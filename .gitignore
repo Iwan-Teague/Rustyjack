@@ -1,10 +1,5 @@
 /payloads/ideas
 /payloads/ref
-/DNSSpoof/sites/paypal/login.html=>(dummy)
-/DNSSpoof/sites/paypal/login.php
-/DNSSpoof/
-/Responder/
 /loot/
-/Icons/
 /rustyjack-core/target
 /rustyjack-ui/target
