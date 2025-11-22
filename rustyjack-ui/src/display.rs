@@ -1,9 +1,11 @@
 use crate::config::ColorScheme;
 use anyhow::Result;
 use embedded_graphics::{
+    image::Image,
     pixelcolor::{Rgb565, Rgb888},
     prelude::RgbColor,
 };
+use std::path::Path;
 
 #[cfg(target_os = "linux")]
 use anyhow::Context;
@@ -15,6 +17,9 @@ use embedded_graphics::{
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Text},
 };
+
+#[cfg(target_os = "linux")]
+use tinybmp::Bmp;
 
 #[cfg(target_os = "linux")]
 use linux_embedded_hal::{
@@ -113,6 +118,95 @@ impl Display {
         )
         .into_styled(style)
         .draw(&mut self.lcd)?;
+        Ok(())
+    }
+
+    pub fn show_splash_screen(&mut self, image_path: &Path) -> Result<()> {
+        // Clear screen to black
+        let style = PrimitiveStyle::with_fill(Rgb565::BLACK);
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new(LCD_WIDTH.into(), LCD_HEIGHT.into()),
+        )
+        .into_styled(style)
+        .draw(&mut self.lcd)?;
+
+        // Try BMP first (much faster), then PNG fallback
+        let bmp_path = image_path.with_extension("bmp");
+        let image_to_load = if bmp_path.exists() {
+            &bmp_path
+        } else {
+            image_path
+        };
+
+        // Try to load and display the image
+        if image_to_load.exists() {
+            // Check if it's a BMP file (easy and fast to display)
+            if let Some(ext) = image_to_load.extension() {
+                if ext == "bmp" {
+                    // Load BMP directly (very fast!)
+                    let bmp_data = std::fs::read(image_to_load)?;
+                    if let Ok(bmp) = Bmp::<Rgb565>::from_slice(&bmp_data) {
+                        // Center the image on the screen
+                        let bmp_width = bmp.bounding_box().size.width as i32;
+                        let bmp_height = bmp.bounding_box().size.height as i32;
+                        let x = (LCD_WIDTH as i32 - bmp_width) / 2;
+                        let y = (LCD_HEIGHT as i32 - bmp_height) / 2;
+                        
+                        let image = Image::new(&bmp, Point::new(x.max(0), y.max(0)));
+                        image.draw(&mut self.lcd)?;
+                        return Ok(());
+                    }
+                } else {
+                    // For PNG/JPG, convert on-the-fly (slower)
+                    let img = image::open(image_to_load)?;
+                    
+                    // Resize to fit screen if needed
+                    let img = if img.width() > LCD_WIDTH as u32 || img.height() > LCD_HEIGHT as u32 {
+                        img.resize(LCD_WIDTH as u32, LCD_HEIGHT as u32, image::imageops::FilterType::Lanczos3)
+                    } else {
+                        img
+                    };
+                    
+                    let rgb_img = img.to_rgb8();
+                    
+                    // Draw pixel by pixel
+                    let x_offset = ((LCD_WIDTH as u32 - rgb_img.width()) / 2) as i32;
+                    let y_offset = ((LCD_HEIGHT as u32 - rgb_img.height()) / 2) as i32;
+                    
+                    for (x, y, pixel) in rgb_img.enumerate_pixels() {
+                        let rgb888 = Rgb888::new(pixel[0], pixel[1], pixel[2]);
+                        let rgb565 = Rgb565::from(rgb888);
+                        let px_x = x_offset + x as i32;
+                        let px_y = y_offset + y as i32;
+                        if px_x >= 0 && px_x < LCD_WIDTH as i32 && px_y >= 0 && px_y < LCD_HEIGHT as i32 {
+                            embedded_graphics::Pixel(Point::new(px_x, px_y), rgb565)
+                                .draw(&mut self.lcd)?;
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Image not found or load failed, show text fallback
+        let text_style = MonoTextStyle::new(&FONT_6X10, Rgb565::GREEN);
+        Text::with_alignment(
+            "RUSTYJACK",
+            Point::new(64, 60),
+            text_style,
+            Alignment::Center,
+        )
+        .draw(&mut self.lcd)?;
+        
+        Text::with_alignment(
+            "Loading...",
+            Point::new(64, 75),
+            text_style,
+            Alignment::Center,
+        )
+        .draw(&mut self.lcd)?;
+        
         Ok(())
     }
 
@@ -505,6 +599,14 @@ impl Display {
 
     #[allow(dead_code)]
     pub fn clear(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn show_splash_screen(&mut self, _image_path: &Path) -> Result<()> {
+        println!("=== RUSTYJACK ===");
+        println!("   Loading...");
+        println!("=================");
         Ok(())
     }
 

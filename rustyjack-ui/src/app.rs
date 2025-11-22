@@ -213,9 +213,18 @@ impl App {
         let core = CoreBridge::with_root(None)?;
         let root = core.root().to_path_buf();
         let config = GuiConfig::load(&root)?;
-        let display = Display::new(&config.colors)?;
+        let mut display = Display::new(&config.colors)?;
         let buttons = ButtonPad::new(&config.pins)?;
+        
+        // Show splash screen during initialization
+        let splash_path = root.join("img").join("rustyjack.png");
+        let _ = display.show_splash_screen(&splash_path);
+        
+        // Let splash show while stats sampler starts up
         let stats = StatsSampler::spawn(core.clone());
+        
+        // Give splash screen time to be visible (1.5 seconds)
+        thread::sleep(Duration::from_millis(1500));
 
         Ok(Self {
             core,
