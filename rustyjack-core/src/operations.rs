@@ -1056,9 +1056,6 @@ fn handle_wifi_disconnect(args: WifiDisconnectArgs) -> Result<HandlerResult> {
     let data = json!({ "interface": interface });
     Ok(("Wi-Fi interface disconnected".to_string(), data))
 }
-    let data = json!({ "interface": interface });
-    Ok(("Wi-Fi interface disconnected".to_string(), data))
-}
 
 fn loot_directory(root: &Path, kind: LootKind) -> PathBuf {
     match kind {

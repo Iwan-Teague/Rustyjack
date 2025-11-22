@@ -17,6 +17,11 @@ pub struct AntiForensicsConfig {
     pub encrypt_loot: bool,
     pub anti_dump_protection: bool,
     pub hide_processes: bool,
+    pub randomize_hostname: bool,
+    pub disable_leds: bool,
+    pub disable_swap: bool,
+    pub randomize_timezone: bool,
+    pub stop_logging: bool,
 }
 
 impl Default for AntiForensicsConfig {
@@ -28,6 +33,11 @@ impl Default for AntiForensicsConfig {
             encrypt_loot: false,
             anti_dump_protection: false,
             hide_processes: false,
+            randomize_hostname: false,
+            disable_leds: false,
+            disable_swap: false,
+            randomize_timezone: false,
+            stop_logging: false,
         }
     }
 }
@@ -564,4 +574,159 @@ pub fn verify_clean() -> Result<Vec<String>> {
     }
     
     Ok(artifacts)
+}
+
+/// Randomize system hostname to avoid identification
+pub fn randomize_hostname() -> Result<String> {
+    info!("Randomizing hostname");
+    
+    let mut rng = rand::thread_rng();
+    use rand::Rng;
+    
+    // Generate a random generic name
+    let prefixes = ["desktop", "laptop", "win", "pc", "workstation"];
+    let prefix = prefixes[rng.gen_range(0..prefixes.len())];
+    let suffix: u32 = rng.gen_range(1000..9999);
+    let new_hostname = format!("{}-{}", prefix, suffix);
+    
+    // Set hostname
+    Command::new("hostnamectl")
+        .args(["set-hostname", &new_hostname])
+        .status()
+        .context("setting hostname via hostnamectl")?;
+        
+    // Update /etc/hosts to prevent sudo warnings
+    let hosts_path = Path::new("/etc/hosts");
+    if hosts_path.exists() {
+        let hosts_content = fs::read_to_string(hosts_path)?;
+        let mut new_lines = Vec::new();
+        
+        for line in hosts_content.lines() {
+            if line.starts_with("127.0.1.1") {
+                new_lines.push(format!("127.0.1.1\t{}", new_hostname));
+            } else {
+                new_lines.push(line.to_string());
+            }
+        }
+        
+        fs::write(hosts_path, new_lines.join("\n"))?;
+    }
+    
+    info!("Hostname changed to {}", new_hostname);
+    Ok(new_hostname)
+}
+
+/// Disable system LEDs to reduce physical visibility
+pub fn disable_leds() -> Result<()> {
+    info!("Disabling system LEDs");
+    
+    // Raspberry Pi specific LED paths
+    let led_paths = vec![
+        "/sys/class/leds/led0/brightness", // Activity LED
+        "/sys/class/leds/led1/brightness", // Power LED
+        "/sys/class/leds/pwr_led/brightness",
+        "/sys/class/leds/act_led/brightness",
+    ];
+    
+    for path_str in led_paths {
+        let path = Path::new(path_str);
+        if path.exists() {
+            // Try to set brightness to 0
+            if let Err(e) = fs::write(path, "0") {
+                // Sometimes we need to set trigger to none first
+                let trigger_path = path.parent().unwrap().join("trigger");
+                if trigger_path.exists() {
+                    let _ = fs::write(trigger_path, "none");
+                }
+                // Try writing 0 again
+                let _ = fs::write(path, "0");
+                debug!("Failed to disable LED at {}: {}", path_str, e);
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+/// Disable swap to prevent sensitive data hitting disk
+pub fn disable_swap() -> Result<()> {
+    info!("Disabling swap");
+    
+    // Try swapoff -a
+    Command::new("swapoff")
+        .arg("-a")
+        .status()
+        .ok();
+        
+    // Try dphys-swapfile if on Raspbian
+    Command::new("dphys-swapfile")
+        .arg("swapoff")
+        .status()
+        .ok();
+        
+    Ok(())
+}
+
+/// Randomize system timezone to confuse timeline analysis
+pub fn randomize_timezone() -> Result<String> {
+    info!("Randomizing timezone");
+    
+    let timezones = vec![
+        "Etc/UTC",
+        "America/New_York",
+        "America/Los_Angeles",
+        "Europe/London",
+        "Europe/Paris",
+        "Asia/Tokyo",
+    ];
+    
+    let mut rng = rand::thread_rng();
+    use rand::Rng;
+    let tz = timezones[rng.gen_range(0..timezones.len())];
+    
+    Command::new("timedatectl")
+        .args(["set-timezone", tz])
+        .status()
+        .context("setting timezone")?;
+        
+    info!("Timezone set to {}", tz);
+    Ok(tz.to_string())
+}
+
+/// Stop logging services temporarily
+pub fn stop_logging_services() -> Result<()> {
+    info!("Stopping logging services");
+    
+    let services = vec![
+        "rsyslog",
+        "syslog",
+        "systemd-journald",
+    ];
+    
+    for service in services {
+        let _ = Command::new("systemctl")
+            .args(["stop", service])
+            .status();
+    }
+    
+    Ok(())
+}
+
+/// Restart logging services
+pub fn start_logging_services() -> Result<()> {
+    info!("Starting logging services");
+    
+    let services = vec![
+        "systemd-journald",
+        "rsyslog",
+        "syslog",
+    ];
+    
+    for service in services {
+        let _ = Command::new("systemctl")
+            .args(["start", service])
+            .status();
+    }
+    
+    Ok(())
 }
