@@ -8,7 +8,7 @@
 <div align="center">
   <h1>🦀 Rustyjack</h1>
 
-  <img src="github-img/logo.jpg" width="300"/>
+  <img src="img/rustyjack.bmp" alt="Rustyjack Logo" width="300"/>
 
   <p>
     <strong>Portable Network Offensive Security Toolkit</strong><br>
@@ -358,7 +358,7 @@ sudo su -
 
 ```bash
 cd /root
-git clone https://github.com/7h30th3r0n3/Rustyjack.git
+git clone https://github.com/Iwan-Teague/Rusty-Jack.git Rustyjack
 cd Rustyjack
 ```
 
@@ -939,7 +939,8 @@ mkdir -p loot/{Nmap,Responder,DNSSpoof,MITM}
 
 ### Original Project
 
-**Rustyjack** - Created by [@7h30th3r0n3](https://github.com/7h30th3r0n3)
+**Rustyjack** - Created by [@Iwan-Teague](https://github.com/Iwan-Teague)  
+Repository: https://github.com/Iwan-Teague/Rusty-Jack.git
 
 ### Rust Implementation
 
