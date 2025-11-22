@@ -785,8 +785,6 @@ uid=1000(victim_user) gid=1000(victim_user)
 | Responder (active) | ~30 MB |
 | **Total (idle)** | **~17 MB** |
 
-**Comparison:** Python UI used ~85 MB (83% reduction)
-
 ### Response Time
 
 | Action | Time |
@@ -794,8 +792,6 @@ uid=1000(victim_user) gid=1000(victim_user)
 | Button press → LCD update | ~20 ms |
 | Menu navigation | ~30 ms |
 | Scan launch | ~150 ms |
-
-**Comparison:** Python UI had 50-100ms latency (60% improvement)
 
 ### Binary Sizes
 
@@ -942,16 +938,6 @@ mkdir -p loot/{Nmap,Responder,DNSSpoof,MITM}
 **Rustyjack** - Created by [@Iwan-Teague](https://github.com/Iwan-Teague)  
 Repository: https://github.com/Iwan-Teague/Rusty-Jack.git
 
-### Rust Implementation
-
-**Rustyjack** (2024) - 100% Rust implementation by Rustyjack team
-
-### Contributors
-
-- [@dagnazty](https://github.com/dagnazty) - Testing and feedback
-- [@Hosseios](https://github.com/Hosseios) - Hardware verification
-- [@m0usem0use](https://github.com/m0usem0use) - Documentation
-
 ### External Tools
 
 - **Responder** - Laurent Gaffié ([@lgandx](https://github.com/lgandx/Responder))
@@ -1018,10 +1004,5 @@ This software is **NOT** for:
 **🦀 Rustyjack - Portable Offensive Security 🦀**
 
 *Built with Rust • Powered by Raspberry Pi • Made for Security Professionals*
-
-⚠️ **Beverage Warning:** Coffee, soda, and other liquids can cause permanent damage if spilled on this device.  
-Keep all beverages away from Rustyjack. We are not liable for liquid damage.
-
-**Star this repo if you find it useful!** ⭐
 
 </div>
