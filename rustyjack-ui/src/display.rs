@@ -66,26 +66,55 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
+        println!("Display::new() - Starting initialization");
         let mut spi_dev = SpidevDevice::open("/dev/spidev0.0").map_err(|e| anyhow::anyhow!("Failed to open SPI: {:?}", e))?;
         let options = SpidevOptions::new()
             .bits_per_word(8)
-            .max_speed_hz(12_000_000)
+            .max_speed_hz(4_000_000) // Lowered to 4MHz for stability
             .mode(SpiModeFlags::SPI_MODE_0)
             .build();
         spi_dev.0.configure(&options).context("configuring SPI")?;
+        println!("SPI configured at 4MHz");
 
         let gpio = Gpio::new().context("initializing GPIO")?;
         
         let dc = RppalPinWrapper::new(gpio.get(25)?.into_output());
         let rst = RppalPinWrapper::new(gpio.get(27)?.into_output());
         let mut backlight = RppalPinWrapper::new(gpio.get(24)?.into_output());
+        
+        // Blink backlight to confirm GPIO control
+        println!("Blinking backlight...");
+        backlight.set_low()?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
         backlight.set_high().context("turning on backlight")?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        backlight.set_low()?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        backlight.set_high()?;
+        println!("Backlight set to HIGH");
 
         let mut delay = Delay {};
+        // Try ST7735S init (Waveshare 1.44" HAT uses ST7735S)
+        // Note: st7735-lcd crate defaults might need tweaking for ST7735S vs ST7735R
         let mut lcd = ST7735::new(spi_dev, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
+        
+        println!("Initializing LCD driver...");
         lcd.init(&mut delay).map_err(|_| anyhow::anyhow!("Failed to init LCD"))?;
+        println!("LCD init complete");
+        
         lcd.set_orientation(&Orientation::Portrait).map_err(|_| anyhow::anyhow!("Failed to set orientation"))?;
         lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
+        
+        // Clear screen to blue to verify drawing
+        let style = PrimitiveStyle::with_fill(Rgb565::BLUE);
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new(LCD_WIDTH as u32, LCD_HEIGHT as u32),
+        )
+        .into_styled(style)
+        .draw(&mut lcd)
+        .map_err(|_| anyhow::anyhow!("Failed to clear display"))?;
+        println!("Screen cleared to BLUE");
 
         let palette = Palette::from_scheme(colors);
         let text_style_regular = MonoTextStyleBuilder::new()
