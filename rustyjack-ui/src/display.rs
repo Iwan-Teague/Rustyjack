@@ -40,7 +40,7 @@ const LCD_OFFSET_Y: u16 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
-    lcd: ST7735<SpidevDevice, SysfsPin, SysfsPin>,
+    lcd: ST7735<SpidevDevice, CdevPin, CdevPin>,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -73,13 +73,10 @@ impl Display {
             .build();
         spi_dev.0.configure(&options).context("configuring SPI")?;
 
-        let mut dc = SysfsPin(Pin::new(25));  // GPIO 25 - DC (Data/Command)
-        init_output_pin(&mut dc).context("initializing DC pin (GPIO 25)")?;
-        let mut rst = SysfsPin(Pin::new(24));  // GPIO 24 - RST (Reset)
-        init_output_pin(&mut rst).context("initializing RST pin (GPIO 24)")?;
-        let mut backlight = SysfsPin(Pin::new(18));  // GPIO 18 - BL (Backlight)
-        init_output_pin(&mut backlight).context("initializing BL pin (GPIO 18)")?;
-        backlight.0.set_value(1).context("turning on backlight")?;
+        let dc = CdevPin::new(25).context("initializing DC pin (GPIO 25)")?;
+        let rst = CdevPin::new(24).context("initializing RST pin (GPIO 24)")?;
+        let mut backlight = CdevPin::new(18).context("initializing BL pin (GPIO 18)")?;
+        backlight.set_high().context("turning on backlight")?;
 
         let mut delay = Delay {};
         let mut lcd = ST7735::new(spi_dev, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
@@ -705,12 +702,50 @@ impl Display {
 }
 
 #[cfg(target_os = "linux")]
-fn init_output_pin(pin: &mut SysfsPin) -> Result<()> {
-    pin.0.export().context("exporting pin")?;
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    pin.0.set_direction(Direction::Out).context("setting direction")?;
-    pin.0.set_value(0).context("setting initial value")?;
-    Ok(())
+impl embedded_hal::digital::OutputPin for CdevPin {
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.handle.set_value(0).map_err(|e| CdevError(e.to_string()))
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.handle.set_value(1).map_err(|e| CdevError(e.to_string()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub struct CdevPin {
+    handle: LineHandle,
+}
+
+#[cfg(target_os = "linux")]
+impl CdevPin {
+    pub fn new(pin: u32) -> Result<Self> {
+        let mut chip = Chip::new("/dev/gpiochip0").map_err(|e| anyhow::anyhow!("Failed to open gpiochip0: {}", e))?;
+        let line = chip.get_line(pin).map_err(|e| anyhow::anyhow!("Failed to get line {}: {}", pin, e))?;
+        let handle = line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-display")
+            .map_err(|e| anyhow::anyhow!("Failed to request line {}: {}", pin, e))?;
+        Ok(Self { handle })
+    }
+    
+    pub fn set_high(&mut self) -> Result<()> {
+        self.handle.set_value(1).map_err(|e| anyhow::anyhow!("GPIO error: {}", e))
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct CdevError(String);
+
+#[cfg(target_os = "linux")]
+impl embedded_hal::digital::Error for CdevError {
+    fn kind(&self) -> embedded_hal::digital::ErrorKind {
+        embedded_hal::digital::ErrorKind::Other
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl embedded_hal::digital::ErrorType for CdevPin {
+    type Error = CdevError;
 }
 
 impl Palette {
