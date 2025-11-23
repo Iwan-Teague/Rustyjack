@@ -1,0 +1,35 @@
+# Git Commit Message
+
+```
+Fix embedded-hal dependency conflicts for Pi Zero W 2 compilation
+
+This commit resolves all compilation errors by ensuring compatible versions
+of the embedded-hal ecosystem crates.
+
+Core issues fixed:
+1. Multiple versions of embedded-hal causing trait bound errors
+2. API incompatibilities between embedded-graphics 0.8 and st7735-lcd  
+3. Missing libc dependency
+4. Duplicate code and unused imports
+
+Changes:
+- rustyjack-core: Add libc dependency, fix duplicate code, remove unused imports
+- rustyjack-ui: Downgrade to embedded-graphics 0.7 ecosystem for compatibility
+- rustyjack-ui: Update display.rs for embedded-graphics 0.7 API
+- rustyjack-ui: Remove unsupported GPIO flags (BIAS_PULL_UP)
+- Add Cargo.toml [patch] section to enforce embedded-hal 0.2.7
+
+Versions used (all compatible with embedded-hal 0.2.7):
+- embedded-graphics 0.7
+- st7735-lcd 0.8
+- linux-embedded-hal 0.3
+- gpio-cdev 0.5
+- tinybmp 0.3
+- image 0.23
+
+After pulling this commit on the Pi, run:
+  python3 fix_display_final.py
+  ./install_rustyjack.sh
+
+See DEPLOYMENT_GUIDE.md for full instructions.
+```
