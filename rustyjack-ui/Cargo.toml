@@ -23,8 +23,3 @@ tinybmp = "0.3"
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-embedded-hal = "0.3"
 gpio-cdev = "0.5"
-
-[patch.crates-io]
-# Force all crates to use embedded-hal 0.2
-embedded-hal = { version = "=0.2.7" }
-
