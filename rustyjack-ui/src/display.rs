@@ -20,7 +20,7 @@ use tinybmp::Bmp;
 #[cfg(target_os = "linux")]
 use linux_embedded_hal::{
     Delay,
-    spidev::{SpiModeFlags, SpidevOptions},
+    spidev::{Spidev, SpiModeFlags, SpidevOptions},
     SpidevDevice,
     CdevPin,
     gpio_cdev::{Chip, LineRequestFlags},
@@ -65,15 +65,19 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
-        // Open and configure SPI device for embedded-hal 1.0
-        let spi = SpidevDevice::open("/dev/spidev0.0")
+        // Open and configure raw SPI device
+        let mut spi = Spidev::open("/dev/spidev0.0")
             .context("opening SPI device")?;
-        spi.set_mode(SpiModeFlags::SPI_MODE_0)
-            .context("setting SPI mode")?;
-        spi.set_max_speed_hz(12_000_000)
-            .context("setting SPI speed")?;
-        spi.set_bits_per_word(8)
-            .context("setting SPI bits per word")?;
+        let options = SpidevOptions::new()
+            .bits_per_word(8)
+            .max_speed_hz(12_000_000)
+            .mode(SpiModeFlags::SPI_MODE_0)
+            .build();
+        spi.configure(&options)
+            .context("configuring SPI")?;
+        
+        // Wrap for embedded-hal 1.0 compatibility
+        let spi = SpidevDevice::new(spi)?;
 
         // Use CdevPin for GPIO (embedded-hal 1.0 compatible)
         let chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
