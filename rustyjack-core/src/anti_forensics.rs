@@ -20,8 +20,6 @@ pub struct AntiForensicsConfig {
     pub randomize_hostname: bool,
     pub disable_leds: bool,
     pub disable_swap: bool,
-    pub randomize_timezone: bool,
-    pub stop_logging: bool,
 }
 
 impl Default for AntiForensicsConfig {
@@ -36,8 +34,6 @@ impl Default for AntiForensicsConfig {
             randomize_hostname: false,
             disable_leds: false,
             disable_swap: false,
-            randomize_timezone: false,
-            stop_logging: false,
         }
     }
 }
@@ -664,69 +660,5 @@ pub fn disable_swap() -> Result<()> {
         .status()
         .ok();
         
-    Ok(())
-}
-
-/// Randomize system timezone to confuse timeline analysis
-pub fn randomize_timezone() -> Result<String> {
-    info!("Randomizing timezone");
-    
-    let timezones = vec![
-        "Etc/UTC",
-        "America/New_York",
-        "America/Los_Angeles",
-        "Europe/London",
-        "Europe/Paris",
-        "Asia/Tokyo",
-    ];
-    
-    let mut rng = rand::thread_rng();
-    use rand::Rng;
-    let tz = timezones[rng.gen_range(0..timezones.len())];
-    
-    Command::new("timedatectl")
-        .args(["set-timezone", tz])
-        .status()
-        .context("setting timezone")?;
-        
-    info!("Timezone set to {}", tz);
-    Ok(tz.to_string())
-}
-
-/// Stop logging services temporarily
-pub fn stop_logging_services() -> Result<()> {
-    info!("Stopping logging services");
-    
-    let services = vec![
-        "rsyslog",
-        "syslog",
-        "systemd-journald",
-    ];
-    
-    for service in services {
-        let _ = Command::new("systemctl")
-            .args(["stop", service])
-            .status();
-    }
-    
-    Ok(())
-}
-
-/// Restart logging services
-pub fn start_logging_services() -> Result<()> {
-    info!("Starting logging services");
-    
-    let services = vec![
-        "systemd-journald",
-        "rsyslog",
-        "syslog",
-    ];
-    
-    for service in services {
-        let _ = Command::new("systemctl")
-            .args(["start", service])
-            .status();
-    }
-    
     Ok(())
 }

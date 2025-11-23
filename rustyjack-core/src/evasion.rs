@@ -19,8 +19,6 @@ pub struct EvasionConfig {
     pub packet_fragmentation: bool,
     pub timing_randomization: bool,
     pub fingerprint_spoofing: Option<String>, // "windows", "macos", "linux"
-    pub spoof_dhcp: bool,
-    pub spoof_usb: bool,
 }
 
 impl Default for EvasionConfig {
@@ -32,8 +30,6 @@ impl Default for EvasionConfig {
             packet_fragmentation: false,
             timing_randomization: false,
             fingerprint_spoofing: None,
-            spoof_dhcp: false,
-            spoof_usb: false,
         }
     }
 }
@@ -322,63 +318,4 @@ pub fn load_original_macs(root: &Path) -> Result<std::collections::HashMap<Strin
     let macs = serde_json::from_str(&json)?;
     
     Ok(macs)
-}
-
-/// Configure DHCP client to send specific hostname
-pub fn spoof_dhcp_hostname(interface: &str, hostname: &str) -> Result<()> {
-    info!("Configuring DHCP hostname for {}", interface);
-    
-    // Create a temporary dhclient config
-    let config_content = format!(
-        "interface \"{}\" {{\n    send host-name \"{}\";\n}}\n",
-        interface, hostname
-    );
-    
-    let config_path = format!("/tmp/dhclient_{}.conf", interface);
-    fs::write(&config_path, config_content)?;
-    
-    // Release current lease
-    Command::new("dhclient")
-        .args(["-r", interface])
-        .status()
-        .ok();
-        
-    // Request new lease with config
-    Command::new("dhclient")
-        .args(["-cf", &config_path, "-v", interface])
-        .status()
-        .context("running dhclient with spoofed hostname")?;
-        
-    info!("DHCP hostname spoofed to {}", hostname);
-    Ok(())
-}
-
-/// Attempt to spoof USB gadget identity (if applicable)
-pub fn spoof_usb_identity() -> Result<()> {
-    // This targets the common configfs gadget setup on Pi Zero
-    let gadget_path = Path::new("/sys/kernel/config/usb_gadget/g1");
-    
-    if !gadget_path.exists() {
-        return Ok(()); // Not using configfs gadget mode
-    }
-    
-    info!("Spoofing USB gadget identity");
-    
-    // Common generic Ethernet adapter IDs (e.g., Realtek)
-    // Note: Changing these while connected might drop the connection
-    // Ideally this runs at boot, but we can try to update strings
-    
-    let strings_path = gadget_path.join("strings/0x409");
-    if strings_path.exists() {
-        // Generic manufacturer
-        let _ = fs::write(strings_path.join("manufacturer"), "Generic");
-        // Generic product
-        let _ = fs::write(strings_path.join("product"), "USB Ethernet Adapter");
-        // Random serial
-        let mut rng = rand::thread_rng();
-        let serial: u32 = rng.gen();
-        let _ = fs::write(strings_path.join("serialnumber"), format!("{:08X}", serial));
-    }
-    
-    Ok(())
 }

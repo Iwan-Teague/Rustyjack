@@ -288,6 +288,15 @@ impl App {
 
     fn render_menu(&mut self) -> Result<Vec<MenuEntry>> {
         let mut entries = self.menu.entries(self.menu_state.current_id())?;
+        
+        // Dynamic label updates
+        for entry in &mut entries {
+            if let MenuAction::ToggleDiscord = entry.action {
+                let state = if self.config.settings.discord_enabled { "ON" } else { "OFF" };
+                entry.label = format!(" Discord Webhook [{}]", state);
+            }
+        }
+
         if entries.is_empty() {
             entries.push(MenuEntry {
                 label: " Nothing here".to_string(),
@@ -327,9 +336,6 @@ impl App {
             )?,
             MenuAction::SpoofSite(site) => self.set_spoof_site(site),
             MenuAction::ShowInfo => self.show_network_info()?,
-            MenuAction::BrowseImages => {
-                self.show_message("Images", ["Feature moved to Rust UI", "Coming soon"])?
-            }
             MenuAction::RefreshConfig => self.reload_config()?,
             MenuAction::SaveConfig => self.save_config()?,
             MenuAction::SetColor(target) => self.pick_color(target)?,
@@ -354,6 +360,7 @@ impl App {
             MenuAction::AutopilotStart(mode) => self.autopilot_start(mode)?,
             MenuAction::AutopilotStop => self.autopilot_stop()?,
             MenuAction::AutopilotStatus => self.autopilot_status()?,
+            MenuAction::ToggleDiscord => self.toggle_discord()?,
         }
         Ok(())
     }
@@ -366,10 +373,24 @@ impl App {
             interface: None,
             target: None,
             output_path: None,
-            no_discord: false,
+            no_discord: !self.config.settings.discord_enabled,
         };
-        let command = Commands::Scan(ScanCommand::Run(args));
-        let (_, data) = self.core.dispatch(command)?;
+
+        let core = self.core.clone();
+        let display = &mut self.display;
+        let stats = &self.stats;
+        let label = profile.label.clone();
+
+        let (_, data) = core.run_scan_with_progress(args, |pct, task| {
+             let status = stats.snapshot();
+             let _ = display.draw_progress_dialog(
+                 &format!("Scanning: {}", label),
+                 task,
+                 pct,
+                 &status
+             );
+        })?;
+
         let interface = data
             .get("interface")
             .and_then(Value::as_str)
@@ -523,17 +544,24 @@ impl App {
     }
 
     fn pick_color(&mut self, target: ColorTarget) -> Result<()> {
-        let choices = ["#ffffff", "#05ff00", "#ff0000", "#2d0fff", "#141494"];
+        let choices = [
+            ("White", "#ffffff"),
+            ("Green", "#05ff00"),
+            ("Red", "#ff0000"),
+            ("Blue", "#2d0fff"),
+            ("Navy", "#141494"),
+        ];
         let mut index = 0;
         loop {
             let overlay = self.stats.snapshot();
-            let label = format!("{:?}: {}", target, choices[index]);
+            let (name, hex) = choices[index];
+            let label = format!("{:?}: {}", target, name);
             self.display.draw_dialog(&[label.clone()], &overlay)?;
             let button = self.buttons.wait_for_press()?;
             match button {
                 Button::Left => index = (index + choices.len() - 1) % choices.len(),
                 Button::Right | Button::Select => {
-                    self.apply_color(target.clone(), choices[index]);
+                    self.apply_color(target.clone(), hex);
                     self.display
                         .draw_dialog(&["Color updated".into()], &overlay)?;
                     thread::sleep(Duration::from_millis(600));
@@ -1356,7 +1384,7 @@ impl App {
 
     fn run_system_update(&mut self) -> Result<()> {
         let args = SystemUpdateArgs {
-            service: "raspyjack".to_string(),
+            service: "rustyjack".to_string(),
             remote: "origin".to_string(),
             branch: "main".to_string(),
             backup_dir: None,
@@ -1513,6 +1541,13 @@ impl App {
                 self.show_message("Autopilot error", msg.iter().map(|s| s.as_str()))?;
             }
         }
+        Ok(())
+    }
+
+    fn toggle_discord(&mut self) -> Result<()> {
+        self.config.settings.discord_enabled = !self.config.settings.discord_enabled;
+        self.save_config()?;
+        // No message needed as the menu label will update immediately
         Ok(())
     }
 }

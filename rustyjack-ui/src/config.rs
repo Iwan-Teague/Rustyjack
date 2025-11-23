@@ -14,6 +14,8 @@ pub struct GuiConfig {
     pub colors: ColorScheme,
     #[serde(default)]
     pub paths: PathConfig,
+    #[serde(default)]
+    pub settings: SettingsConfig,
 }
 
 impl Default for GuiConfig {
@@ -22,6 +24,7 @@ impl Default for GuiConfig {
             pins: PinConfig::default(),
             colors: ColorScheme::default(),
             paths: PathConfig::default(),
+            settings: SettingsConfig::default(),
         }
     }
 }
@@ -193,5 +196,25 @@ impl PathConfig {
         if self.imagebrowser_start.as_os_str().is_empty() {
             self.imagebrowser_start = Self::default_image_path();
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettingsConfig {
+    #[serde(default = "SettingsConfig::default_discord_enabled")]
+    pub discord_enabled: bool,
+}
+
+impl Default for SettingsConfig {
+    fn default() -> Self {
+        Self {
+            discord_enabled: Self::default_discord_enabled(),
+        }
+    }
+}
+
+impl SettingsConfig {
+    fn default_discord_enabled() -> bool {
+        true
     }
 }

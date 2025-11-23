@@ -1,11 +1,13 @@
 use std::{
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Local;
+use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::cli::{
@@ -101,6 +103,17 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
 }
 
 fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
+    run_scan_with_progress(root, args, |_, _| {})
+}
+
+pub fn run_scan_with_progress<F>(
+    root: &Path,
+    args: ScanRunArgs,
+    mut on_progress: F,
+) -> Result<HandlerResult>
+where
+    F: FnMut(f32, &str),
+{
     let ScanRunArgs {
         label,
         nmap_args,
@@ -122,6 +135,10 @@ fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
     if !nmap_args.is_empty() {
         cmd.args(&nmap_args);
     }
+    
+    // Add stats-every to get progress updates
+    cmd.arg("--stats-every").arg("1s");
+    
     cmd.arg("-oN")
         .arg(&loot_path)
         .arg("-S")
@@ -129,11 +146,31 @@ fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
         .arg("-e")
         .arg(&interface_info.name)
         .arg(&target)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
 
-    let status = cmd.status().context("failed to launch nmap")?;
+    let mut child = cmd.spawn().context("failed to launch nmap")?;
+    
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        // Regex to match: "SYN Stealth Scan Timing: About 15.50% done"
+        let re_timing = Regex::new(r"(.*) Timing: About (\d+\.\d+)% done").unwrap();
+
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if let Some(caps) = re_timing.captures(&line) {
+                    if let (Some(task), Some(pct)) = (caps.get(1), caps.get(2)) {
+                        if let Ok(val) = pct.as_str().parse::<f32>() {
+                            on_progress(val, task.as_str().trim());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let status = child.wait().context("failed to wait for nmap")?;
     if !status.success() {
         bail!("nmap exited with status {}", status);
     }

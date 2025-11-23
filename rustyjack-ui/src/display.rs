@@ -4,7 +4,7 @@ use embedded_graphics::{
     image::Image,
     pixelcolor::{Rgb565, Rgb888},
     prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle},
     mono_font::{ascii::FONT_6X10, MonoTextStyle, MonoTextStyleBuilder},
     text::{Baseline, Text},
 };
@@ -20,20 +20,17 @@ use tinybmp::Bmp;
 #[cfg(target_os = "linux")]
 use linux_embedded_hal::{
     Delay,
-    spidev::{SpiModeFlags, SpidevOptions},
-    SpidevDevice,
+    spidev::{SpiModeFlags, SpidevOptions, Spidev},
+    sysfs_gpio::{Direction, Pin},
 };
-
-#[cfg(target_os = "linux")]
-use rppal::gpio::{Gpio, OutputPin};
 
 #[cfg(target_os = "linux")]
 use st7735_lcd::{Orientation, ST7735};
 
 #[cfg(target_os = "linux")]
-const LCD_WIDTH: u32 = 128;
+const LCD_WIDTH: u16 = 128;
 #[cfg(target_os = "linux")]
-const LCD_HEIGHT: u32 = 128;
+const LCD_HEIGHT: u16 = 128;
 #[cfg(target_os = "linux")]
 const LCD_OFFSET_X: u16 = 2;
 #[cfg(target_os = "linux")]
@@ -41,7 +38,7 @@ const LCD_OFFSET_Y: u16 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
-    lcd: ST7735<SpidevDevice, RppalPinWrapper, RppalPinWrapper>,
+    lcd: ST7735<Spidev, Pin, Pin>,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -66,55 +63,27 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
-        println!("Display::new() - Starting initialization");
-        let mut spi_dev = SpidevDevice::open("/dev/spidev0.0").map_err(|e| anyhow::anyhow!("Failed to open SPI: {:?}", e))?;
+        let mut spi = Spidev::open("/dev/spidev0.0").context("opening SPI device")?;
         let options = SpidevOptions::new()
             .bits_per_word(8)
-            .max_speed_hz(4_000_000) // Lowered to 4MHz for stability
+            .max_speed_hz(12_000_000)
             .mode(SpiModeFlags::SPI_MODE_0)
             .build();
-        spi_dev.0.configure(&options).context("configuring SPI")?;
-        println!("SPI configured at 4MHz");
+        spi.configure(&options).context("configuring SPI")?;
 
-        let gpio = Gpio::new().context("initializing GPIO")?;
-        
-        let dc = RppalPinWrapper::new(gpio.get(25)?.into_output());
-        let rst = RppalPinWrapper::new(gpio.get(27)?.into_output());
-        let mut backlight = RppalPinWrapper::new(gpio.get(24)?.into_output());
-        
-        // Blink backlight to confirm GPIO control
-        println!("Blinking backlight...");
-        backlight.set_low()?;
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        backlight.set_high().context("turning on backlight")?;
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        backlight.set_low()?;
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        backlight.set_high()?;
-        println!("Backlight set to HIGH");
+        let mut dc = Pin::new(25);  // GPIO 25 - DC (Data/Command)
+        init_output_pin(&mut dc)?;
+        let mut rst = Pin::new(24);  // GPIO 24 - RST (Reset)
+        init_output_pin(&mut rst)?;
+        let mut backlight = Pin::new(18);  // GPIO 18 - BL (Backlight)
+        init_output_pin(&mut backlight)?;
+        backlight.set_value(1)?;
 
         let mut delay = Delay {};
-        // Try ST7735S init (Waveshare 1.44" HAT uses ST7735S)
-        // Note: st7735-lcd crate defaults might need tweaking for ST7735S vs ST7735R
-        let mut lcd = ST7735::new(spi_dev, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
-        
-        println!("Initializing LCD driver...");
-        lcd.init(&mut delay).map_err(|_| anyhow::anyhow!("Failed to init LCD"))?;
-        println!("LCD init complete");
-        
-        lcd.set_orientation(&Orientation::Landscape).map_err(|_| anyhow::anyhow!("Failed to set orientation"))?;
+        let mut lcd = ST7735::new(spi, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
+        lcd.init(&mut delay)?;
+        lcd.set_orientation(&Orientation::Portrait)?;
         lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
-        
-        // Clear screen to blue to verify drawing
-        let style = PrimitiveStyle::with_fill(Rgb565::BLUE);
-        Rectangle::new(
-            Point::new(0, 0),
-            Size::new(LCD_WIDTH as u32, LCD_HEIGHT as u32),
-        )
-        .into_styled(style)
-        .draw(&mut lcd)
-        .map_err(|_| anyhow::anyhow!("Failed to clear display"))?;
-        println!("Screen cleared to BLUE");
 
         let palette = Palette::from_scheme(colors);
         let text_style_regular = MonoTextStyleBuilder::new()
@@ -310,15 +279,8 @@ impl Display {
         Text::with_baseline(title, Point::new(4, 16), self.text_style_small, Baseline::Top)
             .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
 
-        let max_items = 7;
-        let start_index = if selected >= max_items {
-            selected - max_items + 1
-        } else {
-            0
-        };
-
         let mut y = 30;
-        for (idx, label) in items.iter().enumerate().skip(start_index).take(max_items) {
+        for (idx, label) in items.iter().enumerate() {
             if idx == selected {
                 Rectangle::new(
                     Point::new(2, y - 2),
@@ -354,6 +316,68 @@ impl Display {
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 12;
         }
+        Ok(())
+    }
+
+    pub fn draw_progress_dialog(
+        &mut self,
+        title: &str,
+        message: &str,
+        percentage: f32,
+        status: &StatusOverlay,
+    ) -> Result<()> {
+        self.clear()?;
+        self.draw_toolbar(status)?;
+        
+        // Draw dialog box
+        Rectangle::new(
+            Point::new(6, 32),
+            Size::new(116, 64)
+        )
+        .into_styled(PrimitiveStyle::with_fill(self.palette.selected_background))
+        .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+
+        // Draw title
+        Text::with_baseline(title, Point::new(10, 38), self.text_style_highlight, Baseline::Top)
+            .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+
+        // Draw message (truncated if too long)
+        let msg_display = if message.len() > 18 {
+            format!("{}...", &message[..15])
+        } else {
+            message.to_string()
+        };
+        Text::with_baseline(&msg_display, Point::new(10, 52), self.text_style_regular, Baseline::Top)
+            .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+
+        // Draw progress bar
+        let bar_width = 100u32;
+        let bar_height = 8u32;
+        let x = 14;
+        let y = 70;
+        
+        Rectangle::new(
+            Point::new(x, y),
+            Size::new(bar_width, bar_height),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(self.palette.border, 1))
+        .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+        
+        let fill_width = ((percentage / 100.0) * (bar_width as f32 - 2.0)) as u32;
+        if fill_width > 0 {
+            Rectangle::new(
+                Point::new(x + 1, y + 1),
+                Size::new(fill_width, bar_height - 2),
+            )
+            .into_styled(PrimitiveStyle::with_fill(self.palette.text))
+            .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+        }
+
+        // Draw percentage text
+        let pct_text = format!("{:.1}%", percentage);
+        Text::with_baseline(&pct_text, Point::new(10, 82), self.text_style_small, Baseline::Top)
+            .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+
         Ok(())
     }
 
@@ -721,6 +745,20 @@ impl Display {
         Ok(())
     }
 
+    pub fn draw_progress_dialog(
+        &mut self,
+        title: &str,
+        message: &str,
+        percentage: f32,
+        _: &StatusOverlay,
+    ) -> Result<()> {
+        println!("--- {title} ---");
+        println!("{message}");
+        println!("[{:.1}%]", percentage);
+        println!("----------------");
+        Ok(())
+    }
+
     pub fn draw_dashboard(&mut self, view: DashboardView, status: &StatusOverlay) -> Result<()> {
         println!("=== DASHBOARD: {:?} ===", view);
         println!("CPU: {:.0}% ({:.0}°C)", status.cpu_percent, status.temp_c);
@@ -741,54 +779,12 @@ impl Display {
 }
 
 #[cfg(target_os = "linux")]
-pub struct RppalPinWrapper {
-    pin: OutputPin,
-}
-
-#[cfg(target_os = "linux")]
-impl RppalPinWrapper {
-    pub fn new(pin: OutputPin) -> Self {
-        Self { pin }
-    }
-    
-    pub fn set_high(&mut self) -> Result<()> {
-        self.pin.set_high();
-        Ok(())
-    }
-
-    pub fn set_low(&mut self) -> Result<()> {
-        self.pin.set_low();
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-pub struct RppalError;
-
-#[cfg(target_os = "linux")]
-impl embedded_hal::digital::Error for RppalError {
-    fn kind(&self) -> embedded_hal::digital::ErrorKind {
-        embedded_hal::digital::ErrorKind::Other
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl embedded_hal::digital::ErrorType for RppalPinWrapper {
-    type Error = RppalError;
-}
-
-#[cfg(target_os = "linux")]
-impl embedded_hal::digital::OutputPin for RppalPinWrapper {
-    fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.pin.set_low();
-        Ok(())
-    }
-
-    fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.pin.set_high();
-        Ok(())
-    }
+fn init_output_pin(pin: &mut Pin) -> Result<()> {
+    pin.export()?;
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    pin.set_direction(Direction::Out)?;
+    pin.set_value(0)?;
+    Ok(())
 }
 
 impl Palette {

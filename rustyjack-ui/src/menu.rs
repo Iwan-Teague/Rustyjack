@@ -16,7 +16,6 @@ pub enum MenuAction {
     DnsStop,
     SpoofSite(&'static str),
     ShowInfo,
-    BrowseImages,
     RefreshConfig,
     SaveConfig,
     SetColor(ColorTarget),
@@ -39,6 +38,7 @@ pub enum MenuAction {
     AutopilotStart(AutopilotMode),
     AutopilotStop,
     AutopilotStatus,
+    ToggleDiscord,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -82,7 +82,6 @@ impl MenuTree {
         nodes.insert("ai", MenuNode::Static(mitm_menu));
         nodes.insert("aj", MenuNode::Static(dns_menu));
         nodes.insert("ak", MenuNode::Static(site_menu));
-        nodes.insert("ag", MenuNode::Static(other_menu));
         nodes.insert("ae", MenuNode::Static(options_menu));
         nodes.insert("aea", MenuNode::Static(colors_menu));
         nodes.insert("af", MenuNode::Static(system_menu));
@@ -91,6 +90,7 @@ impl MenuTree {
         nodes.insert("awr", MenuNode::Static(route_menu));
         nodes.insert("abg", MenuNode::Static(bridge_menu));
         nodes.insert("ap", MenuNode::Static(autopilot_menu));
+        nodes.insert("as", MenuNode::Static(settings_menu));
         Self { nodes }
     }
 
@@ -224,9 +224,18 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new(" DNS Spoofing", MenuAction::Submenu("aj")),
         MenuEntry::new(" Network info", MenuAction::ShowInfo),
         MenuEntry::new(" WiFi Manager", MenuAction::Submenu("aw")),
-        MenuEntry::new(" Other features", MenuAction::Submenu("ag")),
-        MenuEntry::new(" Read file", MenuAction::Submenu("ah")),
+        MenuEntry::new(" Settings", MenuAction::Submenu("as")),
+        MenuEntry::new(" Loot", MenuAction::Submenu("ah")),
         MenuEntry::new(" Bridge mode", MenuAction::Submenu("abg")),
+    ]
+}
+
+fn settings_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new(" Toggle Discord", MenuAction::ToggleDiscord),
+        MenuEntry::new(" Upload loot Discord", MenuAction::DiscordUpload),
+        MenuEntry::new(" Options", MenuAction::Submenu("ae")),
+        MenuEntry::new(" System", MenuAction::Submenu("af")),
     ]
 }
 
@@ -271,15 +280,6 @@ fn site_menu() -> Vec<MenuEntry> {
         .iter()
         .map(|site| MenuEntry::new(site, MenuAction::SpoofSite(site)))
         .collect()
-}
-
-fn other_menu() -> Vec<MenuEntry> {
-    vec![
-        MenuEntry::new(" Upload loot Discord", MenuAction::DiscordUpload),
-        MenuEntry::new(" Browse Images", MenuAction::BrowseImages),
-        MenuEntry::new(" Options", MenuAction::Submenu("ae")),
-        MenuEntry::new(" System", MenuAction::Submenu("af")),
-    ]
 }
 
 fn options_menu() -> Vec<MenuEntry> {
@@ -368,7 +368,6 @@ pub fn menu_title(id: &str) -> &'static str {
         "ai" => "MITM",
         "aj" => "DNS Spoofing",
         "ak" => "Spoof Site",
-        "ag" => "Extras",
         "ae" => "Options",
         "aea" => "Colors",
         "af" => "System",
@@ -377,6 +376,7 @@ pub fn menu_title(id: &str) -> &'static str {
         "awr" => "Routing",
         "abg" => "Bridge",
         "ap" => "Autopilot",
+        "as" => "Settings",
         _ => "Menu",
     }
 }
