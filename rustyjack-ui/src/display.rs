@@ -20,9 +20,13 @@ use tinybmp::Bmp;
 #[cfg(target_os = "linux")]
 use linux_embedded_hal::{
     Delay,
-    spidev::{SpiModeFlags, SpidevOptions, Spidev},
-    sysfs_gpio::{Direction, Pin},
+    spidev::{SpiModeFlags, SpidevOptions},
+    SpidevDevice,
+    CdevPin,
 };
+
+#[cfg(target_os = "linux")]
+use gpio_cdev::{Chip, LineRequestFlags};
 
 #[cfg(target_os = "linux")]
 use st7735_lcd::{Orientation, ST7735};
@@ -38,7 +42,7 @@ const LCD_OFFSET_Y: u16 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
-    lcd: ST7735<Spidev, Pin, Pin>,
+    lcd: ST7735<SpidevDevice, CdevPin, CdevPin>,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -63,21 +67,36 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
-        let mut spi = Spidev::open("/dev/spidev0.0").context("opening SPI device")?;
+        // Open and configure SPI device
+        let mut spi = linux_embedded_hal::spidev::Spidev::open("/dev/spidev0.0")
+            .context("opening SPI device")?;
         let options = SpidevOptions::new()
             .bits_per_word(8)
             .max_speed_hz(12_000_000)
             .mode(SpiModeFlags::SPI_MODE_0)
             .build();
         spi.configure(&options).context("configuring SPI")?;
+        
+        // Wrap in SpidevDevice for embedded-hal 1.0
+        let spi = SpidevDevice::new(spi).context("creating SPI device")?;
 
-        let mut dc = Pin::new(25);  // GPIO 25 - DC (Data/Command)
-        init_output_pin(&mut dc)?;
-        let mut rst = Pin::new(24);  // GPIO 24 - RST (Reset)
-        init_output_pin(&mut rst)?;
-        let mut backlight = Pin::new(18);  // GPIO 18 - BL (Backlight)
-        init_output_pin(&mut backlight)?;
-        backlight.set_value(1)?;
+        // Use CdevPin for GPIO (embedded-hal 1.0 compatible)
+        let mut chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
+        
+        let dc_line = chip.get_line(25).context("getting DC line")?;
+        let dc_handle = dc_line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-dc")
+            .context("requesting DC line")?;
+        let dc = CdevPin::new(dc_handle).context("creating DC pin")?;
+        
+        let rst_line = chip.get_line(24).context("getting RST line")?;
+        let rst_handle = rst_line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-rst")
+            .context("requesting RST line")?;
+        let rst = CdevPin::new(rst_handle).context("creating RST pin")?;
+        
+        let bl_line = chip.get_line(18).context("getting backlight line")?;
+        let bl_handle = bl_line.request(LineRequestFlags::OUTPUT, 1, "rustyjack-bl")
+            .context("requesting backlight line")?;
+        let _backlight = CdevPin::new(bl_handle).context("creating backlight pin")?;
 
         let mut delay = Delay {};
         let mut lcd = ST7735::new(spi, dc, rst, true, false, LCD_WIDTH as u32, LCD_HEIGHT as u32);
@@ -778,14 +797,7 @@ impl Display {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn init_output_pin(pin: &mut Pin) -> Result<()> {
-    pin.export()?;
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    pin.set_direction(Direction::Out)?;
-    pin.set_value(0)?;
-    Ok(())
-}
+
 
 impl Palette {
     pub fn from_scheme(colors: &ColorScheme) -> Self {
