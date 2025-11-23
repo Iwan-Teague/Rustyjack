@@ -4,7 +4,7 @@ use embedded_graphics::{
     image::Image,
     pixelcolor::{Rgb565, Rgb888},
     prelude::*,
-    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle},
+    primitives::{PrimitiveStyle, Rectangle},
     mono_font::{ascii::FONT_6X10, MonoTextStyle, MonoTextStyleBuilder},
     text::{Baseline, Text},
 };
@@ -23,6 +23,7 @@ use linux_embedded_hal::{
     spidev::{SpiModeFlags, SpidevOptions, Spidev},
     sysfs_gpio::{Direction, Pin},
     SysfsPin,
+    SpidevDevice,
 };
 
 #[cfg(target_os = "linux")]
@@ -42,7 +43,7 @@ const LCD_OFFSET_Y: u32 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
-    lcd: ST7735<Spidev, SysfsPin, SysfsPin>,
+    lcd: ST7735<SpidevDevice, SysfsPin, SysfsPin>,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -74,6 +75,7 @@ impl Display {
             .mode(SpiModeFlags::SPI_MODE_0)
             .build();
         spi.configure(&options).context("configuring SPI")?;
+        let spi_dev = SpidevDevice::new(spi);
 
         let mut dc = SysfsPin(Pin::new(25));  // GPIO 25 - DC (Data/Command)
         init_output_pin(&mut dc)?;
@@ -84,7 +86,7 @@ impl Display {
         backlight.0.set_value(1)?;
 
         let mut delay = Delay {};
-        let mut lcd = ST7735::new(spi, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
+        let mut lcd = ST7735::new(spi_dev, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
         lcd.init(&mut delay)?;
         lcd.set_orientation(&Orientation::Portrait)?;
         lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
