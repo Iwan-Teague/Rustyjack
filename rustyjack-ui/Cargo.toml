@@ -17,6 +17,7 @@ num_cpus = "1.16"
 image = { version = "0.23", default-features = false, features = ["bmp"] }
 tinybmp = "0.5"
 st7735-lcd = "0.9"
+rustyjack-core = { path = "../rustyjack-core" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-embedded-hal = { version = "0.4", features = [] }
