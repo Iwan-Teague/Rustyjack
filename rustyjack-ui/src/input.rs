@@ -21,30 +21,24 @@ pub enum Button {
 mod platform {
     use super::*;
     use anyhow::{Context, anyhow};
-    use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
+    use rppal::gpio::{Gpio, InputPin};
 
     struct ButtonInput {
         kind: Button,
-        handle: LineHandle,
+        pin: InputPin,
     }
 
     impl ButtonInput {
-        fn new(kind: Button, pin: u32, chip: &mut Chip) -> Result<Self> {
-            let line = chip
-                .get_line(pin)
-                .with_context(|| format!("requesting GPIO line {}", pin))?;
-            let handle = line
-                .request(
-                    LineRequestFlags::INPUT,
-                    1,
-                    "rustyjack-ui",
-                )
-                .with_context(|| format!("configuring GPIO line {}", pin))?;
-            Ok(Self { kind, handle })
+        fn new(kind: Button, pin_num: u32, gpio: &Gpio) -> Result<Self> {
+            let pin = gpio
+                .get(pin_num as u8)
+                .with_context(|| format!("requesting GPIO line {}", pin_num))?
+                .into_input_pullup();
+            Ok(Self { kind, pin })
         }
 
         fn is_pressed(&self) -> Result<bool> {
-            Ok(self.handle.get_value()? == 0)
+            Ok(self.pin.is_low())
         }
     }
 
@@ -55,32 +49,32 @@ mod platform {
 
     impl ButtonPad {
         pub fn new(pins: &PinConfig) -> Result<Self> {
-            let mut chip = Chip::new("/dev/gpiochip0")?;
+            let gpio = Gpio::new()?;
             let mut buttons = Vec::new();
-            buttons.push(ButtonInput::new(Button::Up, pins.key_up_pin, &mut chip)?);
+            buttons.push(ButtonInput::new(Button::Up, pins.key_up_pin, &gpio)?);
             buttons.push(ButtonInput::new(
                 Button::Down,
                 pins.key_down_pin,
-                &mut chip,
+                &gpio,
             )?);
             buttons.push(ButtonInput::new(
                 Button::Left,
                 pins.key_left_pin,
-                &mut chip,
+                &gpio,
             )?);
             buttons.push(ButtonInput::new(
                 Button::Right,
                 pins.key_right_pin,
-                &mut chip,
+                &gpio,
             )?);
             buttons.push(ButtonInput::new(
                 Button::Select,
                 pins.key_press_pin,
-                &mut chip,
+                &gpio,
             )?);
-            buttons.push(ButtonInput::new(Button::Key1, pins.key1_pin, &mut chip)?);
-            buttons.push(ButtonInput::new(Button::Key2, pins.key2_pin, &mut chip)?);
-            buttons.push(ButtonInput::new(Button::Key3, pins.key3_pin, &mut chip)?);
+            buttons.push(ButtonInput::new(Button::Key1, pins.key1_pin, &gpio)?);
+            buttons.push(ButtonInput::new(Button::Key2, pins.key2_pin, &gpio)?);
+            buttons.push(ButtonInput::new(Button::Key3, pins.key3_pin, &gpio)?);
 
             Ok(Self {
                 buttons,
