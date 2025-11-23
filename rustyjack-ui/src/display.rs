@@ -65,9 +65,11 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
-        // Open and configure raw SPI device
-        let mut spi = Spidev::open("/dev/spidev0.0")
+        // Open SPI device using SpidevDevice (embedded-hal 1.0 compatible)
+        let mut spi = SpidevDevice::open("/dev/spidev0.0")
             .context("opening SPI device")?;
+        
+        // Configure the underlying device
         let options = SpidevOptions::new()
             .bits_per_word(8)
             .max_speed_hz(12_000_000)
@@ -75,9 +77,6 @@ impl Display {
             .build();
         spi.configure(&options)
             .context("configuring SPI")?;
-        
-        // Wrap for embedded-hal 1.0 compatibility
-        let spi = SpidevDevice::new(spi)?;
 
         // Use CdevPin for GPIO (embedded-hal 1.0 compatible)
         let chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
