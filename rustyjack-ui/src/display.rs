@@ -65,15 +65,16 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
-        // Open SPI device with embedded-hal 1.0 wrapper
-        let mut spi = SpidevDevice::open("/dev/spidev0.0")
+        // Open and configure SPI device, then wrap for embedded-hal 1.0
+        let mut spi_dev = linux_embedded_hal::spidev::Spidev::open("/dev/spidev0.0")
             .context("opening SPI device")?;
-        spi.spidev().configure(&SpidevOptions::new()
+        spi_dev.configure(&SpidevOptions::new()
             .bits_per_word(8)
             .max_speed_hz(12_000_000)
             .mode(SpiModeFlags::SPI_MODE_0)
             .build())
             .context("configuring SPI")?;
+        let spi = SpidevDevice::from(spi_dev);
 
         // Use CdevPin for GPIO (embedded-hal 1.0 compatible)
         let chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
@@ -95,8 +96,8 @@ impl Display {
 
         let mut delay = Delay {};
         let mut lcd = ST7735::new(spi, dc, rst, true, false, LCD_WIDTH as u32, LCD_HEIGHT as u32);
-        lcd.init(&mut delay)?;
-        lcd.set_orientation(&Orientation::Portrait)?;
+        lcd.init(&mut delay).map_err(|_| anyhow::anyhow!("LCD init failed"))?;
+        lcd.set_orientation(&Orientation::Portrait).map_err(|_| anyhow::anyhow!("LCD orientation failed"))?;
         lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
 
         let palette = Palette::from_scheme(colors);

@@ -21,7 +21,7 @@ pub enum Button {
 mod platform {
     use super::*;
     use anyhow::{Context, anyhow};
-    use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
+    use linux_embedded_hal::gpio_cdev::{Chip, LineHandle, LineRequestFlags};
 
     struct ButtonInput {
         kind: Button,
