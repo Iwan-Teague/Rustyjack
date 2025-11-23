@@ -25,7 +25,7 @@ use linux_embedded_hal::{
 };
 
 #[cfg(target_os = "linux")]
-use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
+use rppal::gpio::{Gpio, OutputPin};
 
 #[cfg(target_os = "linux")]
 use st7735_lcd::{Orientation, ST7735};
@@ -41,7 +41,7 @@ const LCD_OFFSET_Y: u16 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
-    lcd: ST7735<SpidevDevice, CdevPin, CdevPin>,
+    lcd: ST7735<SpidevDevice, RppalPinWrapper, RppalPinWrapper>,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -74,9 +74,11 @@ impl Display {
             .build();
         spi_dev.0.configure(&options).context("configuring SPI")?;
 
-        let dc = CdevPin::new(25).context("initializing DC pin (GPIO 25)")?;
-        let rst = CdevPin::new(24).context("initializing RST pin (GPIO 24)")?;
-        let mut backlight = CdevPin::new(18).context("initializing BL pin (GPIO 18)")?;
+        let gpio = Gpio::new().context("initializing GPIO")?;
+        
+        let dc = RppalPinWrapper::new(gpio.get(25)?.into_output());
+        let rst = RppalPinWrapper::new(gpio.get(24)?.into_output());
+        let mut backlight = RppalPinWrapper::new(gpio.get(18)?.into_output());
         backlight.set_high().context("turning on backlight")?;
 
         let mut delay = Delay {};
@@ -703,50 +705,49 @@ impl Display {
 }
 
 #[cfg(target_os = "linux")]
-impl embedded_hal::digital::OutputPin for CdevPin {
-    fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.handle.set_value(0).map_err(|e| CdevError(e.to_string()))
-    }
-
-    fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.handle.set_value(1).map_err(|e| CdevError(e.to_string()))
-    }
+pub struct RppalPinWrapper {
+    pin: OutputPin,
 }
 
 #[cfg(target_os = "linux")]
-pub struct CdevPin {
-    handle: LineHandle,
-}
-
-#[cfg(target_os = "linux")]
-impl CdevPin {
-    pub fn new(pin: u32) -> Result<Self> {
-        let mut chip = Chip::new("/dev/gpiochip0").map_err(|e| anyhow::anyhow!("Failed to open gpiochip0: {}", e))?;
-        let line = chip.get_line(pin).map_err(|e| anyhow::anyhow!("Failed to get line {}: {}", pin, e))?;
-        let handle = line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-display")
-            .map_err(|e| anyhow::anyhow!("Failed to request line {}: {}", pin, e))?;
-        Ok(Self { handle })
+impl RppalPinWrapper {
+    pub fn new(pin: OutputPin) -> Self {
+        Self { pin }
     }
     
     pub fn set_high(&mut self) -> Result<()> {
-        self.handle.set_value(1).map_err(|e| anyhow::anyhow!("GPIO error: {}", e))
+        self.pin.set_high();
+        Ok(())
     }
 }
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
-pub struct CdevError(String);
+pub struct RppalError;
 
 #[cfg(target_os = "linux")]
-impl embedded_hal::digital::Error for CdevError {
+impl embedded_hal::digital::Error for RppalError {
     fn kind(&self) -> embedded_hal::digital::ErrorKind {
         embedded_hal::digital::ErrorKind::Other
     }
 }
 
 #[cfg(target_os = "linux")]
-impl embedded_hal::digital::ErrorType for CdevPin {
-    type Error = CdevError;
+impl embedded_hal::digital::ErrorType for RppalPinWrapper {
+    type Error = RppalError;
+}
+
+#[cfg(target_os = "linux")]
+impl embedded_hal::digital::OutputPin for RppalPinWrapper {
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.pin.set_low();
+        Ok(())
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.pin.set_high();
+        Ok(())
+    }
 }
 
 impl Palette {
