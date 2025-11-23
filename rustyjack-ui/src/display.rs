@@ -20,7 +20,7 @@ use tinybmp::Bmp;
 #[cfg(target_os = "linux")]
 use linux_embedded_hal::{
     Delay,
-    spidev::{Spidev, SpiModeFlags, SpidevOptions},
+    spidev::{SpiModeFlags, SpidevOptions},
     SpidevDevice,
     CdevPin,
     gpio_cdev::{Chip, LineRequestFlags},
@@ -79,7 +79,7 @@ impl Display {
             .context("configuring SPI")?;
 
         // Use CdevPin for GPIO (embedded-hal 1.0 compatible)
-        let chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
+        let mut chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
         
         let dc_line = chip.get_line(25).context("getting DC line")?;
         let dc_handle = dc_line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-dc")
