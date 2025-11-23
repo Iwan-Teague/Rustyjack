@@ -26,7 +26,7 @@ use linux_embedded_hal::{
 };
 
 #[cfg(target_os = "linux")]
-use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_hal::spi::SpiDevice;
 
 #[cfg(target_os = "linux")]
 use st7735_lcd::{Orientation, ST7735};
@@ -41,22 +41,8 @@ const LCD_OFFSET_X: u32 = 2;
 const LCD_OFFSET_Y: u32 = 1;
 
 #[cfg(target_os = "linux")]
-struct DummyPin;
-
-#[cfg(target_os = "linux")]
-impl embedded_hal::digital::ErrorType for DummyPin {
-    type Error = core::convert::Infallible;
-}
-
-#[cfg(target_os = "linux")]
-impl embedded_hal::digital::OutputPin for DummyPin {
-    fn set_low(&mut self) -> Result<(), Self::Error> { Ok(()) }
-    fn set_high(&mut self) -> Result<(), Self::Error> { Ok(()) }
-}
-
-#[cfg(target_os = "linux")]
 pub struct Display {
-    lcd: ST7735<ExclusiveDevice<Spidev, DummyPin, Delay>, SysfsPin, SysfsPin>,
+    lcd: ST7735<Spidev, SysfsPin, SysfsPin>,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -98,8 +84,7 @@ impl Display {
         backlight.0.set_value(1)?;
 
         let mut delay = Delay {};
-        let spi_dev = ExclusiveDevice::new(spi, DummyPin, delay.clone()).unwrap();
-        let mut lcd = ST7735::new(spi_dev, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
+        let mut lcd = ST7735::new(spi, dc, rst, true, false, LCD_WIDTH, LCD_HEIGHT);
         lcd.init(&mut delay)?;
         lcd.set_orientation(&Orientation::Portrait)?;
         lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
