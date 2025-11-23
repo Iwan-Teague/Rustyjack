@@ -19,8 +19,7 @@ pub enum MenuAction {
     RefreshConfig,
     SaveConfig,
     SetColor(ColorTarget),
-    Shutdown,
-    RestartUi,
+    RestartSystem,
     Loot(LootSection),
     QuickWifiToggle,
     SwitchInterfaceMenu,
@@ -308,8 +307,7 @@ fn colors_menu() -> Vec<MenuEntry> {
 
 fn system_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new(" Shutdown system", MenuAction::Shutdown),
-        MenuEntry::new(" Restart UI", MenuAction::RestartUi),
+        MenuEntry::new(" Restart", MenuAction::RestartSystem),
         MenuEntry::new(" Update from git", MenuAction::SystemUpdate),
     ]
 }

@@ -339,8 +339,7 @@ impl App {
             MenuAction::RefreshConfig => self.reload_config()?,
             MenuAction::SaveConfig => self.save_config()?,
             MenuAction::SetColor(target) => self.pick_color(target)?,
-            MenuAction::Shutdown => self.shutdown_device()?,
-            MenuAction::RestartUi => self.restart_ui()?,
+            MenuAction::RestartSystem => self.restart_system()?,
             MenuAction::Loot(section) => self.show_loot(section)?,
             MenuAction::QuickWifiToggle => self.quick_wifi_toggle()?,
             MenuAction::SwitchInterfaceMenu => self.switch_interface_menu()?,
@@ -1010,14 +1009,8 @@ impl App {
         Ok(())
     }
 
-    fn shutdown_device(&mut self) -> Result<()> {
-        Command::new("poweroff").status().ok();
-        Ok(())
-    }
-
-    fn restart_ui(&mut self) -> Result<()> {
-        Command::new("systemctl")
-            .args(["restart", "raspyjack"])
+    fn restart_system(&mut self) -> Result<()> {
+        Command::new("reboot")
             .status()
             .ok();
         Ok(())
@@ -1389,10 +1382,17 @@ impl App {
             branch: "main".to_string(),
             backup_dir: None,
         };
-        match self
-            .core
-            .dispatch(Commands::System(SystemCommand::Update(args)))
-        {
+
+        let core = self.core.clone();
+        let display = &mut self.display;
+        let stats = &self.stats;
+
+        let result = core.run_system_update_with_progress(args, |pct, task| {
+            let status = stats.snapshot();
+            let _ = display.draw_progress_dialog("System Update", task, pct, &status);
+        });
+
+        match result {
             Ok((_, data)) => {
                 let backup = data
                     .get("backup_path")

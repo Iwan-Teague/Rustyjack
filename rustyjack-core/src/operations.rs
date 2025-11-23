@@ -748,16 +748,46 @@ fn handle_wifi_route_metric(args: WifiRouteMetricArgs) -> Result<HandlerResult> 
 }
 
 fn handle_system_update(root: &Path, args: SystemUpdateArgs) -> Result<HandlerResult> {
+    run_system_update_with_progress(root, args, |_, _| {})
+}
+
+pub fn run_system_update_with_progress<F>(
+    root: &Path,
+    args: SystemUpdateArgs,
+    mut on_progress: F,
+) -> Result<HandlerResult>
+where
+    F: FnMut(f32, &str),
+{
+    on_progress(0.1, "Creating backup...");
     let backup = backup_repository(root, args.backup_dir.as_deref())?;
+
+    on_progress(0.3, "Fetching updates...");
     git_reset_to_remote(root, &args.remote, &args.branch)?;
+
+    on_progress(0.5, "Compiling binary...");
+    // We assume cargo is available in the path
+    let status = std::process::Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .current_dir(root)
+        .status()
+        .context("executing cargo build --release")?;
+
+    if !status.success() {
+        bail!("Compilation failed with status {}", status);
+    }
+
+    on_progress(0.9, "Restarting service...");
     restart_system_service(&args.service)?;
+
     let data = json!({
         "backup_path": backup,
         "service": args.service,
         "remote": args.remote,
         "branch": args.branch,
     });
-    Ok(("Repository updated and service restarted".to_string(), data))
+    Ok(("Repository updated, compiled, and service restarted".to_string(), data))
 }
 
 fn handle_bridge_start(root: &Path, args: BridgeStartArgs) -> Result<HandlerResult> {
