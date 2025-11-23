@@ -21,4 +21,3 @@ rustyjack-core = { path = "../rustyjack-core" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-embedded-hal = { version = "0.4", features = [] }
-gpio-cdev = "0.5"

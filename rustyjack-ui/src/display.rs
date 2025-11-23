@@ -23,10 +23,8 @@ use linux_embedded_hal::{
     spidev::{SpiModeFlags, SpidevOptions},
     SpidevDevice,
     CdevPin,
+    gpio_cdev::{Chip, LineRequestFlags},
 };
-
-#[cfg(target_os = "linux")]
-use gpio_cdev::{Chip, LineRequestFlags};
 
 #[cfg(target_os = "linux")]
 use st7735_lcd::{Orientation, ST7735};
@@ -67,21 +65,18 @@ pub struct Palette {
 #[cfg(target_os = "linux")]
 impl Display {
     pub fn new(colors: &ColorScheme) -> Result<Self> {
-        // Open and configure SPI device
-        let mut spi = linux_embedded_hal::spidev::Spidev::open("/dev/spidev0.0")
+        // Open SPI device with embedded-hal 1.0 wrapper
+        let mut spi = SpidevDevice::open("/dev/spidev0.0")
             .context("opening SPI device")?;
-        let options = SpidevOptions::new()
+        spi.spidev().configure(&SpidevOptions::new()
             .bits_per_word(8)
             .max_speed_hz(12_000_000)
             .mode(SpiModeFlags::SPI_MODE_0)
-            .build();
-        spi.configure(&options).context("configuring SPI")?;
-        
-        // Wrap in SpidevDevice for embedded-hal 1.0
-        let spi = SpidevDevice::new(spi).context("creating SPI device")?;
+            .build())
+            .context("configuring SPI")?;
 
         // Use CdevPin for GPIO (embedded-hal 1.0 compatible)
-        let mut chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
+        let chip = Chip::new("/dev/gpiochip0").context("opening GPIO chip")?;
         
         let dc_line = chip.get_line(25).context("getting DC line")?;
         let dc_handle = dc_line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-dc")
