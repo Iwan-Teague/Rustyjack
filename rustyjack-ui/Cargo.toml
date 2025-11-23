@@ -19,6 +19,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 num_cpus = "1.16"
 image = { version = "0.23", default-features = false, features = ["bmp"] }
 tinybmp = "0.5"
+embedded-hal-bus = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-embedded-hal = { version = "0.4", features = [] }
