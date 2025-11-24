@@ -212,7 +212,17 @@ spi-config -d /dev/spidev0.0 -q
 
 ### Buttons Not Responding?
 
-1. **Check pull-up resistors are configured:**
+**IMPORTANT**: If buttons stopped working after a code update, you may need the GPIO pull-up fix.
+
+1. **Check if your code enables pull-ups programmatically:**
+   ```bash
+   grep -n "BIAS_PULL_UP" ~/Rustyjack/rustyjack-ui/src/input.rs
+   # Should show: LineRequestFlags::INPUT | LineRequestFlags::BIAS_PULL_UP
+   ```
+   
+   If missing, update your code (see BUTTON_FIX.md) or rebuild from latest commit.
+
+2. **Check pull-up resistors are configured in boot config:**
    ```bash
    # For Pi images that need explicit config, add to /boot/config.txt (the
    # installer does this automatically). Note: changes to /boot/config.txt
@@ -273,6 +283,7 @@ spi-config -d /dev/spidev0.0 -q
 | 2024-11-24 | Verified all input pins match Waveshare | No changes needed |
 | 2024-11-24 | Document created | Centralized pin reference |
 | 2024-11-24 | Default display rotation set to Landscape and env var added | UX improvement for Pi Zero orientation |
+| 2024-11-24 | Button GPIO pull-up fix applied to input.rs | Added BIAS_PULL_UP flag for reliable button input |
 
 ---
 
@@ -285,10 +296,11 @@ Use this when setting up a new Pi or debugging hardware:
 - [ ] Display pins: DC=25, RST=27, BL=24
 - [ ] Joystick pins: UP=6, DOWN=19, LEFT=5, RIGHT=26, PRESS=13
 - [ ] Button pins: KEY1=21, KEY2=20, KEY3=16
+- [ ] GPIO pull-ups enabled in code (BIAS_PULL_UP flag) or config.txt
 - [ ] HAT firmly seated on GPIO header
 - [ ] Power LED on (if present)
 - [ ] Backlight can be controlled with `gpioset gpiochip0 24=1`
-- [ ] Buttons respond to `gpioget` tests
+- [ ] Buttons respond to `gpioget` tests (0 when pressed, 1 when released)
 - [ ] Rustyjack service starts without GPIO errors
 
 ---

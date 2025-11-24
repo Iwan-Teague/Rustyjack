@@ -33,9 +33,12 @@ mod platform {
             let line = chip
                 .get_line(pin)
                 .with_context(|| format!("requesting GPIO line {}", pin))?;
+            // Waveshare HAT buttons are active-low (pressed = 0, released = 1).
+            // We need INPUT with internal pull-up enabled so they read high when
+            // not pressed. The default value (1) is the initial state.
             let handle = line
                 .request(
-                    LineRequestFlags::INPUT,
+                    LineRequestFlags::INPUT | LineRequestFlags::BIAS_PULL_UP,
                     1,
                     "rustyjack-ui",
                 )
