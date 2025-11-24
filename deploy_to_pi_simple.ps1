@@ -73,7 +73,9 @@ try {
     if (Get-Command ssh -ErrorAction SilentlyContinue) {
         Write-Host "Detected SSH client: $((Get-Command ssh).Path)" -ForegroundColor Gray
         # Force a pseudo-tty (-tt) so the remote session has a terminal if the remote script needs one
-        Get-Content -Raw $tmp | ssh -tt ${piUser}@${piHost} "bash -s"
+        Write-Host "Running remote script as root via sudo -i..." -ForegroundColor Gray
+        # Run the remote script as an interactive root shell so the session will drop to root
+        Get-Content -Raw $tmp | ssh -tt ${piUser}@${piHost} "sudo -i bash -s"
         $sshExit = $LASTEXITCODE
     } else {
         Write-Host "ERROR: 'ssh' command not found on this machine. Please install OpenSSH client or use plink." -ForegroundColor Red

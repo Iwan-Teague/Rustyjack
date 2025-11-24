@@ -73,7 +73,9 @@ try {
                 # read the temp file content (already written with LF-only newlines)
                 $scriptText = Get-Content -Raw $tempFile
                 $lfScript = $scriptText -replace "`r`n", "`n"
-                $lfScript | sshpass -p $piPassword ssh -o StrictHostKeyChecking=no -tt ${piUser}@${piHost} "bash -s"
+                Write-Host "Running remote script as root via sudo -i..." -ForegroundColor Gray
+                # run the remote script as root on the Pi so it runs under a root login shell (sudo su -)
+                $lfScript | sshpass -p $piPassword ssh -o StrictHostKeyChecking=no -tt ${piUser}@${piHost} "sudo -i bash -s"
                 $sshExit = $LASTEXITCODE
         }
         else {
@@ -87,7 +89,8 @@ try {
                 # Feed script to single SSH session so commands run sequentially and then exec into interactive shell
                 # ensure LF-only script data and force pseudo-tty with -tt
                 $scriptText = Get-Content -Raw $tempFile
-                $scriptText | ssh -tt ${piUser}@${piHost} "bash -s"
+                Write-Host "Running remote script as root via sudo -i..." -ForegroundColor Gray
+                $scriptText | ssh -tt ${piUser}@${piHost} "sudo -i bash -s"
                 $sshExit = $LASTEXITCODE
             }
         }
