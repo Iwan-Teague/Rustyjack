@@ -15,7 +15,7 @@ sudo ./setup_wifi.sh
 The script will:
 1. Check WiFi hardware
 2. Unblock rfkill
-3. Set WiFi country code (required by regulations)
+3. Set WiFi country code (required by regulations). When run non-interactively the installer will default to US if no country can be detected.
 4. Bring up WiFi interfaces
 5. Scan for networks
 
@@ -262,6 +262,7 @@ ls -la /lib/firmware/brcm/
 sudo nano /boot/firmware/config.txt
 # Ensure this line exists and is NOT commented:
 # dtparam=wifi=on
+# Remember to set dtparam=wifi=on in config.txt (installer enforces this).
 
 # Reboot
 sudo reboot

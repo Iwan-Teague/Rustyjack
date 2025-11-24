@@ -65,6 +65,7 @@ step "Enabling I²C & SPI …"
 add_dtparam dtparam=i2c_arm=on
 add_dtparam dtparam=i2c1=on
 add_dtparam dtparam=spi=on
+add_dtparam dtparam=wifi=on
 
 MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
 for m in "${MODULES[@]}"; do

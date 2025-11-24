@@ -63,15 +63,36 @@ echo ""
 # Use provided flag/env or prompt when interactive
 COUNTRY_CODE="${COUNTRY:-${WIFI_COUNTRY:-}}"
 if [ -z "$COUNTRY_CODE" ]; then
+    # If interactive, attempt to detect or let user confirm; otherwise default to US
     if [ "$NONINTERACTIVE" -eq 1 ]; then
-        # sensible default when non-interactive
         COUNTRY_CODE=US
         echo "[INFO] No country provided in non-interactive mode — defaulting to $COUNTRY_CODE"
     else
-        read -p "Enter your country code (e.g., US): " COUNTRY_CODE
-        if [ -z "$COUNTRY_CODE" ]; then
-            echo "[ERROR] Country code cannot be empty"
-            exit 1
+        # Try to detect via locale if available
+        DETECTED=""
+        if [ -n "${LANG:-}" ] && echo "$LANG" | grep -q "_"; then
+            DETECTED=$(echo "$LANG" | awk -F[_.] '{print toupper($2)}') || true
+        fi
+        if [ -z "$DETECTED" ] && command -v curl >/dev/null 2>&1; then
+            DETECTED=$(curl -fsS --max-time 3 https://ipapi.co/country/ 2>/dev/null || true)
+            DETECTED=$(echo "$DETECTED" | tr '[:lower:]' '[:upper:]')
+        fi
+
+        if [ -n "$DETECTED" ]; then
+            read -p "Detected country $DETECTED — press Enter to accept or type another (e.g., US): " input
+            if [ -n "$input" ]; then
+                COUNTRY_CODE="$input"
+            else
+                COUNTRY_CODE="$DETECTED"
+            fi
+        else
+            # Fall back to US if user hits enter
+            read -p "Enter your country code (e.g., US) [default US]: " input
+            if [ -z "$input" ]; then
+                COUNTRY_CODE=US
+            else
+                COUNTRY_CODE="$input"
+            fi
         fi
     fi
 fi
