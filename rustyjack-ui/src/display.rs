@@ -8,6 +8,61 @@ use embedded_graphics::{
     mono_font::{ascii::FONT_6X10, MonoTextStyle, MonoTextStyleBuilder},
     text::{Baseline, Text},
 };
+
+/// Wraps text at specified character width, breaking on word boundaries when possible
+fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    if text.len() <= max_width {
+        return vec![text.to_string()];
+    }
+    
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    
+    for word in text.split_whitespace() {
+        if current_line.is_empty() {
+            // First word on line
+            if word.len() > max_width {
+                // Word itself is too long, force-break it
+                let mut remaining = word;
+                while remaining.len() > max_width {
+                    lines.push(remaining[..max_width].to_string());
+                    remaining = &remaining[max_width..];
+                }
+                current_line = remaining.to_string();
+            } else {
+                current_line = word.to_string();
+            }
+        } else if current_line.len() + 1 + word.len() <= max_width {
+            // Word fits on current line
+            current_line.push(' ');
+            current_line.push_str(word);
+        } else {
+            // Word doesn't fit, start new line
+            lines.push(current_line);
+            if word.len() > max_width {
+                // Word itself is too long, force-break it
+                let mut remaining = word;
+                while remaining.len() > max_width {
+                    lines.push(remaining[..max_width].to_string());
+                    remaining = &remaining[max_width..];
+                }
+                current_line = remaining.to_string();
+            } else {
+                current_line = word.to_string();
+            }
+        }
+    }
+    
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+    
+    if lines.is_empty() {
+        vec![text.to_string()]
+    } else {
+        lines
+    }
+}
 use std::path::Path;
 use image::GenericImageView;
 
@@ -34,10 +89,11 @@ use std::{thread::sleep, time::Duration as StdDuration};
 const LCD_WIDTH: u16 = 128;
 #[cfg(target_os = "linux")]
 const LCD_HEIGHT: u16 = 128;
+// Offset adjusted to avoid dead pixels on left column and bottom row
 #[cfg(target_os = "linux")]
-const LCD_OFFSET_X: u16 = 2;
+const LCD_OFFSET_X: u16 = 3;
 #[cfg(target_os = "linux")]
-const LCD_OFFSET_Y: u16 = 1;
+const LCD_OFFSET_Y: u16 = 2;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
@@ -556,11 +612,21 @@ impl Display {
         )
         .into_styled(PrimitiveStyle::with_fill(self.palette.selected_background))
         .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+        
         let mut y = 38;
+        const MAX_CHARS: usize = 18;
+        
         for line in lines {
-            Text::with_baseline(line, Point::new(10, y), self.text_style_regular, Baseline::Top)
-                .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 12;
+            // Wrap each line if it's longer than 18 characters
+            let wrapped = wrap_text(line, MAX_CHARS);
+            for wrapped_line in wrapped {
+                if y > 90 {
+                    break; // Stop if we're running out of space
+                }
+                Text::with_baseline(&wrapped_line, Point::new(10, y), self.text_style_regular, Baseline::Top)
+                    .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+                y += 10; // Reduced from 12 to fit more lines
+            }
         }
         Ok(())
     }
@@ -583,18 +649,23 @@ impl Display {
         .into_styled(PrimitiveStyle::with_fill(self.palette.selected_background))
         .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
 
-        // Draw title
-        Text::with_baseline(title, Point::new(10, 38), self.text_style_highlight, Baseline::Top)
-            .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+        // Draw title (wrap if needed)
+        const MAX_CHARS: usize = 18;
+        let wrapped_title = wrap_text(title, MAX_CHARS);
+        let mut y = 38;
+        for (idx, line) in wrapped_title.iter().take(1).enumerate() {
+            Text::with_baseline(line, Point::new(10, y + (idx as i32 * 10)), self.text_style_highlight, Baseline::Top)
+                .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+        }
 
-        // Draw message (truncated if too long)
-        let msg_display = if message.len() > 18 {
-            format!("{}...", &message[..15])
-        } else {
-            message.to_string()
-        };
-        Text::with_baseline(&msg_display, Point::new(10, 52), self.text_style_regular, Baseline::Top)
-            .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+        // Draw message (wrap instead of truncate)
+        let wrapped_msg = wrap_text(message, MAX_CHARS);
+        let mut msg_y = 50;
+        for line in wrapped_msg.iter().take(2) {
+            Text::with_baseline(line, Point::new(10, msg_y), self.text_style_regular, Baseline::Top)
+                .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+            msg_y += 10;
+        }
 
         // Draw progress bar
         let bar_width = 100u32;
@@ -719,14 +790,14 @@ impl Display {
 
         for op in status.active_operations.iter().take(3) {
             if y > 110 { break; }
-            let truncated = if op.len() > 18 {
-                format!("{}...", &op[..15])
-            } else {
-                op.clone()
-            };
-            Text::with_baseline(&format!("• {}", truncated), Point::new(8, y), self.text_style_small, Baseline::Top)
-                .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 10;
+            // Wrap operation names instead of truncating (max 16 chars to account for "• " prefix)
+            let wrapped = wrap_text(op, 16);
+            for line in wrapped.iter().take(1) {
+                Text::with_baseline(&format!("• {}", line), Point::new(8, y), self.text_style_small, Baseline::Top)
+                    .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
+                y += 10;
+                if y > 110 { break; }
+            }
         }
         y += 6;
 
