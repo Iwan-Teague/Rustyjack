@@ -67,9 +67,10 @@ try {
     else {
         # Try OpenSSH with sshpass (unattended password), otherwise interactive ssh
         if (Get-Command sshpass -ErrorAction SilentlyContinue) {
-            Write-Host "Using OpenSSH + sshpass to run remote script..." -ForegroundColor Gray
-            sshpass -p $piPassword ssh -o StrictHostKeyChecking=no -t ${piUser}@${piHost} "bash -s" < $tempFile
-            $sshExit = $LASTEXITCODE
+                Write-Host "Using OpenSSH + sshpass to run remote script..." -ForegroundColor Gray
+                # use Get-Content + pipeline instead of shell redirection so this is valid in PowerShell
+                Get-Content -Raw $tempFile | sshpass -p $piPassword ssh -o StrictHostKeyChecking=no -t ${piUser}@${piHost} "bash -s"
+                $sshExit = $LASTEXITCODE
         }
         else {
             # Check if ssh exists — if not, warn user and bail
