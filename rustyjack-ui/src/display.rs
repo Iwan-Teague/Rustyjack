@@ -226,7 +226,7 @@ impl Display {
                         };
 
                         // helper to request a line but retry briefly if it's busy
-                        fn request_line_with_retry(chip: &mut Chip, line: u32, consumer: &str, default: i32) -> Result<CdevPin, anyhow::Error> {
+                        fn request_line_with_retry(chip: &mut Chip, line: u32, consumer: &str, default: u8) -> Result<CdevPin, anyhow::Error> {
                             let mut tries = 0usize;
                             loop {
                                 match chip.get_line(line) {
@@ -249,21 +249,16 @@ impl Display {
                             }
                         }
 
-                        let dc = match request_line_with_retry(&mut chip, 25, "rustyjack-dc", 0) {
+                        let dc = match request_line_with_retry(&mut chip, 25, "rustyjack-dc", 0u8) {
                             Ok(p) => p,
                             Err(e) => { eprintln!("diag: {}", e); continue; }
                         };
 
-                        let rst = match request_line_with_retry(&mut chip, 24, "rustyjack-rst", 0) {
+                        let rst = match request_line_with_retry(&mut chip, 24, "rustyjack-rst", 0u8) {
                             Ok(p) => p,
                             Err(e) => { eprintln!("diag: {}", e); continue; }
                         };
-                        let dc = CdevPin::new(dc_handle).context("creating DC pin for diag")?;
-
-                        let rst_line = chip.get_line(24).context("getting RST line for diag")?;
-                        let rst_handle = rst_line.request(LineRequestFlags::OUTPUT, 0, "rustyjack-rst")
-                            .context("requesting RST line for diag")?;
-                        let rst = CdevPin::new(rst_handle).context("creating RST pin for diag")?;
+                        
 
                         let _backlight = match request_line_with_retry(&mut chip, 18, "rustyjack-bl", 1) {
                             Ok(p) => p,
