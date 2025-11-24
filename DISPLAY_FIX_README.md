@@ -141,6 +141,31 @@ sudo systemctl start rustyjack
 
 If you see the green border, the display is working correctly!
 
+## Dimming / Reducing Backlight Brightness
+
+The Waveshare HAT typically drives the backlight via a single GPIO (BCM24) as an on/off control. BCM24 is not a hardware PWM pin on most Pis, so there are two safe ways to reduce brightness:
+
+1. Re-wire the backlight to a PWM-capable pin (recommended for software control)
+    - Physical pin 12 = BCM18 is a hardware PWM pin on Raspberry Pi.
+    - Move the HAT's BL wire to BCM18 (if your HAT wiring allows it) and then use a PWM utility such as pigpio to set a duty-cycle.
+    - Example using pigpio (after installation):
+
+```bash
+sudo apt-get update && sudo apt-get install -y pigpio
+sudo systemctl enable --now pigpiod
+# Set 50% duty on GPIO 18 (0-255):
+pigs p 18 128
+
+# To reset to fully ON:
+pigs p 18 255
+```
+
+2. Hardware reduction (works without re-wiring)
+    - Fit a small series resistor (e.g. 10Ω–33Ω, try values starting high then lower) in the BL line to reduce LED current and lower perceived brightness.
+    - This is the safest electrical method if you prefer not to change wiring or rely on software PWM.
+
+Note: we can implement software (threaded) PWM in the code that toggles the BL line if you prefer a code-side implementation while leaving BL on BCM24 — tell me and I can add it, but hardware PWM (BCM18) will give smoother results and lower CPU load.
+
 ## Support
 
 If issues persist:

@@ -75,6 +75,16 @@ done
 # ensure overlay spi0‑2cs
 grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
 
+# Ensure buttons use internal pull-ups for reliability on various Pi images.
+# Some Raspberry Pi images do not enable GPIO pull-ups by default for these
+# pins. This line ensures the joystick/buttons are pulled up so pressing a
+# button returns a stable 0 value and released state is 1.
+if ! grep -q "^gpio=6,19,5,26,13,21,20,16=pu" "$CFG" ; then
+  echo 'gpio=6,19,5,26,13,21,20,16=pu' | sudo tee -a "$CFG" >/dev/null
+  info "Pinned button GPIOs to pull‑ups in $CFG"
+fi
+info "Note: pull-up changes require a reboot to take effect. Reboot now or later as needed."
+
 # ───── 3a ▸ ensure sufficient swap space for compilation ─────
 step "Checking swap space for Rust compilation …"
 CURRENT_SWAP=$(free -m | awk '/^Swap:/ {print $2}')

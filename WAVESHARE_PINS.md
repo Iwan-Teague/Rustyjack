@@ -145,6 +145,25 @@ gpioset gpiochip0 24=1
 gpioset gpiochip0 24=0
 ```
 
+### Dimming / Soft brightness control
+
+If you want to reduce the backlight brightness slightly from software, you have two options:
+
+1. Rewire BL to a PWM-capable pin (BCM18 / physical pin 12) and use a PWM daemon (recommended):
+
+```bash
+# Install and run pigpio (daemon)
+sudo apt-get install -y pigpio
+sudo systemctl enable --now pigpiod
+
+# Example: set 60% duty on GPIO 18 (0-255 range)
+pigs p 18 $((255 * 60 / 100))
+```
+
+2. Hardware resistor in series on the BL line to reduce LED current (e.g. 10Ω–33Ω) — smallest change and hardware-only.
+
+Note: the project can add a software PWM implementation that toggles the BL pin on BCM24, but that is less efficient and can cause CPU usage. If you want that I can add code to support it.
+
 ### Test Buttons/Joystick
 ```bash
 # Monitor joystick UP (GPIO 6)
@@ -195,7 +214,9 @@ spi-config -d /dev/spidev0.0 -q
 
 1. **Check pull-up resistors are configured:**
    ```bash
-   # For Pi 4B and newer systems, add to /boot/config.txt:
+   # For Pi images that need explicit config, add to /boot/config.txt (the
+   # installer does this automatically). Note: changes to /boot/config.txt
+   # require a reboot to take effect.
    gpio=6,19,5,26,13,21,20,16=pu
    ```
 
