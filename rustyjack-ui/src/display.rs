@@ -652,7 +652,7 @@ impl Display {
         // Draw title (wrap if needed)
         const MAX_CHARS: usize = 18;
         let wrapped_title = wrap_text(title, MAX_CHARS);
-        let mut y = 38;
+        let y = 38;
         for (idx, line) in wrapped_title.iter().take(1).enumerate() {
             Text::with_baseline(line, Point::new(10, y + (idx as i32 * 10)), self.text_style_highlight, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;

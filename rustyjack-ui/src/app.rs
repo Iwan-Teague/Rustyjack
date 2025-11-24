@@ -418,7 +418,7 @@ impl App {
         }
 
         let start = self.menu_state.offset.min(total);
-        let end = (start + VISIBLE).min(total);
+        let _end = (start + VISIBLE).min(total);
 
         let labels: Vec<String> = entries
             .iter()
@@ -1171,7 +1171,8 @@ impl App {
             let overlay = self.stats.snapshot();
             let content = vec![title.to_string(), items[index].clone()];
             self.display.draw_dialog(&content, &overlay)?;
-            match self.map_button(self.buttons.wait_for_press()?) {
+            let button = self.buttons.wait_for_press()?;
+            match self.map_button(button) {
                 ButtonAction::Up => {
                     if index == 0 {
                         index = items.len() - 1;
@@ -1205,7 +1206,8 @@ impl App {
                 "OK to confirm".to_string(),
             ];
             self.display.draw_dialog(&content, &overlay)?;
-            match self.map_button(self.buttons.wait_for_press()?) {
+            let button = self.buttons.wait_for_press()?;
+            match self.map_button(button) {
                 ButtonAction::Up => value = (value + 1).min(255),
                 ButtonAction::Down => value = (value - 1).max(0),
                 ButtonAction::Select => return Ok(Some(value as u8)),
@@ -1538,7 +1540,7 @@ impl App {
         // Find USB mount point
         let usb_path = match self.find_usb_mount() {
             Ok(path) => path,
-            Err(e) => {
+            Err(_e) => {
                 self.show_message("USB Transfer Error", [
                     "No USB drive detected",
                     "Please insert a USB drive",
