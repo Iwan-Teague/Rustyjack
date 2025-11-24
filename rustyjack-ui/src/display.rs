@@ -89,9 +89,9 @@ use std::{thread::sleep, time::Duration as StdDuration};
 const LCD_WIDTH: u16 = 128;
 #[cfg(target_os = "linux")]
 const LCD_HEIGHT: u16 = 128;
-// Offset adjusted to avoid dead pixels on left column and bottom row
+// Offset adjusted to utilize full screen width and avoid dead pixels on bottom row
 #[cfg(target_os = "linux")]
-const LCD_OFFSET_X: u16 = 4;
+const LCD_OFFSET_X: u16 = 2;
 #[cfg(target_os = "linux")]
 const LCD_OFFSET_Y: u16 = 2;
 
