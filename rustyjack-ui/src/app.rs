@@ -161,6 +161,8 @@ fn format_network_label(net: &WifiNetworkEntry) -> String {
 struct MenuState {
     stack: Vec<String>,
     selection: usize,
+    // Scroll offset for current menu view — ensures selection stays visible
+    offset: usize,
 }
 
 impl MenuState {
@@ -168,6 +170,7 @@ impl MenuState {
         Self {
             stack: vec!["a".to_string()],
             selection: 0,
+            offset: 0,
         }
     }
 
@@ -178,12 +181,14 @@ impl MenuState {
     fn enter(&mut self, id: &str) {
         self.stack.push(id.to_string());
         self.selection = 0;
+        self.offset = 0;
     }
 
     fn back(&mut self) {
         if self.stack.len() > 1 {
             self.stack.pop();
             self.selection = 0;
+            self.offset = 0;
         }
     }
 
@@ -197,6 +202,13 @@ impl MenuState {
         } else {
             self.selection -= 1;
         }
+        // Ensure selection is inside visible window
+        const VISIBLE: usize = 7;
+        if self.selection < self.offset {
+            self.offset = self.selection;
+        } else if self.selection >= self.offset + VISIBLE {
+            self.offset = self.selection.saturating_sub(VISIBLE - 1);
+        }
     }
 
     fn move_down(&mut self, total: usize) {
@@ -205,6 +217,13 @@ impl MenuState {
             return;
         }
         self.selection = (self.selection + 1) % total;
+        // Ensure selection is inside visible window
+        const VISIBLE: usize = 7;
+        if self.selection < self.offset {
+            self.offset = self.selection;
+        } else if self.selection >= self.offset + VISIBLE {
+            self.offset = self.selection.saturating_sub(VISIBLE - 1);
+        }
     }
 }
 
@@ -307,11 +326,36 @@ impl App {
             self.menu_state.selection = entries.len().saturating_sub(1);
         }
         let status = self.stats.snapshot();
-        let labels: Vec<String> = entries.iter().map(|entry| entry.label.clone()).collect();
+        // When there are more entries than fit on-screen, show a sliding window
+        // so the selected item is always visible. MenuState::offset tracks the
+        // first item index in the current view.
+        const VISIBLE: usize = 7;
+        let total = entries.len();
+        if self.menu_state.selection >= total && total > 0 {
+            self.menu_state.selection = total - 1;
+        }
+        // clamp offset
+        if self.menu_state.offset >= total {
+            self.menu_state.offset = 0;
+        }
+
+        let start = self.menu_state.offset.min(total);
+        let end = (start + VISIBLE).min(total);
+
+        let labels: Vec<String> = entries
+            .iter()
+            .skip(start)
+            .take(VISIBLE)
+            .map(|entry| entry.label.clone())
+            .collect();
+
+        // selected index relative to the slice
+        let displayed_selected = if total == 0 { 0 } else { self.menu_state.selection.saturating_sub(start) };
+
         self.display.draw_menu(
             menu_title(self.menu_state.current_id()),
             &labels,
-            self.menu_state.selection,
+            displayed_selected,
             &status,
         )?;
         Ok(entries)
