@@ -102,5 +102,13 @@ catch {
 Remove-Item $tempFile -ErrorAction SilentlyContinue
 
 Write-Host ""
-Write-Host "Press any key to exit..." -ForegroundColor Green
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+Write-Host "Script complete. Press Enter to close this window." -ForegroundColor Green
+try {
+    # Read-Host is more robust than RawUI.ReadKey and works in more hosts (PowerShell, pwsh, and most run modes)
+    Read-Host -Prompt 'Press Enter to close'
+}
+catch {
+    # If Read-Host fails for some reason, fallback to a short sleep so the user has time to see console output
+    Write-Host "(Read-Host unavailable; waiting 10 seconds before exit...)" -ForegroundColor Yellow
+    Start-Sleep -Seconds 10
+}

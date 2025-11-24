@@ -19,8 +19,8 @@ Write-Host "  4. Pull latest changes from git" -ForegroundColor Gray
 Write-Host "  5. Run installation script" -ForegroundColor Gray
 Write-Host "  6. Keep terminal alive for you" -ForegroundColor Gray
 Write-Host ""
-Write-Host "Press any key to continue or Ctrl+C to cancel..." -ForegroundColor Cyan
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+Write-Host "Press Enter to continue or Ctrl+C to cancel..." -ForegroundColor Cyan
+try { Read-Host -Prompt 'Press Enter to continue or Ctrl+C to cancel' } catch { Start-Sleep -Seconds 1 }
 Write-Host ""
 
 # Build a temporary script that will run each command sequentially on the Pi
@@ -71,6 +71,7 @@ try {
 
 	# Stream local script into ssh stdin in a PowerShell-friendly way
 	if (Get-Command ssh -ErrorAction SilentlyContinue) {
+		Write-Host "Detected SSH client: $((Get-Command ssh).Path)" -ForegroundColor Gray
 		Get-Content -Raw $tmp | ssh -t ${piUser}@${piHost} "bash -s"
 		$sshExit = $LASTEXITCODE
 	} else {
@@ -90,6 +91,6 @@ catch {
 finally {
 	# Clean up
 	if (Test-Path $tmp) { Remove-Item $tmp -ErrorAction SilentlyContinue }
-	Write-Host "\nDone — press Enter to close this window." -ForegroundColor Cyan
-	Read-Host | Out-Null
+	Write-Host "\nScript complete. Press Enter to close this window." -ForegroundColor Cyan
+	try { Read-Host -Prompt 'Press Enter to close' } catch { Start-Sleep -Seconds 10 }
 }
