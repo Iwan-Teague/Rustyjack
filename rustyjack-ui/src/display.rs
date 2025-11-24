@@ -183,12 +183,21 @@ impl Display {
         println!("Starting display diagnostics — cycling init options.\nSet RUSTYJACK_DISPLAY_DIAG=1 to run this from the device.");
 
         let mut attempt = 0usize;
+        // helper to print orientation as text — Orientation doesn't implement Debug
+        fn orient_label(o: Orientation) -> &'static str {
+            match o {
+                Orientation::Portrait => "portrait",
+                Orientation::Landscape => "landscape",
+                // keep sensible default for other variants
+                _ => "other",
+            }
+        }
         for &speed in &speeds {
             for &bgr in &bgr_choices {
                 for &inv in &invert_choices {
                     for &orient in &orientations {
                         attempt += 1;
-                        eprintln!("Diag #{}: speed={} bgr={} invert={} orient={:?}", attempt, speed, bgr, inv, orient);
+                        eprintln!("Diag #{}: speed={} bgr={} invert={} orient={}", attempt, speed, bgr, inv, orient_label(orient));
 
                         // Open fresh SPI and GPIO lines for each attempt so ownership
                         // is clean between iterations.
@@ -236,7 +245,7 @@ impl Display {
                             .ok();
 
                         // Draw a textual line showing the parameters (clamping length)
-                        let info = format!("s={} bgr={} inv={} o={:?}", speed, bgr, inv, orient);
+                        let info = format!("s={} bgr={} inv={} o={}", speed, bgr, inv, orient_label(orient));
                         let style = MonoTextStyleBuilder::new().font(&FONT_6X10).text_color(color).build();
                         let _ = Text::with_baseline(&info, Point::new(2, 60), style, Baseline::Top).draw(&mut lcd);
 
