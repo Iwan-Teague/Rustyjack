@@ -70,9 +70,13 @@ impl Display {
             .context("opening SPI device")?;
         
         // Configure the underlying device
+        // Use a slightly lower default SPI speed to improve stability on
+        // long/fragile wiring and marginal ST7735 modules. If you still get a
+        // blank screen try an even lower value (2_000_000) or change init
+        // variants in DISPLAY_FIX_ALTERNATIVES.md
         let options = SpidevOptions::new()
             .bits_per_word(8)
-            .max_speed_hz(12_000_000)
+            .max_speed_hz(4_000_000)
             .mode(SpiModeFlags::SPI_MODE_0)
             .build();
         spi.configure(&options)
