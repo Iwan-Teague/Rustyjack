@@ -43,6 +43,7 @@ pub enum MenuAction {
     HardwareDetect,
     CrackPasswords,
     DeauthAttack,
+    ConnectKnownNetwork,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -215,6 +216,7 @@ pub enum LootSection {
     Nmap,
     Responder,
     DnsSpoof,
+    Aircrack,
 }
 
 fn main_menu() -> Vec<MenuEntry> {
@@ -326,6 +328,7 @@ fn loot_menu() -> Vec<MenuEntry> {
         MenuEntry::new(" Nmap", MenuAction::Loot(LootSection::Nmap)),
         MenuEntry::new(" Responder", MenuAction::Loot(LootSection::Responder)),
         MenuEntry::new(" DNSSpoof", MenuAction::Loot(LootSection::DnsSpoof)),
+        MenuEntry::new(" Aircrack", MenuAction::Loot(LootSection::Aircrack)),
     ]
 }
 

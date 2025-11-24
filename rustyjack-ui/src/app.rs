@@ -14,7 +14,7 @@ use rustyjack_core::cli::{
     DnsSpoofCommand, DnsSpoofStartArgs, HardwareCommand, LootCommand, LootKind, LootListArgs, 
     LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, ResponderArgs, ResponderCommand, 
     ReverseCommand, ReverseLaunchArgs, ScanRunArgs, StatusCommand, SystemUpdateArgs,
-    WifiBestArgs, WifiCommand, WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs,
+    WifiBestArgs, WifiCommand, WifiDeauthArgs, WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs,
     WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
 };
 use serde::Deserialize;
@@ -487,6 +487,7 @@ impl App {
             MenuAction::HardwareDetect => self.show_hardware_detect()?,
             MenuAction::CrackPasswords => self.show_crack_passwords_menu()?,
             MenuAction::DeauthAttack => self.launch_deauth_attack()?,
+            MenuAction::ConnectKnownNetwork => self.connect_known_network()?,
         }
         Ok(())
     }
@@ -758,6 +759,7 @@ impl App {
             LootSection::Nmap => LootKind::Nmap,
             LootSection::Responder => LootKind::Responder,
             LootSection::DnsSpoof => LootKind::Dnsspoof,
+            LootSection::Aircrack => LootKind::Aircrack,
         };
         let (_, data) = self
             .core
@@ -2146,6 +2148,7 @@ impl App {
     fn show_crack_passwords_menu(&mut self) -> Result<()> {
         let actions = vec![
             ("Deauth Attack", "deauth"),
+            ("Connect to Network", "connect"),
             ("Back", "back"),
         ];
         
@@ -2155,6 +2158,7 @@ impl App {
             
             match actions[index].1 {
                 "deauth" => self.launch_deauth_attack()?,
+                "connect" => self.connect_known_network()?,
                 "back" => break,
                 _ => {}
             }
@@ -2174,18 +2178,60 @@ impl App {
             return self.show_message("Deauth Attack", ["No active interface", "Set in Hardware Detect"]);
         }
         
-        let msg = vec![
-            format!("Target: {}", target_network),
-            format!("Interface: {}", active_interface),
-            "Starting deauth attack...".to_string(),
-        ];
-        self.show_message("Deauth Attack", msg.iter().map(|s| s.as_str()))?;
+        // Show initial message
+        self.show_progress("Deauth Attack", [
+            &format!("Target: {}", target_network),
+            &format!("Interface: {}", active_interface),
+            "Preparing attack...",
+        ])?;
         
-        // TODO: Implement actual deauth attack command
-        // This would call into rustyjack-core to execute aireplay-ng or similar
-        // For now, just show a placeholder message
+        // Launch deauth attack via core
+        let command = Commands::Wifi(WifiCommand::Deauth(WifiDeauthArgs {
+            ssid: target_network.clone(),
+            interface: active_interface.clone(),
+            duration: 60,
+            packets: 10,
+        }));
         
-        self.show_message("Deauth Attack", ["Attack launched", "Check loot for results"])
+        match self.core.dispatch(command) {
+            Ok((msg, data)) => {
+                let mut result_lines = vec![msg];
+                
+                if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
+                    if captured {
+                        result_lines.push("Handshake captured!".to_string());
+                    } else {
+                        result_lines.push("No handshake detected".to_string());
+                    }
+                }
+                
+                if let Some(log) = data.get("log_file").and_then(|v| v.as_str()) {
+                    result_lines.push(format!("Log: {}", Path::new(log).file_name().unwrap().to_str().unwrap()));
+                }
+                
+                result_lines.push("Check Loot > Aircrack".to_string());
+                
+                self.show_message("Deauth Complete", result_lines.iter().map(|s| s.as_str()))?;
+            }
+            Err(e) => {
+                self.show_message("Deauth Error", [format!("{}", e)])?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn connect_known_network(&mut self) -> Result<()> {
+        // For now, show message that user should use WiFi Manager or CLI
+        // A full text input UI would require keyboard support
+        self.show_message("Connect Network", [
+            "Use WiFi Manager to",
+            "connect to networks",
+            "",
+            "Or use command line:",
+            "rustyjack-core wifi",
+            "profile connect",
+        ])
     }
 }
 
