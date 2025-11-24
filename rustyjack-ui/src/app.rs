@@ -2178,6 +2178,22 @@ impl App {
             return self.show_message("Deauth Attack", ["No active interface", "Set in Hardware Detect"]);
         }
         
+        // Show initial progress messages
+        let progress_stages = vec![
+            (0, "Preparing attack..."),
+            (1, "Monitor mode enabled"),
+            (2, "Starting capture..."),
+            (3, "Sending deauth packets"),
+            (5, "Attack in progress..."),
+            (10, "Monitoring for handshake"),
+            (20, "Deauth packets sent..."),
+            (30, "Still capturing..."),
+            (40, "Checking for handshake"),
+            (50, "Attack continuing..."),
+            (55, "Finalizing capture..."),
+            (58, "Stopping monitor mode"),
+        ];
+        
         // Show initial message
         self.show_progress("Deauth Attack", [
             &format!("Target: {}", target_network),
@@ -2185,24 +2201,91 @@ impl App {
             "Preparing attack...",
         ])?;
         
-        // Launch deauth attack via core
-        let command = Commands::Wifi(WifiCommand::Deauth(WifiDeauthArgs {
-            ssid: target_network.clone(),
-            interface: active_interface.clone(),
-            duration: 60,
-            packets: 10,
-        }));
+        // Launch attack in background thread while showing progress
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::time::Duration;
         
-        match self.core.dispatch(command) {
+        let core = self.core.clone();
+        let ssid = target_network.clone();
+        let iface = active_interface.clone();
+        
+        let result = Arc::new(Mutex::new(None));
+        let result_clone = Arc::clone(&result);
+        
+        // Spawn attack thread
+        thread::spawn(move || {
+            let command = Commands::Wifi(WifiCommand::Deauth(WifiDeauthArgs {
+                ssid,
+                interface: iface,
+                duration: 60,
+                packets: 10,
+            }));
+            
+            let r = core.dispatch(command);
+            *result_clone.lock().unwrap() = Some(r);
+        });
+        
+        // Show progress updates while attack runs
+        let start = std::time::Instant::now();
+        let mut stage_idx = 0;
+        
+        loop {
+            let elapsed = start.elapsed().as_secs();
+            
+            // Update stage
+            while stage_idx < progress_stages.len() && elapsed >= progress_stages[stage_idx].0 {
+                let overlay = self.stats.snapshot();
+                self.display.draw_progress_dialog(
+                    "Deauth Attack",
+                    progress_stages[stage_idx].1,
+                    (elapsed as f32 / 60.0) * 100.0,
+                    &overlay,
+                )?;
+                stage_idx += 1;
+            }
+            
+            // Check if attack completed
+            if let Some(ref res) = *result.lock().unwrap() {
+                break;
+            }
+            
+            // Update display periodically
+            if elapsed % 5 == 0 {
+                let overlay = self.stats.snapshot();
+                let message = if elapsed < 60 {
+                    format!("Attack progress... {}s", elapsed)
+                } else {
+                    "Finalizing...".to_string()
+                };
+                self.display.draw_progress_dialog(
+                    "Deauth Attack",
+                    &message,
+                    (elapsed as f32 / 60.0).min(1.0) * 100.0,
+                    &overlay,
+                )?;
+            }
+            
+            thread::sleep(Duration::from_millis(500));
+        }
+        
+        // Get result
+        let attack_result = result.lock().unwrap().take().unwrap();
+        
+        match attack_result {
             Ok((msg, data)) => {
                 let mut result_lines = vec![msg];
                 
                 if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
                     if captured {
-                        result_lines.push("Handshake captured!".to_string());
+                        result_lines.push("HANDSHAKE CAPTURED!".to_string());
                     } else {
                         result_lines.push("No handshake detected".to_string());
                     }
+                }
+                
+                if let Some(packets) = data.get("packets_sent").and_then(|v| v.as_u64()) {
+                    result_lines.push(format!("Packets sent: {}", packets));
                 }
                 
                 if let Some(log) = data.get("log_file").and_then(|v| v.as_str()) {
