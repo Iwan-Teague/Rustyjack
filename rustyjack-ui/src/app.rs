@@ -11,9 +11,9 @@ use anyhow::{Result, anyhow, bail};
 use rustyjack_core::cli::{
     AutopilotCommand, AutopilotMode as CoreAutopilotMode, AutopilotStartArgs,
     BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
-    DnsSpoofCommand, DnsSpoofStartArgs, LootCommand, LootKind, LootListArgs, LootReadArgs,
-    MitmCommand, MitmStartArgs, NotifyCommand, ResponderArgs, ResponderCommand, ReverseCommand,
-    ReverseLaunchArgs, ScanRunArgs, StatusCommand, SystemUpdateArgs,
+    DnsSpoofCommand, DnsSpoofStartArgs, HardwareCommand, LootCommand, LootKind, LootListArgs, 
+    LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, ResponderArgs, ResponderCommand, 
+    ReverseCommand, ReverseLaunchArgs, ScanRunArgs, StatusCommand, SystemUpdateArgs,
     WifiBestArgs, WifiCommand, WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs,
     WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
 };
