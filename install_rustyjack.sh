@@ -194,18 +194,59 @@ fi
 
 # Optionally run the repository's WiFi setup helper automatically.
 # To skip automatic invocation set NO_WIFI_SETUP=1 in the environment.
+# If WIFI_COUNTRY not set, try to detect user's locale and set it as default
+detect_wifi_country() {
+  # 1) use explicit env var
+  if [ -n "${WIFI_COUNTRY:-}" ]; then
+    echo "$WIFI_COUNTRY"
+    return 0
+  fi
+
+  # 2) try LANG / locale environment (e.g. en_GB.UTF-8)
+  local lang="${LANG:-}"
+  if [ -z "$lang" ]; then
+    lang=$(locale 2>/dev/null | awk -F= '/^LANG=/ {print $2}') || true
+  fi
+  if [ -n "$lang" ] && echo "$lang" | grep -q "_"; then
+    echo "$lang" | awk -F[_.] '{print toupper($2)}'
+    return 0
+  fi
+
+  # 3) try system timezone -> map using ipinfo as fallback
+  if command -v curl >/dev/null 2>&1; then
+    # Prefer IP geolocation if network is present
+    country=$(curl -fsS --max-time 5 https://ipapi.co/country/ 2>/dev/null || true)
+    if [ -n "$country" ]; then
+      echo "$country" | tr '[:lower:]' '[:upper:]'
+      return 0
+    fi
+    # fallback to ipinfo
+    country=$(curl -fsS --max-time 5 https://ipinfo.io/country 2>/dev/null || true)
+    if [ -n "$country" ]; then
+      echo "$country" | tr '[:lower:]' '[:upper:]'
+      return 0
+    fi
+  fi
+
+  # 4) last resort: default to US
+  echo "US"
+}
+
 if [ "${NO_WIFI_SETUP:-0}" != "1" ]; then
   WIFI_HELPER="$PROJECT_ROOT/setup_wifi.sh"
   if [ -f "$WIFI_HELPER" ]; then
     info "Running WiFi setup helper: $WIFI_HELPER"
     sudo chmod +x "$WIFI_HELPER" || true
     # If WIFI_COUNTRY env is set pass it through; otherwise run non-interactively
-    if [ -n "${WIFI_COUNTRY:-}" ]; then
-      sudo WIFI_COUNTRY="$WIFI_COUNTRY" "$WIFI_HELPER" || warn "WiFi setup helper failed"
-    else
-      # Run non-interactive and default country to US.
-      sudo "$WIFI_HELPER" -y || warn "WiFi setup helper failed"
+    # determine country for non-interactive installer if not provided
+    if [ -z "${WIFI_COUNTRY:-}" ]; then
+      DETECTED_COUNTRY=$(detect_wifi_country)
+      info "Detected locale country code: ${DETECTED_COUNTRY}"
+      WIFI_COUNTRY="$DETECTED_COUNTRY"
     fi
+
+    # run helper using the resolved WIFI_COUNTRY env
+    sudo WIFI_COUNTRY="$WIFI_COUNTRY" "$WIFI_HELPER" -y || warn "WiFi setup helper failed"
   else
     info "No WiFi setup helper found at $WIFI_HELPER — skipping"
   fi
