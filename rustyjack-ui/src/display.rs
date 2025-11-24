@@ -41,6 +41,10 @@ const LCD_OFFSET_Y: u16 = 1;
 #[cfg(target_os = "linux")]
 pub struct Display {
     lcd: ST7735<SpidevDevice, CdevPin, CdevPin>,
+    // Hold the backlight pin so it remains reserved for the lifetime of the
+    // Display instance. Previously this was kept in a temporary local which
+    // caused the line to be released when the constructor returned.
+    backlight: CdevPin,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
@@ -98,7 +102,7 @@ impl Display {
         let bl_line = chip.get_line(18).context("getting backlight line")?;
         let bl_handle = bl_line.request(LineRequestFlags::OUTPUT, 1, "rustyjack-bl")
             .context("requesting backlight line")?;
-        let _backlight = CdevPin::new(bl_handle).context("creating backlight pin")?;
+        let backlight = CdevPin::new(bl_handle).context("creating backlight pin")?;
 
         let mut delay = Delay {};
         // Try RGB mode with inverted colors (common fix for white screen)
@@ -137,6 +141,7 @@ impl Display {
             text_style_regular,
             text_style_highlight,
             text_style_small,
+            backlight,
         })
     }
 
