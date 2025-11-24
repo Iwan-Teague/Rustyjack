@@ -61,6 +61,8 @@ pub enum Commands {
     Bridge(BridgeCommand),
     #[command(subcommand)]
     Autopilot(AutopilotCommand),
+    #[command(subcommand)]
+    Hardware(HardwareCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -378,6 +380,12 @@ pub enum StatusCommand {
     Summary,
     /// Provide a network health dashboard
     Network,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HardwareCommand {
+    /// Scan and detect all available network hardware
+    Detect,
 }
 
 #[derive(Subcommand, Debug)]

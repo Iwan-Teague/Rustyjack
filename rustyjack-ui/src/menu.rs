@@ -40,6 +40,7 @@ pub enum MenuAction {
     AutopilotStatus,
     ToggleDiscord,
     TransferToUSB,
+    HardwareDetect,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -217,6 +218,7 @@ pub enum LootSection {
 fn main_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new(" View Dashboards", MenuAction::ViewDashboards),
+        MenuEntry::new(" Hardware Detect", MenuAction::HardwareDetect),
         MenuEntry::new(" Autopilot", MenuAction::Submenu("ap")),
         MenuEntry::new(" Scan Nmap", MenuAction::Submenu("ab")),
         MenuEntry::new(" Reverse Shell", MenuAction::Submenu("ac")),

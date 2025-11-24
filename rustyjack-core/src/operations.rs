@@ -12,13 +12,13 @@ use serde_json::{Value, json};
 
 use crate::cli::{
     AutopilotCommand, AutopilotStartArgs, BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands, 
-    DiscordCommand, DiscordSendArgs, DnsSpoofCommand, DnsSpoofStartArgs, LootCommand, LootKind, 
-    LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, ProcessCommand, 
-    ProcessKillArgs, ProcessStatusArgs, ResponderArgs, ResponderCommand, ReverseCommand, 
-    ReverseLaunchArgs, ScanCommand, ScanRunArgs, StatusCommand, SystemCommand, SystemUpdateArgs, 
-    WifiBestArgs, WifiCommand, WifiDisconnectArgs, WifiProfileCommand, WifiProfileConnectArgs, 
-    WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiRouteCommand, WifiRouteEnsureArgs, 
-    WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
+    DiscordCommand, DiscordSendArgs, DnsSpoofCommand, DnsSpoofStartArgs, HardwareCommand,
+    LootCommand, LootKind, LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, 
+    ProcessCommand, ProcessKillArgs, ProcessStatusArgs, ResponderArgs, ResponderCommand, 
+    ReverseCommand, ReverseLaunchArgs, ScanCommand, ScanRunArgs, StatusCommand, SystemCommand, 
+    SystemUpdateArgs, WifiBestArgs, WifiCommand, WifiDisconnectArgs, WifiProfileCommand, 
+    WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiRouteCommand, 
+    WifiRouteEnsureArgs, WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
 };
 use crate::system::{
     KillResult, WifiProfile, append_payload_log, backup_repository, backup_routing_state,
@@ -98,6 +98,9 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             AutopilotCommand::Start(args) => handle_autopilot_start(root, args),
             AutopilotCommand::Stop => handle_autopilot_stop(),
             AutopilotCommand::Status => handle_autopilot_status(),
+        },
+        Commands::Hardware(cmd) => match cmd {
+            HardwareCommand::Detect => handle_hardware_detect(),
         },
     }
 }
@@ -1154,3 +1157,55 @@ fn resolve_loot_path(root: &Path, path: &Path) -> Result<PathBuf> {
     }
     Ok(canonical)
 }
+
+fn handle_hardware_detect() -> Result<HandlerResult> {
+    log::info!("Scanning hardware interfaces");
+    
+    let interfaces = list_interface_summaries()?;
+    
+    // Categorize interfaces
+    let mut ethernet_ports = Vec::new();
+    let mut wifi_modules = Vec::new();
+    let mut other_interfaces = Vec::new();
+    
+    for iface in &interfaces {
+        // Skip loopback
+        if iface.name == "lo" {
+            continue;
+        }
+        
+        match iface.kind.as_str() {
+            "wireless" => wifi_modules.push(iface.clone()),
+            "wired" => {
+                // Only count ethernet if it's eth* or en*
+                if iface.name.starts_with("eth") || iface.name.starts_with("en") {
+                    ethernet_ports.push(iface.clone());
+                } else {
+                    other_interfaces.push(iface.clone());
+                }
+            }
+            _ => other_interfaces.push(iface.clone()),
+        }
+    }
+    
+    let data = json!({
+        "ethernet_count": ethernet_ports.len(),
+        "wifi_count": wifi_modules.len(),
+        "other_count": other_interfaces.len(),
+        "ethernet_ports": ethernet_ports,
+        "wifi_modules": wifi_modules,
+        "other_interfaces": other_interfaces,
+        "total_interfaces": interfaces.len() - 1, // Exclude loopback
+    });
+    
+    let summary = format!(
+        "Found {} ethernet, {} wifi, {} other",
+        ethernet_ports.len(),
+        wifi_modules.len(),
+        other_interfaces.len()
+    );
+    
+    log::info!("Hardware scan complete: {summary}");
+    Ok((summary, data))
+}
+

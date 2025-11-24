@@ -484,6 +484,7 @@ impl App {
             MenuAction::AutopilotStatus => self.autopilot_status()?,
             MenuAction::ToggleDiscord => self.toggle_discord()?,
             MenuAction::TransferToUSB => self.transfer_to_usb()?,
+            MenuAction::HardwareDetect => self.show_hardware_detect()?,
         }
         Ok(())
     }
@@ -1935,6 +1936,59 @@ impl App {
         self.config.settings.discord_enabled = !self.config.settings.discord_enabled;
         self.save_config()?;
         // No message needed as the menu label will update immediately
+        Ok(())
+    }
+    
+    fn show_hardware_detect(&mut self) -> Result<()> {
+        self.show_progress("Hardware Scan", ["Detecting interfaces...", "Please wait"])?;
+        
+        match self.core.dispatch(Commands::Hardware(HardwareCommand::Detect)) {
+            Ok((_, data)) => {
+                let eth_count = data.get("ethernet_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let wifi_count = data.get("wifi_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let other_count = data.get("other_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                
+                let ethernet_ports = data.get("ethernet_ports").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let wifi_modules = data.get("wifi_modules").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                
+                // Build detailed view
+                let mut lines = vec![
+                    format!("Ethernet: {}", eth_count),
+                    format!("WiFi: {}", wifi_count),
+                    format!("Other: {}", other_count),
+                    "".to_string(),
+                ];
+                
+                if !ethernet_ports.is_empty() {
+                    lines.push("Ethernet Ports:".to_string());
+                    for port in &ethernet_ports {
+                        if let Some(name) = port.get("name").and_then(|v| v.as_str()) {
+                            let status = port.get("oper_state").and_then(|v| v.as_str()).unwrap_or("?");
+                            let ip = port.get("ip").and_then(|v| v.as_str()).unwrap_or("no ip");
+                            lines.push(format!("  {}: {} {}", name, status, ip));
+                        }
+                    }
+                    lines.push("".to_string());
+                }
+                
+                if !wifi_modules.is_empty() {
+                    lines.push("WiFi Modules:".to_string());
+                    for module in &wifi_modules {
+                        if let Some(name) = module.get("name").and_then(|v| v.as_str()) {
+                            let status = module.get("oper_state").and_then(|v| v.as_str()).unwrap_or("?");
+                            let ip = module.get("ip").and_then(|v| v.as_str()).unwrap_or("no ip");
+                            lines.push(format!("  {}: {} {}", name, status, ip));
+                        }
+                    }
+                }
+                
+                self.show_message("Hardware Detected", lines.iter().map(|s| s.as_str()))?;
+            }
+            Err(err) => {
+                let msg = vec![format!("Scan failed: {}", err)];
+                self.show_message("Hardware Error", msg.iter().map(|s| s.as_str()))?;
+            }
+        }
         Ok(())
     }
 }
