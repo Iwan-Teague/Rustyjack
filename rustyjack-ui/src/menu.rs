@@ -22,6 +22,8 @@ pub enum MenuAction {
     CrackPasswords,
     DeauthAttack,
     ConnectKnownNetwork,
+    /// Placeholder for informational entries (no action)
+    ShowInfo,
 }
 
 #[derive(Clone, Copy, Debug)]

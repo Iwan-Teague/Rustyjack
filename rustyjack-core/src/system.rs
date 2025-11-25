@@ -75,7 +75,7 @@ pub struct InterfaceStats {
     pub oper_state: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceSummary {
     pub name: String,
     pub kind: String,

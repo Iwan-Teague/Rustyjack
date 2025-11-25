@@ -7,15 +7,16 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use rustyjack_core::cli::{
     AutopilotCommand, AutopilotMode as CoreAutopilotMode, AutopilotStartArgs,
     Commands, DiscordCommand, DiscordSendArgs,
     HardwareCommand, LootCommand, LootKind, LootListArgs, 
-    LootReadArgs, NotifyCommand, StatusCommand, SystemUpdateArgs,
+    LootReadArgs, NotifyCommand, SystemUpdateArgs,
     WifiCommand, WifiDeauthArgs, WifiRouteCommand, WifiScanArgs, 
-    WifiStatusArgs, WifiProfileCommand,
+    WifiStatusArgs, WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs,
 };
+use rustyjack_core::InterfaceSummary;
 use serde::Deserialize;
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
@@ -30,6 +31,59 @@ use crate::{
     menu::{AutopilotMode, ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, menu_title},
     stats::StatsSampler,
 };
+
+// Response types for WiFi operations
+#[derive(Debug, Deserialize)]
+struct WifiNetworkEntry {
+    ssid: Option<String>,
+    bssid: Option<String>,
+    signal_dbm: Option<i32>,
+    channel: Option<u8>,
+    encrypted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct WifiScanResponse {
+    networks: Vec<WifiNetworkEntry>,
+    count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct WifiProfileSummary {
+    ssid: String,
+    #[serde(default)]
+    interface: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WifiProfilesResponse {
+    profiles: Vec<WifiProfileSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WifiListResponse {
+    interfaces: Vec<InterfaceSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RouteSnapshot {
+    #[serde(default)]
+    default_gateway: Option<String>,
+    #[serde(default)]
+    default_interface: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WifiStatusOverview {
+    #[serde(default)]
+    connected: bool,
+    #[serde(default)]
+    ssid: Option<String>,
+    #[serde(default)]
+    interface: Option<String>,
+    #[serde(default)]
+    signal_dbm: Option<i32>,
+}
 
 pub struct App {
     core: CoreBridge,
@@ -261,7 +315,6 @@ impl App {
                     }
                     ButtonAction::MainMenu => self.menu_state.home(),
                     ButtonAction::Reboot => self.confirm_reboot()?,
-                    _ => {}
                 }
             }
         }
@@ -345,6 +398,7 @@ impl App {
             MenuAction::CrackPasswords => self.show_crack_passwords_menu()?,
             MenuAction::DeauthAttack => self.launch_deauth_attack()?,
             MenuAction::ConnectKnownNetwork => self.connect_known_network()?,
+            MenuAction::ShowInfo => {} // No-op for informational entries
         }
         Ok(())
     }
@@ -1164,7 +1218,7 @@ impl App {
             scan: true,
             mitm: true,
             responder: true,
-            dns_spoof: Some(self.spoof_site.clone()),
+            dns_spoof: None,
             duration: 0,
             check_interval: 30,
         };
