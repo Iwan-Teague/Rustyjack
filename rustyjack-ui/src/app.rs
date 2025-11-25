@@ -9,7 +9,6 @@ use std::{
 
 use anyhow::{Result, bail};
 use rustyjack_core::cli::{
-    AutopilotCommand, AutopilotMode as CoreAutopilotMode, AutopilotStartArgs,
     Commands, DiscordCommand, DiscordSendArgs,
     HardwareCommand, LootCommand, LootKind, LootListArgs, 
     LootReadArgs, NotifyCommand, SystemUpdateArgs,
@@ -28,7 +27,7 @@ use crate::{
     core::CoreBridge,
     display::{Display, DashboardView},
     input::{Button, ButtonPad},
-    menu::{AutopilotMode, ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, menu_title},
+    menu::{ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, menu_title},
     stats::StatsSampler,
 };
 
@@ -389,13 +388,10 @@ impl App {
             MenuAction::ViewDashboards => {
                 self.dashboard_view = Some(DashboardView::SystemHealth);
             }
-            MenuAction::AutopilotStart(mode) => self.autopilot_start(mode)?,
-            MenuAction::AutopilotStop => self.autopilot_stop()?,
-            MenuAction::AutopilotStatus => self.autopilot_status()?,
             MenuAction::ToggleDiscord => self.toggle_discord()?,
             MenuAction::TransferToUSB => self.transfer_to_usb()?,
             MenuAction::HardwareDetect => self.show_hardware_detect()?,
-            MenuAction::CrackPasswords => self.show_crack_passwords_menu()?,
+            MenuAction::ScanNetworks => self.scan_wifi_networks()?,
             MenuAction::DeauthAttack => self.launch_deauth_attack()?,
             MenuAction::ConnectKnownNetwork => self.connect_known_network()?,
             MenuAction::ShowInfo => {} // No-op for informational entries
@@ -1204,86 +1200,6 @@ impl App {
             .map(|idx| names[idx].clone()))
     }
 
-    fn autopilot_start(&mut self, mode: AutopilotMode) -> Result<()> {
-        let core_mode = match mode {
-            AutopilotMode::Standard => CoreAutopilotMode::Standard,
-            AutopilotMode::Aggressive => CoreAutopilotMode::Aggressive,
-            AutopilotMode::Stealth => CoreAutopilotMode::Stealth,
-            AutopilotMode::Harvest => CoreAutopilotMode::Harvest,
-        };
-
-        let args = AutopilotStartArgs {
-            mode: core_mode,
-            interface: None,
-            scan: true,
-            mitm: true,
-            responder: true,
-            dns_spoof: None,
-            duration: 0,
-            check_interval: 30,
-        };
-
-        match self.core.dispatch(Commands::Autopilot(AutopilotCommand::Start(args))) {
-            Ok((_, data)) => {
-                let mode_str = data.get("mode").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let msg = vec![
-                    "Autopilot started".to_string(),
-                    format!("Mode: {}", mode_str),
-                    "Running...".to_string(),
-                ];
-                self.show_message("Autopilot", msg.iter().map(|s| s.as_str()))?;
-            }
-            Err(err) => {
-                let msg = vec![format!("{}", err)];
-                self.show_message("Autopilot error", msg.iter().map(|s| s.as_str()))?;
-            }
-        }
-        Ok(())
-    }
-
-    fn autopilot_stop(&mut self) -> Result<()> {
-        match self.core.dispatch(Commands::Autopilot(AutopilotCommand::Stop)) {
-            Ok(_) => {
-                self.show_message("Autopilot", ["Stopped"])?;
-            }
-            Err(err) => {
-                let msg = vec![format!("{}", err)];
-                self.show_message("Autopilot error", msg.iter().map(|s| s.as_str()))?;
-            }
-        }
-        Ok(())
-    }
-
-    fn autopilot_status(&mut self) -> Result<()> {
-        match self.core.dispatch(Commands::Autopilot(AutopilotCommand::Status)) {
-            Ok((_, data)) => {
-                let running = data.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
-                let phase = data.get("phase").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let elapsed = data.get("elapsed_secs").and_then(|v| v.as_u64()).unwrap_or(0);
-                let creds = data.get("credentials_captured").and_then(|v| v.as_u64()).unwrap_or(0);
-                let packets = data.get("packets_captured").and_then(|v| v.as_u64()).unwrap_or(0);
-
-                let status_text = if running { "RUNNING" } else { "STOPPED" };
-                let elapsed_mins = elapsed / 60;
-                let elapsed_secs = elapsed % 60;
-
-                let msg = vec![
-                    format!("Status: {}", status_text),
-                    format!("Phase: {}", phase),
-                    format!("Time: {}m{}s", elapsed_mins, elapsed_secs),
-                    format!("Creds: {}", creds),
-                    format!("Pkts: {}", packets),
-                ];
-                self.show_message("Autopilot Status", msg.iter().map(|s| s.as_str()))?;
-            }
-            Err(err) => {
-                let msg = vec![format!("{}", err)];
-                self.show_message("Autopilot error", msg.iter().map(|s| s.as_str()))?;
-            }
-        }
-        Ok(())
-    }
-
     fn toggle_discord(&mut self) -> Result<()> {
         self.config.settings.discord_enabled = !self.config.settings.discord_enabled;
         self.save_config()?;
@@ -1408,24 +1324,41 @@ impl App {
         Ok(())
     }
     
-    fn show_crack_passwords_menu(&mut self) -> Result<()> {
-        let actions = vec![
-            ("Deauth Attack", "deauth"),
-            ("Connect to Network", "connect"),
-            ("Back", "back"),
-        ];
+    fn scan_wifi_networks(&mut self) -> Result<()> {
+        self.show_progress("WiFi Scan", ["Scanning for networks...", "Please wait"])?;
         
-        loop {
-            let labels: Vec<String> = actions.iter().map(|(label, _)| format!(" {}", label)).collect();
-            let Some(index) = self.choose_from_menu("Crack Passwords", &labels)? else { break; };
-            
-            match actions[index].1 {
-                "deauth" => self.launch_deauth_attack()?,
-                "connect" => self.connect_known_network()?,
-                "back" => break,
-                _ => {}
+        let scan_result = self.fetch_wifi_scan();
+        
+        match scan_result {
+            Ok(response) => {
+                if response.networks.is_empty() {
+                    return self.show_message("WiFi Scan", ["No networks found"]);
+                }
+                
+                // Build list of networks for selection
+                let mut labels = Vec::new();
+                for net in &response.networks {
+                    let ssid = net.ssid.as_deref().unwrap_or("<hidden>");
+                    let signal = net.signal_dbm.map(|s| format!("{}dBm", s)).unwrap_or_default();
+                    let ch = net.channel.map(|c| format!("ch{}", c)).unwrap_or_default();
+                    let lock = if net.encrypted { "[E]" } else { "" };
+                    labels.push(format!("{} {} {} {}", ssid, signal, ch, lock));
+                }
+                
+                // Interactive network list
+                loop {
+                    let Some(idx) = self.choose_from_menu("Networks", &labels)? else { break; };
+                    
+                    if let Some(network) = response.networks.get(idx) {
+                        self.handle_network_selection(network)?;
+                    }
+                }
+            }
+            Err(e) => {
+                self.show_message("WiFi Scan Error", [format!("{}", e)])?;
             }
         }
+        
         Ok(())
     }
     
