@@ -19,6 +19,7 @@ use crate::nl80211::get_ifindex;
 #[derive(Debug)]
 pub struct InjectionSocket {
     fd: RawFd,
+    #[allow(dead_code)]
     ifindex: i32,
 }
 

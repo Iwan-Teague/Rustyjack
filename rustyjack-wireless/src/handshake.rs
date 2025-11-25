@@ -9,7 +9,8 @@ use crate::frames::MacAddress;
 use crate::capture::CapturedPacket;
 use byteorder::{BigEndian, ByteOrder};
 
-/// EAPOL Ethertype
+/// EAPOL Ethertype (0x888E)
+#[allow(dead_code)]
 const EAPOL_ETHER_TYPE: u16 = 0x888E;
 
 /// EAPOL packet types

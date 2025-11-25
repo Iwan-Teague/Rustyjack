@@ -166,7 +166,7 @@ pub fn execute_deauth_attack(
         // Write packets to a simple capture format
         let mut pcap_data = Vec::new();
         for pkt in &captured_packets {
-            pcap_data.extend_from_slice(pkt.data());
+            pcap_data.extend_from_slice(&pkt.raw_data);
         }
         if !pcap_data.is_empty() {
             fs::write(&capture_file, &pcap_data)

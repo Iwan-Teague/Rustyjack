@@ -21,6 +21,7 @@ const CAPTURE_BUFFER_SIZE: usize = 65536;
 /// Packet capture socket
 pub struct PacketCapture {
     fd: RawFd,
+    #[allow(dead_code)]
     ifindex: i32,
     buffer: Vec<u8>,
     filter: CaptureFilter,

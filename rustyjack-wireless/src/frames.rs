@@ -128,20 +128,33 @@ impl FrameType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FrameSubtype {
-    // Management subtypes (0-15)
+    /// Association Request (subtype 0)
     AssociationRequest = 0,
+    /// Association Response (subtype 1)
     AssociationResponse = 1,
+    /// Reassociation Request (subtype 2)
     ReassociationRequest = 2,
+    /// Reassociation Response (subtype 3)
     ReassociationResponse = 3,
+    /// Probe Request (subtype 4)
     ProbeRequest = 4,
+    /// Probe Response (subtype 5)
     ProbeResponse = 5,
+    /// Timing Advertisement (subtype 6)
     TimingAdvertisement = 6,
+    /// Beacon (subtype 8)
     Beacon = 8,
+    /// ATIM (subtype 9)
     Atim = 9,
+    /// Disassociation (subtype 10)
     Disassociation = 10,
+    /// Authentication (subtype 11)
     Authentication = 11,
+    /// Deauthentication (subtype 12)
     Deauthentication = 12,
+    /// Action (subtype 13)
     Action = 13,
+    /// Action No Ack (subtype 14)
     ActionNoAck = 14,
     
     /// Unknown subtype

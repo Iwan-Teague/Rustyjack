@@ -96,16 +96,23 @@ pub enum Nl80211Attr {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NlMsgHdr {
+    /// Message length including header
     pub len: u32,
+    /// Message type
     pub msg_type: u16,
+    /// Message flags
     pub flags: u16,
+    /// Sequence number
     pub seq: u32,
+    /// Process ID
     pub pid: u32,
 }
 
 impl NlMsgHdr {
+    /// Size of the header in bytes
     pub const SIZE: usize = 16;
     
+    /// Create a new netlink message header
     pub fn new(msg_type: u16, flags: u16, seq: u32) -> Self {
         Self {
             len: Self::SIZE as u32,
@@ -121,12 +128,16 @@ impl NlMsgHdr {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GenlMsgHdr {
+    /// Command
     pub cmd: u8,
+    /// Version
     pub version: u8,
+    /// Reserved (padding)
     pub reserved: u16,
 }
 
 impl GenlMsgHdr {
+    /// Size of the header in bytes
     pub const SIZE: usize = 4;
 }
 
@@ -134,11 +145,14 @@ impl GenlMsgHdr {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NlAttrHdr {
+    /// Attribute length including header
     pub len: u16,
+    /// Attribute type
     pub attr_type: u16,
 }
 
 impl NlAttrHdr {
+    /// Size of the header in bytes
     pub const SIZE: usize = 4;
 }
 
@@ -187,8 +201,11 @@ pub fn get_interface_type(name: &str) -> Result<u32> {
 /// Interface state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterfaceState {
+    /// Interface is up
     Up,
+    /// Interface is down
     Down,
+    /// Unknown state
     Unknown,
 }
 

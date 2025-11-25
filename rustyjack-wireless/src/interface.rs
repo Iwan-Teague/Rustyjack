@@ -24,8 +24,10 @@ pub struct WirelessInterface {
     /// Interface index
     ifindex: i32,
     /// Original MAC address (for restoration)
+    #[allow(dead_code)]
     original_mac: [u8; 6],
     /// Original interface type
+    #[allow(dead_code)]
     original_type: Option<Nl80211IfType>,
     /// Whether we put it in monitor mode
     we_enabled_monitor: bool,
