@@ -140,9 +140,9 @@ info "Using project root: $PROJECT_ROOT"
 info "Stopping rustyjack service for rebuild..."
 sudo systemctl stop rustyjack.service 2>/dev/null || true
 
-# Remove old binaries
-info "Removing old binaries..."
-sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack-core
+# Remove old binary (only rustyjack-ui - core is a library)
+info "Removing old binary..."
+sudo rm -f /usr/local/bin/rustyjack-ui
 
 # Ask user about clean build
 echo ""
@@ -159,35 +159,29 @@ BUILD_CHOICE="${BUILD_CHOICE:-1}"
 if [ "$BUILD_CHOICE" = "2" ]; then
   warn "Performing CLEAN build (cargo clean)..."
   info "This will take longer but ensures a fresh build."
-  (cd "$PROJECT_ROOT/rustyjack-core" && cargo clean) || warn "cargo clean failed for core"
-  (cd "$PROJECT_ROOT/rustyjack-ui" && cargo clean) || warn "cargo clean failed for ui"
+  (cd "$PROJECT_ROOT/rustyjack-ui" && cargo clean) || warn "cargo clean failed"
   info "Cache cleared. Starting fresh compilation..."
 else
   info "Performing INCREMENTAL build (faster)..."
 fi
 
-info "Building rustyjack-core (debug)..."
-(cd "$PROJECT_ROOT/rustyjack-core" && cargo build) || fail "Failed to build rustyjack-core"
+# Build rustyjack-ui (this also compiles rustyjack-core library as a dependency)
 info "Building rustyjack-ui (debug)..."
 (cd "$PROJECT_ROOT/rustyjack-ui" && cargo build) || fail "Failed to build rustyjack-ui"
 
-# Verify the binaries exist (debug builds are in target/debug/)
-if [ ! -f "$PROJECT_ROOT/rustyjack-core/target/debug/rustyjack-core" ]; then
-  fail "rustyjack-core binary not found after build!"
-fi
+# Verify the binary exists (debug builds are in target/debug/)
 if [ ! -f "$PROJECT_ROOT/rustyjack-ui/target/debug/rustyjack-ui" ]; then
   fail "rustyjack-ui binary not found after build!"
 fi
 
-# Install DEBUG binaries
-sudo install -Dm755 "$PROJECT_ROOT/rustyjack-core/target/debug/rustyjack-core" /usr/local/bin/rustyjack-core
+# Install DEBUG binary
 sudo install -Dm755 "$PROJECT_ROOT/rustyjack-ui/target/debug/rustyjack-ui" /usr/local/bin/rustyjack-ui
 
 # Verify installation
-if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack-core ]; then
-  info "Installed DEBUG binaries to /usr/local/bin/"
-  info "Binary timestamps:"
-  ls -la /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack-core
+if [ -x /usr/local/bin/rustyjack-ui ]; then
+  info "Installed DEBUG binary to /usr/local/bin/"
+  info "Binary info:"
+  ls -la /usr/local/bin/rustyjack-ui
 else
   fail "Failed to install binaries to /usr/local/bin/"
 fi

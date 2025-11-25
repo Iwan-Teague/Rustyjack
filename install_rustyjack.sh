@@ -140,39 +140,32 @@ info "Using project root: $PROJECT_ROOT"
 info "Stopping rustyjack service for rebuild..."
 sudo systemctl stop rustyjack.service 2>/dev/null || true
 
-# Remove old binaries to ensure fresh install
-info "Removing old binaries..."
-sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack-core
+# Remove old binary to ensure fresh install (rustyjack-core is a library, not a binary)
+info "Removing old binary..."
+sudo rm -f /usr/local/bin/rustyjack-ui
 
 # Clean old build artifacts to force full rebuild
 info "Cleaning build cache for fresh compilation..."
-(cd "$PROJECT_ROOT/rustyjack-core" && cargo clean) 2>/dev/null || true
 (cd "$PROJECT_ROOT/rustyjack-ui" && cargo clean) 2>/dev/null || true
 
-# Build Rust binaries with fresh compilation
-info "Building rustyjack-core (fresh build)..."
-(cd "$PROJECT_ROOT/rustyjack-core" && cargo build --release) || fail "Failed to build rustyjack-core"
-info "Building rustyjack-ui (fresh build)..."
+# Build rustyjack-ui (this also compiles rustyjack-core library as a dependency)
+info "Building rustyjack-ui (release - this takes a while)..."
 (cd "$PROJECT_ROOT/rustyjack-ui" && cargo build --release) || fail "Failed to build rustyjack-ui"
 
-# Verify the binaries exist before installing
-if [ ! -f "$PROJECT_ROOT/rustyjack-core/target/release/rustyjack-core" ]; then
-  fail "rustyjack-core binary not found after build!"
-fi
+# Verify the binary exists before installing
 if [ ! -f "$PROJECT_ROOT/rustyjack-ui/target/release/rustyjack-ui" ]; then
   fail "rustyjack-ui binary not found after build!"
 fi
 
-# Install binaries (only core and ui - wireless is a library)
-sudo install -Dm755 "$PROJECT_ROOT/rustyjack-core/target/release/rustyjack-core" /usr/local/bin/rustyjack-core
+# Install binary
 sudo install -Dm755 "$PROJECT_ROOT/rustyjack-ui/target/release/rustyjack-ui" /usr/local/bin/rustyjack-ui
 
 # Verify installation
-if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack-core ]; then
-  info "Installed rustyjack-core and rustyjack-ui to /usr/local/bin/"
-  # Show binary timestamps to confirm they're new
-  info "Binary timestamps:"
-  ls -la /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack-core
+if [ -x /usr/local/bin/rustyjack-ui ]; then
+  info "Installed rustyjack-ui to /usr/local/bin/"
+  # Show binary info to confirm it's new
+  info "Binary info:"
+  ls -la /usr/local/bin/rustyjack-ui
 else
   fail "Failed to install binaries to /usr/local/bin/"
 fi
