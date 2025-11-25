@@ -144,8 +144,28 @@ sudo systemctl stop rustyjack.service 2>/dev/null || true
 info "Removing old binaries..."
 sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack-core
 
-# For dev builds, we do incremental compilation (no cargo clean)
-# This makes subsequent builds much faster
+# Ask user about clean build
+echo ""
+info "=========================================="
+info "  BUILD OPTIONS"
+info "=========================================="
+echo ""
+echo "  [1] Incremental build (fast - recompiles only changed files)"
+echo "  [2] Clean build (slow - removes all cached artifacts first)"
+echo ""
+read -p "Select build type [1/2] (default: 1): " BUILD_CHOICE
+BUILD_CHOICE="${BUILD_CHOICE:-1}"
+
+if [ "$BUILD_CHOICE" = "2" ]; then
+  warn "Performing CLEAN build (cargo clean)..."
+  info "This will take longer but ensures a fresh build."
+  (cd "$PROJECT_ROOT/rustyjack-core" && cargo clean) || warn "cargo clean failed for core"
+  (cd "$PROJECT_ROOT/rustyjack-ui" && cargo clean) || warn "cargo clean failed for ui"
+  info "Cache cleared. Starting fresh compilation..."
+else
+  info "Performing INCREMENTAL build (faster)..."
+fi
+
 info "Building rustyjack-core (debug)..."
 (cd "$PROJECT_ROOT/rustyjack-core" && cargo build) || fail "Failed to build rustyjack-core"
 info "Building rustyjack-ui (debug)..."
