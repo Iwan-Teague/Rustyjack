@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, Context};
 use rustyjack_core::cli::{
     Commands, DiscordCommand, DiscordSendArgs,
     HardwareCommand, LootCommand, LootKind, LootListArgs, 
@@ -1070,7 +1070,32 @@ impl App {
     }
 
     fn find_usb_mount(&self) -> Result<PathBuf> {
-        // Check common mount points
+        // First, find USB block devices by checking /sys/block/
+        let usb_devices = self.find_usb_block_devices();
+        
+        if usb_devices.is_empty() {
+            bail!("No USB storage device detected. Please insert a USB drive.");
+        }
+        
+        // Now find mount points for these USB devices
+        let mounts = self.read_mount_points()?;
+        
+        for usb_dev in &usb_devices {
+            // Check for partitions (e.g., sda1, sdb1) or the device itself
+            for (device, mount_point) in &mounts {
+                // Match if device starts with the USB device name (handles partitions)
+                // e.g., /dev/sda1 starts with "sda"
+                let dev_name = device.strip_prefix("/dev/").unwrap_or(device);
+                if dev_name.starts_with(usb_dev) {
+                    // Verify it's writable
+                    if self.is_writable_mount(Path::new(mount_point)) {
+                        return Ok(PathBuf::from(mount_point));
+                    }
+                }
+            }
+        }
+        
+        // Fallback: check common mount points but be more selective
         let mount_points = [
             "/media",
             "/mnt",
@@ -1083,13 +1108,22 @@ impl App {
                 continue;
             }
 
-            // Iterate through subdirectories
+            // Iterate through subdirectories (usually named after user or device)
             if let Ok(entries) = fs::read_dir(base_path) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir() {
-                        // Check if it looks like a USB mount (has write permission)
-                        if self.is_writable_mount(&path) {
+                        // For /media and /run/media, check subdirectories too (user folders)
+                        if let Ok(sub_entries) = fs::read_dir(&path) {
+                            for sub_entry in sub_entries.flatten() {
+                                let sub_path = sub_entry.path();
+                                if sub_path.is_dir() && self.is_usb_storage_mount(&sub_path) {
+                                    return Ok(sub_path);
+                                }
+                            }
+                        }
+                        // Also check direct mount
+                        if self.is_usb_storage_mount(&path) {
                             return Ok(path);
                         }
                     }
@@ -1097,7 +1131,116 @@ impl App {
             }
         }
 
-        bail!("No USB drive found. Please insert a USB drive.")
+        bail!("No USB storage drive found. Please insert a USB drive.")
+    }
+    
+    /// Find USB block devices by checking /sys/block/ for removable USB devices
+    fn find_usb_block_devices(&self) -> Vec<String> {
+        let mut usb_devices = Vec::new();
+        
+        let sys_block = Path::new("/sys/block");
+        if !sys_block.exists() {
+            return usb_devices;
+        }
+        
+        if let Ok(entries) = fs::read_dir(sys_block) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                
+                // Skip loop devices, ram disks, and mmcblk (SD cards - usually the boot drive)
+                if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("mmcblk") {
+                    continue;
+                }
+                
+                // Check if it's a removable device
+                let removable_path = entry.path().join("removable");
+                let is_removable = fs::read_to_string(&removable_path)
+                    .map(|s| s.trim() == "1")
+                    .unwrap_or(false);
+                
+                // Check if it's a USB device by looking at the device path
+                let device_path = entry.path().join("device");
+                let is_usb = if device_path.exists() {
+                    // Follow symlink and check if path contains "usb"
+                    fs::read_link(&device_path)
+                        .map(|p| p.to_string_lossy().contains("usb"))
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+                
+                // Also check uevent for DRIVER=usb-storage
+                let uevent_path = entry.path().join("device").join("uevent");
+                let is_usb_storage = fs::read_to_string(&uevent_path)
+                    .map(|s| s.contains("usb-storage") || s.contains("usb"))
+                    .unwrap_or(false);
+                
+                if is_removable || is_usb || is_usb_storage {
+                    // Make sure it has a size > 0 (actually a storage device)
+                    let size_path = entry.path().join("size");
+                    let has_size = fs::read_to_string(&size_path)
+                        .map(|s| s.trim().parse::<u64>().unwrap_or(0) > 0)
+                        .unwrap_or(false);
+                    
+                    if has_size {
+                        usb_devices.push(name);
+                    }
+                }
+            }
+        }
+        
+        usb_devices
+    }
+    
+    /// Read mount points from /proc/mounts
+    fn read_mount_points(&self) -> Result<Vec<(String, String)>> {
+        let contents = fs::read_to_string("/proc/mounts")
+            .context("Failed to read /proc/mounts")?;
+        
+        let mut mounts = Vec::new();
+        for line in contents.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let device = parts[0].to_string();
+                let mount_point = parts[1].to_string();
+                
+                // Only consider actual device mounts (not tmpfs, proc, etc.)
+                if device.starts_with("/dev/") {
+                    mounts.push((device, mount_point));
+                }
+            }
+        }
+        
+        Ok(mounts)
+    }
+    
+    /// Check if a path is likely a USB storage mount (not a WiFi dongle, etc.)
+    fn is_usb_storage_mount(&self, path: &Path) -> bool {
+        // Must be writable
+        if !self.is_writable_mount(path) {
+            return false;
+        }
+        
+        // Check filesystem type - USB storage typically uses vfat, exfat, ntfs, ext4
+        // This helps exclude pseudo-filesystems and network mounts
+        let mount_path_str = path.to_string_lossy();
+        
+        if let Ok(contents) = fs::read_to_string("/proc/mounts") {
+            for line in contents.lines() {
+                if line.contains(&*mount_path_str) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 3 {
+                        let fs_type = parts[2];
+                        // Common USB storage filesystems
+                        if matches!(fs_type, "vfat" | "exfat" | "ntfs" | "ntfs3" | "ext4" | "ext3" | "ext2" | "fuseblk") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        false
     }
 
     fn is_writable_mount(&self, path: &Path) -> bool {
