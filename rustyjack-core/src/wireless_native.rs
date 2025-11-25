@@ -184,12 +184,12 @@ pub fn execute_deauth_attack(
 
     // Write detailed log file
     let mut log_content = String::new();
-    log_content.push_str("═══════════════════════════════════════════════════\n");
+    log_content.push_str("====================================================\n");
     log_content.push_str("    RUSTYJACK NATIVE DEAUTHENTICATION ATTACK LOG   \n");
-    log_content.push_str("═══════════════════════════════════════════════════\n\n");
+    log_content.push_str("====================================================\n\n");
     log_content.push_str(&format!("Timestamp: {}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
     log_content.push_str("Implementation: Native Rust (rustyjack-wireless)\n\n");
-    log_content.push_str("─── TARGET INFORMATION ───────────────────────────\n");
+    log_content.push_str("--- TARGET INFORMATION ----------------------------\n");
     log_content.push_str(&format!("Target BSSID: {}\n", config.bssid));
     log_content.push_str(&format!("Target SSID: {}\n", ssid_display));
     log_content.push_str(&format!("Target Channel: {}\n", config.channel));
@@ -199,12 +199,12 @@ pub fn execute_deauth_attack(
     } else {
         log_content.push_str("Target Client: Broadcast (all clients)\n");
     }
-    log_content.push_str("\n─── ATTACK CONFIGURATION ─────────────────────────\n");
+    log_content.push_str("\n--- ATTACK CONFIGURATION --------------------------\n");
     log_content.push_str(&format!("Duration: {} seconds\n", config.duration));
     log_content.push_str(&format!("Packets per burst: {}\n", config.packets));
     log_content.push_str(&format!("Burst interval: {} seconds\n", config.interval));
     log_content.push_str(&format!("Continuous mode: {}\n", config.continuous));
-    log_content.push_str("\n─── ATTACK RESULTS ───────────────────────────────\n");
+    log_content.push_str("\n--- ATTACK RESULTS --------------------------------\n");
     log_content.push_str(&format!("Attack Duration: {:.1} seconds\n", stats.duration.as_secs_f32()));
     log_content.push_str(&format!("Total bursts: {}\n", stats.bursts));
     log_content.push_str(&format!("Total packets sent: {}\n", stats.packets_sent));
@@ -212,9 +212,9 @@ pub fn execute_deauth_attack(
     log_content.push_str(&format!("Bytes sent: {}\n", stats.bytes_sent));
     log_content.push_str(&format!("Packets/second: {:.1}\n", stats.packets_per_second()));
     log_content.push_str(&format!("EAPOL frames captured: {}\n", stats.eapol_frames));
-    log_content.push_str("\n═══════════════════════════════════════════════════\n");
-    log_content.push_str(&format!("HANDSHAKE CAPTURED: {}\n", if stats.handshake_captured { "YES ✓" } else { "NO ✗" }));
-    log_content.push_str("═══════════════════════════════════════════════════\n\n");
+    log_content.push_str("\n====================================================\n");
+    log_content.push_str(&format!("HANDSHAKE CAPTURED: {}\n", if stats.handshake_captured { "YES" } else { "NO" }));
+    log_content.push_str("====================================================\n\n");
     
     if !capture_files.is_empty() {
         log_content.push_str("Capture files:\n");

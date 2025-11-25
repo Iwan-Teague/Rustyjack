@@ -625,7 +625,7 @@ impl App {
             
             // Add navigation hint
             if offset + LINES_PER_PAGE < total_lines {
-                content.push("↓ More below ↓".to_string());
+                content.push("-- More below --".to_string());
             } else if truncated {
                 content.push("[File truncated]".to_string());
             }

@@ -811,13 +811,13 @@ impl Display {
         let tx_kb = status.net_tx_rate / 1024.0;
         
         if y <= 118 {
-            Text::with_baseline(&format!("↑ {:.1}KB/s", tx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
+            Text::with_baseline(&format!("TX:{:.1}KB/s", tx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 10;
         }
         
         if y <= 118 {
-            Text::with_baseline(&format!("↓ {:.1}KB/s", rx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
+            Text::with_baseline(&format!("RX:{:.1}KB/s", rx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 14;
         }
@@ -918,13 +918,13 @@ impl Display {
         let tx_mb = status.net_tx_bytes / 1_048_576;
         
         if y <= 118 {
-            Text::with_baseline(&format!("↓ RX:{}MB", rx_mb), Point::new(8, y), self.text_style_small, Baseline::Top)
+            Text::with_baseline(&format!("RX:{}MB", rx_mb), Point::new(8, y), self.text_style_small, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 10;
         }
         
         if y <= 118 {
-            Text::with_baseline(&format!("↑ TX:{}MB", tx_mb), Point::new(8, y), self.text_style_small, Baseline::Top)
+            Text::with_baseline(&format!("TX:{}MB", tx_mb), Point::new(8, y), self.text_style_small, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 16;
         }
@@ -939,13 +939,13 @@ impl Display {
         let tx_kb = status.net_tx_rate / 1024.0;
         
         if y <= 118 {
-            Text::with_baseline(&format!("↓ {:.1}KB/s", rx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
+            Text::with_baseline(&format!("RX:{:.1}KB/s", rx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 10;
         }
         
         if y <= 118 {
-            Text::with_baseline(&format!("↑ {:.1}KB/s", tx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
+            Text::with_baseline(&format!("TX:{:.1}KB/s", tx_kb), Point::new(8, y), self.text_style_small, Baseline::Top)
                 .draw(&mut self.lcd).map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 10;
         }
@@ -1082,7 +1082,7 @@ impl Display {
         println!("MEM: {}/{} MB", status.mem_used_mb, status.mem_total_mb);
         println!("DISK: {:.1}/{:.1} GB", status.disk_used_gb, status.disk_total_gb);
         println!("NET RX: {} MB  TX: {} MB", status.net_rx_bytes / 1_048_576, status.net_tx_bytes / 1_048_576);
-        println!("Rate: ↓{:.1} KB/s ↑{:.1} KB/s", status.net_rx_rate / 1024.0, status.net_tx_rate / 1024.0);
+        println!("Rate: RX:{:.1} KB/s TX:{:.1} KB/s", status.net_rx_rate / 1024.0, status.net_tx_rate / 1024.0);
         println!("Packets: {}  Creds: {}", status.packets_captured, status.creds_found);
         println!("Active: {:?}", status.active_operations);
         println!("========================");
