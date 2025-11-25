@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "rustyjack-core",
+    "rustyjack-ui",
+    "rustyjack-wireless",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["RustyJack Team"]
+license = "MIT"
+repository = "https://github.com/yourusername/rustyjack"
+
+[workspace.dependencies]
+# Shared dependencies across crates
+anyhow = "1.0"
+chrono = "0.4"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"

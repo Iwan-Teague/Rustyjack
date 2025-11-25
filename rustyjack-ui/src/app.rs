@@ -13,7 +13,8 @@ use rustyjack_core::cli::{
     Commands, DiscordCommand, DiscordSendArgs,
     HardwareCommand, LootCommand, LootKind, LootListArgs, 
     LootReadArgs, NotifyCommand, StatusCommand, SystemUpdateArgs,
-    WifiDeauthArgs,
+    WifiCommand, WifiDeauthArgs, WifiRouteCommand, WifiScanArgs, 
+    WifiStatusArgs, WifiProfileCommand,
 };
 use serde::Deserialize;
 use serde_json::{self, Value};
@@ -473,7 +474,7 @@ impl App {
 
     fn show_loot(&mut self, section: LootSection) -> Result<()> {
         let kind = match section {
-            LootSection::Aircrack => LootKind::Aircrack,
+            LootSection::Wireless => LootKind::Wireless,
         };
         let (_, data) = self
             .core
@@ -753,15 +754,39 @@ impl App {
         });
         self.show_message("Network", details.iter().map(|s| s.as_str()))?;
 
-        let actions = vec!["Connect".to_string(), "Back".to_string()];
+        let actions = vec!["Connect".to_string(), "Set as Target".to_string(), "Back".to_string()];
         if let Some(choice) = self.choose_from_list("Network action", &actions)? {
-            if choice == 0 {
-                if self.connect_profile_by_ssid(&ssid)? {
-                    // message handled in helper
-                } else {
-                    let msg = vec![format!("No saved profile for {ssid}")];
-                    self.show_message("Wi-Fi", msg.iter().map(|s| s.as_str()))?;
+            match choice {
+                0 => {
+                    // Connect
+                    if self.connect_profile_by_ssid(&ssid)? {
+                        // message handled in helper
+                    } else {
+                        let msg = vec![format!("No saved profile for {ssid}")];
+                        self.show_message("Wi-Fi", msg.iter().map(|s| s.as_str()))?;
+                    }
                 }
+                1 => {
+                    // Set as Target for deauth attack
+                    self.config.settings.target_network = ssid.clone();
+                    self.config.settings.target_bssid = network.bssid.clone().unwrap_or_default();
+                    self.config.settings.target_channel = network.channel.unwrap_or(0) as u8;
+                    
+                    // Save config
+                    let config_path = self.root.join("gui_conf.json");
+                    if let Err(e) = self.config.save(&config_path) {
+                        self.show_message("Error", [format!("Failed to save: {}", e)])?;
+                    } else {
+                        self.show_message("Target Set", [
+                            &format!("SSID: {}", ssid),
+                            &format!("BSSID: {}", self.config.settings.target_bssid),
+                            &format!("Channel: {}", self.config.settings.target_channel),
+                            "",
+                            "Ready for Deauth Attack"
+                        ])?;
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -1353,35 +1378,65 @@ impl App {
     fn launch_deauth_attack(&mut self) -> Result<()> {
         let active_interface = self.config.settings.active_network_interface.clone();
         let target_network = self.config.settings.target_network.clone();
+        let target_bssid = self.config.settings.target_bssid.clone();
+        let target_channel = self.config.settings.target_channel;
         
-        if target_network.is_empty() {
-            return self.show_message("Deauth Attack", ["No target network set", "Scan networks first", "and set a target"]);
+        // Validate we have all required target info
+        if target_bssid.is_empty() {
+            return self.show_message("Deauth Attack", [
+                "No target BSSID set",
+                "Scan networks first",
+                "and select a target"
+            ]);
+        }
+        
+        if target_channel == 0 {
+            return self.show_message("Deauth Attack", [
+                "No target channel set",
+                "Scan networks first",
+                "and select a target"
+            ]);
         }
         
         if active_interface.is_empty() {
-            return self.show_message("Deauth Attack", ["No active interface", "Set in Hardware Detect"]);
+            return self.show_message("Deauth Attack", [
+                "No active interface",
+                "Set in Hardware Detect"
+            ]);
         }
         
-        // Show initial progress messages
+        // Show attack configuration
+        self.show_message("Deauth Attack", [
+            &format!("Target: {}", if target_network.is_empty() { &target_bssid } else { &target_network }),
+            &format!("BSSID: {}", target_bssid),
+            &format!("Channel: {}", target_channel),
+            &format!("Interface: {}", active_interface),
+            "Duration: 120s",
+            "Press SELECT to start"
+        ])?;
+        
+        // Show progress stages for 120 second attack
         let progress_stages = vec![
-            (0, "Preparing attack..."),
-            (1, "Monitor mode enabled"),
-            (2, "Starting capture..."),
-            (3, "Sending deauth packets"),
-            (5, "Attack in progress..."),
-            (10, "Monitoring for handshake"),
-            (20, "Deauth packets sent..."),
-            (30, "Still capturing..."),
-            (40, "Checking for handshake"),
-            (50, "Attack continuing..."),
-            (55, "Finalizing capture..."),
-            (58, "Stopping monitor mode"),
+            (0, "Killing processes..."),
+            (2, "Monitor mode enabled"),
+            (5, "Setting channel..."),
+            (8, "Starting capture..."),
+            (10, "Sending deauth burst"),
+            (15, "Attack in progress..."),
+            (30, "Monitoring for handshake"),
+            (45, "Deauth burst sent..."),
+            (60, "Halfway complete..."),
+            (75, "Still capturing..."),
+            (90, "Checking for handshake"),
+            (100, "Attack continuing..."),
+            (110, "Finalizing capture..."),
+            (115, "Stopping monitor mode"),
         ];
         
         // Show initial message
         self.show_progress("Deauth Attack", [
-            &format!("Target: {}", target_network),
-            &format!("Interface: {}", active_interface),
+            &format!("Target: {}", if target_network.is_empty() { &target_bssid } else { &target_network }),
+            &format!("Channel: {} | {}", target_channel, active_interface),
             "Preparing attack...",
         ])?;
         
@@ -1391,7 +1446,9 @@ impl App {
         use std::time::Duration;
         
         let core = self.core.clone();
-        let ssid = target_network.clone();
+        let bssid = target_bssid.clone();
+        let ssid = if target_network.is_empty() { None } else { Some(target_network.clone()) };
+        let channel = target_channel;
         let iface = active_interface.clone();
         
         let result = Arc::new(Mutex::new(None));
@@ -1400,17 +1457,23 @@ impl App {
         // Spawn attack thread
         thread::spawn(move || {
             let command = Commands::Wifi(WifiCommand::Deauth(WifiDeauthArgs {
+                bssid,
                 ssid,
                 interface: iface,
-                duration: 60,
-                packets: 10,
+                channel,
+                duration: 120,      // 2 minutes for better handshake capture
+                packets: 64,        // More packets per burst
+                client: None,       // Broadcast to all clients
+                continuous: true,   // Keep sending deauth throughout
+                interval: 1,        // 1 second between bursts
             }));
             
             let r = core.dispatch(command);
             *result_clone.lock().unwrap() = Some(r);
         });
         
-        // Show progress updates while attack runs
+        // Show progress updates while attack runs (120 seconds)
+        let attack_duration = 120u64;
         let start = std::time::Instant::now();
         let mut stage_idx = 0;
         
@@ -1423,29 +1486,29 @@ impl App {
                 self.display.draw_progress_dialog(
                     "Deauth Attack",
                     progress_stages[stage_idx].1,
-                    (elapsed as f32 / 60.0) * 100.0,
+                    (elapsed as f32 / attack_duration as f32) * 100.0,
                     &overlay,
                 )?;
                 stage_idx += 1;
             }
             
             // Check if attack completed
-            if let Some(ref res) = *result.lock().unwrap() {
+            if result.lock().unwrap().is_some() {
                 break;
             }
             
             // Update display periodically
             if elapsed % 5 == 0 {
                 let overlay = self.stats.snapshot();
-                let message = if elapsed < 60 {
-                    format!("Attack progress... {}s", elapsed)
+                let message = if elapsed < attack_duration {
+                    format!("Attack progress... {}s/{}s", elapsed, attack_duration)
                 } else {
                     "Finalizing...".to_string()
                 };
                 self.display.draw_progress_dialog(
                     "Deauth Attack",
                     &message,
-                    (elapsed as f32 / 60.0).min(1.0) * 100.0,
+                    (elapsed as f32 / attack_duration as f32).min(1.0) * 100.0,
                     &overlay,
                 )?;
             }
@@ -1463,20 +1526,27 @@ impl App {
                 if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
                     if captured {
                         result_lines.push("HANDSHAKE CAPTURED!".to_string());
+                        if let Some(hf) = data.get("handshake_file").and_then(|v| v.as_str()) {
+                            result_lines.push(format!("File: {}", Path::new(hf).file_name().unwrap().to_str().unwrap()));
+                        }
                     } else {
                         result_lines.push("No handshake detected".to_string());
                     }
                 }
                 
-                if let Some(packets) = data.get("packets_sent").and_then(|v| v.as_u64()) {
-                    result_lines.push(format!("Packets sent: {}", packets));
+                if let Some(packets) = data.get("total_packets_sent").and_then(|v| v.as_u64()) {
+                    result_lines.push(format!("Packets: {}", packets));
+                }
+                
+                if let Some(bursts) = data.get("deauth_bursts").and_then(|v| v.as_u64()) {
+                    result_lines.push(format!("Bursts: {}", bursts));
                 }
                 
                 if let Some(log) = data.get("log_file").and_then(|v| v.as_str()) {
                     result_lines.push(format!("Log: {}", Path::new(log).file_name().unwrap().to_str().unwrap()));
                 }
                 
-                result_lines.push("Check Loot > Aircrack".to_string());
+                result_lines.push("Check Loot > Wireless".to_string());
                 
                 self.show_message("Deauth Complete", result_lines.iter().map(|s| s.as_str()))?;
             }

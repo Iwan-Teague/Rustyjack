@@ -90,7 +90,7 @@ pub enum ColorTarget {
 
 #[derive(Clone, Copy)]
 pub enum LootSection {
-    Aircrack,
+    Wireless,
 }
 
 fn main_menu() -> Vec<MenuEntry> {
@@ -149,7 +149,7 @@ fn system_menu() -> Vec<MenuEntry> {
 fn loot_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new(" Transfer to USB", MenuAction::TransferToUSB),
-        MenuEntry::new(" Aircrack", MenuAction::Loot(LootSection::Aircrack)),
+        MenuEntry::new(" Wireless Captures", MenuAction::Loot(LootSection::Wireless)),
     ]
 }
 

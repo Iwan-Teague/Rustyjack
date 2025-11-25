@@ -66,12 +66,12 @@ A high-level, current view of the project's structure. Rustyjack is split into t
 ┌────────────────────────────────────────┐
 │               Rustyjack                │
 ├──────────────┬─────────────────────────┤
-│ rustyjack-ui │     rustyjack-core     │
-│ (LCD + GPIO) │     (Orchestration)    │
-│ - Menu / UX  │ - Task runner / CLI    │
-│ - Display    │ - Autopilot & tasks    │
-│ - Button I/O │ - Loot management      │
-│              │ - System actions       │
+│ rustyjack-ui │     rustyjack-core      │
+│ (LCD + GPIO) │     (Orchestration)     │
+│ - Menu / UX  │ - Task runner / CLI     │
+│ - Display    │ - Autopilot & tasks     │
+│ - Button I/O │ - Loot management       │
+│              │ - System actions        │
 └──────────────┴─────────────────────────┘
 
 UI → dispatches commands to → Core → interacts with OS and filesystem
@@ -89,7 +89,7 @@ Notes:
 ### 💾 Loot & Data
 
 **On-device loot viewer:**
-- Browse captured output and logs (Aircrack and other supported outputs)
+- Browse captured output and logs (Wireless and other supported outputs)
 - View device-generated logs and export files
 - Navigate and open files using LCD buttons
 
@@ -352,7 +352,7 @@ Main Menu
 │  └─ System
 ├─ Loot
 │  ├─ Transfer to USB
-│  └─ Aircrack
+│  └─ Wireless
 └─ (Other utilities)
 ```
 
@@ -364,7 +364,7 @@ Here are a few things you can do from the device's main menu (keeps the current 
 - Start password cracking workflows: Main Menu → Crack Passwords
 - View dashboards for system and attack metrics: Main Menu → View Dashboards
 - Launch Autopilot to run automated sequences: Main Menu → Autopilot → Start ...
-- Browse loot captured from Aircrack tools and transfer to USB: Main Menu → Loot → Transfer to USB
+- Browse loot captured from wireless attacks and transfer to USB: Main Menu → Loot → Transfer to USB
 
 ---
 
@@ -375,8 +375,8 @@ Rustyjack is now focused on providing a compact UI for the device and a core orc
 - UI / LCD-driven menu and controls (rustyjack-ui)
 - Hardware detection (interface and peripheral detection)
 - Autopilot — automated sequences and task orchestration
-- Password-cracking workflows (Aircrack-related loot & processing)
-- Loot viewer and transfer utilities (view and export Aircrack outputs)
+- Native wireless attacks (rustyjack-wireless - pure Rust, no external tools)
+- Loot viewer and transfer utilities (view and export wireless attack outputs)
 - Discord webhook integration for uploading loot and notifications
 - System management (configuration, updates, service control)
 
@@ -508,7 +508,7 @@ cd ../rustyjack-ui && cargo clean
 # Archive loot
 tar -czf ~/loot_$(date +%Y%m%d).tar.gz loot/
 rm -rf loot/*
-mkdir -p loot/Aircrack
+mkdir -p loot/Wireless
 ```
 
 ---
@@ -519,10 +519,6 @@ mkdir -p loot/Aircrack
 
 **Rustyjack** - Created by [@Iwan-Teague](https://github.com/Iwan-Teague)  
 Repository: https://github.com/Iwan-Teague/Rusty-Jack.git
-
-### External Tools
-
-- **aircrack-ng** - Thomas d'Otreppe
 
 ### Rust Libraries
 

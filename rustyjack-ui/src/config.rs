@@ -207,6 +207,10 @@ pub struct SettingsConfig {
     pub active_network_interface: String,
     #[serde(default = "SettingsConfig::default_target_network")]
     pub target_network: String,
+    #[serde(default)]
+    pub target_bssid: String,
+    #[serde(default)]
+    pub target_channel: u8,
 }
 
 impl Default for SettingsConfig {
@@ -215,6 +219,8 @@ impl Default for SettingsConfig {
             discord_enabled: Self::default_discord_enabled(),
             active_network_interface: Self::default_active_interface(),
             target_network: Self::default_target_network(),
+            target_bssid: String::new(),
+            target_channel: 0,
         }
     }
 }

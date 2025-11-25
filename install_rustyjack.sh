@@ -5,7 +5,7 @@
 # * Bookworm‑ready – handles /boot/firmware/config.txt move
 # * Enables I²C/SPI, installs all deps, sets up systemd unit
 # * Ends with a health‑check (SPI nodes + Rust binary presence)
-# * WiFi attack support with aircrack-ng and USB dongle tools
+# * Native Rust wireless support (rustyjack-wireless crate)
 # * RUST UI - Phase 3 complete, Python UI removed
 # ------------------------------------------------------------
 set -euo pipefail
@@ -42,8 +42,8 @@ PACKAGES=(
   build-essential pkg-config libssl-dev
   # ‣ network / offensive tools
   nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps
-  # ‣ WiFi attack tools
-  aircrack-ng wireless-tools wpasupplicant iw
+  # ‣ WiFi interface tools (for native Rust wireless operations)
+  wireless-tools wpasupplicant iw
   # ‣ USB WiFi dongle support
   firmware-linux-nonfree firmware-realtek firmware-atheros
   # ‣ misc
@@ -302,11 +302,12 @@ else
   warn "✗ SPI device NOT found – a reboot may be required"
 fi
 
-# 6‑b WiFi attack tools check
-if cmd aireplay-ng && cmd airodump-ng && cmd airmon-ng; then
-  info "✓ WiFi attack tools found: aircrack-ng suite installed"
+# 6‑b Wireless tools check (native rustyjack-wireless is used instead of aircrack-ng)
+if cmd iw && cmd iwconfig; then
+  info "✓ Wireless interface tools found (iw, iwconfig)"
+  info "  Native rustyjack-wireless crate handles all wireless attacks"
 else
-  warn "✗ WiFi attack tools missing - check aircrack-ng installation"
+  warn "✗ Wireless tools missing - install 'iw' and 'wireless-tools'"
 fi
 
 # 6‑c USB WiFi dongle detection
