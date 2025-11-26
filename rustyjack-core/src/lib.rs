@@ -13,7 +13,10 @@ pub mod system;
 pub mod autopilot;
 pub mod wireless_native;
 
-pub use cli::{Cli, Commands, OutputFormat};
+pub use cli::{
+    Cli, Commands, OutputFormat,
+    WifiCommand, WifiEvilTwinArgs, WifiProbeSniffArgs, WifiPmkidArgs, WifiCrackArgs,
+};
 pub use operations::{HandlerResult, dispatch_command};
 pub use system::{resolve_root, InterfaceSummary};
 pub use wireless_native::{

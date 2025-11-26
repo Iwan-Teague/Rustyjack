@@ -1789,15 +1789,16 @@ impl App {
         ])?;
         
         // Execute evil twin via core
-        use rustyjack_core::Commands;
+        use rustyjack_core::{Commands, WifiCommand, WifiEvilTwinArgs};
         
-        let cmd = Commands::EvilTwin {
+        let cmd = Commands::Wifi(WifiCommand::EvilTwin(WifiEvilTwinArgs {
             ssid: target_network.clone(),
-            bssid: Some(target_bssid),
+            target_bssid: Some(target_bssid),
             channel: target_channel,
             interface: active_interface,
             duration: 300, // 5 minutes
-        };
+            open: true,
+        }));
         
         match self.core.dispatch(cmd) {
             Ok((msg, data)) => {
@@ -1850,12 +1851,13 @@ impl App {
             "from nearby devices...",
         ])?;
         
-        use rustyjack_core::Commands;
+        use rustyjack_core::{Commands, WifiCommand, WifiProbeSniffArgs};
         
-        let cmd = Commands::ProbeSniff {
+        let cmd = Commands::Wifi(WifiCommand::ProbeSniff(WifiProbeSniffArgs {
             interface: active_interface,
             duration: duration_secs,
-        };
+            channel: 0, // hop channels
+        }));
         
         match self.core.dispatch(cmd) {
             Ok((msg, data)) => {
@@ -1931,15 +1933,15 @@ impl App {
             "No deauth needed!",
         ])?;
         
-        use rustyjack_core::Commands;
+        use rustyjack_core::{Commands, WifiCommand, WifiPmkidArgs};
         
-        let cmd = Commands::PmkidCapture {
+        let cmd = Commands::Wifi(WifiCommand::PmkidCapture(WifiPmkidArgs {
             interface: active_interface,
             bssid: if use_target { Some(target_bssid) } else { None },
             ssid: if use_target { Some(target_network) } else { None },
             channel: if use_target { target_channel } else { 0 },
             duration,
-        };
+        }));
         
         match self.core.dispatch(cmd) {
             Ok((msg, data)) => {
@@ -2040,12 +2042,14 @@ impl App {
             "This may take a while...",
         ])?;
         
-        use rustyjack_core::Commands;
+        use rustyjack_core::{Commands, WifiCommand, WifiCrackArgs};
         
-        let cmd = Commands::CrackHandshake {
+        let cmd = Commands::Wifi(WifiCommand::Crack(WifiCrackArgs {
             file: file_path.to_string_lossy().to_string(),
             mode: crack_mode.to_string(),
-        };
+            ssid: None,
+            wordlist: None,
+        }));
         
         match self.core.dispatch(cmd) {
             Ok((msg, data)) => {
@@ -2591,17 +2595,17 @@ impl App {
         
         let status = if enabled { "ENABLED" } else { "DISABLED" };
         self.show_message("MAC Randomization", [
-            &format!("Auto-randomize: {}", status),
-            "",
+            format!("Auto-randomize: {}", status),
+            "".to_string(),
             if enabled {
-                "MAC will be randomized"
+                "MAC will be randomized".to_string()
             } else {
-                "MAC will NOT be changed"  
+                "MAC will NOT be changed".to_string()
             },
             if enabled {
-                "before each attack."
+                "before each attack.".to_string()
             } else {
-                "before attacks."
+                "before attacks.".to_string()
             },
         ])
     }
@@ -2619,17 +2623,17 @@ impl App {
         
         let status = if enabled { "ENABLED" } else { "DISABLED" };
         self.show_message("Passive Mode", [
-            &format!("Passive mode: {}", status),
-            "",
+            format!("Passive mode: {}", status),
+            "".to_string(),
             if enabled {
-                "Recon will use RX-only"
+                "Recon will use RX-only".to_string()
             } else {
-                "Normal TX/RX mode"
+                "Normal TX/RX mode".to_string()
             },
             if enabled {
-                "No transmissions."
+                "No transmissions.".to_string()
             } else {
-                "will be used."
+                "will be used.".to_string()
             },
         ])
     }
@@ -2746,18 +2750,19 @@ impl App {
         if let Ok(output) = set_result {
             if output.status.success() {
                 // Save the new MAC in config
+                let original_mac = self.config.settings.original_mac.clone();
                 self.config.settings.current_mac = random_mac.clone();
                 let config_path = self.root.join("gui_conf.json");
                 let _ = self.config.save(&config_path);
                 
                 self.show_message("MAC Randomized", [
-                    &format!("Interface: {}", active_interface),
-                    "",
-                    &format!("New MAC:"),
-                    &random_mac,
-                    "",
-                    &format!("Original saved:"),
-                    &self.config.settings.original_mac,
+                    format!("Interface: {}", active_interface),
+                    "".to_string(),
+                    "New MAC:".to_string(),
+                    random_mac,
+                    "".to_string(),
+                    "Original saved:".to_string(),
+                    original_mac,
                 ])
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2898,23 +2903,23 @@ impl App {
         
         if success {
             self.show_message("TX Power Set", [
-                &format!("Interface: {}", active_interface),
-                &format!("Power: {}", label),
-                "",
+                format!("Interface: {}", active_interface),
+                format!("Power: {}", label),
+                "".to_string(),
                 match level {
-                    TxPowerSetting::Stealth => "Minimal range - stealth mode",
-                    TxPowerSetting::Low => "Short range operations",
-                    TxPowerSetting::Medium => "Balanced range/stealth",
-                    TxPowerSetting::High => "Normal operation range",
-                    TxPowerSetting::Maximum => "Maximum range",
+                    TxPowerSetting::Stealth => "Minimal range - stealth mode".to_string(),
+                    TxPowerSetting::Low => "Short range operations".to_string(),
+                    TxPowerSetting::Medium => "Balanced range/stealth".to_string(),
+                    TxPowerSetting::High => "Normal operation range".to_string(),
+                    TxPowerSetting::Maximum => "Maximum range".to_string(),
                 }
             ])
         } else {
             self.show_message("TX Power Error", [
-                "Failed to set power.",
-                "",
-                "Interface may not",
-                "support TX power control.",
+                "Failed to set power.".to_string(),
+                "".to_string(),
+                "Interface may not".to_string(),
+                "support TX power control.".to_string(),
             ])
         }
     }
