@@ -454,7 +454,7 @@ impl Display {
         let style = PrimitiveStyle::with_fill(Rgb565::BLACK);
         // If clearing the simulated display in non-linux builds, cover the
         // full buffer area including the last column/row used by hardware
-        Rectangle::new(Point::new(0, 0), Size::new((LCD_WIDTH.into()) + 1, (LCD_HEIGHT.into()) + 1))
+        Rectangle::new(Point::new(0, 0), Size::new((LCD_WIDTH as u32) + 1, (LCD_HEIGHT as u32) + 1))
             .into_styled(style)
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Failed to clear screen"))?;
