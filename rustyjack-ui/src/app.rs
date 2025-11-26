@@ -1479,21 +1479,32 @@ impl App {
                 }
                 
                 // Build list of networks for selection
+                let networks = response.networks;
                 let mut labels = Vec::new();
-                for net in &response.networks {
+                for net in &networks {
                     let ssid = net.ssid.as_deref().unwrap_or("<hidden>");
-                    let signal = net.signal_dbm.map(|s| format!("{}dBm", s)).unwrap_or_default();
-                    let ch = net.channel.map(|c| format!("ch{}", c)).unwrap_or_default();
-                    let lock = if net.encrypted { "[E]" } else { "" };
-                    labels.push(format!("{} {} {} {}", ssid, signal, ch, lock));
+                    // Truncate SSID if too long for display
+                    let ssid_display = if ssid.len() > 10 {
+                        format!("{}...", &ssid[..10])
+                    } else {
+                        ssid.to_string()
+                    };
+                    let signal = net.signal_dbm.map(|s| format!("{}dB", s)).unwrap_or_default();
+                    let ch = net.channel.map(|c| format!("c{}", c)).unwrap_or_default();
+                    let lock = if net.encrypted { "*" } else { "" };
+                    labels.push(format!("{}{} {} {}", lock, ssid_display, signal, ch));
                 }
                 
-                // Interactive network list
+                // Interactive network list - loop until user backs out
                 loop {
-                    let Some(idx) = self.choose_from_menu("Networks", &labels)? else { break; };
-                    
-                    if let Some(network) = response.networks.get(idx) {
-                        self.handle_network_selection(network)?;
+                    let choice = self.choose_from_menu("Select Network", &labels)?;
+                    match choice {
+                        Some(idx) => {
+                            if let Some(network) = networks.get(idx) {
+                                self.handle_network_selection(network)?;
+                            }
+                        }
+                        None => break, // User pressed back
                     }
                 }
             }

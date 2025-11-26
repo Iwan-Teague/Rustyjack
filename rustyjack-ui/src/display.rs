@@ -89,11 +89,13 @@ use std::{thread::sleep, time::Duration as StdDuration};
 const LCD_WIDTH: u16 = 128;
 #[cfg(target_os = "linux")]
 const LCD_HEIGHT: u16 = 128;
-// Offset adjusted to utilize full screen width and avoid dead pixels on bottom row
+// Offset adjusted to utilize full screen width and avoid dead pixels
+// ST7735S has a 132x162 buffer but Waveshare 1.44" uses 128x128 visible
+// X offset of 2 shifts content to use full visible area
 #[cfg(target_os = "linux")]
-const LCD_OFFSET_X: u16 = 0;
+const LCD_OFFSET_X: u16 = 2;
 #[cfg(target_os = "linux")]
-const LCD_OFFSET_Y: u16 = 0;
+const LCD_OFFSET_Y: u16 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
