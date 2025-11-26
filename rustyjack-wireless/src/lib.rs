@@ -63,6 +63,9 @@ pub mod pmkid;
 pub mod probe;
 pub mod crack;
 pub mod evil_twin;
+pub mod stealth;
+pub mod karma;
+pub mod pipeline;
 
 // Re-exports for convenience
 pub use error::{WirelessError, Result};
@@ -76,6 +79,9 @@ pub use pmkid::{PmkidCapture, PmkidCapturer};
 pub use probe::{ProbeSniffer, ProbeRequest, ProbedNetwork, ClientStats};
 pub use crack::{WpaCracker, CrackerConfig, CrackResult};
 pub use evil_twin::{EvilTwin, EvilTwinConfig, EvilTwinStats};
+pub use stealth::{StealthManager, MacState, TxPowerLevel, PassiveModeConfig, PassiveResult};
+pub use karma::{KarmaAttack, KarmaConfig, KarmaStats, KarmaResult, CapturedProbe, KarmaVictim};
+pub use pipeline::{AttackPipeline, PipelineConfig, PipelineObjective, PipelineStage, PipelineResult, AttackTechnique};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

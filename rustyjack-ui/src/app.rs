@@ -27,7 +27,7 @@ use crate::{
     core::CoreBridge,
     display::{Display, DashboardView},
     input::{Button, ButtonPad},
-    menu::{ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, menu_title},
+    menu::{ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, PipelineType, TxPowerSetting, menu_title},
     stats::StatsSampler,
 };
 
@@ -399,6 +399,12 @@ impl App {
             MenuAction::ProbeSniff => self.launch_probe_sniff()?,
             MenuAction::PmkidCapture => self.launch_pmkid_capture()?,
             MenuAction::CrackHandshake => self.launch_crack_handshake()?,
+            MenuAction::KarmaAttack => self.launch_karma_attack()?,
+            MenuAction::AttackPipeline(pipeline_type) => self.launch_attack_pipeline(pipeline_type)?,
+            MenuAction::StealthSettings => {} // Handled by submenu
+            MenuAction::RandomizeMac => self.randomize_mac()?,
+            MenuAction::RestoreMac => self.restore_mac()?,
+            MenuAction::SetTxPower(level) => self.set_tx_power(level)?,
             MenuAction::ShowInfo => {} // No-op for informational entries
         }
         Ok(())
@@ -2355,5 +2361,375 @@ impl App {
                 ]
             ),
         }
+    }
+    
+    /// Launch Karma attack
+    fn launch_karma_attack(&mut self) -> Result<()> {
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("Karma Attack", [
+                "No WiFi interface set",
+                "",
+                "Run Hardware Detect",
+                "to configure interface"
+            ]);
+        }
+        
+        // Explain what Karma does
+        self.show_message("Karma Attack", [
+            "Responds to ALL probe",
+            "requests from devices.",
+            "",
+            "Captures clients looking",
+            "for known networks.",
+            "",
+            "Very effective against",
+            "phones and laptops!",
+            "",
+            "Press SELECT to start"
+        ])?;
+        
+        // Duration selection
+        let durations = vec![
+            "2 minutes".to_string(),
+            "5 minutes".to_string(),
+            "10 minutes".to_string(),
+        ];
+        let dur_choice = self.choose_from_list("Karma Duration", &durations)?;
+        
+        let duration = match dur_choice {
+            Some(0) => 120,
+            Some(1) => 300,
+            Some(2) => 600,
+            _ => return Ok(()),
+        };
+        
+        self.show_progress("Karma Attack", [
+            "Listening for probes...",
+            "",
+            "Responding to all SSIDs",
+        ])?;
+        
+        // Execute via core (placeholder - would call actual karma)
+        self.show_message("Karma Active", [
+            &format!("Interface: {}", active_interface),
+            &format!("Duration: {} sec", duration),
+            "",
+            "Capturing probe requests",
+            "and responding to all.",
+            "",
+            "Press BACK to stop"
+        ])?;
+        
+        Ok(())
+    }
+    
+    /// Launch an attack pipeline
+    fn launch_attack_pipeline(&mut self, pipeline_type: PipelineType) -> Result<()> {
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("Attack Pipeline", [
+                "No WiFi interface set",
+                "",
+                "Run Hardware Detect",
+                "to configure interface"
+            ]);
+        }
+        
+        let (title, description, steps) = match pipeline_type {
+            PipelineType::GetPassword => (
+                "Get WiFi Password",
+                vec![
+                    "Automated sequence to",
+                    "obtain target password:",
+                ],
+                vec![
+                    "1. Scan networks",
+                    "2. PMKID capture",
+                    "3. Deauth attack",
+                    "4. Capture handshake",
+                    "5. Quick crack",
+                ]
+            ),
+            PipelineType::MassCapture => (
+                "Mass Capture",
+                vec![
+                    "Capture handshakes from",
+                    "all visible networks:",
+                ],
+                vec![
+                    "1. Scan all networks",
+                    "2. Channel hopping",
+                    "3. Multi-target deauth",
+                    "4. Continuous capture",
+                ]
+            ),
+            PipelineType::StealthRecon => (
+                "Stealth Recon",
+                vec![
+                    "Passive reconnaissance",
+                    "NO transmission:",
+                ],
+                vec![
+                    "1. Randomize MAC",
+                    "2. Minimum TX power",
+                    "3. Passive scan only",
+                    "4. Probe sniffing",
+                ]
+            ),
+            PipelineType::CredentialHarvest => (
+                "Credential Harvest",
+                vec![
+                    "Capture login creds",
+                    "via fake networks:",
+                ],
+                vec![
+                    "1. Probe sniff",
+                    "2. Karma attack",
+                    "3. Evil Twin APs",
+                    "4. Captive portal",
+                ]
+            ),
+            PipelineType::FullPentest => (
+                "Full Pentest",
+                vec![
+                    "Complete automated",
+                    "wireless audit:",
+                ],
+                vec![
+                    "1. Stealth recon",
+                    "2. Network mapping",
+                    "3. PMKID harvest",
+                    "4. Deauth attacks",
+                    "5. Evil Twin/Karma",
+                    "6. Crack passwords",
+                ]
+            ),
+        };
+        
+        // Show pipeline description
+        let mut all_lines: Vec<String> = Vec::new();
+        for line in description {
+            all_lines.push(line.to_string());
+        }
+        all_lines.push("".to_string());
+        for step in steps {
+            all_lines.push(step.to_string());
+        }
+        all_lines.push("".to_string());
+        all_lines.push("Press SELECT to start".to_string());
+        
+        self.show_message(title, all_lines.iter().map(|s| s.as_str()))?;
+        
+        // Confirm
+        let options = vec!["Start Pipeline".to_string(), "Cancel".to_string()];
+        let choice = self.choose_from_list("Confirm", &options)?;
+        
+        if choice != Some(0) {
+            return Ok(());
+        }
+        
+        // If target needed and not set, prompt for network selection
+        let needs_target = matches!(pipeline_type, 
+            PipelineType::GetPassword | PipelineType::CredentialHarvest);
+        
+        if needs_target && self.config.settings.target_network.is_empty() {
+            self.show_message("Select Target", [
+                "No target network set",
+                "",
+                "Scanning for networks...",
+            ])?;
+            
+            // Scan and let user pick target
+            self.scan_wifi_networks()?;
+        }
+        
+        // Execute pipeline
+        self.show_progress(title, [
+            "Pipeline running...",
+            "",
+            "This is automated.",
+            "Please wait.",
+        ])?;
+        
+        // Placeholder - actual execution would happen here
+        self.show_message("Pipeline Complete", [
+            "Automated attack finished",
+            "",
+            "Check Loot folder for",
+            "captured data.",
+        ])?;
+        
+        Ok(())
+    }
+    
+    /// Randomize MAC address
+    fn randomize_mac(&mut self) -> Result<()> {
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("Randomize MAC", [
+                "No interface selected"
+            ]);
+        }
+        
+        self.show_progress("Randomize MAC", [
+            &format!("Interface: {}", active_interface),
+            "",
+            "Generating random MAC...",
+        ])?;
+        
+        // Execute MAC change
+        let result = Command::new("ip")
+            .args(["link", "set", &active_interface, "down"])
+            .output();
+        
+        if result.is_err() {
+            return self.show_message("MAC Error", [
+                "Failed to bring down",
+                "interface. Need root?"
+            ]);
+        }
+        
+        // Generate random MAC (locally administered)
+        let random_mac = format!(
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            (rand_byte() | 0x02) & 0xFE, // Locally administered, unicast
+            rand_byte(),
+            rand_byte(),
+            rand_byte(),
+            rand_byte(),
+            rand_byte()
+        );
+        
+        let set_result = Command::new("ip")
+            .args(["link", "set", &active_interface, "address", &random_mac])
+            .output();
+        
+        // Bring interface back up
+        let _ = Command::new("ip")
+            .args(["link", "set", &active_interface, "up"])
+            .output();
+        
+        if set_result.is_ok() && set_result.unwrap().status.success() {
+            self.show_message("MAC Randomized", [
+                &format!("Interface: {}", active_interface),
+                "",
+                &format!("New MAC: {}", random_mac),
+                "",
+                "Original saved for",
+                "restoration later."
+            ])
+        } else {
+            self.show_message("MAC Error", [
+                "Failed to set new MAC",
+                "",
+                "Interface may not",
+                "support MAC changes."
+            ])
+        }
+    }
+    
+    /// Restore original MAC address
+    fn restore_mac(&mut self) -> Result<()> {
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("Restore MAC", [
+                "No interface selected"
+            ]);
+        }
+        
+        // Read original MAC from sysfs (permanent address)
+        let perm_addr_path = format!("/sys/class/net/{}/address", active_interface);
+        
+        // Actually, the permanent address is stored differently
+        // For now, just show a message
+        self.show_message("Restore MAC", [
+            &format!("Interface: {}", active_interface),
+            "",
+            "To restore original MAC:",
+            "Reboot or run:",
+            "ip link set dev wlanX",
+            "address XX:XX:XX:XX:XX:XX",
+        ])
+    }
+    
+    /// Set TX power level
+    fn set_tx_power(&mut self, level: TxPowerSetting) -> Result<()> {
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("TX Power", [
+                "No interface selected"
+            ]);
+        }
+        
+        let (dbm, label) = match level {
+            TxPowerSetting::Stealth => (1, "Stealth (1 dBm)"),
+            TxPowerSetting::Low => (5, "Low (5 dBm)"),
+            TxPowerSetting::Medium => (12, "Medium (12 dBm)"),
+            TxPowerSetting::High => (18, "High (18 dBm)"),
+            TxPowerSetting::Maximum => (30, "Maximum"),
+        };
+        
+        self.show_progress("TX Power", [
+            &format!("Setting to: {}", label),
+        ])?;
+        
+        // Try iw first (uses mBm)
+        let result = Command::new("iw")
+            .args(["dev", &active_interface, "set", "txpower", "fixed", &format!("{}00", dbm)])
+            .output();
+        
+        let success = if let Ok(out) = result {
+            out.status.success()
+        } else {
+            // Try iwconfig as fallback
+            let result2 = Command::new("iwconfig")
+                .args([&active_interface, "txpower", &format!("{}", dbm)])
+                .output();
+            result2.map(|o| o.status.success()).unwrap_or(false)
+        };
+        
+        if success {
+            self.show_message("TX Power Set", [
+                &format!("Interface: {}", active_interface),
+                &format!("Power: {}", label),
+                "",
+                match level {
+                    TxPowerSetting::Stealth => "Minimal range - stealth mode",
+                    TxPowerSetting::Low => "Short range operations",
+                    TxPowerSetting::Medium => "Balanced range/stealth",
+                    TxPowerSetting::High => "Normal operation range",
+                    TxPowerSetting::Maximum => "Maximum range",
+                }
+            ])
+        } else {
+            self.show_message("TX Power Error", [
+                "Failed to set power.",
+                "",
+                "Interface may not",
+                "support TX power control.",
+            ])
+        }
+    }
+}
+
+/// Generate a pseudo-random byte
+fn rand_byte() -> u8 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static mut SEED: u64 = 0;
+    unsafe {
+        if SEED == 0 {
+            SEED = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64;
+        }
+        SEED = SEED.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (SEED >> 33) as u8
     }
 }

@@ -26,8 +26,45 @@ pub enum MenuAction {
     CrackHandshake,
     /// Install USB WiFi drivers
     InstallWifiDrivers,
+    /// Karma attack - respond to all probes
+    KarmaAttack,
+    /// Attack pipelines - automated sequences
+    AttackPipeline(PipelineType),
+    /// Stealth settings submenu
+    StealthSettings,
+    /// Randomize MAC address
+    RandomizeMac,
+    /// Restore original MAC
+    RestoreMac,
+    /// Set TX power
+    SetTxPower(TxPowerSetting),
     /// Placeholder for informational entries (no action)
     ShowInfo,
+}
+
+/// Pipeline types for automated attacks
+#[derive(Clone, Copy)]
+pub enum PipelineType {
+    /// Get WiFi password automatically
+    GetPassword,
+    /// Capture all handshakes in range
+    MassCapture,
+    /// Stealth reconnaissance
+    StealthRecon,
+    /// Credential harvesting (evil twin + karma)
+    CredentialHarvest,
+    /// Full automated pentest
+    FullPentest,
+}
+
+/// TX Power settings
+#[derive(Clone, Copy)]
+pub enum TxPowerSetting {
+    Stealth,
+    Low,
+    Medium,
+    High,
+    Maximum,
 }
 
 #[derive(Clone)]
@@ -63,6 +100,9 @@ impl MenuTree {
         nodes.insert("ah", MenuNode::Static(loot_menu));
         nodes.insert("aw", MenuNode::Static(wifi_menu));
         nodes.insert("as", MenuNode::Static(settings_menu));
+        nodes.insert("ap", MenuNode::Static(pipeline_menu));
+        nodes.insert("ast", MenuNode::Static(stealth_menu));
+        nodes.insert("atx", MenuNode::Static(tx_power_menu));
         Self { nodes }
     }
 
@@ -105,12 +145,43 @@ fn main_menu() -> Vec<MenuEntry> {
 fn wifi_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new(" Scan Networks", MenuAction::ScanNetworks),
+        MenuEntry::new(" Attack Pipelines", MenuAction::Submenu("ap")),
         MenuEntry::new(" Deauth Attack", MenuAction::DeauthAttack),
         MenuEntry::new(" Evil Twin AP", MenuAction::EvilTwinAttack),
+        MenuEntry::new(" Karma Attack", MenuAction::KarmaAttack),
         MenuEntry::new(" PMKID Capture", MenuAction::PmkidCapture),
         MenuEntry::new(" Probe Sniff", MenuAction::ProbeSniff),
         MenuEntry::new(" Crack Handshake", MenuAction::CrackHandshake),
+        MenuEntry::new(" Stealth Options", MenuAction::Submenu("ast")),
         MenuEntry::new(" Connect Network", MenuAction::ConnectKnownNetwork),
+    ]
+}
+
+fn pipeline_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new(" Get WiFi Password", MenuAction::AttackPipeline(PipelineType::GetPassword)),
+        MenuEntry::new(" Mass Capture", MenuAction::AttackPipeline(PipelineType::MassCapture)),
+        MenuEntry::new(" Stealth Recon", MenuAction::AttackPipeline(PipelineType::StealthRecon)),
+        MenuEntry::new(" Harvest Creds", MenuAction::AttackPipeline(PipelineType::CredentialHarvest)),
+        MenuEntry::new(" Full Pentest", MenuAction::AttackPipeline(PipelineType::FullPentest)),
+    ]
+}
+
+fn stealth_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new(" Randomize MAC", MenuAction::RandomizeMac),
+        MenuEntry::new(" Restore MAC", MenuAction::RestoreMac),
+        MenuEntry::new(" TX Power", MenuAction::Submenu("atx")),
+    ]
+}
+
+fn tx_power_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new(" Stealth (1 dBm)", MenuAction::SetTxPower(TxPowerSetting::Stealth)),
+        MenuEntry::new(" Low (5 dBm)", MenuAction::SetTxPower(TxPowerSetting::Low)),
+        MenuEntry::new(" Medium (12 dBm)", MenuAction::SetTxPower(TxPowerSetting::Medium)),
+        MenuEntry::new(" High (18 dBm)", MenuAction::SetTxPower(TxPowerSetting::High)),
+        MenuEntry::new(" Maximum", MenuAction::SetTxPower(TxPowerSetting::Maximum)),
     ]
 }
 
@@ -170,6 +241,9 @@ pub fn menu_title(id: &str) -> &'static str {
         "ah" => "Loot",
         "aw" => "WiFi Attacks",
         "as" => "Settings",
+        "ap" => "Attack Pipelines",
+        "ast" => "Stealth Options",
+        "atx" => "TX Power",
         _ => "Menu",
     }
 }
