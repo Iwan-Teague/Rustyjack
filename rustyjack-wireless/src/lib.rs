@@ -62,6 +62,7 @@ pub mod nl80211;
 pub mod pmkid;
 pub mod probe;
 pub mod crack;
+pub mod evil_twin;
 
 // Re-exports for convenience
 pub use error::{WirelessError, Result};
@@ -74,6 +75,7 @@ pub use channel::ChannelInfo;
 pub use pmkid::{PmkidCapture, PmkidCapturer};
 pub use probe::{ProbeSniffer, ProbeRequest, ProbedNetwork, ClientStats};
 pub use crack::{WpaCracker, CrackerConfig, CrackResult};
+pub use evil_twin::{EvilTwin, EvilTwinConfig, EvilTwinStats};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

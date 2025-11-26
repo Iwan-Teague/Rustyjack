@@ -40,12 +40,14 @@ add_dtparam() {
 PACKAGES=(
   # build tools for Rust compilation
   build-essential pkg-config libssl-dev
+  # DKMS for WiFi driver compilation
+  dkms bc libelf-dev linux-headers-$(uname -r)
   # network / offensive tools
   nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps
   # WiFi interface tools (for native Rust wireless operations)
-  wireless-tools wpasupplicant iw
+  wireless-tools wpasupplicant iw hostapd dnsmasq
   # USB WiFi dongle support
-  firmware-linux-nonfree firmware-realtek firmware-atheros
+  firmware-linux-nonfree firmware-realtek firmware-atheros firmware-ralink firmware-misc-nonfree
   # misc
   git i2c-tools curl
 )
@@ -181,6 +183,21 @@ sudo chmod -R 755 "$PROJECT_ROOT/loot"
 sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles"
 sudo chmod 755 "$PROJECT_ROOT/wifi/profiles"
+
+# Install WiFi driver scripts
+step "Installing WiFi driver auto-install scripts..."
+sudo mkdir -p "$PROJECT_ROOT/scripts"
+sudo cp -f scripts/wifi_driver_installer.sh "$PROJECT_ROOT/scripts/" 2>/dev/null || true
+sudo cp -f scripts/wifi_hotplug.sh "$PROJECT_ROOT/scripts/" 2>/dev/null || true
+sudo chmod +x "$PROJECT_ROOT/scripts/"*.sh 2>/dev/null || true
+
+# Install udev rules for USB WiFi auto-detection
+if [ -f scripts/99-rustyjack-wifi.rules ]; then
+  sudo cp -f scripts/99-rustyjack-wifi.rules /etc/udev/rules.d/
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger
+  info "Installed USB WiFi auto-detection udev rules"
+fi
 
 # Create sample WiFi profile if it doesn't exist
 if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then

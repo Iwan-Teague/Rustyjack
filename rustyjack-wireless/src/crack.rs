@@ -424,6 +424,93 @@ pub fn generate_common_passwords() -> Vec<String> {
     passwords
 }
 
+/// Quick crack attempt - tries common passwords automatically
+/// Returns the password if found, None otherwise
+/// This is called automatically when a handshake is captured
+pub fn quick_crack(handshake: &HandshakeExport, ssid: &str) -> Option<String> {
+    log::info!("Starting quick crack attempt for SSID: {}", ssid);
+    
+    let mut cracker = WpaCracker::new(handshake.clone(), ssid);
+    let passwords = generate_common_passwords();
+    
+    // Also try SSID-based passwords
+    let mut ssid_passwords = generate_ssid_passwords(ssid);
+    
+    // Combine password lists
+    let mut all_passwords = passwords;
+    all_passwords.append(&mut ssid_passwords);
+    
+    match cracker.crack_passwords(&all_passwords) {
+        Ok(CrackResult::Found(password)) => {
+            log::info!("Quick crack SUCCESS! Password: {}", password);
+            Some(password)
+        }
+        Ok(CrackResult::Exhausted { attempts }) => {
+            log::info!("Quick crack exhausted {} passwords, no match", attempts);
+            None
+        }
+        Ok(CrackResult::Stopped { .. }) => None,
+        Err(e) => {
+            log::error!("Quick crack error: {}", e);
+            None
+        }
+    }
+}
+
+/// Generate passwords based on SSID name
+pub fn generate_ssid_passwords(ssid: &str) -> Vec<String> {
+    let mut passwords = Vec::new();
+    let ssid_lower = ssid.to_lowercase();
+    let ssid_clean: String = ssid.chars().filter(|c| c.is_alphanumeric()).collect();
+    
+    // SSID + common suffixes
+    let suffixes = ["", "1", "12", "123", "1234", "!", "!!", "123!", "wifi", "pass", "password"];
+    for suffix in suffixes {
+        let p = format!("{}{}", ssid, suffix);
+        if p.len() >= 8 && p.len() <= 63 {
+            passwords.push(p);
+        }
+        let p = format!("{}{}", ssid_lower, suffix);
+        if p.len() >= 8 && p.len() <= 63 {
+            passwords.push(p);
+        }
+    }
+    
+    // Common patterns with SSID
+    if ssid.len() >= 4 {
+        passwords.push(format!("{}1234", ssid_clean));
+        passwords.push(format!("{}12345", ssid_clean));
+        passwords.push(format!("{}{}", ssid_clean, ssid_clean));
+    }
+    
+    // Phone number patterns (if SSID contains numbers)
+    let digits: String = ssid.chars().filter(|c| c.is_numeric()).collect();
+    if digits.len() >= 4 {
+        passwords.push(format!("{}0000", digits));
+        passwords.push(format!("{}1234", digits));
+    }
+    
+    passwords
+}
+
+/// Auto-crack callback type for integration with capture
+pub type CrackCallback = Box<dyn Fn(&str) + Send>;
+
+/// Crack result for UI display
+#[derive(Debug, Clone)]
+pub struct QuickCrackResult {
+    /// SSID that was cracked
+    pub ssid: String,
+    /// BSSID of the AP
+    pub bssid: String,
+    /// Password if found
+    pub password: Option<String>,
+    /// Number of attempts made
+    pub attempts: u64,
+    /// Time taken
+    pub duration: std::time::Duration,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +520,13 @@ mod tests {
         let passwords = generate_common_passwords();
         assert!(!passwords.is_empty());
         assert!(passwords.iter().all(|p| p.len() >= 8));
+    }
+    
+    #[test]
+    fn test_ssid_passwords() {
+        let passwords = generate_ssid_passwords("HomeNetwork");
+        assert!(!passwords.is_empty());
+        assert!(passwords.contains(&"HomeNetwork1234".to_string()));
     }
     
     // Note: Full cracking tests require actual handshake data

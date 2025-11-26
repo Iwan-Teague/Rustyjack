@@ -391,9 +391,14 @@ impl App {
             MenuAction::ToggleDiscord => self.toggle_discord()?,
             MenuAction::TransferToUSB => self.transfer_to_usb()?,
             MenuAction::HardwareDetect => self.show_hardware_detect()?,
+            MenuAction::InstallWifiDrivers => self.install_wifi_drivers()?,
             MenuAction::ScanNetworks => self.scan_wifi_networks()?,
             MenuAction::DeauthAttack => self.launch_deauth_attack()?,
             MenuAction::ConnectKnownNetwork => self.connect_known_network()?,
+            MenuAction::EvilTwinAttack => self.launch_evil_twin()?,
+            MenuAction::ProbeSniff => self.launch_probe_sniff()?,
+            MenuAction::PmkidCapture => self.launch_pmkid_capture()?,
+            MenuAction::CrackHandshake => self.launch_crack_handshake()?,
             MenuAction::ShowInfo => {} // No-op for informational entries
         }
         Ok(())
@@ -1711,5 +1716,644 @@ impl App {
             "profile connect",
         ])
     }
+    
+    fn launch_evil_twin(&mut self) -> Result<()> {
+        // Check if we have a target set
+        let target_network = self.config.settings.target_network.clone();
+        let target_bssid = self.config.settings.target_bssid.clone();
+        let target_channel = self.config.settings.target_channel;
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if target_network.is_empty() || target_bssid.is_empty() {
+            return self.show_message("Evil Twin", [
+                "No target network set",
+                "",
+                "First scan networks and",
+                "select 'Set as Target'"
+            ]);
+        }
+        
+        if active_interface.is_empty() {
+            return self.show_message("Evil Twin", [
+                "No WiFi interface set",
+                "",
+                "Run Hardware Detect",
+                "to configure interface"
+            ]);
+        }
+        
+        // Show attack configuration
+        self.show_message("Evil Twin Attack", [
+            &format!("SSID: {}", target_network),
+            &format!("Channel: {}", target_channel),
+            &format!("Interface: {}", active_interface),
+            "",
+            "Creates fake AP with",
+            "same SSID to capture",
+            "client connections",
+            "",
+            "Press SELECT to start"
+        ])?;
+        
+        // Confirm start
+        let options = vec!["Start Attack".to_string(), "Cancel".to_string()];
+        let choice = self.choose_from_list("Confirm", &options)?;
+        
+        if choice != Some(0) {
+            return Ok(());
+        }
+        
+        // Show progress - in background start evil twin
+        self.show_progress("Evil Twin", [
+            &format!("Creating fake: {}", target_network),
+            "Starting hostapd...",
+        ])?;
+        
+        // Execute evil twin via core
+        use rustyjack_core::Commands;
+        
+        let cmd = Commands::EvilTwin {
+            ssid: target_network.clone(),
+            bssid: Some(target_bssid),
+            channel: target_channel,
+            interface: active_interface,
+            duration: 300, // 5 minutes
+        };
+        
+        match self.core.dispatch(cmd) {
+            Ok((msg, data)) => {
+                let mut lines = vec![msg];
+                if let Some(clients) = data.get("clients_connected").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Clients: {}", clients));
+                }
+                if let Some(hs) = data.get("handshakes_captured").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Handshakes: {}", hs));
+                }
+                self.show_message("Evil Twin Done", lines.iter().map(|s| s.as_str()))?;
+            }
+            Err(e) => {
+                self.show_message("Evil Twin Error", [format!("{}", e)])?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn launch_probe_sniff(&mut self) -> Result<()> {
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("Probe Sniff", [
+                "No WiFi interface set",
+                "",
+                "Run Hardware Detect",
+                "to configure interface"
+            ]);
+        }
+        
+        // Duration selection
+        let durations = vec![
+            "30 seconds".to_string(),
+            "1 minute".to_string(),
+            "5 minutes".to_string(),
+        ];
+        let dur_choice = self.choose_from_list("Sniff Duration", &durations)?;
+        
+        let duration_secs = match dur_choice {
+            Some(0) => 30,
+            Some(1) => 60,
+            Some(2) => 300,
+            _ => return Ok(()),
+        };
+        
+        self.show_progress("Probe Sniff", [
+            "Capturing probe requests",
+            "from nearby devices...",
+        ])?;
+        
+        use rustyjack_core::Commands;
+        
+        let cmd = Commands::ProbeSniff {
+            interface: active_interface,
+            duration: duration_secs,
+        };
+        
+        match self.core.dispatch(cmd) {
+            Ok((msg, data)) => {
+                let mut lines = vec![msg];
+                
+                if let Some(probes) = data.get("total_probes").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Probes: {}", probes));
+                }
+                if let Some(clients) = data.get("unique_clients").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Clients: {}", clients));
+                }
+                if let Some(networks) = data.get("unique_networks").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Networks: {}", networks));
+                }
+                
+                // Show top probed networks
+                if let Some(top) = data.get("top_networks").and_then(|v| v.as_array()) {
+                    lines.push("".to_string());
+                    lines.push("Top Networks:".to_string());
+                    for net in top.iter().take(3) {
+                        if let Some(ssid) = net.get("ssid").and_then(|v| v.as_str()) {
+                            let count = net.get("probe_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                            lines.push(format!("  {} ({})", ssid, count));
+                        }
+                    }
+                }
+                
+                self.show_message("Probe Sniff Done", lines.iter().map(|s| s.as_str()))?;
+            }
+            Err(e) => {
+                self.show_message("Probe Error", [format!("{}", e)])?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn launch_pmkid_capture(&mut self) -> Result<()> {
+        let target_network = self.config.settings.target_network.clone();
+        let target_bssid = self.config.settings.target_bssid.clone();
+        let target_channel = self.config.settings.target_channel;
+        let active_interface = self.config.settings.active_network_interface.clone();
+        
+        if active_interface.is_empty() {
+            return self.show_message("PMKID Capture", [
+                "No WiFi interface set",
+                "",
+                "Run Hardware Detect first"
+            ]);
+        }
+        
+        // Option to target specific network or passive capture
+        let options = vec![
+            if target_network.is_empty() {
+                "Passive Capture".to_string()
+            } else {
+                format!("Target: {}", target_network)
+            },
+            "Passive (any network)".to_string(),
+            "Cancel".to_string(),
+        ];
+        
+        let choice = self.choose_from_list("PMKID Mode", &options)?;
+        
+        let (use_target, duration) = match choice {
+            Some(0) if !target_network.is_empty() => (true, 30),
+            Some(1) | Some(0) => (false, 60),
+            _ => return Ok(()),
+        };
+        
+        self.show_progress("PMKID Capture", [
+            if use_target { "Targeting network..." } else { "Passive capture..." },
+            "No deauth needed!",
+        ])?;
+        
+        use rustyjack_core::Commands;
+        
+        let cmd = Commands::PmkidCapture {
+            interface: active_interface,
+            bssid: if use_target { Some(target_bssid) } else { None },
+            ssid: if use_target { Some(target_network) } else { None },
+            channel: if use_target { target_channel } else { 0 },
+            duration,
+        };
+        
+        match self.core.dispatch(cmd) {
+            Ok((msg, data)) => {
+                let mut lines = vec![msg];
+                
+                if let Some(count) = data.get("pmkids_captured").and_then(|v| v.as_u64()) {
+                    if count > 0 {
+                        lines.push(format!("Captured: {} PMKIDs", count));
+                        lines.push("".to_string());
+                        lines.push("Auto-cracking...".to_string());
+                        
+                        // If PMKID was captured, trigger auto-crack
+                        if let Some(hashcat) = data.get("hashcat_format").and_then(|v| v.as_str()) {
+                            lines.push(format!("Hash saved for cracking"));
+                        }
+                    } else {
+                        lines.push("No PMKIDs found".to_string());
+                        lines.push("Try different network".to_string());
+                    }
+                }
+                
+                self.show_message("PMKID Result", lines.iter().map(|s| s.as_str()))?;
+            }
+            Err(e) => {
+                self.show_message("PMKID Error", [format!("{}", e)])?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn launch_crack_handshake(&mut self) -> Result<()> {
+        // Look for captured handshakes in loot directory
+        let loot_dir = self.root.join("loot/Wireless");
+        
+        if !loot_dir.exists() {
+            return self.show_message("Crack", [
+                "No handshakes found",
+                "",
+                "Capture a handshake",
+                "using Deauth Attack",
+                "or PMKID Capture first"
+            ]);
+        }
+        
+        // Find .hc22000 or .cap files
+        let mut handshake_files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&loot_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if ext == "hc22000" || ext == "cap" || ext == "pcap" {
+                        if let Some(name) = path.file_name() {
+                            handshake_files.push(name.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        if handshake_files.is_empty() {
+            return self.show_message("Crack", [
+                "No handshakes found",
+                "in loot/Wireless",
+                "",
+                "Capture one first"
+            ]);
+        }
+        
+        // Let user select which to crack
+        let choice = self.choose_from_menu("Select Handshake", &handshake_files)?;
+        
+        let Some(idx) = choice else {
+            return Ok(());
+        };
+        
+        let selected_file = &handshake_files[idx];
+        let file_path = loot_dir.join(selected_file);
+        
+        // Crack method selection
+        let methods = vec![
+            "Quick (common)".to_string(),
+            "8-digit PINs".to_string(),
+            "SSID patterns".to_string(),
+        ];
+        
+        let method = self.choose_from_list("Crack Method", &methods)?;
+        
+        let crack_mode = match method {
+            Some(0) => "quick",
+            Some(1) => "pins",
+            Some(2) => "ssid",
+            _ => return Ok(()),
+        };
+        
+        self.show_progress("Cracking", [
+            &format!("File: {}", selected_file),
+            "This may take a while...",
+        ])?;
+        
+        use rustyjack_core::Commands;
+        
+        let cmd = Commands::CrackHandshake {
+            file: file_path.to_string_lossy().to_string(),
+            mode: crack_mode.to_string(),
+        };
+        
+        match self.core.dispatch(cmd) {
+            Ok((msg, data)) => {
+                let mut lines = vec![msg];
+                
+                if let Some(password) = data.get("password").and_then(|v| v.as_str()) {
+                    lines.push("".to_string());
+                    lines.push("PASSWORD FOUND!".to_string());
+                    lines.push(format!("{}", password));
+                } else {
+                    if let Some(attempts) = data.get("attempts").and_then(|v| v.as_u64()) {
+                        lines.push(format!("Tried: {} passwords", attempts));
+                    }
+                    lines.push("No match found".to_string());
+                    lines.push("Try different method".to_string());
+                }
+                
+                self.show_message("Crack Result", lines.iter().map(|s| s.as_str()))?;
+            }
+            Err(e) => {
+                self.show_message("Crack Error", [format!("{}", e)])?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Install WiFi drivers for USB dongles
+    /// Keeps user on screen until installation completes or fails
+    fn install_wifi_drivers(&mut self) -> Result<()> {
+        use std::fs;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+        
+        // Status file used by the driver installer script
+        let status_file = Path::new("/tmp/rustyjack_wifi_status");
+        let result_file = Path::new("/tmp/rustyjack_wifi_result.json");
+        let script_path = self.root.join("scripts/wifi_driver_installer.sh");
+        
+        // Check if script exists
+        if !script_path.exists() {
+            return self.show_message("Driver Install", [
+                "Installer script not found",
+                "",
+                "Missing:",
+                "scripts/wifi_driver_installer.sh",
+                "",
+                "Please reinstall RustyJack"
+            ]);
+        }
+        
+        // Initial screen - explain what we're doing
+        self.show_message("WiFi Driver Install", [
+            "This will scan for USB WiFi",
+            "adapters and install any",
+            "required drivers.",
+            "",
+            "Internet required for",
+            "driver downloads.",
+            "",
+            "Press SELECT to continue"
+        ])?;
+        
+        // Confirm
+        let options = vec!["Start Scan".to_string(), "Cancel".to_string()];
+        let choice = self.choose_from_list("Install Drivers?", &options)?;
+        
+        if choice != Some(0) {
+            return Ok(());
+        }
+        
+        // Clear old status files
+        let _ = fs::remove_file(status_file);
+        let _ = fs::remove_file(result_file);
+        
+        // Show initial scanning message
+        self.show_progress("WiFi Driver", ["Scanning for USB WiFi...", "Please wait"])?;
+        
+        // Run the installer script
+        let mut child = match Command::new("bash")
+            .arg(&script_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    return self.show_message("Driver Error", [
+                        "Failed to start installer",
+                        "",
+                        &format!("{}", e)
+                    ]);
+                }
+            };
+        
+        // Monitor progress
+        let mut last_status = String::new();
+        let mut ticks = 0;
+        
+        loop {
+            // Check if process finished
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    // Process finished - check result
+                    let exit_code = status.code().unwrap_or(-1);
+                    
+                    // Read final result
+                    if let Ok(result_json) = fs::read_to_string(result_file) {
+                        if let Ok(result) = serde_json::from_str::<Value>(&result_json) {
+                            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+                            let details = result.get("details").and_then(|v| v.as_str()).unwrap_or("");
+                            let interfaces = result.get("interfaces").and_then(|v| v.as_array());
+                            
+                            match status {
+                                "SUCCESS" => {
+                                    let mut lines = vec![
+                                        "Driver installed!".to_string(),
+                                        "".to_string(),
+                                    ];
+                                    if let Some(ifaces) = interfaces {
+                                        lines.push("Available interfaces:".to_string());
+                                        for iface in ifaces {
+                                            if let Some(name) = iface.as_str() {
+                                                lines.push(format!("  - {}", name));
+                                            }
+                                        }
+                                    }
+                                    lines.push("".to_string());
+                                    lines.push("Ready to use!".to_string());
+                                    
+                                    return self.show_message("Driver Success", lines.iter().map(|s| s.as_str()));
+                                }
+                                "REBOOT_REQUIRED" => {
+                                    return self.show_message("Reboot Required", [
+                                        "Driver installed but",
+                                        "reboot is required.",
+                                        "",
+                                        "Please restart the",
+                                        "device to complete",
+                                        "installation.",
+                                        "",
+                                        "Press KEY3 to reboot"
+                                    ]);
+                                }
+                                "NO_DEVICES" => {
+                                    return self.show_message("No Devices", [
+                                        "No USB WiFi adapters",
+                                        "were detected.",
+                                        "",
+                                        "Please plug in a USB",
+                                        "WiFi adapter and try",
+                                        "again."
+                                    ]);
+                                }
+                                "FAILED" => {
+                                    return self.show_message("Driver Failed", [
+                                        "Failed to install drivers",
+                                        "",
+                                        details,
+                                        "",
+                                        "Check internet connection",
+                                        "and try again.",
+                                        "",
+                                        "Some adapters may not",
+                                        "be supported."
+                                    ]);
+                                }
+                                _ => {
+                                    return self.show_message("Unknown Result", [
+                                        &format!("Status: {}", status),
+                                        details
+                                    ]);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // No result file - use exit code
+                    if exit_code == 0 {
+                        return self.show_message("Driver Install", ["Installation completed"]);
+                    } else if exit_code == 2 {
+                        return self.show_message("Reboot Required", [
+                            "Driver installed.",
+                            "Reboot required to",
+                            "complete setup.",
+                            "",
+                            "Press KEY3 to reboot"
+                        ]);
+                    } else {
+                        return self.show_message("Driver Failed", [
+                            "Installation failed",
+                            "",
+                            &format!("Exit code: {}", exit_code),
+                            "",
+                            "Check logs at:",
+                            "/var/log/rustyjack_wifi_driver.log"
+                        ]);
+                    }
+                }
+                Ok(None) => {
+                    // Still running - update status display
+                    if let Ok(status) = fs::read_to_string(status_file) {
+                        let status = status.trim();
+                        if status != last_status {
+                            last_status = status.to_string();
+                            
+                            // Parse status and show appropriate message
+                            let (title, messages) = self.parse_driver_status(&last_status, ticks);
+                            self.display.draw_menu(&title, &messages, usize::MAX, &self.stats.snapshot())?;
+                        }
+                    }
+                    
+                    // Animate waiting indicator
+                    ticks += 1;
+                    thread::sleep(Duration::from_millis(500));
+                    
+                    // Check for user cancel (back button)
+                    if let Ok(Some(btn)) = self.buttons.try_read() {
+                        if matches!(self.map_button(btn), ButtonAction::Back) {
+                            // User cancelled - try to kill process
+                            let _ = child.kill();
+                            return self.show_message("Cancelled", ["Installation cancelled by user"]);
+                        }
+                    }
+                }
+                Err(e) => {
+                    return self.show_message("Error", [
+                        "Failed to check process",
+                        &format!("{}", e)
+                    ]);
+                }
+            }
+        }
+    }
+    
+    /// Parse driver installer status into display messages
+    fn parse_driver_status(&self, status: &str, ticks: u32) -> (String, Vec<String>) {
+        let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(ticks as usize) % 10];
+        
+        let parts: Vec<&str> = status.split(':').collect();
+        
+        match parts.get(0).map(|s| *s) {
+            Some("SCANNING") => (
+                "WiFi Driver".to_string(),
+                vec![
+                    format!("{} Scanning USB devices...", spinner),
+                    "".to_string(),
+                    "Looking for WiFi".to_string(),
+                    "adapters...".to_string(),
+                ]
+            ),
+            Some("DETECTED") => {
+                let chipset = parts.get(1).unwrap_or(&"Unknown");
+                (
+                    "Device Found".to_string(),
+                    vec![
+                        format!("Chipset: {}", chipset),
+                        "".to_string(),
+                        format!("{} Preparing driver...", spinner),
+                    ]
+                )
+            }
+            Some("INSTALLING_PREREQUISITES") => (
+                "Prerequisites".to_string(),
+                vec![
+                    format!("{} Installing build tools", spinner),
+                    "".to_string(),
+                    "This may take a few".to_string(),
+                    "minutes...".to_string(),
+                ]
+            ),
+            Some("INSTALLING_DRIVER") => {
+                let package = parts.get(1).unwrap_or(&"driver");
+                (
+                    "Installing Driver".to_string(),
+                    vec![
+                        format!("Package: {}", package),
+                        "".to_string(),
+                        format!("{} Compiling...", spinner),
+                        "".to_string(),
+                        "This may take 5-10".to_string(),
+                        "minutes on Pi Zero".to_string(),
+                    ]
+                )
+            }
+            Some("VERIFYING") => {
+                let iface = parts.get(1).unwrap_or(&"wlan");
+                (
+                    "Verifying".to_string(),
+                    vec![
+                        format!("{} Testing interface", spinner),
+                        "".to_string(),
+                        format!("Interface: {}", iface),
+                        "Checking functionality...".to_string(),
+                    ]
+                )
+            }
+            Some("BUILTIN") => {
+                let chipset = parts.get(1).unwrap_or(&"Unknown");
+                (
+                    "Built-in Driver".to_string(),
+                    vec![
+                        format!("Chipset: {}", chipset),
+                        "".to_string(),
+                        format!("{} Loading firmware...", spinner),
+                    ]
+                )
+            }
+            Some("UNKNOWN") => {
+                let usb_id = parts.get(1).unwrap_or(&"????:????");
+                (
+                    "Unknown Device".to_string(),
+                    vec![
+                        format!("USB ID: {}", usb_id),
+                        "".to_string(),
+                        "No driver available".to_string(),
+                        "for this device.".to_string(),
+                    ]
+                )
+            }
+            _ => (
+                "WiFi Driver".to_string(),
+                vec![
+                    format!("{} Working...", spinner),
+                    "".to_string(),
+                    status.to_string(),
+                ]
+            ),
+        }
+    }
 }
-

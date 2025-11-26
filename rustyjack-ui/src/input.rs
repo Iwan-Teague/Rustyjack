@@ -101,6 +101,15 @@ mod platform {
                 thread::sleep(Duration::from_millis(20));
             }
         }
+        
+        /// Non-blocking button check - returns immediately with Some(Button) if pressed, None otherwise
+        pub fn try_read(&mut self) -> Result<Option<Button>> {
+            if let Some(kind) = self.poll()? {
+                self.wait_for_release(kind)?;
+                return Ok(Some(kind));
+            }
+            Ok(None)
+        }
 
         fn wait_for_release(&mut self, kind: Button) -> Result<()> {
             let button = self
@@ -141,6 +150,10 @@ mod platform {
         pub fn wait_for_press(&mut self) -> Result<Button> {
             thread::sleep(Duration::from_millis(250));
             Ok(Button::Select)
+        }
+        
+        pub fn try_read(&mut self) -> Result<Option<Button>> {
+            Ok(None)
         }
     }
 }

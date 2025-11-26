@@ -190,6 +190,14 @@ pub enum WifiCommand {
     Route(WifiRouteCommand),
     /// Launch deauthentication attack on target network
     Deauth(WifiDeauthArgs),
+    /// Launch Evil Twin attack (fake AP)
+    EvilTwin(WifiEvilTwinArgs),
+    /// Capture PMKID from target network
+    PmkidCapture(WifiPmkidArgs),
+    /// Sniff probe requests from nearby devices
+    ProbeSniff(WifiProbeSniffArgs),
+    /// Crack captured handshake/PMKID
+    Crack(WifiCrackArgs),
 }
 
 #[derive(Args, Debug)]
@@ -245,6 +253,76 @@ pub struct WifiDeauthArgs {
     /// Interval between deauth bursts in seconds (default: 1)
     #[arg(long, default_value_t = 1)]
     pub interval: u32,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiEvilTwinArgs {
+    /// SSID to impersonate
+    #[arg(long)]
+    pub ssid: String,
+    /// Interface for the fake AP
+    #[arg(long)]
+    pub interface: String,
+    /// Channel for the fake AP
+    #[arg(long, default_value_t = 6)]
+    pub channel: u8,
+    /// Target BSSID to deauth clients from (optional)
+    #[arg(long)]
+    pub target_bssid: Option<String>,
+    /// Duration in seconds (default: 300 = 5 minutes)
+    #[arg(long, default_value_t = 300)]
+    pub duration: u32,
+    /// Use open network (captive portal style)
+    #[arg(long, default_value_t = true)]
+    pub open: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiPmkidArgs {
+    /// Interface to use
+    #[arg(long)]
+    pub interface: String,
+    /// Target BSSID (optional, for targeted capture)
+    #[arg(long)]
+    pub bssid: Option<String>,
+    /// Target SSID (optional)
+    #[arg(long)]
+    pub ssid: Option<String>,
+    /// Channel (0 = hop channels)
+    #[arg(long, default_value_t = 0)]
+    pub channel: u8,
+    /// Capture duration in seconds
+    #[arg(long, default_value_t = 60)]
+    pub duration: u32,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiProbeSniffArgs {
+    /// Interface to use
+    #[arg(long)]
+    pub interface: String,
+    /// Duration in seconds
+    #[arg(long, default_value_t = 60)]
+    pub duration: u32,
+    /// Channel to sniff on (0 = hop)
+    #[arg(long, default_value_t = 0)]
+    pub channel: u8,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiCrackArgs {
+    /// Path to handshake file (.cap, .pcap, .hc22000)
+    #[arg(long)]
+    pub file: String,
+    /// SSID of the network (required for cracking)
+    #[arg(long)]
+    pub ssid: Option<String>,
+    /// Crack mode: quick, pins, ssid, wordlist
+    #[arg(long, default_value = "quick")]
+    pub mode: String,
+    /// Path to wordlist file (for wordlist mode)
+    #[arg(long)]
+    pub wordlist: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

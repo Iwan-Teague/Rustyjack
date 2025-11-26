@@ -231,7 +231,7 @@ impl SettingsConfig {
     }
     
     fn default_active_interface() -> String {
-        "eth0".to_string()
+        "wlan0".to_string()
     }
     
     fn default_target_network() -> String {

@@ -1,0 +1,51 @@
+# RustyJack USB WiFi Auto-Detection udev Rules
+# Place in /etc/udev/rules.d/99-rustyjack-wifi.rules
+
+# Trigger on USB WiFi adapter insertion
+# This covers major WiFi chipset vendors
+
+# Realtek WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="0bda", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="0bda", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# Ralink/MediaTek WiFi Adapters  
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="148f", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="148f", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# MediaTek (alternate vendor ID)
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="0e8d", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="0e8d", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# Atheros/Qualcomm WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="0cf3", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="0cf3", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# TP-Link WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="2357", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="2357", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# D-Link WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="2001", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="2001", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# Alfa Network WiFi Adapters (uses Realtek/Atheros chipsets)
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="0bda", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+
+# NetGear WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="0846", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="0846", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# Linksys/Belkin WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="13b1", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="13b1", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# ASUS WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="0b05", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="0b05", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# Edimax WiFi Adapters
+SUBSYSTEM=="usb", ACTION=="add", ATTR{idVendor}=="7392", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh add %k"
+SUBSYSTEM=="usb", ACTION=="remove", ATTR{idVendor}=="7392", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh remove %k"
+
+# Also trigger on net subsystem for interface creation
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="wlan*", RUN+="/opt/rustyjack/scripts/wifi_hotplug.sh interface_add %k"

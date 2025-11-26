@@ -19,6 +19,13 @@ pub enum MenuAction {
     DeauthAttack,
     ScanNetworks,
     ConnectKnownNetwork,
+    // New wireless attack actions
+    EvilTwinAttack,
+    ProbeSniff,
+    PmkidCapture,
+    CrackHandshake,
+    /// Install USB WiFi drivers
+    InstallWifiDrivers,
     /// Placeholder for informational entries (no action)
     ShowInfo,
 }
@@ -87,6 +94,7 @@ pub enum LootSection {
 fn main_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new(" Hardware Detect", MenuAction::HardwareDetect),
+        MenuEntry::new(" Install WiFi Drivers", MenuAction::InstallWifiDrivers),
         MenuEntry::new(" WiFi Attacks", MenuAction::Submenu("aw")),
         MenuEntry::new(" View Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new(" Settings", MenuAction::Submenu("as")),
@@ -98,6 +106,10 @@ fn wifi_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new(" Scan Networks", MenuAction::ScanNetworks),
         MenuEntry::new(" Deauth Attack", MenuAction::DeauthAttack),
+        MenuEntry::new(" Evil Twin AP", MenuAction::EvilTwinAttack),
+        MenuEntry::new(" PMKID Capture", MenuAction::PmkidCapture),
+        MenuEntry::new(" Probe Sniff", MenuAction::ProbeSniff),
+        MenuEntry::new(" Crack Handshake", MenuAction::CrackHandshake),
         MenuEntry::new(" Connect Network", MenuAction::ConnectKnownNetwork),
     ]
 }
