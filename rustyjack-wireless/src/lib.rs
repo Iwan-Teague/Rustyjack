@@ -59,6 +59,9 @@ pub mod deauth;
 pub mod handshake;
 pub mod channel;
 pub mod nl80211;
+pub mod pmkid;
+pub mod probe;
+pub mod crack;
 
 // Re-exports for convenience
 pub use error::{WirelessError, Result};
@@ -66,8 +69,11 @@ pub use interface::WirelessInterface;
 pub use frames::{Ieee80211Frame, FrameType, FrameSubtype, MacAddress, DeauthReason, DeauthFrame};
 pub use deauth::{DeauthAttacker, DeauthConfig, DeauthStats};
 pub use capture::{PacketCapture, CaptureFilter, CapturedPacket};
-pub use handshake::{HandshakeCapture, HandshakeMessage, HandshakeState};
+pub use handshake::{HandshakeCapture, HandshakeMessage, HandshakeState, HandshakeExport};
 pub use channel::ChannelInfo;
+pub use pmkid::{PmkidCapture, PmkidCapturer};
+pub use probe::{ProbeSniffer, ProbeRequest, ProbedNetwork, ClientStats};
+pub use crack::{WpaCracker, CrackerConfig, CrackResult};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
