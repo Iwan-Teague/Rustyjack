@@ -500,13 +500,15 @@ impl App {
     }
 
     fn pick_color(&mut self, target: ColorTarget) -> Result<()> {
+        // use common, unambiguous hex values so picked colours match names
         let choices = [
-            ("White", "#ffffff"),
+            ("White", "#FFFFFF"),
             ("Black", "#000000"),
-            ("Green", "#05ff00"),
-            ("Red", "#ff0000"),
-            ("Blue", "#2d0fff"),
-            ("Navy", "#141494"),
+            ("Green", "#00FF00"),
+            ("Red", "#FF0000"),
+            ("Blue", "#0000FF"),
+            ("Navy", "#000080"),
+            ("Purple", "#AA00FF"),
         ];
         let mut index = 0;
         loop {

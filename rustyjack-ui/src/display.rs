@@ -93,7 +93,11 @@ const LCD_HEIGHT: u16 = 128;
 // ST7735S has a 132x162 buffer but Waveshare 1.44" uses 128x128 visible
 // X offset of 2 shifts content to use full visible area
 #[cfg(target_os = "linux")]
-const LCD_OFFSET_X: u16 = 2;
+// Offset X is 0 by default to align drawing to left edge on most displays.
+// Some ST7735 modules exposed an extra left column when set to 2 — this caused
+// a white backlight column to show on the edge of some panels. Set default to
+// 0 so UI fills the entire visible area on typical Waveshare 1.44" modules.
+const LCD_OFFSET_X: u16 = 0;
 #[cfg(target_os = "linux")]
 const LCD_OFFSET_Y: u16 = 1;
 
