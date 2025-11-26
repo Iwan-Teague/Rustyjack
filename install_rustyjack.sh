@@ -142,7 +142,8 @@ info "Using project root: $PROJECT_ROOT"
 info "Stopping rustyjack service for rebuild..."
 sudo systemctl stop rustyjack.service 2>/dev/null || true
 
-# Remove old binary to ensure fresh install (rustyjack-core is a library, not a binary)
+# Remove old binary to ensure fresh install
+# Note: rustyjack-core and rustyjack-evasion are library crates, not binaries
 info "Removing old binary..."
 sudo rm -f /usr/local/bin/rustyjack-ui
 
@@ -273,14 +274,27 @@ else
 fi
 
 # 6-d Rust binaries check
-if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack-core ]; then
-  info "[OK] Rust binaries installed: rustyjack-ui & rustyjack-core"
-  /usr/local/bin/rustyjack-core --version 2>/dev/null && info "     rustyjack-core version OK" || warn "     rustyjack-core version check failed"
+if [ -x /usr/local/bin/rustyjack-ui ]; then
+  info "[OK] Rust binary installed: rustyjack-ui"
+  info "     (rustyjack-core, rustyjack-evasion, rustyjack-wireless are library crates)"
 else
-  fail "[X] Rust binaries missing - check build output"
+  fail "[X] Rust binary missing - check build output"
 fi
 
-# 6-e Service status
+# 6-e Verify library crates were compiled
+if [ -f "$PROJECT_ROOT/target/release/librustyjack_core.rlib" ] || [ -f "$PROJECT_ROOT/target/release/librustyjack_core.so" ]; then
+  info "[OK] rustyjack-core library compiled"
+else
+  warn "[X] rustyjack-core library not found in target/release/"
+fi
+
+if [ -f "$PROJECT_ROOT/target/release/librustyjack_evasion.rlib" ] || [ -f "$PROJECT_ROOT/target/release/librustyjack_evasion.so" ]; then
+  info "[OK] rustyjack-evasion library compiled"
+else
+  warn "[X] rustyjack-evasion library not found in target/release/"
+fi
+
+# 6-f Service status
 if systemctl is-active --quiet rustyjack.service; then
   info "[OK] Rustyjack service is running"
 else

@@ -140,7 +140,7 @@ info "Using project root: $PROJECT_ROOT"
 info "Stopping rustyjack service for rebuild..."
 sudo systemctl stop rustyjack.service 2>/dev/null || true
 
-# Remove old binary (only rustyjack-ui - core is a library)
+# Remove old binary (only rustyjack-ui - core and evasion are library crates)
 info "Removing old binary..."
 sudo rm -f /usr/local/bin/rustyjack-ui
 
@@ -260,10 +260,24 @@ else
   warn "[X] Wireless tools missing"
 fi
 
-if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack-core ]; then
-  info "[OK] DEBUG binaries installed"
+if [ -x /usr/local/bin/rustyjack-ui ]; then
+  info "[OK] DEBUG binary installed: rustyjack-ui"
+  info "     (rustyjack-core, rustyjack-evasion, rustyjack-wireless are library crates)"
 else
-  fail "[X] Binaries missing"
+  fail "[X] Binary missing"
+fi
+
+# Verify library crates were compiled
+if [ -f "$PROJECT_ROOT/target/debug/librustyjack_core.rlib" ]; then
+  info "[OK] rustyjack-core library compiled"
+else
+  warn "[X] rustyjack-core library not found"
+fi
+
+if [ -f "$PROJECT_ROOT/target/debug/librustyjack_evasion.rlib" ]; then
+  info "[OK] rustyjack-evasion library compiled"
+else
+  warn "[X] rustyjack-evasion library not found"
 fi
 
 if systemctl is-active --quiet rustyjack.service; then
