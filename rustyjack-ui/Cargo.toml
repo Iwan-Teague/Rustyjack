@@ -19,6 +19,7 @@ tinybmp = "0.5"
 st7735-lcd = "0.10" # Updated for embedded-hal 1.0 compatibility
 log = "0.4"
 rustyjack-core = { path = "../rustyjack-core" }
+rustyjack-evasion = { path = "../rustyjack-evasion" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-embedded-hal = { version = "0.4", features = [] }

@@ -63,9 +63,33 @@ pub mod pmkid;
 pub mod probe;
 pub mod crack;
 pub mod evil_twin;
-pub mod stealth;
 pub mod karma;
 pub mod pipeline;
+
+// Re-export evasion crate for convenience (stealth functionality now in separate crate)
+pub use rustyjack_evasion as evasion;
+pub use rustyjack_evasion::{
+    MacManager, MacAddress as EvasionMacAddress, MacState, MacGenerationStrategy,
+    TxPowerManager, TxPowerLevel,
+    PassiveManager, PassiveConfig, PassiveResult,
+    EvasionConfig, EvasionSettings,
+};
+
+// Legacy stealth module re-export for backwards compatibility
+pub mod stealth {
+    //! Stealth and evasion functionality
+    //! 
+    //! This module is now provided by the `rustyjack-evasion` crate.
+    //! It is re-exported here for backwards compatibility.
+    
+    pub use rustyjack_evasion::{
+        MacManager as StealthManager,
+        MacState,
+        TxPowerLevel,
+        PassiveConfig as PassiveModeConfig,
+        PassiveResult,
+    };
+}
 
 // Re-exports for convenience
 pub use error::{WirelessError, Result};
@@ -79,7 +103,6 @@ pub use pmkid::{PmkidCapture, PmkidCapturer};
 pub use probe::{ProbeSniffer, ProbeRequest, ProbedNetwork, ClientStats};
 pub use crack::{WpaCracker, CrackerConfig, CrackResult};
 pub use evil_twin::{EvilTwin, EvilTwinConfig, EvilTwinStats};
-pub use stealth::{StealthManager, MacState, TxPowerLevel, PassiveModeConfig, PassiveResult};
 pub use karma::{KarmaAttack, KarmaConfig, KarmaStats, KarmaResult, CapturedProbe, KarmaVictim};
 pub use pipeline::{AttackPipeline, PipelineConfig, PipelineObjective, PipelineStage, PipelineResult, AttackTechnique};
 

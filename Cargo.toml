@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "rustyjack-core",
+    "rustyjack-evasion",
     "rustyjack-ui",
     "rustyjack-wireless",
 ]

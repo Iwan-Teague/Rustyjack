@@ -17,6 +17,9 @@ path = "src/lib.rs"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 
 [dependencies]
+# Evasion and obfuscation (shared library)
+rustyjack-evasion = { path = "../rustyjack-evasion" }
+
 # Low-level system interfaces
 libc = "0.2"
 nix = { version = "0.27", features = ["socket", "net", "ioctl", "fs"] }
