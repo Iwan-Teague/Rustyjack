@@ -140,7 +140,7 @@ impl Default for ColorScheme {
         Self {
             background: "#000000".into(),
             border: "#8800AA".into(),
-            text: "#AA00FF".into(),
+            text: "#00FF00".into(),
             selected_text: "#CC44FF".into(),
             selected_background: "#330055".into(),
             gamepad: "#440066".into(),
@@ -157,7 +157,7 @@ impl ColorScheme {
         "#8800AA".to_string()
     }
     fn default_text() -> String {
-        "#AA00FF".to_string()
+        "#00FF00".to_string()
     }
     fn default_selected_text() -> String {
         "#CC44FF".to_string()
