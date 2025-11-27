@@ -882,6 +882,46 @@ impl App {
         Ok(())
     }
 
+    /// Helper to set a scanned network as the configured deauth target
+    fn set_target_from_network(&mut self, network: &WifiNetworkEntry) -> Result<()> {
+        // Try to use SSID if present
+        let ssid = network.ssid.as_deref().unwrap_or("").to_string();
+
+        if ssid.is_empty() {
+            self.show_message("Target Error", ["No SSID available", "Cannot set as target"])?;
+            return Ok(());
+        }
+
+        self.config.settings.target_network = ssid.clone();
+        self.config.settings.target_bssid = network.bssid.clone().unwrap_or_default();
+        self.config.settings.target_channel = network.channel.unwrap_or(0) as u8;
+
+        let config_path = self.root.join("gui_conf.json");
+        if let Err(e) = self.config.save(&config_path) {
+            self.show_message("Error", [format!("Failed to save: {}", e)])?;
+        } else {
+            if self.config.settings.target_bssid.is_empty() {
+                self.show_message("Target Set", [
+                    &format!("SSID: {}", ssid),
+                    "BSSID: (none)",
+                    &format!("Channel: {}", self.config.settings.target_channel),
+                    "",
+                    "Note: target has no BSSID. Deauth requires a BSSID",
+                ])?;
+            } else {
+                self.show_message("Target Set", [
+                    &format!("SSID: {}", ssid),
+                    &format!("BSSID: {}", self.config.settings.target_bssid),
+                    &format!("Channel: {}", self.config.settings.target_channel),
+                    "",
+                    "Ready for Deauth Attack",
+                ])?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn handle_profile_selection(&mut self, profile: &WifiProfileSummary) -> Result<()> {
         let actions = vec![
             "Connect".to_string(),
@@ -1518,30 +1558,20 @@ impl App {
                     return self.show_message("WiFi Scan", ["No networks found"]);
                 }
                 
-                // Build list of networks for selection
+                // Build list of networks for selection — only show SSID in the
+                // primary scan list for clarity. Additional metadata is shown
+                // in the details view.
                 let networks = response.networks;
                 let mut labels = Vec::new();
                 for net in &networks {
                     let ssid = net.ssid.as_deref().unwrap_or("<hidden>");
                     // Truncate SSID if too long for display
-                    let ssid_display = if ssid.len() > 10 {
-                        format!("{}...", &ssid[..10])
+                    let ssid_display = if ssid.len() > 16 {
+                        format!("{}...", &ssid[..16])
                     } else {
                         ssid.to_string()
                     };
-                    let signal = net.signal_dbm.map(|s| format!("{}dB", s)).unwrap_or_default();
-                    let ch = net.channel.map(|c| format!("c{}", c)).unwrap_or_default();
-                    // Mark target networks with '*' if the ssid or bssid matches
-                    // the currently configured target; show a lock indicator 'L'
-                    // for encrypted networks so '*' is reserved for the selected target.
-                    let bssid = net.bssid.as_deref().unwrap_or("");
-                    let cur_target_bssid = self.config.settings.target_bssid.as_str();
-                    let cur_target_ssid = self.config.settings.target_network.as_str();
-                    let is_target = (!cur_target_bssid.is_empty() && cur_target_bssid == bssid)
-                        || (!self.config.settings.target_network.is_empty() && self.config.settings.target_network == ssid);
-                    let target_marker = if is_target { "*" } else { " " };
-                    let lock = if net.encrypted { "L" } else { " " };
-                    labels.push(format!("{}{} {} {} {}", target_marker, lock, ssid_display, signal, ch));
+                    labels.push(ssid_display);
                 }
                 
                 // Interactive network list - loop until user backs out
@@ -1550,8 +1580,28 @@ impl App {
                     match choice {
                         Some(idx) => {
                             if let Some(network) = networks.get(idx) {
-                                self.handle_network_selection(network)?;
-                            }
+                                        // On selecting an SSID from the scan list show an
+                                        // action chooser so users can set a target quickly
+                                        // or view details before choosing.
+                                        let actions = vec![
+                                            "Set Target".to_string(),
+                                            "Details".to_string(),
+                                            "Back".to_string(),
+                                        ];
+                                        if let Some(a) = self.choose_from_list("Action", &actions)? {
+                                            match a {
+                                                0 => {
+                                                    // Set selected network as target
+                                                    self.set_target_from_network(network)?;
+                                                }
+                                                1 => {
+                                                    // Details flow (existing)
+                                                    self.handle_network_selection(network)?;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
                         }
                         None => break, // User pressed back
                     }
