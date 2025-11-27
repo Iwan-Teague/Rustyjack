@@ -86,9 +86,16 @@ use st7735_lcd::{Orientation, ST7735};
 use std::{thread::sleep, time::Duration as StdDuration};
 
 #[cfg(target_os = "linux")]
-const LCD_WIDTH: u16 = 128;
+// Try a slightly larger logical drawing area to accommodate displays that
+// reserve an extra column/row in their internal buffer. Some ST7735 modules
+// report a 132x162 buffer but only show 128x128 visible area; bumping the
+// logical size to 129x130 helps cover any dead column/row that manifests on
+// certain hardware. If this fails the device truly needs a module-specific
+// init/offset and diagnostics should be used.
 #[cfg(target_os = "linux")]
-const LCD_HEIGHT: u16 = 128;
+const LCD_WIDTH: u16 = 129;
+#[cfg(target_os = "linux")]
+const LCD_HEIGHT: u16 = 130;
 // Offset adjusted to utilize full screen width and avoid dead pixels
 // ST7735S has a 132x162 buffer but Waveshare 1.44" uses 128x128 visible
 // X offset of 2 shifts content to use full visible area
