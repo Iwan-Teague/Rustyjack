@@ -139,6 +139,7 @@ impl MenuTree {
         nodes.insert("awc", MenuNode::Static(wifi_connected_menu));
         nodes.insert("aops", MenuNode::Static(operation_mode_menu));
         nodes.insert("as", MenuNode::Static(settings_menu));
+        nodes.insert("asl", MenuNode::Static(logs_menu));
         nodes.insert("asd", MenuNode::Static(discord_menu));
         nodes.insert("ap", MenuNode::Static(pipeline_menu));
         nodes.insert("ao", MenuNode::Static(obfuscation_menu)); // Obfuscation & Evasion
@@ -337,12 +338,18 @@ fn settings_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("Discord", MenuAction::Submenu("asd")),
         MenuEntry::new("Colors", MenuAction::Submenu("aea")),
-        MenuEntry::new("Logs: ???", MenuAction::ToggleLogs),
-        MenuEntry::new("Purge Logs", MenuAction::PurgeLogs),
+        MenuEntry::new("Logs", MenuAction::Submenu("asl")),
         MenuEntry::new("Refresh Config", MenuAction::RefreshConfig),
         MenuEntry::new("Save Config", MenuAction::SaveConfig),
         MenuEntry::new("System", MenuAction::Submenu("af")),
         MenuEntry::new("WiFi Drivers", MenuAction::InstallWifiDrivers),
+    ]
+}
+
+fn logs_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new("Logs: ???", MenuAction::ToggleLogs),
+        MenuEntry::new("Purge Logs", MenuAction::PurgeLogs),
     ]
 }
 
@@ -398,6 +405,7 @@ pub fn menu_title(id: &str) -> &'static str {
         "aeth" => "Ethernet Recon",
         "aethp" => "Ethernet Pipelines",
         "as" => "Settings",
+        "asl" => "Logs",
         "asd" => "Discord",
         "ap" => "Attack Pipelines",
         "ao" => "Obfuscation & Evasion",

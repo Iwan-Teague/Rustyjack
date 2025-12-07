@@ -648,52 +648,61 @@ impl App {
                 let status = self.status_overlay();
                 self.display.draw_dashboard(view, &status)?;
 
-                let button = self.buttons.wait_for_press()?;
-                match self.map_button(button) {
-                    ButtonAction::Back => {
-                        // Exit dashboard, return to menu
-                        self.dashboard_view = None;
+                // Use timeout to allow refresh for scrolling text/graphs
+                let button_opt = self.buttons.try_read_timeout(Duration::from_millis(100))?;
+                
+                if let Some(button) = button_opt {
+                    match self.map_button(button) {
+                        ButtonAction::Back => {
+                            // Exit dashboard, return to menu
+                            self.dashboard_view = None;
+                        }
+                        ButtonAction::Select => {
+                            // Cycle to next dashboard
+                            self.dashboard_view = Some(match view {
+                                DashboardView::SystemHealth => DashboardView::TargetStatus,
+                                DashboardView::TargetStatus => DashboardView::MacStatus,
+                                DashboardView::MacStatus => DashboardView::SystemHealth,
+                            });
+                        }
+                        ButtonAction::Refresh => {
+                            // force redraw
+                        }
+                        ButtonAction::MainMenu => {
+                            // Exit dashboard and go to main menu
+                            self.dashboard_view = None;
+                            self.menu_state.home();
+                        }
+                        ButtonAction::Reboot => {
+                            self.confirm_reboot()?;
+                        }
+                        _ => {}
                     }
-                    ButtonAction::Select => {
-                        // Cycle to next dashboard
-                        self.dashboard_view = Some(match view {
-                            DashboardView::SystemHealth => DashboardView::TargetStatus,
-                            DashboardView::TargetStatus => DashboardView::MacStatus,
-                            DashboardView::MacStatus => DashboardView::SystemHealth,
-                        });
-                    }
-                    ButtonAction::Refresh => {
-                        // force redraw; nothing else required (loop will redraw)
-                    }
-                    ButtonAction::MainMenu => {
-                        // Exit dashboard and go to main menu
-                        self.dashboard_view = None;
-                        self.menu_state.home();
-                    }
-                    ButtonAction::Reboot => {
-                        self.confirm_reboot()?;
-                    }
-                    _ => {}
                 }
             } else {
                 // Menu mode
                 let entries = self.render_menu()?;
-                let button = self.buttons.wait_for_press()?;
-                match self.map_button(button) {
-                    ButtonAction::Up => self.menu_state.move_up(entries.len()),
-                    ButtonAction::Down => self.menu_state.move_down(entries.len()),
-                    ButtonAction::Back => self.menu_state.back(),
-                    ButtonAction::Select => {
-                        if let Some(entry) = entries.get(self.menu_state.selection) {
-                            let action = entry.action.clone();
-                            self.execute_action(action)?;
+                
+                // Use timeout to allow refresh for scrolling text
+                let button_opt = self.buttons.try_read_timeout(Duration::from_millis(100))?;
+                
+                if let Some(button) = button_opt {
+                    match self.map_button(button) {
+                        ButtonAction::Up => self.menu_state.move_up(entries.len()),
+                        ButtonAction::Down => self.menu_state.move_down(entries.len()),
+                        ButtonAction::Back => self.menu_state.back(),
+                        ButtonAction::Select => {
+                            if let Some(entry) = entries.get(self.menu_state.selection) {
+                                let action = entry.action.clone();
+                                self.execute_action(action)?;
+                            }
                         }
+                        ButtonAction::Refresh => {
+                            // Force refresh
+                        }
+                        ButtonAction::MainMenu => self.menu_state.home(),
+                        ButtonAction::Reboot => self.confirm_reboot()?,
                     }
-                    ButtonAction::Refresh => {
-                        // Force refresh — nothing required here because the loop redraws
-                    }
-                    ButtonAction::MainMenu => self.menu_state.home(),
-                    ButtonAction::Reboot => self.confirm_reboot()?,
                 }
             }
         }
