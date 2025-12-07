@@ -624,7 +624,7 @@ impl App {
         // Give splash screen time to be visible (1.5 seconds)
         thread::sleep(Duration::from_millis(1500));
 
-        let mut app = Self {
+        let app = Self {
             core,
             display,
             buttons,
@@ -872,11 +872,6 @@ impl App {
             MenuAction::Hotspot => self.manage_hotspot()?,
             MenuAction::SetOperationMode(mode) => self.select_operation_mode(mode)?,
             MenuAction::ShowInfo => {} // No-op for informational entries
-            MenuAction::EthernetMitmStop => {
-                let _ = self.core.dispatch(Commands::Mitm(MitmCommand::Stop));
-                self.active_mitm = None;
-                self.show_message("MITM Stopped", ["Ethernet MITM/DNS spoofing stopped."])?;
-            }
         }
         Ok(())
     }
@@ -947,7 +942,6 @@ impl App {
                     self.confirm_reboot()?;
                     needs_redraw = true;
                 }
-                _ => {}
             }
         }
         Ok(())
@@ -4968,7 +4962,7 @@ impl App {
                 [
                     format!("Set mode: {}", self.mode_display_name()),
                     "Some settings may have".to_string(),
-                    "changed automatically.",
+                    "changed automatically.".to_string(),
                 ],
             )?;
         }
@@ -7962,7 +7956,7 @@ impl App {
                         let upstream_iface = upstream.unwrap_or(upstream_pref);
 
                         // Build AP list (WiFi only, excluding upstream if same)
-                        let mut ap_choices: Vec<String> = wifi
+                        let ap_choices: Vec<String> = wifi
                             .iter()
                             .filter(|name| **name != upstream_iface)
                             .cloned()
