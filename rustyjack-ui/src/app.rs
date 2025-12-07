@@ -2769,11 +2769,6 @@ impl App {
                 ],
             );
         }
-                    "Run Hardware Detect",
-                    "to configure interface",
-                ],
-            );
-        }
 
         // Show attack configuration
         self.show_message(
