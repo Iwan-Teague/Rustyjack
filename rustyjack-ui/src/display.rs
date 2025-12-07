@@ -84,7 +84,7 @@ use linux_embedded_hal::{
 
 #[cfg(target_os = "linux")]
 use st7735_lcd::{Orientation, ST7735};
-use std::{thread::sleep, time::{Duration as StdDuration, SystemTime, UNIX_EPOCH}};
+use std::{thread::sleep, time::Duration as StdDuration};
 
 #[cfg(target_os = "linux")]
 const LCD_WIDTH: u16 = 129;
@@ -654,40 +654,6 @@ impl Display {
         Ok(())
     }
 
-    fn get_scrolled_text(
-        text: &str,
-        max_chars: usize,
-        start_delay_ms: u128,
-        end_delay_ms: u128,
-        scroll_speed_ms: u128,
-    ) -> String {
-        let text_len = text.len();
-        if text_len <= max_chars {
-            return text.to_string();
-        }
-
-        let scrollable_chars = text_len - max_chars;
-        let scroll_duration_ms = scrollable_chars as u128 * scroll_speed_ms;
-        let total_cycle_ms = start_delay_ms + scroll_duration_ms + end_delay_ms;
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let cycle_pos = now % total_cycle_ms;
-
-        let offset = if cycle_pos < start_delay_ms {
-            0
-        } else if cycle_pos < (start_delay_ms + scroll_duration_ms) {
-            ((cycle_pos - start_delay_ms) / scroll_speed_ms) as usize
-        } else {
-            scrollable_chars
-        };
-
-        let offset = offset.min(scrollable_chars);
-        text.chars().skip(offset).take(max_chars).collect()
-    }
-
     pub fn draw_toolbar(&mut self, status: &StatusOverlay) -> Result<()> {
         self.draw_toolbar_with_title(None, status)
     }
@@ -707,10 +673,12 @@ impl Display {
         if let Some(t) = title {
             // Leave room for temp/autopilot but allow longer labels
             const MAX_TITLE_CHARS: usize = 16;
-            let display_text = Self::get_scrolled_text(t, MAX_TITLE_CHARS, 1000, 3000, 300);
-
+            let mut title_text = t.to_string();
+            if title_text.len() > MAX_TITLE_CHARS {
+                title_text.truncate(MAX_TITLE_CHARS);
+            }
             Text::with_baseline(
-                &display_text,
+                &title_text,
                 Point::new(4, 4),
                 self.text_style_small,
                 Baseline::Top,
@@ -784,16 +752,7 @@ impl Display {
             } else {
                 self.text_style_regular
             };
-
-            let display_label = if idx == selected {
-                Self::get_scrolled_text(label, 21, 3000, 3000, 300)
-            } else if label.len() > 21 {
-                format!("{}...", &label[..18])
-            } else {
-                label.clone()
-            };
-
-            Text::with_baseline(&display_label, Point::new(4, y), style, Baseline::Top)
+            Text::with_baseline(label, Point::new(4, y), style, Baseline::Top)
                 .draw(&mut self.lcd)
                 .map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 12;
