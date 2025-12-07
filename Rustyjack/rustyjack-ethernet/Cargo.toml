@@ -1,0 +1,13 @@
+[package]
+name = "rustyjack-ethernet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+ipnet = "2"
+socket2 = { version = "0.5", features = ["all"] }
+log = "0.4"
+libc = "0.2"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }

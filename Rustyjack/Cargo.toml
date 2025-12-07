@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "rustyjack-core",
+    "rustyjack-evasion",
+    "rustyjack-ui",
+    "rustyjack-wireless",
+    "rustyjack-ethernet",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["RustyJack Team"]
+license = "MIT"
+repository = "https://github.com/yourusername/rustyjack"
+
+[workspace.dependencies]
+# Shared dependencies across crates
+anyhow = "1.0"
+chrono = "0.4"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.release-pi]
+inherits = "release"
+opt-level = "s"
+
+[profile.release-embedded]
+inherits = "release"
+opt-level = "s"
+strip = true

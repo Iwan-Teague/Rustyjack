@@ -1,0 +1,197 @@
+# Rustyjack PCB Requirements (Draft)
+#
+# Purpose: Minimal-but-capable single-board platform to run the Rustyjack stack
+# (rustyjack-ui/core/wireless/evasion/ethernet) on a lightweight Linux OS with
+# dual Ethernet, dual Wi‑Fi (one monitor/injection capable), SPI LCD + buttons,
+# USB-C power, and USB mass storage.
+#
+# Target software assumptions:
+# - Linux kernel with nl80211/hostapd/dnsmasq/iw/iproute2/iptables
+# - Runs rustyjack-ui + rustyjack-core as root via systemd (CAP_NET_ADMIN/RAW)
+# - SPI and GPIO exposed for ST7735S 128×128 LCD and button matrix
+# - Udev and hotplug for USB NICs
+#
+# Core compute
+# - SoC/Module: ARM Cortex-A53/A55 class recommended (e.g., Raspberry Pi CM4/CM5,
+#   RK3566/68, Allwinner H616) for mainline Linux support and low power.
+# - CPU cores: 4 cores min; Rust build + multitasking benefit from >2 cores.
+# - Clock: ~1.2–1.8 GHz is sufficient; favor thermal headroom over peak clocks.
+# - RAM: 2 GB minimum, 4 GB recommended (room for hostapd + captures + UI + rust).
+# - Storage: 32 GB eMMC recommended (8 GB bare minimum). Expose microSD as optional
+#   fallback for reflashing/recovery.
+# - PMIC/thermal: Include temperature sensor/thermal pad; allow throttling or small
+#   heat spreader if SoC >3 W under load.
+#
+# Power
+# - Input: USB-C with PD or 5 V @ 3 A baseline. Provide BC1.2 fallback if PD not
+#   negotiated. Use reverse-current protection and fuse/TVS.
+# - Rails: 5 V main, 3.3 V for GPIO/SPI, 1.8 V/1.2 V as SoC requires.
+# - Budget: SoC (~3–5 W peak), two Wi‑Fi radios (~2–5 W), dual Ethernet PHYs
+#   (~1 W), LCD/backlight (~0.2 W). Size regulators accordingly.
+#
+# Ethernet
+# - Two Gigabit PHYs with RGMII/SGMII to SoC or integrated MAC+PHY switch module.
+# - Magnetics + ESD. Expose PHY reset/strap pins for bring-up.
+# - MAC persistence: optional I2C EEPROM for unique MACs if SoC lacks OTP.
+#
+# Wi‑Fi
+# - Radio #1 (basic/client/AP): 2.4 GHz (Pi Zero 2 W-class is enough). Needs
+#   managed/AP mode for UI/status/hotspot; monitor/injection not required.
+# - Radio #2 (advanced): Must support monitor + injection + dual-band (2.4/5 GHz).
+#   ath9k_htc (AR9271/AR7010) or mt76/mt7612u-class chipsets are proven.
+# - Interfaces: Prefer M.2 E-key or mini-PCIe for the advanced radio; SDIO/UART/SPI
+#   for basic radio or integrated SoC Wi‑Fi. Provide two u.FL connectors and keep
+#   antenna keep-out regions.
+# - Hotspot support: hostapd requires AP mode; ensure firmware/driver supports AP
+#   concurrently with upstream interface.
+#
+# Display & Input (Waveshare 1.44" ST7735S equivalent)
+# - SPI LCD (ST7735S 128×128):
+#   - SCLK: GPIO11 (SPI0 SCLK), MOSI: GPIO10 (SPI0 MOSI), CS: GPIO8 (CE0)
+#   - DC: GPIO25, RST: GPIO27, BL: GPIO24 (backlight enable)
+# - Buttons / joystick:
+#   - Up=GPIO6, Down=GPIO19, Left=GPIO5, Right=GPIO26, Press=GPIO13
+#   - Key1=GPIO21, Key2=GPIO20, Key3=GPIO16
+#   - Enable pull-ups via boot config (gpio=6,19,5,26,13,21,20,16=pu)
+# - Ensure SPI0 and GPIO are routed; level is 3.3 V.
+#
+# USB
+# - One USB Type-A (host) for mass storage or external adapters.
+# - Internal USB routed to Wi‑Fi module (if USB-based) and debug.
+# - ESD protection on D+/D-; power switch for host port.
+#
+# Storage expansion
+# - Optional microSD slot for recovery/alt boot.
+# - Expose USB host for flash drives (loot export).
+#
+# LEDs
+# - Minimum: 1 status LED (power/heartbeat), 1 activity LED for attacks/tasks
+#   (mapped to GPIO23 in current UI expectations), and optional charge/PD status.
+# - Make status LED GPIO-controllable.
+#
+# Connectivity checks (software-driven)
+# - AP interface must support AP mode; upstream interface should be IP-configured.
+#   Hardware should expose at least one interface that is always upstream-capable
+#   (Ethernet preferred) to avoid user dead-ends.
+#
+# Clocks/Timing
+# - 32 kHz + main crystal as SoC requires. Optional RTC with coin cell to keep
+#   timestamps for loot without net sync.
+#
+# Security/Recovery
+# - Expose UART debug header for boot logs and recovery.
+# - Allow USB or SD boot for re-flashing.
+# - Optional secure boot if supported by SoC; not required for current stack but
+#   useful for tamper resistance.
+#
+# Mechanical/Connector notes
+# - Keep antenna clear areas; provide mounting holes for LCD HAT alignment or
+#   directly mount a 1.44" TFT + small button board matching the GPIO map above.
+# - Label GPIOs for button/LED hookups; expose a small header for future buttons.
+#
+# OS/Kernel expectations
+# - Recent Linux with nl80211, cfg80211, mac80211; drivers for chosen Wi‑Fi chips.
+# - Hostapd, dnsmasq, iptables/nftables available in rootfs.
+# - SPI/I2C enabled by default; /sys/class/net and /dev/gpiochip0 present.
+#
+# Bill-of-materials outline (major)
+# - SoC/Compute module (quad-core ARM, 2–4 GB RAM, 32 GB eMMC)
+# - PMIC + regulators (5 V in -> 3.3/1.x V rails)
+# - 2× Ethernet PHY + magnetics + RJ45
+# - 2× Wi‑Fi modules (one AP-only/basic, one monitor/injection-capable)
+# - ST7735S TFT + SPI connector; button/joystick tact switches + pull-ups
+# - USB-C PD controller + protection; USB-A host port + power switch
+# - Optional microSD socket; UART debug header; status LEDs (≥2 GPIO LEDs)
+
+
+====================================
+Approximate BOM Pricing Breakdown
+====================================
+
+Note: All prices are rough estimates based on typical distributor / OEM pricing at ~100-unit scale.
+Values are in USD; EUR is roughly 0.9 × USD. These are for electronics components only (no PCB/assembly/NRE).
+
+Compute (SoC + RAM + eMMC)
+--------------------------
+- SoC: Rockchip RK3308B-S (or similar class SoC)
+  Approximate unit price: ~$5.60
+
+- RAM: DDR3L, 1 GB total (e.g., 2× 4 Gb chips)
+  Approximate unit price (total): ~$6.00
+
+- eMMC: 16 GB
+  Approximate unit price: ~$6.00
+
+Compute subtotal: ~$18.00
+
+
+Ethernet
+--------
+- 1× Gigabit Ethernet PHY (e.g., RTL8211F-CG)
+  Approximate unit price: ~$0.80
+
+- 1× RJ45 connector with integrated magnetics (Gigabit)
+  Approximate unit price: ~$1.40
+
+Ethernet subtotal: ~$2.20
+
+
+Wi-Fi (Single Advanced Radio)
+------------------------------
+- 1× MT7612U-class Wi-Fi module (monitor + injection capable, dual-band)
+  Approximate OEM/module-class price: ~$10.00
+
+Wi-Fi subtotal: ~$10.00
+
+
+Power (USB-C + PD + Regulators)
+-------------------------------
+- 1× USB-C receptacle
+  Approximate unit price: ~$0.10
+
+- 1× USB PD / Type-C controller (e.g., FUSB302 or equivalent)
+  Approximate unit price: ~$0.40
+
+- DC-DC converters and LDOs for 5 V → 3.3 V → 1.x V rails
+  Approximate combined price: ~$3.00
+
+Power subtotal: ~$3.50
+
+
+Display / Input
+---------------
+- 1× 1.44" ST7735S-based SPI TFT (128×128)
+  Approximate unit price: ~$3.30
+
+- Buttons / input switches (D-pad/joystick style + confirm/panic buttons)
+  Approximate combined price: ~$0.70
+
+Display/Input subtotal: ~$4.00
+
+
+Miscellaneous (Connectors, ESD, Passives, LEDs, Headers)
+--------------------------------------------------------
+- USB-A host connector: ~$0.40
+- MicroSD socket (if used): ~$0.50
+- LEDs + resistors (status indicators): ~$0.20
+- ESD protection diodes for USB/Ethernet and key external lines: ~$1.00
+- Misc passives (caps, resistors, crystals/oscillators): ~$1.50
+- Headers (UART/debug, optional extra USB, etc.): ~$1.40
+
+Misc subtotal: ~$5.00
+
+
+Estimated Total Electronics BOM
+-------------------------------
+Compute subtotal:        ~$18.00
+Ethernet subtotal:       ~$2.20
+Wi-Fi subtotal:          ~$10.00
+Power subtotal:          ~$3.50
+Display/Input subtotal:  ~$4.00
+Misc subtotal:           ~$5.00
+---------------------------------
+Approximate BOM total:   ~$42–45 USD
+Approximate in EUR:      ~€38–41 (at ~0.9× conversion)
+
+This leaves headroom under a target of ~€50 per assembled board, once PCB fabrication and assembly costs are included, assuming moderate production volume.
+

@@ -1,0 +1,142 @@
+# Rustyjack PCB Requirements (Draft)
+#
+# Purpose: Minimal-but-capable single-board platform to run the Rustyjack stack
+# (rustyjack-ui/core/wireless/evasion/ethernet) on a lightweight Linux OS with
+# a single Ethernet port, one monitor/injection-capable Wi‑Fi radio, SPI LCD + buttons,
+# USB-C power, and USB mass storage.
+#
+# Target software assumptions:
+# - Linux kernel with nl80211/hostapd/dnsmasq/iw/iproute2/iptables
+# - Runs rustyjack-ui + rustyjack-core as root via systemd (CAP_NET_ADMIN/RAW)
+# - SPI and GPIO exposed for ST7735S 128×128 LCD and button matrix
+# - Udev and hotplug for USB NICs
+#
+# Core compute
+# - SoC/Module: ARM Cortex-A53/A55 class recommended (e.g., Allwinner H616/H618, RK3308B-class)
+#   for mainline-ish Linux support and low power.
+# - CPU cores: 4 cores min; Rust build + multitasking benefit from >2 cores.
+# - Clock: ~1.2–1.8 GHz is sufficient; favor thermal headroom over peak clocks.
+# - RAM: 1 GB (budget-focused; sufficient for Rustyjack workload).
+# - Storage: 16 GB eMMC (budget) with optional microSD for reflashing/recovery.
+# - PMIC/thermal: Include temperature sensor/thermal pad; allow throttling or small
+#   heat spreader if SoC >3 W under load.
+#
+# Power
+# - Input: USB-C with PD or 5 V @ 3 A baseline. Provide BC1.2 fallback if PD not
+#   negotiated. Use reverse-current protection and fuse/TVS.
+# - Rails: 5 V main, 3.3 V for GPIO/SPI, 1.8 V/1.2 V as SoC requires.
+# - Budget: SoC (~3–5 W peak), Wi‑Fi radio (~2–3 W), single Ethernet PHY (~0.5 W),
+#   LCD/backlight (~0.2 W). Size regulators accordingly.
+#
+# Ethernet
+# - One Gigabit PHY with RGMII/SGMII to SoC.
+# - Magnetics + ESD. Expose PHY reset/strap pins for bring-up.
+# - MAC persistence: optional I2C EEPROM for unique MAC if SoC lacks OTP.
+#
+# Wi‑Fi
+# - Single radio: monitor + injection + dual-band (2.4/5 GHz) capability (ath9k_htc/mt76 class).
+# - Interface: Prefer soldered M.2 E-key or mini-PCIe (or USB) for the radio.
+# - Antennas: expose u.FL connectors and keep antenna keep-out regions.
+# - Hotspot support: hostapd requires AP mode; ensure firmware/driver supports AP concurrently with upstream.
+#
+# Display & Input (Waveshare 1.44" ST7735S equivalent)
+# - SPI LCD (ST7735S 128×128):
+#   - SCLK: GPIO11 (SPI0 SCLK), MOSI: GPIO10 (SPI0 MOSI), CS: GPIO8 (CE0)
+#   - DC: GPIO25, RST: GPIO27, BL: GPIO24 (backlight enable)
+# - Buttons / joystick:
+#   - Up=GPIO6, Down=GPIO19, Left=GPIO5, Right=GPIO26, Press=GPIO13
+#   - Key1=GPIO21, Key2=GPIO20, Key3=GPIO16
+#   - Enable pull-ups via boot config (gpio=6,19,5,26,13,21,20,16=pu)
+# - Ensure SPI0 and GPIO are routed; level is 3.3 V.
+#
+# USB
+# - One USB Type-A (host) for mass storage or external adapters.
+# - Internal USB routed to Wi‑Fi module (if USB-based) and debug.
+# - ESD protection on D+/D-; power switch for host port.
+#
+# Storage expansion
+# - Optional microSD slot for recovery/alt boot.
+# - Expose USB host for flash drives (loot export).
+#
+# LEDs
+# - Minimum: 1 status LED (power/heartbeat), 1 activity LED for attacks/tasks
+#   (mapped to GPIO23 in current UI expectations), and optional charge/PD status.
+# - Make status LED GPIO-controllable.
+# - Add hardware kill switch to gate power to the Ethernet PHY and Wi‑Fi radio for isolation.
+#
+# Connectivity checks (software-driven)
+# - AP interface must support AP mode; upstream interface should be IP-configured.
+#   Hardware should expose at least one interface that is always upstream-capable
+#   (Ethernet preferred) to avoid user dead-ends.
+#
+# Clocks/Timing
+# - 32 kHz + main crystal as SoC requires. Optional RTC with coin cell to keep
+#   timestamps for loot without net sync.
+#
+# Security/Recovery
+# - Expose UART debug header for boot logs and recovery.
+# - Allow USB or SD boot for re-flashing.
+# - Optional secure boot if supported by SoC; not required for current stack but
+#   useful for tamper resistance.
+#
+# Mechanical/Connector notes
+# - Keep antenna clear areas; provide mounting holes for LCD HAT alignment or
+#   directly mount a 1.44" TFT + small button board matching the GPIO map above.
+# - Label GPIOs for button/LED hookups; expose a small header for future buttons.
+#
+# OS/Kernel expectations
+# - Recent Linux with nl80211, cfg80211, mac80211; drivers for chosen Wi‑Fi chips.
+# - Hostapd, dnsmasq, iptables/nftables available in rootfs.
+# - SPI/I2C enabled by default; /sys/class/net and /dev/gpiochip0 present.
+#
+# Bill-of-materials outline (major)
+# - SoC/Compute module (quad-core ARM, 1 GB RAM, 16 GB eMMC)
+# - PMIC + regulators (5 V in -> 3.3/1.x V rails)
+# - 1× Ethernet PHY + magnetics + RJ45
+# - 1× Wi‑Fi module (monitor/injection-capable)
+# - ST7735S TFT + SPI connector; button/joystick tact switches + pull-ups
+# - USB-C PD controller + protection; USB-A host port + power switch
+# - Optional microSD socket; UART debug header; status LEDs (≥2 GPIO LEDs)
+# - Hardware kill switch for Ethernet/Wi‑Fi power cut
+
+------------------------------------------------------------------------------
+# Recommended hardware sets (budget-conscious, ~€50 target BOM excluding NRE)
+
+1) SoC / compute
+   - Family: Allwinner H616/H618 (quad Cortex-A53, integrated MAC) or Rockchip RK3308B (quad A35).
+   - Rationale: Cheap, Linux-friendly, adequate for Rustyjack tasks, low thermal load.
+   - RAM: 1 GB to meet budget.
+   - Storage: 16 GB eMMC (budget); optional microSD for recovery.
+   - Notes: Discrete SoC + DRAM + eMMC cheaper than CM4/CM5 and better for a €50 target.
+
+2) Ethernet
+   - Use SoC MAC + one external Gigabit PHY (e.g., RTL8211F) over RGMII; simpler/cheaper than dual PHY/switch.
+
+3) Wi‑Fi
+   - Single advanced radio: MT7612U-class (USB) or MT76 PCIe module with monitor/injection + AP.
+   - Prefer soldered module (M.2 E-key/mini-PCIe socket) to avoid external dongle cost; expose u.FL antennas.
+
+4) Power
+   - USB-C with 5 V @ 3 A (PD optional) using a low-cost PD trigger (FUSB302 or passive 5 V DRP).
+   - Budget regulators: synchronous buck for 3.3 V; LDOs for clean rails.
+
+5) Display / Input
+   - Reuse the existing ST7735S 128×128 via SPI; route the same GPIO map to a small header or onboard TFT.
+   - Buttons: tactile switches matching the current GPIO assignments; add pull-ups in boot config or hardware.
+
+6) LEDs
+   - Minimum two: Power and Activity (map Activity to GPIO23 to align with current code). Optional charge/PD LED.
+
+7) Cost notes
+   - Avoid compute modules; use discrete SoC + DRAM + eMMC to hit ~€50.
+   - 1 GB RAM is acceptable for the workload; saves a few euros vs. 2 GB.
+   - 16 GB eMMC is cheaper; ensure logs/loot rotation to avoid fill-up.
+   - Soldered Wi‑Fi modules (SDIO/PCIe) reduce BOM vs. branded USB dongles; still expose one USB host for storage.
+
+# Why these choices
+# - Quad A53/A35 is enough for Rust, hostapd, dnsmasq, and occasional scans without overheating or throttling.
+# - 1 GB RAM meets your constraint and keeps cost low; Rust binaries are small, and workloads are bursty.
+# - Single Ethernet port keeps BOM down while supporting upstream/passthrough use cases.
+# - Single monitor/injection-capable Wi‑Fi radio covers all Rustyjack wireless features without needing a second basic radio.
+# - SPI LCD and GPIO buttons match the existing software stack—no UI rewrite needed.
+# - Removable antennas via u.FL keep RF performance and serviceability.

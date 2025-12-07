@@ -1,0 +1,16 @@
+[Unit]
+Description=Rustyjack UI Service
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Rustyjack
+ExecStart=/usr/local/bin/rustyjack-ui
+Restart=on-failure
+RestartSec=5
+User=root
+Environment=RUSTYJACK_ROOT=/root/Rustyjack
+
+[Install]
+WantedBy=multi-user.target

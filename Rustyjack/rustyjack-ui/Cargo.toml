@@ -1,0 +1,26 @@
+[package]
+name = "rustyjack-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["clock"] }
+embedded-graphics = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+embedded-hal = "1.0"
+tempfile = "3.12"
+walkdir = "2.5"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+num_cpus = "1.16"
+image = { version = "0.23", default-features = false, features = ["bmp"] }
+tinybmp = "0.5"
+st7735-lcd = "0.10" # Updated for embedded-hal 1.0 compatibility
+log = "0.4"
+rustyjack-core = { path = "../rustyjack-core" }
+rustyjack-evasion = { path = "../rustyjack-evasion" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-embedded-hal = { version = "0.4", features = [] }
+rustyjack-wireless = { path = "../rustyjack-wireless" }

