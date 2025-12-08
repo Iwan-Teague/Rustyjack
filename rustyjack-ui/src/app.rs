@@ -346,10 +346,6 @@ impl App {
             );
         }
 
-        let args = WifiRouteEnsureArgs {
-            interface: active_interface.clone(),
-        };
-
         match self.ensure_route_for_interface(&active_interface) {
             Ok(Some(msg)) => self.show_message("Route", [msg]),
             Ok(None) => Ok(()),
@@ -2484,7 +2480,7 @@ impl App {
             .settings
             .operation_mode
             .eq_ignore_ascii_case("stealth")
-            && mode != AutopilotMode::Stealth
+            && !matches!(mode, AutopilotMode::Stealth)
         {
             return self.show_message(
                 "Autopilot",
@@ -2550,7 +2546,7 @@ impl App {
                     [
                         "Already running.",
                         &format!("Mode: {}", mode_text),
-                        "",
+                        "".to_string(),
                         "Stop it first, then",
                         "start a new run.",
                     ],
@@ -2654,7 +2650,7 @@ impl App {
             .core
             .dispatch(Commands::Autopilot(AutopilotCommand::Status))
         {
-            Ok((msg, data)) => {
+            Ok((_msg, data)) => {
                 let running = data
                     .get("running")
                     .and_then(|v| v.as_bool())
