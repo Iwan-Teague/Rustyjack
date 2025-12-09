@@ -24,7 +24,10 @@ use rustyjack_core::cli::{
     WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiRouteCommand, WifiRouteEnsureArgs,
     WifiScanArgs, WifiStatusArgs,
 };
-use rustyjack_core::InterfaceSummary;
+use rustyjack_core::{
+    apply_interface_isolation, is_wireless_interface, rfkill_index_for_interface,
+    InterfaceSummary,
+};
 use serde::Deserialize;
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
@@ -509,60 +512,7 @@ impl App {
     }
 
     fn apply_interface_isolation(&mut self, allowed: &[String]) -> Result<()> {
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = allowed;
-            return Ok(());
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            use std::collections::HashSet;
-
-            let allowed_set: HashSet<String> = allowed
-                .iter()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
-
-            if allowed_set.is_empty() {
-                return Ok(()); // Do not shut everything down if nothing is selected
-            }
-
-            let entries = match fs::read_dir("/sys/class/net") {
-                Ok(e) => e,
-                Err(_) => return Ok(()),
-            };
-
-            for entry in entries.flatten() {
-                let iface = entry.file_name().to_string_lossy().to_string();
-                if iface == "lo" {
-                    continue;
-                }
-                let is_allowed = allowed_set.contains(&iface);
-                let is_wireless =
-                    Path::new(&format!("/sys/class/net/{}/wireless", iface)).exists();
-
-                if is_allowed {
-                    let _ = Command::new("ip").args(["link", "set", &iface, "up"]).status();
-                    if is_wireless {
-                        if let Some(idx) = rfkill_index_for_interface(&iface) {
-                            let _ = Command::new("rfkill")
-                                .args(["unblock", &idx])
-                                .status();
-                        }
-                    }
-                } else {
-                    let _ = Command::new("ip").args(["link", "set", &iface, "down"]).status();
-                    if is_wireless {
-                        if let Some(idx) = rfkill_index_for_interface(&iface) {
-                            let _ = Command::new("rfkill").args(["block", &idx]).status();
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
+        apply_interface_isolation(allowed)
     }
 
     fn status_overlay(&self) -> StatusOverlay {
@@ -10014,27 +9964,6 @@ fn randomize_mac_with_reconnect(interface: &str) -> anyhow::Result<rustyjack_eva
 
     renew_dhcp_and_reconnect(interface);
     Ok(state)
-}
-
-#[cfg(target_os = "linux")]
-fn rfkill_index_for_interface(interface: &str) -> Option<String> {
-    let phy = Path::new("/sys/class/net").join(interface).join("phy80211");
-    if !phy.exists() {
-        return None;
-    }
-    let entries = fs::read_dir(phy).ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with("rfkill") {
-            return Some(name.trim_start_matches("rfkill").to_string());
-        }
-    }
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
-fn rfkill_index_for_interface(_: &str) -> Option<String> {
-    None
 }
 
 fn interface_has_ip(interface: &str) -> bool {

@@ -956,6 +956,78 @@ fn parse_gateway_from_route(output: &str) -> Option<Ipv4Addr> {
     None
 }
 
+pub fn rfkill_index_for_interface(interface: &str) -> Option<String> {
+    let phy = Path::new("/sys/class/net").join(interface).join("phy80211");
+    if !phy.exists() {
+        return None;
+    }
+    let entries = fs::read_dir(phy).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("rfkill") {
+            return Some(name.trim_start_matches("rfkill").to_string());
+        }
+    }
+    None
+}
+
+pub fn is_wireless_interface(interface: &str) -> bool {
+    Path::new(&format!("/sys/class/net/{}/wireless", interface)).exists()
+}
+
+pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
+    use std::collections::HashSet;
+
+    let allowed_set: HashSet<String> = allowed
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    if allowed_set.is_empty() {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir("/sys/class/net").context("reading /sys/class/net")?;
+
+    for entry in entries.flatten() {
+        let iface = entry.file_name().to_string_lossy().to_string();
+        if iface == "lo" {
+            continue;
+        }
+        let is_allowed = allowed_set.contains(&iface);
+        let is_wireless = is_wireless_interface(&iface);
+
+        if is_allowed {
+            let _ = Command::new("ip")
+                .args(["link", "set", &iface, "up"])
+                .status();
+            if is_wireless {
+                if let Some(idx) = rfkill_index_for_interface(&iface) {
+                    let _ = Command::new("rfkill").args(["unblock", &idx]).status();
+                }
+            }
+        } else {
+            let _ = Command::new("ip")
+                .args(["link", "set", &iface, "down"])
+                .status();
+            if is_wireless {
+                if let Some(idx) = rfkill_index_for_interface(&iface) {
+                    let _ = Command::new("rfkill").args(["block", &idx]).status();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn enforce_single_interface(interface: &str) -> Result<()> {
+    if interface.is_empty() {
+        bail!("Cannot enforce isolation: no interface specified");
+    }
+    apply_interface_isolation(&[interface.to_string()])
+}
+
 pub fn set_default_route(interface: &str, gateway: Ipv4Addr) -> Result<()> {
     let _ = Command::new("ip")
         .args(["route", "del", "default"])

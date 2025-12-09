@@ -40,8 +40,8 @@ use crate::cli::{
 use crate::system::{
     append_payload_log, backup_repository, backup_routing_state, build_loot_path,
     build_manual_embed, build_mitm_pcap_path, compose_status_text, connect_wifi_network,
-    default_gateway_ip, delete_wifi_profile, detect_ethernet_interface,
-    detect_interface, disconnect_wifi_interface, enable_ip_forwarding, git_reset_to_remote,
+    default_gateway_ip, delete_wifi_profile, detect_ethernet_interface, detect_interface,
+    disconnect_wifi_interface, enable_ip_forwarding, enforce_single_interface, git_reset_to_remote,
     interface_gateway, kill_process, kill_process_pattern, list_interface_summaries,
     list_wifi_profiles, load_wifi_profile, log_mac_usage, ping_host, process_running_exact,
     process_running_pattern, randomize_hostname, read_default_route, read_discord_webhook,
@@ -55,6 +55,43 @@ use crate::system::{
 };
 
 pub type HandlerResult = (String, Value);
+
+fn get_active_interface(root: &Path) -> Result<Option<String>> {
+    read_interface_preference(root, "system_preferred")
+}
+
+fn validate_and_enforce_interface(
+    root: &Path,
+    requested: Option<&str>,
+    allow_multi: bool,
+) -> Result<String> {
+    let active = get_active_interface(root)?;
+
+    match (requested, active.as_deref()) {
+        (Some(req), Some(act)) if req != act && !allow_multi => {
+            bail!(
+                "Interface mismatch: requested '{}' but active interface is '{}'. Use 'wifi route ensure' to switch.",
+                req,
+                act
+            );
+        }
+        (Some(req), _) => {
+            if !allow_multi {
+                enforce_single_interface(req)?;
+            }
+            Ok(req.to_string())
+        }
+        (None, Some(act)) => {
+            if !allow_multi {
+                enforce_single_interface(&act)?;
+            }
+            Ok(act)
+        }
+        (None, None) => {
+            bail!("No active interface set. Run 'hardware detect' and 'wifi route ensure' first.");
+        }
+    }
+}
 
 pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult> {
     match command {
@@ -155,6 +192,9 @@ fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
 
 fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<HandlerResult> {
     let interface = detect_ethernet_interface(args.interface.clone())?;
+    
+    enforce_single_interface(&interface.name)?;
+    
     let cidr = args
         .target
         .clone()
@@ -162,7 +202,6 @@ fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<Handle
     let net: Ipv4Net = cidr.parse().context("parsing target CIDR")?;
 
     let timeout = Duration::from_millis(args.timeout_ms.max(50));
-    // Try ARP sweep first for low-noise discovery, then augment with ICMP.
     let mut hosts_detail = Vec::new();
     if let Ok(arp_result) = discover_hosts_arp(&interface.name, net, Some(50), timeout) {
         hosts_detail.extend(arp_result.details);
@@ -170,7 +209,6 @@ fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<Handle
     if let Ok(icmp_result) = discover_hosts(net, timeout) {
         hosts_detail.extend(icmp_result.details);
     }
-    // Deduplicate while preserving the first discovery method/ttl observed.
     let mut seen = std::collections::HashSet::new();
     let mut deduped = Vec::new();
     for h in hosts_detail {
@@ -180,7 +218,6 @@ fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<Handle
     }
     let hosts: Vec<Ipv4Addr> = deduped.iter().map(|h| h.ip).collect();
 
-    // Save loot
     let loot_dir = root.join("loot").join("Ethernet");
     fs::create_dir_all(&loot_dir).context("creating loot/Ethernet")?;
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
@@ -408,13 +445,22 @@ fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<Hand
 }
 
 fn handle_hotspot_start(args: HotspotStartArgs) -> Result<HandlerResult> {
+    use crate::system::apply_interface_isolation;
+
     let cfg = HotspotConfig {
-        ap_interface: args.ap_interface,
-        upstream_interface: args.upstream_interface,
+        ap_interface: args.ap_interface.clone(),
+        upstream_interface: args.upstream_interface.clone(),
         ssid: args.ssid,
         password: args.password,
         channel: args.channel,
     };
+
+    let mut allowed_interfaces = vec![args.ap_interface.clone()];
+    if !args.upstream_interface.is_empty() {
+        allowed_interfaces.push(args.upstream_interface.clone());
+    }
+    apply_interface_isolation(&allowed_interfaces)?;
+
     let state = start_hotspot(cfg).context("starting hotspot")?;
 
     let data = json!({
@@ -425,6 +471,8 @@ fn handle_hotspot_start(args: HotspotStartArgs) -> Result<HandlerResult> {
         "upstream_interface": state.upstream_interface,
         "channel": state.channel,
         "upstream_ready": state.upstream_ready,
+        "isolation_enforced": true,
+        "interfaces_allowed": allowed_interfaces,
     });
     Ok(("Hotspot started".to_string(), data))
 }
@@ -604,6 +652,8 @@ fn handle_responder_on(root: &Path, args: ResponderArgs) -> Result<HandlerResult
         None => detect_interface(None)?.name,
     };
 
+    enforce_single_interface(&interface)?;
+
     let responder_script = root.join("Responder/Responder.py");
     if !responder_script.exists() {
         bail!(
@@ -622,7 +672,10 @@ fn handle_responder_on(root: &Path, args: ResponderArgs) -> Result<HandlerResult
         .stderr(std::process::Stdio::null());
     cmd.spawn().context("launching Responder")?;
 
-    let data = json!({ "interface": interface });
+    let data = json!({
+        "interface": interface,
+        "isolation_enforced": true,
+    });
     Ok(("Responder started".to_string(), data))
 }
 
@@ -647,6 +700,9 @@ fn handle_mitm_start(root: &Path, args: MitmStartArgs) -> Result<HandlerResult> 
         label,
     } = args;
     let interface_info = detect_interface(interface)?;
+    
+    enforce_single_interface(&interface_info.name)?;
+    
     let gateway = default_gateway_ip().context("determining default gateway for MITM")?;
     let network = network.unwrap_or_else(|| interface_info.network_cidr());
 
@@ -701,6 +757,7 @@ fn handle_mitm_start(root: &Path, args: MitmStartArgs) -> Result<HandlerResult> 
         "loot_dir": pcap_path.parent().map(|p| p.to_string_lossy().to_string()),
         "network": network,
         "max_hosts": max_hosts,
+        "isolation_enforced": true,
     });
 
     Ok(("MITM started".to_string(), data))
@@ -992,6 +1049,8 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
         None => select_wifi_interface(None)?,
     };
 
+    enforce_single_interface(&interface)?;
+
     let gateway_info = discover_gateway(&interface)?;
 
     let data = json!({
@@ -999,6 +1058,7 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
         "default_gateway": gateway_info.default_gateway,
         "dns_servers": gateway_info.dns_servers,
         "dhcp_server": gateway_info.dhcp_server,
+        "isolation_enforced": true,
     });
 
     let mut msg = format!("Gateway info for {}:\n", interface);
@@ -1018,6 +1078,8 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
 fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResult> {
     log::info!("Scanning local network via ARP on {}", args.interface);
 
+    enforce_single_interface(&args.interface)?;
+
     let devices = arp_scan(&args.interface)?;
 
     let devices_json: Vec<Value> = devices
@@ -1036,6 +1098,7 @@ fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResul
         "interface": args.interface,
         "devices": devices_json,
         "count": devices.len(),
+        "isolation_enforced": true,
     });
 
     let msg = format!(
@@ -1542,6 +1605,8 @@ fn handle_wifi_route_status(_root: &Path) -> Result<HandlerResult> {
 }
 
 fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<HandlerResult> {
+    use crate::system::{apply_interface_isolation, enforce_single_interface};
+
     let WifiRouteEnsureArgs { interface } = args;
     let interface_info = detect_interface(Some(interface.clone()))?;
 
@@ -1551,6 +1616,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         )
     })?;
 
+    enforce_single_interface(&interface)?;
     set_default_route(&interface, gateway)?;
     let _ = rewrite_dns_servers(&interface, gateway);
 
@@ -1562,6 +1628,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         "ip": interface_info.address,
         "gateway": gateway,
         "ping_success": ping_success,
+        "isolation_enforced": true,
     });
     Ok(("Default route updated".to_string(), data))
 }
@@ -1764,16 +1831,12 @@ fn handle_autopilot_status() -> Result<HandlerResult> {
 fn handle_wifi_scan(args: WifiScanArgs) -> Result<HandlerResult> {
     log::info!("Starting WiFi scan");
 
-    let interface = match select_wifi_interface(args.interface) {
-        Ok(iface) => {
-            log::info!("Selected interface: {iface}");
-            iface
-        }
-        Err(e) => {
-            log::error!("Failed to select WiFi interface: {e}");
-            bail!("Failed to select WiFi interface: {e}");
-        }
+    let interface = match args.interface {
+        Some(iface) => iface,
+        None => select_wifi_interface(None)?,
     };
+
+    enforce_single_interface(&interface)?;
 
     let networks = match scan_wifi_networks(&interface) {
         Ok(nets) => {
@@ -1790,6 +1853,7 @@ fn handle_wifi_scan(args: WifiScanArgs) -> Result<HandlerResult> {
         "interface": interface,
         "networks": networks,
         "count": networks.len(),
+        "isolation_enforced": true,
     });
     Ok(("Wi-Fi scan completed".to_string(), data))
 }
@@ -1834,6 +1898,8 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
     if !wireless_native::is_wireless_interface(&args.interface) {
         bail!("Interface {} is not a wireless interface", args.interface);
     }
+
+    enforce_single_interface(&args.interface)?;
 
     // Check wireless capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
@@ -1913,6 +1979,7 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
         "eapol_frames": result.eapol_frames,
         "loot_directory": loot_dir.display().to_string(),
         "implementation": "native-rust",
+        "isolation_enforced": true,
     });
 
     let message = if result.handshake_captured {
@@ -1946,6 +2013,8 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
     if !wireless_native::is_wireless_interface(&args.interface) {
         bail!("Interface {} is not a wireless interface", args.interface);
     }
+
+    enforce_single_interface(&args.interface)?;
 
     // Check required tools are installed
     let missing = EvilTwin::check_requirements()
@@ -2025,6 +2094,7 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
         "attack_duration_secs": result.stats.duration.as_secs(),
         "loot_directory": result.loot_path.display().to_string(),
         "log_file": log_file,
+        "isolation_enforced": true,
     });
 
     let message = if result.stats.ap_started {
@@ -2053,6 +2123,8 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
     if !wireless_native::is_wireless_interface(&args.interface) {
         bail!("Interface {} is not a wireless interface", args.interface);
     }
+
+    enforce_single_interface(&args.interface)?;
 
     // Check capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
@@ -2094,6 +2166,7 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
         "networks_seen": result.networks_seen,
         "hashcat_file": result.hashcat_file.as_ref().map(|p| p.display().to_string()),
         "loot_directory": result.loot_path.display().to_string(),
+        "isolation_enforced": true,
     });
 
     let message = if result.pmkids_captured > 0 {
@@ -2125,6 +2198,8 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
     if !wireless_native::is_wireless_interface(&args.interface) {
         bail!("Interface {} is not a wireless interface", args.interface);
     }
+
+    enforce_single_interface(&args.interface)?;
 
     // Check capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
