@@ -354,11 +354,6 @@ impl App {
     }
 
     fn ensure_route_for_interface(&mut self, interface: &str) -> Result<Option<String>> {
-        if !self.interface_has_ip(interface) {
-            // Skip silently when no IPv4 is present
-            return Ok(None);
-        }
-
         let args = WifiRouteEnsureArgs {
             interface: interface.to_string(),
         };
@@ -8615,7 +8610,7 @@ impl App {
 
                         let upstream =
                             self.choose_interface_name("Internet (upstream)", &upstream_options)?;
-                        let upstream_iface = upstream.unwrap_or(upstream_pref);
+                        let upstream_iface = upstream.as_ref().cloned().unwrap_or(upstream_pref);
                         let mut upstream_note = String::new();
                         if upstream.is_none() {
                             upstream_note = "No upstream selected; hotspot will have no internet."
