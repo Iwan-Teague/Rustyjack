@@ -9185,7 +9185,7 @@ impl App {
                         if upstream_choice == Some(0) {
                             upstream_note = "No upstream selected; hotspot will have no internet."
                                 .to_string();
-                        } else if !upstream_iface.is_empty() && !self.interface_has_ip(&upstream_iface) {
+                        } else if !upstream_iface.is_empty() && !interface_has_ip(&upstream_iface) {
                             upstream_note = format!(
                                 "{} has no IP; hotspot will be local-only until it connects.",
                                 upstream_iface
