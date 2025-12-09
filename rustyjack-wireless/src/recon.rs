@@ -47,7 +47,7 @@ pub struct MdnsDevice {
     pub txt_records: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TrafficStats {
     pub interface: String,
     pub rx_bytes: u64,
@@ -57,14 +57,14 @@ pub struct TrafficStats {
     pub timestamp: Instant,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BandwidthSample {
     pub timestamp: Instant,
     pub rx_bps: f64,
     pub tx_bps: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DnsQuery {
     pub timestamp: Instant,
     pub domain: String,
@@ -220,11 +220,13 @@ fn parse_arp_line(line: &str) -> Option<ArpDevice> {
             .find(|p| p.contains(':') && p.len() == 17)?
             .to_string();
 
+        let vendor = lookup_mac_vendor(&mac);
+
         Some(ArpDevice {
             ip,
             mac,
             hostname: resolve_hostname(ip),
-            vendor: lookup_mac_vendor(&mac),
+            vendor,
         })
     } else {
         None
@@ -352,7 +354,7 @@ fn is_port_open(ip: Ipv4Addr, port: u16) -> bool {
 }
 
 /// Discover mDNS/Bonjour devices on the network
-pub fn discover_mdns_devices(duration_secs: u64) -> Result<Vec<MdnsDevice>> {
+pub fn discover_mdns_devices(_duration_secs: u64) -> Result<Vec<MdnsDevice>> {
     let mut devices = Vec::new();
     let mut seen_devices = HashSet::new();
 
