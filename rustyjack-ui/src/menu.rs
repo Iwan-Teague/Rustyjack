@@ -154,6 +154,7 @@ impl MenuTree {
         nodes.insert("as", MenuNode::Static(settings_menu));
         nodes.insert("asl", MenuNode::Static(logs_menu));
         nodes.insert("asd", MenuNode::Static(discord_menu));
+        nodes.insert("asc", MenuNode::Static(config_menu));
         nodes.insert("ap", MenuNode::Static(pipeline_menu));
         nodes.insert("ao", MenuNode::Static(obfuscation_menu)); // Obfuscation & Evasion
         nodes.insert("aom", MenuNode::Static(mac_menu)); // MAC address submenu
@@ -198,7 +199,7 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Operation Mode", MenuAction::Submenu("aops")),
         MenuEntry::new("Hardware Detect", MenuAction::HardwareDetect),
         MenuEntry::new("Wireless", MenuAction::Submenu("aw")),
-        MenuEntry::new("Ethernet Recon", MenuAction::Submenu("aeth")),
+        MenuEntry::new("Ethernet", MenuAction::Submenu("aeth")),
         MenuEntry::new("Autopilot", MenuAction::Submenu("apt")),
         MenuEntry::new("Obfuscation", MenuAction::Submenu("ao")),
         MenuEntry::new("Loot", MenuAction::Submenu("ah")),
@@ -225,10 +226,10 @@ fn wireless_menu() -> Vec<MenuEntry> {
 
 fn wifi_access_menu() -> Vec<MenuEntry> {
     vec![
+        MenuEntry::new("Scan Networks", MenuAction::ScanNetworks),
         MenuEntry::new("Recon", MenuAction::Submenu("awar")),
         MenuEntry::new("Offence", MenuAction::Submenu("awao")),
         MenuEntry::new("Connect Network", MenuAction::ConnectKnownNetwork),
-        MenuEntry::new("Hotspot", MenuAction::Hotspot),
     ]
 }
 
@@ -414,8 +415,7 @@ fn settings_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Discord", MenuAction::Submenu("asd")),
         MenuEntry::new("Colors", MenuAction::Submenu("aea")),
         MenuEntry::new("Logs", MenuAction::Submenu("asl")),
-        MenuEntry::new("Refresh Config", MenuAction::RefreshConfig),
-        MenuEntry::new("Save Config", MenuAction::SaveConfig),
+        MenuEntry::new("Config", MenuAction::Submenu("asc")),
         MenuEntry::new("System", MenuAction::Submenu("af")),
         MenuEntry::new("WiFi Drivers", MenuAction::InstallWifiDrivers),
     ]
@@ -448,6 +448,13 @@ fn colors_menu() -> Vec<MenuEntry> {
             MenuAction::SetColor(ColorTarget::SelectedBackground),
         ),
         MenuEntry::new("Toolbar", MenuAction::SetColor(ColorTarget::Toolbar)),
+    ]
+}
+
+fn config_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new("Refresh Config", MenuAction::RefreshConfig),
+        MenuEntry::new("Save Config", MenuAction::SaveConfig),
     ]
 }
 
@@ -487,6 +494,7 @@ pub fn menu_title(id: &str) -> &'static str {
         "as" => "Settings",
         "asl" => "Logs",
         "asd" => "Discord",
+        "asc" => "Config",
         "ap" => "Attack Pipelines",
         "ao" => "Obfuscation & Evasion",
         "aom" => "MAC Address",

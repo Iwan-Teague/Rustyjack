@@ -339,9 +339,9 @@ impl App {
             return self.show_message(
                 "Route",
                 [
-                    "Not connected to WiFi.",
-                    "Connect first, then ensure",
-                    "default route.",
+                    "Not connected.",
+                    "Route changes skipped",
+                    "until a link is up.",
                 ],
             );
         }
@@ -354,6 +354,11 @@ impl App {
     }
 
     fn ensure_route_for_interface(&mut self, interface: &str) -> Result<Option<String>> {
+        if !self.interface_has_ip(interface) {
+            // Skip silently when no IPv4 is present
+            return Ok(None);
+        }
+
         let args = WifiRouteEnsureArgs {
             interface: interface.to_string(),
         };
@@ -1006,7 +1011,10 @@ impl App {
             MenuAction::AutopilotStop => self.stop_autopilot()?,
             MenuAction::AutopilotStatus => self.show_autopilot_status()?,
             MenuAction::AttackPipeline(pipeline_type) => {
-                self.launch_attack_pipeline(pipeline_type)?
+                if let Err(e) = self.launch_attack_pipeline(pipeline_type) {
+                    let msg = shorten_for_display(&e.to_string(), 20);
+                    self.show_message("Pipeline Error", [msg])?;
+                }
             }
             MenuAction::ToggleMacRandomization => self.toggle_mac_randomization()?,
             MenuAction::ToggleHostnameRandomization => self.toggle_hostname_randomization()?,
@@ -2276,6 +2284,51 @@ impl App {
         self.choose_interface_name(title, &names)
     }
 
+    /// Choose a wireless interface (wifi_modules) with active preselection if present
+    fn choose_wifi_interface(&mut self, title: &str) -> Result<Option<String>> {
+        let (_, data) = self
+            .core
+            .dispatch(Commands::Hardware(HardwareCommand::Detect))?;
+        let mut wifi = Vec::new();
+        if let Some(arr) = data.get("wifi_modules").and_then(|v| v.as_array()) {
+            for item in arr {
+                if let Ok(info) = serde_json::from_value::<InterfaceSummary>(item.clone()) {
+                    wifi.push(info.name);
+                }
+            }
+        }
+
+        if wifi.is_empty() {
+            self.show_message("WiFi", ["No wireless interfaces found"])?;
+            return Ok(None);
+        }
+
+        wifi.sort();
+        wifi.dedup();
+
+        // Auto-select if only one
+        if wifi.len() == 1 {
+            return Ok(Some(wifi[0].clone()));
+        }
+
+        // Build labels with active marker
+        let active = self.config.settings.active_network_interface.clone();
+        let labels: Vec<String> = wifi
+            .iter()
+            .map(|n| {
+                if !active.is_empty() && *n == active {
+                    format!("* {}", n)
+                } else {
+                    n.clone()
+                }
+            })
+            .collect();
+
+        Ok(self
+            .choose_from_list(title, &labels)?
+            .map(|idx| wifi[idx].clone()))
+    }
+
     fn toggle_discord(&mut self) -> Result<()> {
         self.config.settings.discord_enabled = !self.config.settings.discord_enabled;
         self.save_config()?;
@@ -2500,7 +2553,7 @@ impl App {
                     "No active interface set",
                     "",
                     "Run Hardware Detect and",
-                    "select a wired interface.",
+                    "select an Ethernet iface.",
                 ],
             );
         }
@@ -2510,8 +2563,9 @@ impl App {
                 "Autopilot",
                 [
                     &format!("Interface: {}", active_interface),
-                    "Requires wired interface",
-                    "with link for reliability.",
+                    "Autopilot requires",
+                    "a wired (Ethernet)",
+                    "connection with link.",
                 ],
             );
         }
@@ -2521,8 +2575,8 @@ impl App {
                 "Autopilot",
                 [
                     &format!("Interface: {}", active_interface),
-                    "Link is down / no cable.",
-                    "Plug Ethernet and retry.",
+                    "Ethernet link is down.",
+                    "Plug in a cable and retry.",
                 ],
             );
         }
@@ -3151,7 +3205,7 @@ impl App {
         let target_network = self.config.settings.target_network.clone();
         let target_bssid = self.config.settings.target_bssid.clone();
         let target_channel = self.config.settings.target_channel;
-        let active_interface = self.config.settings.active_network_interface.clone();
+        let mut attack_interface = self.config.settings.active_network_interface.clone();
 
         if target_network.is_empty() || target_bssid.is_empty() {
             return self.show_message(
@@ -3165,19 +3219,18 @@ impl App {
             );
         }
 
-        if active_interface.is_empty() {
-            return self.show_message(
-                "Evil Twin",
-                [
-                    "No WiFi interface set",
-                    "",
-                    "Run Hardware Detect",
-                    "to configure interface",
-                ],
-            );
+        if attack_interface.is_empty() {
+            // Let user pick a wireless interface if none set
+            if let Some(choice) = self.choose_wifi_interface("Pick WiFi interface")? {
+                attack_interface = choice;
+                self.config.settings.active_network_interface = attack_interface.clone();
+                let _ = self.config.save(&self.root.join("gui_conf.json"));
+            } else {
+                return Ok(());
+            }
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !check_monitor_mode_support(&attack_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -3194,7 +3247,7 @@ impl App {
             "Evil Twin Attack",
             [
                 &format!("SSID: {}", target_network),
-                &format!("Ch: {} Iface: {}", target_channel, active_interface),
+                &format!("Ch: {} Iface: {}", target_channel, attack_interface),
                 "",
                 "Creates fake AP with same",
                 "SSID to capture client",
@@ -3219,7 +3272,7 @@ impl App {
             ssid: target_network.clone(),
             target_bssid: Some(target_bssid),
             channel: target_channel,
-            interface: active_interface,
+            interface: attack_interface.clone(),
             duration: 300, // 5 minutes
             open: true,
         }));
@@ -3786,7 +3839,14 @@ impl App {
             if let Some(button) = self.buttons.try_read()? {
                 match self.map_button(button) {
                     ButtonAction::Back | ButtonAction::MainMenu => {
-                        stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // Confirm cancel
+                        let confirm = self.choose_from_list(
+                            "Cancel crack?",
+                            &["Yes".to_string(), "No".to_string()],
+                        )?;
+                        if confirm == Some(0) {
+                            stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                     ButtonAction::Reboot => self.confirm_reboot()?,
                     _ => {}
@@ -3794,7 +3854,7 @@ impl App {
             }
 
             self.draw_crack_progress(attempts, total_attempts, rate, &current)?;
-            thread::sleep(Duration::from_millis(150));
+            thread::sleep(Duration::from_millis(350));
         }
 
         Ok(finished.unwrap_or(CrackOutcome {
@@ -8556,6 +8616,11 @@ impl App {
                         let upstream =
                             self.choose_interface_name("Internet (upstream)", &upstream_options)?;
                         let upstream_iface = upstream.unwrap_or(upstream_pref);
+                        let mut upstream_note = String::new();
+                        if upstream.is_none() {
+                            upstream_note = "No upstream selected; hotspot will have no internet."
+                                .to_string();
+                        }
 
                         // Build AP list (WiFi only, excluding upstream if same)
                         let ap_choices: Vec<String> = wifi
@@ -8629,6 +8694,11 @@ impl App {
                                         format!("Password: {}", password),
                                         format!("AP: {}", ap_iface),
                                         format!("Upstream: {}", upstream_iface),
+                                        if upstream_note.is_empty() {
+                                            "".to_string()
+                                        } else {
+                                            upstream_note.clone()
+                                        },
                                         "".to_string(),
                                         "Turn off to exit this view".to_string(),
                                     ],
@@ -8739,6 +8809,25 @@ fn rfkill_index_for_interface(interface: &str) -> Option<String> {
 #[cfg(not(target_os = "linux"))]
 fn rfkill_index_for_interface(_: &str) -> Option<String> {
     None
+}
+
+fn interface_has_ip(interface: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let output = Command::new("ip")
+            .args(["-4", "addr", "show", "dev", interface])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            return stdout.contains("inet ");
+        }
+        false
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        false
+    }
 }
 
 fn shorten_for_display(value: &str, max_len: usize) -> String {

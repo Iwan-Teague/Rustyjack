@@ -96,7 +96,7 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 - **System**: Restart, Secure Shutdown (best-effort RAM wipe then poweroff), Complete Purge (removes binaries, service, loot, udev helpers; exits UI).
 - **Wi-Fi driver installer**: Runs `scripts/wifi_driver_installer.sh`, detecting USB chipsets and installing/compiling drivers; progress is shown in the UI (`/var/log/rustyjack_wifi_driver.log`).
 - **Autopilot (main menu)**: Start Standard/Aggressive/Stealth/Harvest runs or stop/view status. Requires an active wired interface with link; blocked when Operation Mode is Stealth unless you choose the Stealth autopilot. Optional DNS spoof site selection when starting. Toolbar shows `AP:<mode>` while running.
-- **Wireless menus split**: Main menu → Wireless. Inside: Get Connected (Recon/Offence folders plus Connect), Post Connection (Recon + Offence placeholder), and Hotspot. Selecting an active interface in Hardware Detect enforces the default route and brings other interfaces down; non-selected Wi-Fi adapters are rfkill-blocked. Hotspot temporarily unblocks/uses its AP + upstream interfaces while running.
+- **Wireless menus split**: Main menu → Wireless. Inside: Get Connected (Scan + Recon/Offence folders plus Connect), Post Connection (Recon + Offence placeholder), and Hotspot. Selecting an active interface in Hardware Detect enforces the default route and brings other interfaces down; non-selected Wi-Fi adapters are rfkill-blocked. Hotspot temporarily unblocks/uses its AP + upstream interfaces while running.
 
 ### Hardware Detect
 
