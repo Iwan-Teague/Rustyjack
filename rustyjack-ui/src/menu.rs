@@ -33,6 +33,13 @@ pub enum MenuAction {
     WifiStatus,
     WifiDisconnect,
     WifiEnsureRoute,
+    /// Post-connection recon actions
+    ReconGateway,
+    ReconArpScan,
+    ReconServiceScan,
+    ReconMdnsScan,
+    ReconBandwidth,
+    ReconDnsCapture,
     /// Post-connection wireless offensive actions
     ResponderOn,
     ResponderOff,
@@ -269,6 +276,12 @@ fn wifi_access_offence_menu() -> Vec<MenuEntry> {
 fn wifi_connected_recon_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("WiFi Status", MenuAction::WifiStatus),
+        MenuEntry::new("Gateway Info", MenuAction::ReconGateway),
+        MenuEntry::new("ARP Scan", MenuAction::ReconArpScan),
+        MenuEntry::new("Service Scan", MenuAction::ReconServiceScan),
+        MenuEntry::new("mDNS Discovery", MenuAction::ReconMdnsScan),
+        MenuEntry::new("Bandwidth Monitor", MenuAction::ReconBandwidth),
+        MenuEntry::new("DNS Capture", MenuAction::ReconDnsCapture),
     ]
 }
 

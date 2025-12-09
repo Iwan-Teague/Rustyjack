@@ -16,6 +16,8 @@ use rustyjack_ethernet::{
 };
 use rustyjack_wireless::{
     start_hotspot, status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
+    arp_scan, calculate_bandwidth, discover_gateway, discover_mdns_devices, get_traffic_stats,
+    parse_dns_query, scan_network_services, start_dns_capture,
 };
 use serde_json::{json, Value};
 use walkdir::WalkDir;
@@ -30,8 +32,10 @@ use crate::cli::{
     ScanCommand, ScanRunArgs, StatusCommand, SystemCommand, SystemUpdateArgs, WifiBestArgs,
     WifiCommand, WifiCrackArgs, WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs,
     WifiKarmaArgs, WifiPmkidArgs, WifiProbeSniffArgs, WifiProfileCommand, WifiProfileConnectArgs,
-    WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiRouteCommand, WifiRouteEnsureArgs,
-    WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
+    WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiReconArpScanArgs, WifiReconBandwidthArgs,
+    WifiReconCommand, WifiReconDnsCaptureArgs, WifiReconGatewayArgs, WifiReconMdnsScanArgs,
+    WifiReconServiceScanArgs, WifiRouteCommand, WifiRouteEnsureArgs, WifiRouteMetricArgs,
+    WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
 };
 use crate::system::{
     append_payload_log, backup_repository, backup_routing_state, build_loot_path,
@@ -97,6 +101,14 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             WifiCommand::ProbeSniff(args) => handle_wifi_probe_sniff(root, args),
             WifiCommand::Crack(args) => handle_wifi_crack(root, args),
             WifiCommand::Karma(args) => handle_wifi_karma(root, args),
+            WifiCommand::Recon(recon) => match recon {
+                WifiReconCommand::Gateway(args) => handle_wifi_recon_gateway(args),
+                WifiReconCommand::ArpScan(args) => handle_wifi_recon_arp_scan(args),
+                WifiReconCommand::ServiceScan(args) => handle_wifi_recon_service_scan(args),
+                WifiReconCommand::MdnsScan(args) => handle_wifi_recon_mdns_scan(args),
+                WifiReconCommand::Bandwidth(args) => handle_wifi_recon_bandwidth(args),
+                WifiReconCommand::DnsCapture(args) => handle_wifi_recon_dns_capture(args),
+            },
         },
         Commands::Loot(sub) => match sub {
             LootCommand::List(args) => handle_loot_list(root, args),
@@ -970,6 +982,213 @@ fn handle_dnsspoof_stop() -> Result<HandlerResult> {
     let _ = kill_process_pattern("ettercap");
     let data = json!({ "stopped": true });
     Ok(("DNS spoofing stopped".to_string(), data))
+}
+
+fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult> {
+    log::info!("Discovering gateway information");
+
+    let interface = match args.interface {
+        Some(iface) => iface,
+        None => select_wifi_interface()?.unwrap_or_else(|| "wlan0".to_string()),
+    };
+
+    let gateway_info = discover_gateway(&interface)?;
+
+    let data = json!({
+        "interface": gateway_info.interface,
+        "default_gateway": gateway_info.default_gateway,
+        "dns_servers": gateway_info.dns_servers,
+        "dhcp_server": gateway_info.dhcp_server,
+    });
+
+    let mut msg = format!("Gateway info for {}:\n", interface);
+    if let Some(gw) = gateway_info.default_gateway {
+        msg.push_str(&format!("  Gateway: {}\n", gw));
+    }
+    if !gateway_info.dns_servers.is_empty() {
+        msg.push_str(&format!("  DNS: {:?}\n", gateway_info.dns_servers));
+    }
+    if let Some(dhcp) = gateway_info.dhcp_server {
+        msg.push_str(&format!("  DHCP: {}", dhcp));
+    }
+
+    Ok((msg, data))
+}
+
+fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResult> {
+    log::info!("Scanning local network via ARP on {}", args.interface);
+
+    let devices = arp_scan(&args.interface)?;
+
+    let devices_json: Vec<Value> = devices
+        .iter()
+        .map(|d| {
+            json!({
+                "ip": d.ip.to_string(),
+                "mac": d.mac,
+                "hostname": d.hostname,
+                "vendor": d.vendor,
+            })
+        })
+        .collect();
+
+    let data = json!({
+        "interface": args.interface,
+        "devices": devices_json,
+        "count": devices.len(),
+    });
+
+    let msg = format!(
+        "Found {} device(s) on {}",
+        devices.len(),
+        args.interface
+    );
+
+    Ok((msg, data))
+}
+
+fn handle_wifi_recon_service_scan(args: WifiReconServiceScanArgs) -> Result<HandlerResult> {
+    log::info!("Scanning network services on {}", args.interface);
+
+    let devices = arp_scan(&args.interface)?;
+    let services = scan_network_services(&devices)?;
+
+    let services_json: Vec<Value> = services
+        .iter()
+        .map(|s| {
+            json!({
+                "ip": s.ip.to_string(),
+                "services": s.services.iter().map(|svc| {
+                    json!({
+                        "port": svc.port,
+                        "service": svc.service,
+                        "state": svc.state,
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    let data = json!({
+        "interface": args.interface,
+        "results": services_json,
+        "count": services.len(),
+    });
+
+    let msg = format!(
+        "Found services on {} device(s)",
+        services.len()
+    );
+
+    Ok((msg, data))
+}
+
+fn handle_wifi_recon_mdns_scan(args: WifiReconMdnsScanArgs) -> Result<HandlerResult> {
+    log::info!("Discovering mDNS devices for {} seconds", args.duration);
+
+    let devices = discover_mdns_devices(args.duration)?;
+
+    let devices_json: Vec<Value> = devices
+        .iter()
+        .map(|d| {
+            json!({
+                "name": d.name,
+                "ip": d.ip.to_string(),
+                "services": d.services,
+                "txt_records": d.txt_records,
+            })
+        })
+        .collect();
+
+    let data = json!({
+        "devices": devices_json,
+        "count": devices.len(),
+        "duration": args.duration,
+    });
+
+    let msg = format!("Found {} mDNS device(s)", devices.len());
+
+    Ok((msg, data))
+}
+
+fn handle_wifi_recon_bandwidth(args: WifiReconBandwidthArgs) -> Result<HandlerResult> {
+    log::info!(
+        "Monitoring bandwidth on {} for {} seconds",
+        args.interface,
+        args.duration
+    );
+
+    let before = get_traffic_stats(&args.interface)?;
+    std::thread::sleep(Duration::from_secs(args.duration));
+    let after = get_traffic_stats(&args.interface)?;
+
+    let bandwidth = calculate_bandwidth(&before, &after);
+
+    let rx_mbps = bandwidth.rx_bps / 1_000_000.0;
+    let tx_mbps = bandwidth.tx_bps / 1_000_000.0;
+
+    let data = json!({
+        "interface": args.interface,
+        "duration_secs": args.duration,
+        "rx_mbps": rx_mbps,
+        "tx_mbps": tx_mbps,
+        "rx_bytes": after.rx_bytes.saturating_sub(before.rx_bytes),
+        "tx_bytes": after.tx_bytes.saturating_sub(before.tx_bytes),
+    });
+
+    let msg = format!(
+        "Bandwidth: RX={:.2} Mbps, TX={:.2} Mbps",
+        rx_mbps, tx_mbps
+    );
+
+    Ok((msg, data))
+}
+
+fn handle_wifi_recon_dns_capture(args: WifiReconDnsCaptureArgs) -> Result<HandlerResult> {
+    use std::io::BufRead;
+
+    log::info!(
+        "Capturing DNS queries on {} for {} seconds",
+        args.interface,
+        args.duration
+    );
+
+    let mut child = start_dns_capture(&args.interface)?;
+    let stdout = child.stdout.take().context("Failed to capture stdout")?;
+    let reader = BufReader::new(stdout);
+
+    let start = std::time::Instant::now();
+    let mut queries = Vec::new();
+
+    for line in reader.lines() {
+        if start.elapsed().as_secs() >= args.duration {
+            break;
+        }
+
+        if let Ok(line_str) = line {
+            if let Some(query) = parse_dns_query(&line_str) {
+                queries.push(json!({
+                    "domain": query.domain,
+                    "type": query.query_type,
+                    "source": query.source_ip.to_string(),
+                }));
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let data = json!({
+        "interface": args.interface,
+        "duration_secs": args.duration,
+        "queries": queries,
+        "count": queries.len(),
+    });
+
+    let msg = format!("Captured {} DNS queries", queries.len());
+
+    Ok((msg, data))
 }
 
 fn handle_loot_list(root: &Path, args: LootListArgs) -> Result<HandlerResult> {

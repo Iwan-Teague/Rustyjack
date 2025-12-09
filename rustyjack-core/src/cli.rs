@@ -325,6 +325,9 @@ pub enum WifiCommand {
     Crack(WifiCrackArgs),
     /// Launch Karma attack (respond to all probe requests)
     Karma(WifiKarmaArgs),
+    /// Post-connection reconnaissance
+    #[command(subcommand)]
+    Recon(WifiReconCommand),
 }
 
 #[derive(Args, Debug)]
@@ -475,6 +478,70 @@ pub struct WifiKarmaArgs {
     /// SSIDs to ignore (comma-separated)
     #[arg(long)]
     pub ssid_blacklist: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WifiReconCommand {
+    /// Discover gateway, DNS servers, and DHCP server
+    Gateway(WifiReconGatewayArgs),
+    /// ARP scan to discover devices on local subnet
+    ArpScan(WifiReconArpScanArgs),
+    /// Scan common network services on discovered devices
+    ServiceScan(WifiReconServiceScanArgs),
+    /// Discover mDNS/Bonjour devices
+    MdnsScan(WifiReconMdnsScanArgs),
+    /// Monitor bandwidth usage
+    Bandwidth(WifiReconBandwidthArgs),
+    /// Capture DNS queries
+    DnsCapture(WifiReconDnsCaptureArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct WifiReconGatewayArgs {
+    /// Interface to query (defaults to active connection)
+    #[arg(long)]
+    pub interface: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiReconArpScanArgs {
+    /// Interface to scan on
+    #[arg(long)]
+    pub interface: String,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiReconServiceScanArgs {
+    /// Interface to scan on
+    #[arg(long)]
+    pub interface: String,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiReconMdnsScanArgs {
+    /// Duration in seconds to listen for mDNS announcements
+    #[arg(long, default_value_t = 10)]
+    pub duration: u64,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiReconBandwidthArgs {
+    /// Interface to monitor
+    #[arg(long)]
+    pub interface: String,
+    /// Duration in seconds to monitor
+    #[arg(long, default_value_t = 10)]
+    pub duration: u64,
+}
+
+#[derive(Args, Debug)]
+pub struct WifiReconDnsCaptureArgs {
+    /// Interface to capture on
+    #[arg(long)]
+    pub interface: String,
+    /// Duration in seconds to capture
+    #[arg(long, default_value_t = 60)]
+    pub duration: u64,
 }
 
 #[derive(Subcommand, Debug)]

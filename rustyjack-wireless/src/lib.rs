@@ -66,6 +66,7 @@ pub mod pipeline;
 pub mod pmkid;
 pub mod probe;
 pub mod radiotap;
+pub mod recon;
 
 // Re-export evasion crate for convenience (stealth functionality now in separate crate)
 pub use hotspot::{
@@ -116,6 +117,11 @@ pub use pmkid::{
 pub use probe::{
     execute_probe_sniff, ClientStats, ProbeRequest, ProbeSniffConfig, ProbeSniffResult,
     ProbeSniffer, ProbedNetwork,
+};
+pub use recon::{
+    arp_scan, calculate_bandwidth, discover_gateway, discover_mdns_devices, get_traffic_stats,
+    parse_dns_query, scan_network_services, start_dns_capture, ArpDevice, BandwidthSample,
+    DeviceServices, DnsQuery, GatewayInfo, MdnsDevice, ServiceInfo, TrafficStats,
 };
 
 /// Library version

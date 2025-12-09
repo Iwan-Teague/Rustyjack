@@ -1018,6 +1018,7 @@ impl Display {
             DashboardView::SystemHealth => self.draw_system_health(status),
             DashboardView::TargetStatus => self.draw_target_status(status),
             DashboardView::MacStatus => self.draw_mac_status(status),
+            DashboardView::NetworkInterfaces => self.draw_network_interfaces(status),
         }
     }
 
@@ -1202,6 +1203,69 @@ impl Display {
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
                 if y > 119 {
+                    break;
+                }
+                Text::with_baseline(
+                    &wrapped,
+                    Point::new(4, y),
+                    self.text_style_small,
+                    Baseline::Top,
+                )
+                .draw(&mut self.lcd)
+                .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                y += 12;
+            }
+        }
+
+        Text::with_baseline(
+            "LEFT=Exit SEL=Next",
+            Point::new(12, 115),
+            self.text_style_small,
+            Baseline::Top,
+        )
+        .draw(&mut self.lcd)
+        .map_err(|_| anyhow::anyhow!("Draw error"))?;
+        Ok(())
+    }
+
+    fn draw_network_interfaces(&mut self, status: &StatusOverlay) -> Result<()> {
+        use std::process::Command;
+        
+        self.draw_toolbar_with_title(Some("NETWORK IFS"), status)?;
+
+        let mut entries = Vec::new();
+        
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(output) = Command::new("ip").args(["-o", "-4", "addr", "show"]).output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        let iface = parts[1];
+                        if let Some(ip_part) = parts.iter().position(|&p| p == "inet").and_then(|i| parts.get(i + 1)) {
+                            let ip = ip_part.split('/').next().unwrap_or(ip_part);
+                            entries.push(format!("{}: {}", iface, ip));
+                        }
+                    }
+                }
+            }
+        }
+        
+        #[cfg(not(target_os = "linux"))]
+        {
+            entries.push("No interfaces".to_string());
+        }
+
+        if entries.is_empty() {
+            entries.push("No IP addresses".to_string());
+        }
+
+        let mut y = 16;
+        const MAX_CHARS: usize = 21;
+        for line in entries.iter() {
+            for wrapped in wrap_text(line, MAX_CHARS) {
+                if y > 102 {
                     break;
                 }
                 Text::with_baseline(
@@ -1433,6 +1497,31 @@ impl Display {
                     }
                 );
             }
+            DashboardView::NetworkInterfaces => {
+                #[cfg(target_os = "linux")]
+                {
+                    use std::process::Command;
+                    if let Ok(output) = Command::new("ip").args(["-o", "-4", "addr", "show"]).output() {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        for line in stdout.lines() {
+                            let parts: Vec<&str> = line.split_whitespace().collect();
+                            if parts.len() >= 4 {
+                                let iface = parts[1];
+                                if let Some(ip_part) = parts.iter().position(|&p| p == "inet").and_then(|i| parts.get(i + 1)) {
+                                    let ip = ip_part.split('/').next().unwrap_or(ip_part);
+                                    println!("{}: {}", iface, ip);
+                                }
+                            }
+                        }
+                    } else {
+                        println!("No interfaces");
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    println!("No interfaces");
+                }
+            }
         }
         println!("========================");
         Ok(())
@@ -1496,4 +1585,5 @@ pub enum DashboardView {
     SystemHealth,
     TargetStatus,
     MacStatus,
+    NetworkInterfaces,
 }
