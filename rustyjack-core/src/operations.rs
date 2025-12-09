@@ -989,7 +989,7 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
 
     let interface = match args.interface {
         Some(iface) => iface,
-        None => select_wifi_interface()?.unwrap_or_else(|| "wlan0".to_string()),
+        None => select_wifi_interface(None)?,
     };
 
     let gateway_info = discover_gateway(&interface)?;
