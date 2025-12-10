@@ -9,6 +9,20 @@
 # ------------------------------------------------------------
 set -euo pipefail
 
+ensure_rw_root() {
+  local root_status
+  root_status=$(findmnt -n -o OPTIONS / || true)
+  if echo "$root_status" | grep -q '\bro\b'; then
+    warn "Root filesystem is read-only; attempting remount rw..."
+    if sudo mount -o remount,rw /; then
+      info "[OK] Remounted / as read-write"
+    else
+      fail "Failed to remount / as read-write. Please enable rw and rerun."
+    fi
+  fi
+}
+ensure_rw_root
+
 # ---- helpers ------------------------------------------------
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
@@ -55,7 +69,7 @@ PACKAGES=(
   # build tools for Rust compilation
   build-essential pkg-config libssl-dev
   # WiFi interface tools (for native Rust wireless operations)
-  wireless-tools wpasupplicant iw iproute2 isc-dhcp-client network-manager
+  wireless-tools wpasupplicant iw iproute2 isc-dhcp-client network-manager rfkill
   # Evil Twin / Karma AP requirements
   hostapd dnsmasq iptables
   # USB WiFi dongle support
@@ -73,6 +87,99 @@ if ((${#to_install[@]})); then
 else
   info "All packages already installed and up-to-date."
 fi
+
+# Re-claim resolv.conf after any package changes (apt may rewrite it)
+claim_resolv_conf
+
+check_resolv_conf() {
+  local resolv="/etc/resolv.conf"
+  info "Checking $resolv writability..."
+
+  if [ -L "$resolv" ]; then
+    local target
+    target=$(readlink -f "$resolv" 2>/dev/null || true)
+    warn "[NOTE] $resolv is a symlink -> ${target:-unknown}. If managed by systemd-resolved/resolvconf, allow Rustyjack to overwrite it for route enforcement."
+  fi
+
+  if command -v lsattr >/dev/null 2>&1; then
+    if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+      warn "[NOTE] $resolv is immutable (chattr +i). Clear with: sudo chattr -i $resolv"
+    fi
+  fi
+
+  if ! sudo test -w "$resolv"; then
+    warn "[NOTE] $resolv is not writable by root. Adjust permissions or disable the managing service before using ensure-route."
+  else
+    info "[OK] $resolv writable by root"
+  fi
+}
+check_resolv_conf
+
+claim_resolv_conf() {
+  local resolv="/etc/resolv.conf"
+  info "Claiming $resolv for Rustyjack (dedicated device)..."
+
+  if command -v lsattr >/dev/null 2>&1; then
+    if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+      sudo chattr -i "$resolv" 2>/dev/null || warn "[WARN] Failed to clear immutable bit on $resolv"
+    }
+  fi
+
+  if [ -L "$resolv" ]; then
+    local target
+    target=$(readlink -f "$resolv" 2>/dev/null || true)
+    warn "Replacing symlinked $resolv (was -> ${target:-unknown}) with Rustyjack-managed file"
+    sudo rm -f "$resolv"
+  else
+    if [ -f "$resolv" ]; then
+      sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
+    fi
+  fi
+
+  sudo sh -c "printf '# Managed by Rustyjack\\n# Updated by ensure-route\\n' > $resolv"
+  sudo chmod 644 "$resolv"
+  sudo chown root:root "$resolv"
+  info "[OK] $resolv now owned by Rustyjack (plain file, root-writable)"
+}
+claim_resolv_conf
+
+configure_dns_control() {
+  # Disable competing DNS managers; keep NetworkManager but stop it from touching resolv.conf
+  if systemctl list-unit-files | grep -q '^systemd-resolved'; then
+    warn "Disabling systemd-resolved to prevent resolv.conf rewrites"
+    sudo systemctl disable --now systemd-resolved.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^dhcpcd'; then
+    warn "Disabling dhcpcd (Rustyjack uses dhclient)"
+    sudo systemctl disable --now dhcpcd.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^resolvconf'; then
+    warn "Disabling resolvconf to avoid resolv.conf churn"
+    sudo systemctl disable --now resolvconf.service 2>/dev/null || true
+  fi
+
+  local nm_conf="/etc/NetworkManager/NetworkManager.conf"
+  info "Setting NetworkManager DNS handling to 'none' (preserve Rustyjack resolv.conf)"
+  if [ ! -f "$nm_conf" ]; then
+    sudo mkdir -p /etc/NetworkManager
+    cat <<'EOF' | sudo tee "$nm_conf" >/dev/null
+[main]
+dns=none
+EOF
+  else
+    if grep -q '^\[main\]' "$nm_conf"; then
+      if grep -q '^dns=' "$nm_conf"; then
+        sudo sed -i 's/^dns=.*/dns=none/' "$nm_conf"
+      else
+        sudo sed -i '/^\[main\]/a dns=none' "$nm_conf"
+      fi
+    else
+      printf '\n[main]\ndns=none\n' | sudo tee -a "$nm_conf" >/dev/null
+    fi
+  fi
+  sudo systemctl restart NetworkManager.service 2>/dev/null || true
+}
+configure_dns_control
 
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."

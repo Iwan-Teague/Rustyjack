@@ -10,11 +10,15 @@ use std::{
 };
 
 use anyhow::Result;
-use rustyjack_core::cli::StatusCommand;
-use rustyjack_core::Commands;
+use rustyjack_core::cli::{HotspotCommand, StatusCommand};
+use rustyjack_core::{apply_interface_isolation, Commands};
 use serde_json::Value;
 
-use crate::{core::CoreBridge, display::StatusOverlay};
+use crate::{
+    config::GuiConfig,
+    core::CoreBridge,
+    display::StatusOverlay,
+};
 
 pub struct StatsSampler {
     data: Arc<Mutex<StatusOverlay>>,
@@ -83,6 +87,11 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
         }
     }
 
+    // Enforce interface isolation continuously based on active/hotspot state
+    if let Err(err) = enforce_isolation_watchdog(core, root) {
+        eprintln!("[isolation] watchdog error: {err:?}");
+    }
+
     // Check autopilot status
     if let Ok((_, data)) = core.dispatch(Commands::Autopilot(
         rustyjack_core::cli::AutopilotCommand::Status,
@@ -115,6 +124,41 @@ fn extract_status_text(data: &Value) -> Option<String> {
             .map(|s| s.to_string()),
         _ => None,
     }
+}
+
+fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
+    let cfg = GuiConfig::load(root)?;
+    let mut allow_list = vec![cfg.settings.active_network_interface.trim().to_string()];
+
+    if let Ok((_, hs_data)) = core.dispatch(Commands::Hotspot(HotspotCommand::Status)) {
+        let running = hs_data
+            .get("running")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if running {
+            if let Some(ap) = hs_data.get("ap_interface").and_then(|v| v.as_str()) {
+                if !ap.is_empty() {
+                    allow_list.push(ap.to_string());
+                }
+            }
+            if let Some(up) = hs_data.get("upstream_interface").and_then(|v| v.as_str()) {
+                if !up.is_empty() {
+                    allow_list.push(up.to_string());
+                }
+            }
+        }
+    }
+
+    allow_list.retain(|s| !s.is_empty());
+    allow_list.sort();
+    allow_list.dedup();
+
+    if allow_list.is_empty() {
+        return Ok(());
+    }
+
+    apply_interface_isolation(&allow_list)?;
+    Ok(())
 }
 
 fn read_temp() -> Result<f32> {

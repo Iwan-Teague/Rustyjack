@@ -26,7 +26,8 @@
 //! explicit error messages if not run as root.
 
 use std::{
-    env, fs,
+    env,
+    fs,
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -975,6 +976,34 @@ pub fn is_wireless_interface(interface: &str) -> bool {
     Path::new(&format!("/sys/class/net/{}/wireless", interface)).exists()
 }
 
+pub fn read_interface_mac(interface: &str) -> Option<String> {
+    let path = format!("/sys/class/net/{}/address", interface);
+    fs::read_to_string(&path)
+        .ok()
+        .map(|mac| mac.trim().to_lowercase())
+}
+
+pub fn find_interface_by_mac(mac: &str) -> Option<String> {
+    let target = mac.trim().to_lowercase();
+    if target.is_empty() {
+        return None;
+    }
+    let entries = fs::read_dir("/sys/class/net").ok()?;
+    for entry in entries.flatten() {
+        let iface = entry.file_name().to_string_lossy().to_string();
+        if iface == "lo" {
+            continue;
+        }
+        let path = format!("/sys/class/net/{}/address", iface);
+        if let Ok(val) = fs::read_to_string(&path) {
+            if val.trim().to_lowercase() == target {
+                return Some(iface);
+            }
+        }
+    }
+    None
+}
+
 pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
     use std::collections::HashSet;
 
@@ -985,12 +1014,13 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
         .collect();
 
     if allowed_set.is_empty() {
-        return Ok(());
+        bail!("Cannot enforce isolation: no allowed interfaces provided");
     }
 
     let entries = fs::read_dir("/sys/class/net").context("reading /sys/class/net")?;
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.context("iterating interfaces in /sys/class/net")?;
         let iface = entry.file_name().to_string_lossy().to_string();
         if iface == "lo" {
             continue;
@@ -999,21 +1029,41 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
         let is_wireless = is_wireless_interface(&iface);
 
         if is_allowed {
-            let _ = Command::new("ip")
+            Command::new("ip")
                 .args(["link", "set", &iface, "up"])
-                .status();
+                .status()
+                .with_context(|| format!("bringing interface {} up", iface))?
+                .success()
+                .then_some(())
+                .ok_or_else(|| anyhow!("ip link set up failed for {}", iface))?;
             if is_wireless {
                 if let Some(idx) = rfkill_index_for_interface(&iface) {
-                    let _ = Command::new("rfkill").args(["unblock", &idx]).status();
+                    Command::new("rfkill")
+                        .args(["unblock", &idx])
+                        .status()
+                        .with_context(|| format!("rfkill unblock {}", iface))?
+                        .success()
+                        .then_some(())
+                        .ok_or_else(|| anyhow!("rfkill unblock failed for {}", iface))?;
                 }
             }
         } else {
-            let _ = Command::new("ip")
+            Command::new("ip")
                 .args(["link", "set", &iface, "down"])
-                .status();
+                .status()
+                .with_context(|| format!("bringing interface {} down", iface))?
+                .success()
+                .then_some(())
+                .ok_or_else(|| anyhow!("ip link set down failed for {}", iface))?;
             if is_wireless {
                 if let Some(idx) = rfkill_index_for_interface(&iface) {
-                    let _ = Command::new("rfkill").args(["block", &idx]).status();
+                    Command::new("rfkill")
+                        .args(["block", &idx])
+                        .status()
+                        .with_context(|| format!("rfkill block {}", iface))?
+                        .success()
+                        .then_some(())
+                        .ok_or_else(|| anyhow!("rfkill block failed for {}", iface))?;
                 }
             }
         }
@@ -1124,11 +1174,34 @@ pub fn read_interface_preference(root: &Path, key: &str) -> Result<Option<String
         .map(|s| s.to_string()))
 }
 
+pub fn read_interface_preference_with_mac(
+    root: &Path,
+    key: &str,
+) -> Result<Option<(String, Option<String>)>> {
+    let path = root.join("wifi").join("interface_preferences.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&path)?;
+    let map: Map<String, Value> = serde_json::from_str(&contents)?;
+    if let Some(entry) = map.get(key) {
+        if let Some(iface) = entry.get("interface").and_then(|v| v.as_str()) {
+            let mac = entry
+                .get("mac")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            return Ok(Some((iface.to_string(), mac)));
+        }
+    }
+    Ok(None)
+}
+
 pub fn write_interface_preference(root: &Path, key: &str, interface: &str) -> Result<()> {
     let path = root.join("wifi").join("interface_preferences.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    let mac = read_interface_mac(interface);
     let mut map: Map<String, Value> = if path.exists() {
         let contents = fs::read_to_string(&path)?;
         serde_json::from_str(&contents).unwrap_or_default()
@@ -1139,6 +1212,7 @@ pub fn write_interface_preference(root: &Path, key: &str, interface: &str) -> Re
         key.to_string(),
         json!({
             "interface": interface,
+            "mac": mac,
             "timestamp": Local::now().to_rfc3339(),
         }),
     );

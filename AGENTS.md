@@ -9,7 +9,11 @@ Hardware specifics drawn from WAVESHARE_PINS.md and WAVESHARE_BUTTONS.md:
 
 Software/runtime expectations:
 - Built and run on Linux (Pi OS) with root privileges via systemd service, so `CAP_NET_ADMIN` is available.
-- Dependencies are installed by `install_rustyjack.sh` and `install_rustyjack_dev.sh`: `iproute2` (`ip`), `isc-dhcp-client` (`dhclient`), `network-manager` (`nmcli`), `wpasupplicant` (`wpa_cli`), `wireless-tools`, `iw`, `hostapd`, `dnsmasq`, plus build and firmware packages. When adding features that call new system binaries, update both installers accordingly.
+- Dependencies are installed by `install_rustyjack.sh` and `install_rustyjack_dev.sh`: `iproute2` (`ip`), `isc-dhcp-client` (`dhclient`), `network-manager` (`nmcli`), `wpasupplicant` (`wpa_cli`), `wireless-tools`, `iw`, `hostapd`, `dnsmasq`, `rfkill`, plus build and firmware packages. When adding features that call new system binaries, update both installers accordingly.
+- Installers now:
+  - Remount `/` read-write if needed (fresh Pi images can boot `ro`).
+  - Claim `/etc/resolv.conf` for Rustyjack (plain root-owned file) and reclaim it after apt installs so route/DNS enforcement can write reliably.
+  - Disable competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present) and set NetworkManager `dns=none` so `nmcli` remains available but does not rewrite `resolv.conf`. This ensures Rustyjack has sole control of DNS on the dedicated device.
 
 MAC randomization flow:
 - UI uses `rustyjack-evasion::MacManager` for secure, locally administered MACs and will prefer vendor-matched OUIs based on the current interface’s OUI. After changing MAC it triggers `dhclient -r && dhclient` and signals reconnect via `wpa_cli reconnect` or `nmcli device reconnect` if present.

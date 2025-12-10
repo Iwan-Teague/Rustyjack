@@ -356,29 +356,6 @@ impl App {
             return self.show_message("Route", ["No active interface set"]);
         }
 
-        // Require link + IP to avoid breaking connectivity
-        if !self.interface_has_carrier(&active_interface) {
-            return self.show_message(
-                "Route",
-                [
-                    &format!("Interface: {}", active_interface),
-                    "Link is down / no carrier.",
-                    "Connect first, then retry.",
-                ],
-            );
-        }
-        if !interface_has_ip(&active_interface) {
-            return self.show_message(
-                "Route",
-                [
-                    &format!("Interface: {}", active_interface),
-                    "No IPv4 address.",
-                    "Connect first, then set",
-                    "default route.",
-                ],
-            );
-        }
-
         match self.ensure_route_for_interface(&active_interface) {
             Ok(Some(msg)) => self.show_message("Route", [msg]),
             Ok(None) => Ok(()),
@@ -442,20 +419,6 @@ impl App {
         if interface.is_empty() {
             return Ok(None);
         }
-        if !self.interface_has_carrier(interface) {
-            return self.show_message(
-                "Route",
-                [
-                    &format!("Interface: {}", interface),
-                    "Link is down / no carrier.",
-                    "Connect first, then retry.",
-                ],
-            )
-            .map(|_| None);
-        }
-        if !interface_has_ip(interface) {
-            return Ok(None);
-        }
 
         let args = WifiRouteEnsureArgs {
             interface: interface.to_string(),
@@ -495,7 +458,7 @@ impl App {
                     }
                 }
                 allow_list.retain(|s| !s.is_empty());
-                let _ = self.apply_interface_isolation(&allow_list);
+                self.apply_interface_isolation(&allow_list)?;
                 Ok(Some(msg))
             }
             Err(e) => {
@@ -2551,9 +2514,11 @@ impl App {
                                             [format!("Failed to save: {}", e)],
                                         )?;
                                     } else {
-                                        let _ = self.apply_interface_isolation(
+                                        if let Err(e) = self.apply_interface_isolation(
                                             &[interface_name.clone()],
-                                        );
+                                        ) {
+                                            lines.push(format!("Isolation failed: {}", e));
+                                        }
                                         if let Some(route_msg) =
                                             self.ensure_route_for_interface(&interface_name)?
                                         {
@@ -9645,7 +9610,9 @@ impl App {
                 if !upstream_iface.is_empty() {
                     allow_list.push(upstream_iface.clone());
                 }
-                let _ = self.apply_interface_isolation(&allow_list);
+                if let Err(e) = self.apply_interface_isolation(&allow_list) {
+                    self.show_message("Hotspot", [format!("Isolation failed: {}", e)])?;
+                }
 
                 let mut lines = vec![
                     format!("SSID: {}", current_ssid),
@@ -9837,7 +9804,12 @@ impl App {
                                     upstream_iface.clone(),
                                 ];
                                 allow_list.retain(|s| !s.is_empty());
-                                let _ = self.apply_interface_isolation(&allow_list);
+                                if let Err(e) = self.apply_interface_isolation(&allow_list) {
+                                    self.show_message(
+                                        "Hotspot",
+                                        [format!("Isolation failed: {}", e)],
+                                    )?;
+                                }
 
                                 let upstream_line = if upstream_iface.is_empty() {
                                     "Upstream: none (offline)".to_string()

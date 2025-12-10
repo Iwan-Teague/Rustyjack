@@ -3,6 +3,7 @@ use std::{
     io::{BufRead, BufReader},
     net::Ipv4Addr,
     path::{Path, PathBuf},
+    process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -42,10 +43,11 @@ use crate::system::{
     build_manual_embed, build_mitm_pcap_path, compose_status_text, connect_wifi_network,
     default_gateway_ip, delete_wifi_profile, detect_ethernet_interface, detect_interface,
     disconnect_wifi_interface, enable_ip_forwarding, enforce_single_interface, git_reset_to_remote,
-    interface_gateway, kill_process, kill_process_pattern, list_interface_summaries,
-    list_wifi_profiles, load_wifi_profile, log_mac_usage, ping_host, process_running_exact,
-    process_running_pattern, randomize_hostname, read_default_route, read_discord_webhook,
-    read_dns_servers, read_interface_preference, read_interface_stats, read_wifi_link_info,
+    find_interface_by_mac, interface_gateway, kill_process, kill_process_pattern,
+    list_interface_summaries, list_wifi_profiles, load_wifi_profile, log_mac_usage, ping_host,
+    process_running_exact, process_running_pattern, randomize_hostname, read_default_route,
+    read_discord_webhook, read_dns_servers, read_interface_preference,
+    read_interface_preference_with_mac, read_interface_stats, read_wifi_link_info,
     restart_system_service, restore_routing_state, rewrite_dns_servers, rewrite_ettercap_dns,
     sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks, select_best_interface,
     select_wifi_interface, send_discord_payload, send_scan_to_discord, set_default_route,
@@ -1592,6 +1594,58 @@ fn handle_wifi_switch(root: &Path, args: WifiSwitchArgs) -> Result<HandlerResult
     Ok(("Interface preference saved".to_string(), data))
 }
 
+fn ensure_route_health_check() -> Result<()> {
+    // ip binary availability
+    let ip_check = Command::new("ip").arg("-V").output();
+    match ip_check {
+        Ok(out) if out.status.success() => {}
+        _ => bail!("ip command missing or not working (install iproute2)"),
+    }
+
+    // root permissions
+    let uid_out = Command::new("id").arg("-u").output();
+    match uid_out {
+        Ok(out) if out.status.success() => {
+            let uid = String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u32>()
+                .unwrap_or(u32::MAX);
+            if uid != 0 {
+                bail!("Rustyjack must run as root (uid 0) to manage interfaces and routes");
+            }
+        }
+        _ => bail!("Unable to determine UID (need root to manage interfaces)"),
+    }
+
+    // rfkill availability
+    let rfkill_check = Command::new("rfkill").arg("list").output();
+    match rfkill_check {
+        Ok(out) if out.status.success() => {}
+        _ => bail!("rfkill command missing or not working (install rfkill/util-linux)"),
+    }
+
+    // /etc/resolv.conf must be writable by root
+    let resolv = std::fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open("/etc/resolv.conf");
+    if let Err(e) = resolv {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            bail!(
+                "/etc/resolv.conf is not writable (possible immutable bit or permissions). \
+                 Remove chattr +i or adjust permissions before running ensure-route."
+            );
+        } else {
+            bail!("Failed to open /etc/resolv.conf for write: {}", e);
+        }
+    }
+
+    // /sys/class/net must be readable
+    fs::read_dir("/sys/class/net").context("reading /sys/class/net")?;
+
+    Ok(())
+}
+
 fn handle_wifi_route_status(_root: &Path) -> Result<HandlerResult> {
     let default_route = read_default_route().unwrap_or(None);
     let interfaces = list_interface_summaries()?;
@@ -1608,29 +1662,72 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
     use crate::system::enforce_single_interface;
 
     let WifiRouteEnsureArgs { interface } = args;
-    let interface_info = detect_interface(Some(interface.clone()))?;
+    ensure_route_health_check()?;
 
-    let gateway = interface_gateway(&interface)?.ok_or_else(|| {
-        anyhow!(
-            "No gateway found for {interface}. Ensure the interface is connected before setting the default route."
-        )
-    })?;
+    let mut summaries = list_interface_summaries()?;
+    let mut target_interface = interface.clone();
+    let mut iface = summaries.iter().find(|s| s.name == interface);
 
-    enforce_single_interface(&interface)?;
-    set_default_route(&interface, gateway)?;
-    let _ = rewrite_dns_servers(&interface, gateway);
+    if iface.is_none() {
+        if let Some((stored_iface, mac)) =
+            read_interface_preference_with_mac(root, "system_preferred")?
+        {
+            if let Some(mac) = mac {
+                if let Some(found) = find_interface_by_mac(&mac) {
+                    target_interface = found;
+                    summaries = list_interface_summaries()?;
+                    iface = summaries.iter().find(|s| s.name == target_interface);
+                    // Update preference to the renamed interface
+                    write_interface_preference(root, "system_preferred", &target_interface)?;
+                    log::info!(
+                        "Recovered renamed interface: {} -> {}",
+                        stored_iface,
+                        target_interface
+                    );
+                }
+            }
+        }
+    }
 
-    write_interface_preference(root, "system_preferred", &interface)?;
-    let ping_success = ping_host("8.8.8.8", Duration::from_secs(2)).unwrap_or(false);
+    let iface = iface
+        .ok_or_else(|| anyhow!("interface {} not found", interface))?;
+
+    enforce_single_interface(&target_interface)?;
+    let gateway = interface_gateway(&target_interface)?;
+    let mut route_set = false;
+    let mut gateway_ip = None;
+
+    if let Some(gateway) = gateway {
+        set_default_route(&target_interface, gateway)?;
+        let _ = rewrite_dns_servers(&target_interface, gateway);
+        route_set = true;
+        gateway_ip = Some(gateway);
+    } else {
+        // Remove any existing default route so traffic cannot leak to other interfaces
+        let _ = Command::new("ip").args(["route", "del", "default"]).status();
+    }
+
+    write_interface_preference(root, "system_preferred", &target_interface)?;
+    let ping_success = if route_set {
+        ping_host("8.8.8.8", Duration::from_secs(2)).unwrap_or(false)
+    } else {
+        false
+    };
 
     let data = json!({
-        "interface": interface,
-        "ip": interface_info.address,
-        "gateway": gateway,
+        "interface": target_interface,
+        "ip": iface.ip,
+        "gateway": gateway_ip,
+        "route_set": route_set,
         "ping_success": ping_success,
         "isolation_enforced": true,
     });
-    Ok(("Default route updated".to_string(), data))
+    let msg = if route_set {
+        "Default route updated"
+    } else {
+        "Interface isolated (no gateway found)"
+    };
+    Ok((msg.to_string(), data))
 }
 
 fn handle_wifi_route_backup(root: &Path) -> Result<HandlerResult> {

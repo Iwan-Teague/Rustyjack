@@ -169,6 +169,8 @@ Responder on/off, DNS spoof start/stop, reverse shell launcher, and transparent 
    - Ensures ~2 GB swap for compilation, builds `rustyjack-ui` (release), installs to `/usr/local/bin/`.
    - Creates `loot/{Wireless,Ethernet,Reports}`, `wifi/profiles/sample.json`, and keeps WLAN interfaces up.
    - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT`, installs/enables `rustyjack.service` (root, landscape rotation), starts the service, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
+   - Claims `/etc/resolv.conf` for Rustyjack (plain root-owned file), disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present), and sets NetworkManager `dns=none` so `nmcli` stays available but does not rewrite `resolv.conf`.
+   - Remounts `/` read-write if needed on fresh images to allow installs/edits.
 5. After reboot, the LCD shows the menu. Service status: `systemctl status rustyjack`.
 
 `install_rustyjack_dev.sh` is available for development setups and follows the same dependency/build steps.
