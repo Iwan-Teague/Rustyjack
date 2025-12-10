@@ -134,8 +134,8 @@ add_dtparam() {
 PACKAGES=(
   # build tools for Rust compilation
   build-essential pkg-config libssl-dev
-  # DKMS for WiFi driver compilation
-  dkms bc libelf-dev linux-headers-$(uname -r)
+  # DKMS for WiFi driver compilation (kernel headers added separately, best-effort)
+  dkms bc libelf-dev
   # network / offensive tools
   nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps iproute2 isc-dhcp-client network-manager rfkill
   # WiFi interface tools (for native Rust wireless operations)
@@ -169,6 +169,20 @@ fi
 if ((${#missing_firmware[@]})); then
   warn "Skipping unavailable firmware packages: ${missing_firmware[*]}"
   warn "Enable 'non-free-firmware' in /etc/apt/sources.list on Debian 12+ if you need them."
+fi
+
+# Try to pull a kernel headers package (needed only for DKMS WiFi drivers); skip if none available
+header_candidates=( "linux-headers-$(uname -r)" "linux-headers-generic" "linux-headers-amd64" "linux-headers-arm64" "raspberrypi-kernel-headers" )
+chosen_header=""
+for hdr in "${header_candidates[@]}"; do
+  if apt-cache show "$hdr" >/dev/null 2>&1; then
+    chosen_header="$hdr"
+    INSTALL_PACKAGES+=("$hdr")
+    break
+  fi
+done
+if [ -z "$chosen_header" ]; then
+  warn "No kernel headers package found (needed only if building DKMS WiFi drivers). Skipping."
 fi
 
 to_install=()
