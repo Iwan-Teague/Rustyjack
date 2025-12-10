@@ -337,7 +337,7 @@ impl MacManager {
             });
         }
 
-        let state = self.states.entry(interface.to_string())
+        self.states.entry(interface.to_string())
             .or_insert_with(|| MacState {
                 interface: interface.to_string(),
                 original_mac: current_mac.clone(),
@@ -352,6 +352,7 @@ impl MacManager {
         result?;
         up_result?;
 
+        let state = self.states.get_mut(interface).unwrap();
         state.current_mac = mac.clone();
         state.is_randomized = true;
         state.changed_at = chrono::Utc::now().timestamp();
@@ -412,9 +413,7 @@ impl MacManager {
     ///
     /// Returns an error if restoration fails
     pub fn restore(&mut self, interface: &str) -> Result<()> {
-        if let Some(pos) = self.states.iter().position(|s| s.interface == interface) {
-            let state = self.states.remove(pos);
-
+        if let Some(state) = self.states.remove(interface) {
             // Bring down, set original, bring up
             self.interface_down(interface)?;
             let result = self.set_mac_raw(interface, &state.original_mac);
@@ -573,7 +572,7 @@ impl Drop for MacManager {
 impl Default for MacManager {
     fn default() -> Self {
         Self {
-            states: Vec::new(),
+            states: HashMap::new(),
             auto_restore: true,
         }
     }
