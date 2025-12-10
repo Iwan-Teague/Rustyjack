@@ -174,6 +174,20 @@ if ((${#missing_firmware[@]})); then
   warn "Enable 'non-free-firmware' in /etc/apt/sources.list on Debian 12+ if you need them."
 fi
 
+# Try to pull a kernel headers package (needed only for DKMS WiFi drivers); skip if none available
+header_candidates=( "linux-headers-$(uname -r)" "linux-headers-generic" "linux-headers-amd64" "linux-headers-arm64" "raspberrypi-kernel-headers" )
+chosen_header=""
+for hdr in "${header_candidates[@]}"; do
+  if apt-cache show "$hdr" >/dev/null 2>&1; then
+    chosen_header="$hdr"
+    INSTALL_PACKAGES+=("$hdr")
+    break
+  fi
+done
+if [ -z "$chosen_header" ]; then
+  warn "No kernel headers package found (needed only if building DKMS WiFi drivers). Skipping."
+fi
+
 to_install=()
 install_plan=""
 if install_plan=$(apt_retry "APT dry-run" apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}" 2>/dev/null); then
