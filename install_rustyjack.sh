@@ -98,6 +98,10 @@ fi
 
 # ---- 1: locate active config.txt ----------------------------
 CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
+if [ ! -f "$CFG" ]; then
+  sudo mkdir -p "$(dirname "$CFG")"
+  echo "# Rustyjack config (created by installer)" | sudo tee "$CFG" >/dev/null
+fi
 info "Using config file: $CFG"
 add_dtparam() {
   local param="$1"
@@ -181,10 +185,6 @@ else
     fi
   fi
 fi
-
-# Re-claim resolv.conf after any package changes (apt may rewrite it)
-claim_resolv_conf
-check_resolv_conf
 
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."
@@ -386,6 +386,9 @@ info "Rustyjack service enabled - will start on next boot"
 # Start the service now
 sudo systemctl start rustyjack.service && info "Rustyjack service started successfully" || warn "Failed to start service - check 'systemctl status rustyjack'"
 
+# Claim resolv.conf and adjust DNS control after installs/builds are complete
+claim_resolv_conf
+check_resolv_conf
 # Defer NetworkManager DNS changes until installs/builds are done so apt isn't impacted
 configure_dns_control
 
