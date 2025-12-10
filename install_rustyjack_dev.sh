@@ -9,20 +9,6 @@
 # ------------------------------------------------------------
 set -euo pipefail
 
-ensure_rw_root() {
-  local root_status
-  root_status=$(findmnt -n -o OPTIONS / || true)
-  if echo "$root_status" | grep -q '\bro\b'; then
-    warn "Root filesystem is read-only; attempting remount rw..."
-    if sudo mount -o remount,rw /; then
-      info "[OK] Remounted / as read-write"
-    else
-      fail "Failed to remount / as read-write. Please enable rw and rerun."
-    fi
-  fi
-}
-ensure_rw_root
-
 # ---- helpers ------------------------------------------------
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
@@ -37,6 +23,70 @@ has_crate_artifact() {
   compgen -G "$base/deps/lib${crate}-*.rmeta" >/dev/null || \
   compgen -G "$base/deps/lib${crate}-*.so" >/dev/null
 }
+
+check_resolv_conf() {
+  local resolv="/etc/resolv.conf"
+  info "Checking $resolv writability..."
+
+  if [ -L "$resolv" ]; then
+    local target
+    target=$(readlink -f "$resolv" 2>/dev/null || true)
+    warn "[NOTE] $resolv is a symlink -> ${target:-unknown}. If managed by systemd-resolved/resolvconf, allow Rustyjack to overwrite it for route enforcement."
+  fi
+
+  if command -v lsattr >/dev/null 2>&1; then
+    if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+      warn "[NOTE] $resolv is immutable (chattr +i). Clear with: sudo chattr -i $resolv"
+    fi
+  fi
+
+  if ! sudo test -w "$resolv"; then
+    warn "[NOTE] $resolv is not writable by root. Adjust permissions or disable the managing service before using ensure-route."
+  else
+    info "[OK] $resolv writable by root"
+  fi
+}
+
+claim_resolv_conf() {
+  local resolv="/etc/resolv.conf"
+  info "Claiming $resolv for Rustyjack (dedicated device)..."
+
+  if command -v lsattr >/dev/null 2>&1; then
+    if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+      sudo chattr -i "$resolv" 2>/dev/null || warn "[WARN] Failed to clear immutable bit on $resolv"
+    fi
+  fi
+
+  if [ -L "$resolv" ]; then
+    local target
+    target=$(readlink -f "$resolv" 2>/dev/null || true)
+    warn "Replacing symlinked $resolv (was -> ${target:-unknown}) with Rustyjack-managed file"
+    sudo rm -f "$resolv"
+  else
+    if [ -f "$resolv" ]; then
+      sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
+    fi
+  fi
+
+  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\n' > $resolv"
+  sudo chmod 644 "$resolv"
+  sudo chown root:root "$resolv"
+  info "[OK] $resolv now owned by Rustyjack (plain file, root-writable)"
+}
+
+ensure_rw_root() {
+  local root_status
+  root_status=$(findmnt -n -o OPTIONS / || true)
+  if echo "$root_status" | grep -q '\bro\b'; then
+    warn "Root filesystem is read-only; attempting remount rw..."
+    if sudo mount -o remount,rw /; then
+      info "[OK] Remounted / as read-write"
+    else
+      fail "Failed to remount / as read-write. Please enable rw and rerun."
+    fi
+  fi
+}
+ensure_rw_root
 
 echo ""
 info "=========================================="
@@ -79,70 +129,22 @@ PACKAGES=(
 )
 
 step "Updating APT and installing dependencies..."
-sudo apt-get update -qq
-to_install=($(sudo apt-get -qq --just-print install "${PACKAGES[@]}" 2>/dev/null | awk '/^Inst/ {print $2}'))
+if ! sudo apt-get update -qq; then
+  fail "APT update failed. Check network connectivity/apt sources and rerun."
+fi
+
+install_plan=$(sudo apt-get -qq --just-print install "${PACKAGES[@]}" 2>/dev/null || true)
+to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
 if ((${#to_install[@]})); then
   info "Will install/upgrade: ${to_install[*]}"
-  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}" || fail "APT install failed. Check output above."
 else
   info "All packages already installed and up-to-date."
 fi
 
 # Re-claim resolv.conf after any package changes (apt may rewrite it)
 claim_resolv_conf
-
-check_resolv_conf() {
-  local resolv="/etc/resolv.conf"
-  info "Checking $resolv writability..."
-
-  if [ -L "$resolv" ]; then
-    local target
-    target=$(readlink -f "$resolv" 2>/dev/null || true)
-    warn "[NOTE] $resolv is a symlink -> ${target:-unknown}. If managed by systemd-resolved/resolvconf, allow Rustyjack to overwrite it for route enforcement."
-  fi
-
-  if command -v lsattr >/dev/null 2>&1; then
-    if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
-      warn "[NOTE] $resolv is immutable (chattr +i). Clear with: sudo chattr -i $resolv"
-    fi
-  fi
-
-  if ! sudo test -w "$resolv"; then
-    warn "[NOTE] $resolv is not writable by root. Adjust permissions or disable the managing service before using ensure-route."
-  else
-    info "[OK] $resolv writable by root"
-  fi
-}
 check_resolv_conf
-
-claim_resolv_conf() {
-  local resolv="/etc/resolv.conf"
-  info "Claiming $resolv for Rustyjack (dedicated device)..."
-
-  if command -v lsattr >/dev/null 2>&1; then
-    if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
-      sudo chattr -i "$resolv" 2>/dev/null || warn "[WARN] Failed to clear immutable bit on $resolv"
-    }
-  fi
-
-  if [ -L "$resolv" ]; then
-    local target
-    target=$(readlink -f "$resolv" 2>/dev/null || true)
-    warn "Replacing symlinked $resolv (was -> ${target:-unknown}) with Rustyjack-managed file"
-    sudo rm -f "$resolv"
-  else
-    if [ -f "$resolv" ]; then
-      sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
-    fi
-  fi
-
-  sudo sh -c "printf '# Managed by Rustyjack\\n# Updated by ensure-route\\n' > $resolv"
-  sudo chmod 644 "$resolv"
-  sudo chown root:root "$resolv"
-  info "[OK] $resolv now owned by Rustyjack (plain file, root-writable)"
-}
-claim_resolv_conf
-
 configure_dns_control() {
   # Disable competing DNS managers; keep NetworkManager but stop it from touching resolv.conf
   if systemctl list-unit-files | grep -q '^systemd-resolved'; then
