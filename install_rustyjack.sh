@@ -129,13 +129,19 @@ if ! sudo apt-get update -qq; then
   fail "APT update failed. Check network connectivity/apt sources and rerun."
 fi
 
-install_plan=$(sudo apt-get -qq --just-print install "${PACKAGES[@]}" 2>/dev/null || true)
-to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
-if ((${#to_install[@]})); then
-  info "Will install/upgrade: ${to_install[*]}"
-  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}" || fail "APT install failed. Check output above."
+to_install=()
+install_plan=""
+if install_plan=$(sudo apt-get -qq --just-print install "${PACKAGES[@]}" 2>/dev/null); then
+  to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
+  if ((${#to_install[@]})); then
+    info "Will install/upgrade: ${to_install[*]}"
+    sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}" || fail "APT install failed. Check output above."
+  else
+    info "All packages already installed and up-to-date."
+  fi
 else
-  info "All packages already installed and up-to-date."
+  warn "APT dry-run failed (likely missing kernel headers or bad sources); attempting full install..."
+  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}" || fail "APT install failed. Check output above."
 fi
 
 # Re-claim resolv.conf after any package changes (apt may rewrite it)
@@ -241,6 +247,11 @@ fi
 
 # ---- 3b: build/install Rust binaries ------------------------
 step "Ensuring Rust toolchain + building binaries..."
+if ! cmd curl; then
+  warn "curl missing after package install; installing curl..."
+  sudo apt-get install -y --no-install-recommends curl || fail "Failed to install curl; check network/apt sources."
+fi
+
 if ! command -v cargo >/dev/null 2>&1; then
   info "cargo missing - installing rustup toolchain"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
