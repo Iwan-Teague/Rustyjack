@@ -24,6 +24,24 @@ has_crate_artifact() {
   compgen -G "$base/deps/lib${crate}-*.rmeta" >/dev/null || \
   compgen -G "$base/deps/lib${crate}-*.so" >/dev/null
 }
+apt_retry() {
+  local desc="$1"; shift
+  local attempts=5
+  local delay=5
+  local i
+  for ((i=1; i<=attempts; i++)); do
+    if sudo "$@"; then
+      return 0
+    fi
+    warn "$desc attempt $i/$attempts failed (dpkg lock or transient error). Retrying in ${delay}s..."
+    if systemctl list-unit-files | grep -q '^packagekit'; then
+      warn "Stopping packagekit.service to release apt/dpkg lock"
+      sudo systemctl stop packagekit.service 2>/dev/null || true
+    fi
+    sleep "$delay"
+  done
+  fail "$desc failed after ${attempts} attempts. Ensure no other package managers are running."
+}
 
 check_resolv_conf() {
   local resolv="/etc/resolv.conf"
@@ -132,9 +150,7 @@ FIRMWARE_PACKAGES=(
 )
 
 step "Updating APT and installing dependencies..."
-if ! sudo apt-get update -qq; then
-  fail "APT update failed. Check network connectivity/apt sources and rerun."
-fi
+apt_retry "APT update" apt-get update -qq
 
 # Only install firmware packages that exist in current apt sources
 INSTALL_PACKAGES=("${PACKAGES[@]}")
@@ -157,15 +173,15 @@ fi
 
 to_install=()
 install_plan=""
-if install_plan=$(sudo apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}" 2>/dev/null); then
+if install_plan=$(apt_retry "APT dry-run" apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}" 2>/dev/null); then
   to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
   if ((${#to_install[@]})); then
     info "Will install/upgrade: ${to_install[*]}"
-    if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+    if ! apt_retry "APT install" apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
       if ((${#available_firmware[@]})); then
         warn "APT install failed; retrying without firmware bundles: ${available_firmware[*]}"
         INSTALL_PACKAGES=("${PACKAGES[@]}")
-        sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed even without firmware. Check output above."
+        apt_retry "APT install (no firmware)" apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed even without firmware. Check output above."
       else
         fail "APT install failed. Check output above."
       fi
@@ -175,11 +191,11 @@ if install_plan=$(sudo apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}"
   fi
 else
   warn "APT dry-run failed (likely missing kernel headers or bad sources); attempting full install..."
-  if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+  if ! apt_retry "APT install" apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
     if ((${#available_firmware[@]})); then
       warn "APT install failed; retrying without firmware bundles: ${available_firmware[*]}"
       INSTALL_PACKAGES=("${PACKAGES[@]}")
-      sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed even without firmware. Check output above."
+      apt_retry "APT install (no firmware)" apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed even without firmware. Check output above."
     else
       fail "APT install failed. Check output above."
     fi
