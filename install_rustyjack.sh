@@ -148,44 +148,6 @@ fi
 claim_resolv_conf
 check_resolv_conf
 
-configure_dns_control() {
-  # Disable competing DNS managers; keep NetworkManager but stop it from touching resolv.conf
-  if systemctl list-unit-files | grep -q '^systemd-resolved'; then
-    warn "Disabling systemd-resolved to prevent resolv.conf rewrites"
-    sudo systemctl disable --now systemd-resolved.service 2>/dev/null || true
-  fi
-  if systemctl list-unit-files | grep -q '^dhcpcd'; then
-    warn "Disabling dhcpcd (Rustyjack uses dhclient)"
-    sudo systemctl disable --now dhcpcd.service 2>/dev/null || true
-  fi
-  if systemctl list-unit-files | grep -q '^resolvconf'; then
-    warn "Disabling resolvconf to avoid resolv.conf churn"
-    sudo systemctl disable --now resolvconf.service 2>/dev/null || true
-  fi
-
-  local nm_conf="/etc/NetworkManager/NetworkManager.conf"
-  info "Setting NetworkManager DNS handling to 'none' (preserve Rustyjack resolv.conf)"
-  if [ ! -f "$nm_conf" ]; then
-    sudo mkdir -p /etc/NetworkManager
-    cat <<'EOF' | sudo tee "$nm_conf" >/dev/null
-[main]
-dns=none
-EOF
-  else
-    if grep -q '^\[main\]' "$nm_conf"; then
-      if grep -q '^dns=' "$nm_conf"; then
-        sudo sed -i 's/^dns=.*/dns=none/' "$nm_conf"
-      else
-        sudo sed -i '/^\[main\]/a dns=none' "$nm_conf"
-      fi
-    else
-      printf '\n[main]\ndns=none\n' | sudo tee -a "$nm_conf" >/dev/null
-    fi
-  fi
-  sudo systemctl restart NetworkManager.service 2>/dev/null || true
-}
-configure_dns_control
-
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."
 add_dtparam dtparam=i2c_arm=on
@@ -385,6 +347,9 @@ info "Rustyjack service enabled - will start on next boot"
 
 # Start the service now
 sudo systemctl start rustyjack.service && info "Rustyjack service started successfully" || warn "Failed to start service - check 'systemctl status rustyjack'"
+
+# Defer NetworkManager DNS changes until installs/builds are done so apt isn't impacted
+configure_dns_control
 
 # ---- 6: final health-check ----------------------------------
 step "Running post install checks..."

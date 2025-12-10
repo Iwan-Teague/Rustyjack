@@ -151,6 +151,7 @@ fi
 # Re-claim resolv.conf after any package changes (apt may rewrite it)
 claim_resolv_conf
 check_resolv_conf
+
 configure_dns_control() {
   # Disable competing DNS managers; keep NetworkManager but stop it from touching resolv.conf
   if systemctl list-unit-files | grep -q '^systemd-resolved'; then
@@ -187,7 +188,6 @@ EOF
   fi
   sudo systemctl restart NetworkManager.service 2>/dev/null || true
 }
-configure_dns_control
 
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."
@@ -384,6 +384,9 @@ info "Rustyjack service enabled"
 
 # Start the service now
 sudo systemctl start rustyjack.service && info "Rustyjack service started successfully" || warn "Failed to start service - check 'systemctl status rustyjack'"
+
+# Defer NetworkManager DNS changes until installs/builds are done so apt isn't impacted
+configure_dns_control
 
 # ---- 6: final health-check ----------------------------------
 step "Running post install checks..."
