@@ -6816,10 +6816,12 @@ impl App {
                 let config_path = self.root.join("gui_conf.json");
                 let _ = self.config.save(&config_path);
 
+                let interface_line = format!("Interface: {}", active_interface);
+                let mac_line = format!("MAC: {}", original_mac);
                 let mut lines = vec![
-                    &format!("Interface: {}", active_interface),
+                    &interface_line,
                     "",
-                    &format!("MAC: {}", original_mac),
+                    &mac_line,
                     "",
                 ];
                 
