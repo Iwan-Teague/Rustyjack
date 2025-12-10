@@ -160,13 +160,29 @@ if install_plan=$(sudo apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}"
   to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
   if ((${#to_install[@]})); then
     info "Will install/upgrade: ${to_install[*]}"
-    sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed. Check output above."
+    if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+      if ((${#available_firmware[@]})); then
+        warn "APT install failed; retrying without firmware bundles: ${available_firmware[*]}"
+        INSTALL_PACKAGES=("${PACKAGES[@]}")
+        sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed even without firmware. Check output above."
+      else
+        fail "APT install failed. Check output above."
+      fi
+    fi
   else
     info "All packages already installed and up-to-date."
   fi
 else
   warn "APT dry-run failed (likely missing kernel headers or bad sources); attempting full install..."
-  sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed. Check output above."
+  if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+    if ((${#available_firmware[@]})); then
+      warn "APT install failed; retrying without firmware bundles: ${available_firmware[*]}"
+      INSTALL_PACKAGES=("${PACKAGES[@]}")
+      sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed even without firmware. Check output above."
+    else
+      fail "APT install failed. Check output above."
+    fi
+  fi
 fi
 
 # Re-claim resolv.conf after any package changes (apt may rewrite it)
