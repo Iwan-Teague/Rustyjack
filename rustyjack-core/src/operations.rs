@@ -85,7 +85,7 @@ fn validate_and_enforce_interface(
             if !allow_multi {
                 enforce_single_interface(&act)?;
             }
-            Ok(act)
+            Ok(act.to_string())
         }
         (None, None) => {
             bail!("No active interface set. Run 'hardware detect' and 'wifi route ensure' first.");
@@ -1605,7 +1605,7 @@ fn handle_wifi_route_status(_root: &Path) -> Result<HandlerResult> {
 }
 
 fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<HandlerResult> {
-    use crate::system::{apply_interface_isolation, enforce_single_interface};
+    use crate::system::enforce_single_interface;
 
     let WifiRouteEnsureArgs { interface } = args;
     let interface_info = detect_interface(Some(interface.clone()))?;
