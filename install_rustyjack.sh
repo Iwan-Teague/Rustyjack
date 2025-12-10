@@ -125,11 +125,15 @@ PACKAGES=(
 )
 
 step "Updating APT and installing dependencies..."
-sudo apt-get update -qq
-to_install=($(sudo apt-get -qq --just-print install "${PACKAGES[@]}" 2>/dev/null | awk '/^Inst/ {print $2}'))
+if ! sudo apt-get update -qq; then
+  fail "APT update failed. Check network connectivity/apt sources and rerun."
+fi
+
+install_plan=$(sudo apt-get -qq --just-print install "${PACKAGES[@]}" 2>/dev/null || true)
+to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
 if ((${#to_install[@]})); then
   info "Will install/upgrade: ${to_install[*]}"
-  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}" || fail "APT install failed. Check output above."
 else
   info "All packages already installed and up-to-date."
 fi
