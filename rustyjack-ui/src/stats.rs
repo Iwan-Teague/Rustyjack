@@ -68,7 +68,8 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
         read_disk_usage(root.to_str().unwrap_or("/root/Rustyjack")).unwrap_or((0.0, 0.0));
 
     let mut overlay = {
-        let guard = shared.lock().unwrap();
+        let guard = shared.lock()
+            .map_err(|e| anyhow::anyhow!("Stats mutex poisoned: {}", e))?;
         let mut snapshot = guard.clone();
 
         snapshot.temp_c = temp;

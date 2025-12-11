@@ -650,7 +650,9 @@ impl App {
         // Spawn command in background
         thread::spawn(move || {
             let r = core.dispatch(cmd);
-            *result_clone.lock().unwrap() = Some(r);
+            *result_clone.lock()
+                .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))
+                .unwrap_or_else(|_| panic!("Failed to lock result mutex")) = Some(r);
         });
 
         let start = std::time::Instant::now();
@@ -690,7 +692,9 @@ impl App {
             }
 
             // Check if completed
-            if let Some(r) = result.lock().unwrap().take() {
+            if let Some(r) = result.lock()
+                .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))?
+                .take() {
                 return Ok(Some(r?));
             }
 
@@ -3899,7 +3903,9 @@ impl App {
             }));
 
             let r = core.dispatch(command);
-            *result_clone.lock().unwrap() = Some(r);
+            *result_clone.lock()
+                .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))
+                .unwrap_or_else(|_| panic!("Failed to lock result mutex")) = Some(r);
         });
 
         // Show progress updates while attack runs (120 seconds)
@@ -3926,7 +3932,9 @@ impl App {
             }
 
             // Check if attack completed
-            if result.lock().unwrap().is_some() {
+            if result.lock()
+                .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))?
+                .is_some() {
                 break;
             }
 
@@ -3976,7 +3984,10 @@ impl App {
         }
 
         // Get result
-        let attack_result = result.lock().unwrap().take().unwrap();
+        let attack_result = result.lock()
+            .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))?
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Attack result not available"))?;
 
         match attack_result {
             Ok((msg, data)) => {
@@ -3988,7 +3999,9 @@ impl App {
                         if let Some(hf) = data.get("handshake_file").and_then(|v| v.as_str()) {
                             result_lines.push(format!(
                                 "File: {}",
-                                Path::new(hf).file_name().unwrap().to_str().unwrap()
+                                Path::new(hf).file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("handshake.cap")
                             ));
                         }
                     } else {
@@ -4007,7 +4020,9 @@ impl App {
                 if let Some(log) = data.get("log_file").and_then(|v| v.as_str()) {
                     result_lines.push(format!(
                         "Log: {}",
-                        Path::new(log).file_name().unwrap().to_str().unwrap()
+                        Path::new(log).file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("log.txt")
                     ));
                 }
 
@@ -8872,9 +8887,12 @@ impl App {
             return Ok(None);
         }
         files.sort();
-        let latest = files.last().cloned().unwrap();
-        let data = fs::read_to_string(&latest)?;
-        let parsed: Vec<Value> = serde_json::from_str(&data)?;
+        let latest = files.last().cloned()
+            .ok_or_else(|| anyhow::anyhow!("No loot files found in directory"))?;
+        let data = fs::read_to_string(&latest)
+            .with_context(|| format!("Failed to read loot file: {}", latest))?;
+        let parsed: Vec<Value> = serde_json::from_str(&data)
+            .with_context(|| format!("Failed to parse loot JSON from: {}", latest))?;
         let count = parsed.len();
         let mut samples = Vec::new();
         for dev in parsed.iter().take(4) {
