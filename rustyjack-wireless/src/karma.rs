@@ -625,7 +625,7 @@ where
     F: Fn(&str) + Send + Sync + 'static,
 {
     let mut config = config;
-    let logging_enabled = rustyjack_core::system::logs_enabled();
+    let logging_enabled = rustyjack_evasion::logs_enabled();
     if !logging_enabled {
         config.log_probes = false;
     }
