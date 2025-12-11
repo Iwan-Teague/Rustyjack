@@ -359,7 +359,7 @@ impl EvilTwin {
     fn start_dnsmasq(&mut self) -> Result<()> {
         let conf_path = format!("{}/dnsmasq.conf", self.config.capture_path);
         let iface = &self.config.ap_interface;
-        let logging_enabled = crate::logs_enabled();
+        let logging_enabled = rustyjack_core::system::logs_enabled();
 
         let dnsmasq_logging = if logging_enabled {
             "            log-queries\n            log-dhcp\n"
@@ -674,7 +674,7 @@ where
     let mut attack_config = config.clone();
     attack_config.capture_path = loot_dir.to_string_lossy().to_string();
 
-    let logging_enabled = crate::logs_enabled();
+    let logging_enabled = rustyjack_core::system::logs_enabled();
 
     // Create attack log when enabled
     let (log_path, mut log_file) = if logging_enabled {

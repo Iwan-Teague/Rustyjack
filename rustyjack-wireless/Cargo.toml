@@ -17,6 +17,9 @@ path = "src/lib.rs"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 
 [dependencies]
+# Core shared library
+rustyjack-core = { path = "../rustyjack-core" }
+
 # Evasion and obfuscation (shared library)
 rustyjack-evasion = { path = "../rustyjack-evasion" }
 

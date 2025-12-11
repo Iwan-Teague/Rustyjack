@@ -350,7 +350,7 @@ impl KarmaAttack {
                 probes.iter().map(|p| p.ssid.clone()).collect();
             ssids.into_iter().collect()
         };
-        let log_file = if crate::logs_enabled() {
+        let log_file = if rustyjack_core::system::logs_enabled() {
             self.config.output_dir.join("karma_log.txt")
         } else {
             PathBuf::new()
@@ -411,7 +411,7 @@ where
     F: Fn(&str) + Send + Sync + 'static,
 {
     let mut config = config;
-    let logging_enabled = crate::logs_enabled();
+    let logging_enabled = rustyjack_core::system::logs_enabled();
     if !logging_enabled {
         config.log_probes = false;
     }
@@ -625,7 +625,7 @@ where
     F: Fn(&str) + Send + Sync + 'static,
 {
     let mut config = config;
-    let logging_enabled = crate::logs_enabled();
+    let logging_enabled = rustyjack_core::system::logs_enabled();
     if !logging_enabled {
         config.log_probes = false;
     }

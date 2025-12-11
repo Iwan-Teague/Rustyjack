@@ -182,7 +182,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     fs::write(&hostapd_path, hostapd_conf)
         .map_err(|e| WirelessError::System(format!("writing hostapd.conf: {e}")))?;
 
-    let logging_enabled = crate::logs_enabled();
+    let logging_enabled = rustyjack_core::system::logs_enabled();
 
     // Write dnsmasq.conf
     let dns_logging = if logging_enabled {

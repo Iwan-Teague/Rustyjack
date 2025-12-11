@@ -448,7 +448,7 @@ where
         .map(|s| s.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_"))
         .unwrap_or_else(|| "passive".to_string());
 
-    let logging_enabled = crate::logs_enabled();
+    let logging_enabled = rustyjack_core::system::logs_enabled();
     let log_file = if logging_enabled {
         let logs_dir = loot_dir.join("logs");
         fs::create_dir_all(&logs_dir)

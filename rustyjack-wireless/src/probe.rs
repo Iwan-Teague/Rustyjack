@@ -507,7 +507,7 @@ where
     // Create loot directory and set up optional logging paths
     fs::create_dir_all(loot_dir)
         .map_err(|e| WirelessError::System(format!("Failed to create loot dir: {}", e)))?;
-    let logging_enabled = crate::logs_enabled();
+    let logging_enabled = rustyjack_core::system::logs_enabled();
 
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
     let (network_logs_dir, global_log) = if logging_enabled {
