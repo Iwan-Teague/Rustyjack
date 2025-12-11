@@ -28,6 +28,7 @@ use rustyjack_core::cli::{
     WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs, WifiStatusArgs,
 };
 use rustyjack_core::{apply_interface_isolation, InterfaceSummary};
+use rustyjack_encryption::{clear_encryption_key, set_encryption_key};
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
 use walkdir::WalkDir;
