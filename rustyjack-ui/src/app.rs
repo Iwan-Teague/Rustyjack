@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     fs,
     fs::File,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{self, TryRecvError},
@@ -23,15 +23,11 @@ use rustyjack_core::cli::{
     EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs, HardwareCommand,
     HotspotCommand, HotspotStartArgs, LootCommand, LootReadArgs, MitmCommand, MitmStartArgs,
     NotifyCommand, ResponderArgs, ResponderCommand, ReverseCommand, ReverseLaunchArgs,
-    SystemCommand, SystemFdePrepareArgs, WifiCommand, WifiDeauthArgs, WifiDisconnectArgs,
+    SystemCommand, WifiCommand, WifiDeauthArgs, WifiDisconnectArgs,
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
     WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs, WifiStatusArgs,
 };
-use rustyjack_core::{
-    apply_interface_isolation, is_wireless_interface, rfkill_index_for_interface, InterfaceSummary,
-};
-use rustyjack_encryption::{clear_encryption_key, set_encryption_key};
-use serde::Deserialize;
+use rustyjack_core::{apply_interface_isolation, InterfaceSummary};
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
 use walkdir::WalkDir;
@@ -44,7 +40,6 @@ use rustyjack_wireless::{
         generate_common_passwords, generate_ssid_passwords, CrackProgress, CrackResult,
         CrackerConfig, WpaCracker,
     },
-    handshake::HandshakeExport,
 };
 
 use crate::{
@@ -96,8 +91,6 @@ struct PipelineResult {
     networks_found: u32,
     clients_found: u32,
 }
-
-const INDEFINITE_SECS: u32 = 86_400; // 24h stand-in for "run until stopped"
 
 enum StepOutcome {
     Completed(Option<(u32, u32, Option<String>, u32, u32)>),
@@ -2210,7 +2203,7 @@ impl App {
             title: "Rustyjack Loot".to_string(),
             message: Some("Complete loot archive".to_string()),
             file: Some(archive_path.clone()),
-            target: Some(webhook),
+            target: Some(webhook.clone()),
             interface: None,
         };
         let result = self.core.dispatch(Commands::Notify(NotifyCommand::Discord(
@@ -2360,25 +2353,27 @@ impl App {
                 self.config.settings.encryption_key_path = file_path.to_string_lossy().to_string();
                 let config_path = self.root.join("gui_conf.json");
                 let _ = self.config.save(&config_path);
-                let res = self.show_message(
+                self.show_message(
                     "Encryption",
                     [
                         "Key loaded into RAM",
                         &shorten_for_display(&file_path.to_string_lossy(), 18),
                         "Path saved for next boot",
                     ],
-                );
-                res
+                )?;
             }
-            Err(e) => self.show_message(
-                "Encryption",
-                [
-                    "Failed to load key",
-                    &shorten_for_display(&e.to_string(), 90),
-                ],
-            ),
+            Err(e) => {
+                self.show_message(
+                    "Encryption",
+                    [
+                        "Failed to load key",
+                        &shorten_for_display(&e.to_string(), 90),
+                    ],
+                )?;
+            }
         }
         clear_encryption_key();
+        Ok(())
     }
 
     fn generate_encryption_key_on_usb(&mut self) -> Result<()> {
@@ -3012,16 +3007,13 @@ impl App {
     }
 
     fn start_fde_migration(&mut self) -> Result<()> {
-        let target_prompt = vec!["Enter target device (e.g., /dev/mmcblk0p3)".to_string()];
-        let target = match self.prompt_input("Encrypted Root Target", &target_prompt)? {
-            Some(t) => t,
-            None => return Ok(()),
-        };
-        let key_prompt = vec!["Enter keyfile path (e.g., /mnt/usb/rustyjack.key)".to_string()];
-        let keyfile = match self.prompt_input("Keyfile", &key_prompt)? {
-            Some(t) => t,
-            None => return Ok(()),
-        };
+        // FDE migration feature not yet implemented
+        self.show_message(
+            "FDE Migration",
+            ["Feature not yet implemented", "Use command line tools instead"],
+        )?;
+        Ok(())
+    }
 
         let confirm_migrate = vec![
             "Dry run (safe)".to_string(),
@@ -3416,7 +3408,7 @@ Do not remove power/USB",
             });
 
             // Build labels
-            let mut labels: Vec<String> = if entries.is_empty() {
+            let labels: Vec<String> = if entries.is_empty() {
                 vec!["<empty directory>".to_string()]
             } else {
                 entries
@@ -4310,7 +4302,7 @@ Do not remove power/USB",
                 Commands::Wifi(WifiCommand::Recon(WifiReconCommand::Gateway(args))),
                 10,
             )? {
-                Some((msg, data)) => {
+                Some((_msg, data)) => {
                     let mut lines = vec!["Gateway Discovery".to_string(), "".to_string()];
                     lines.push(format!("Interface: {}", iface));
                     lines.push("".to_string());
@@ -4412,7 +4404,7 @@ Do not remove power/USB",
                 Commands::Wifi(WifiCommand::Recon(WifiReconCommand::ArpScan(args))),
                 40,
             )? {
-                Some((msg, data)) => {
+                Some((_msg, data)) => {
                     let mut lines = vec!["Local Network Devices".to_string(), "".to_string()];
 
                     if let Some(devices) = data.get("devices").and_then(|d| d.as_array()) {
@@ -4523,7 +4515,7 @@ Do not remove power/USB",
                 Commands::Wifi(WifiCommand::Recon(WifiReconCommand::ServiceScan(args))),
                 120,
             )? {
-                Some((msg, data)) => {
+                Some((_msg, data)) => {
                     let mut lines = vec!["Network Services".to_string(), "".to_string()];
 
                     if let Some(results) = data.get("results").and_then(|r| r.as_array()) {
@@ -4617,7 +4609,7 @@ Do not remove power/USB",
                 Commands::Wifi(WifiCommand::Recon(WifiReconCommand::MdnsScan(args))),
                 15,
             )? {
-                Some((msg, data)) => {
+                Some((_msg, data)) => {
                     let mut lines = vec!["mDNS/Bonjour Devices".to_string(), "".to_string()];
 
                     if let Some(devices) = data.get("devices").and_then(|d| d.as_array()) {
@@ -4735,7 +4727,7 @@ Do not remove power/USB",
                 Commands::Wifi(WifiCommand::Recon(WifiReconCommand::Bandwidth(args))),
                 15,
             )? {
-                Some((msg, data)) => {
+                Some((_msg, data)) => {
                     let mut lines = vec!["Bandwidth Monitor".to_string(), "".to_string()];
                     lines.push(format!("Interface: {}", iface));
                     lines.push("".to_string());
@@ -4839,7 +4831,7 @@ Do not remove power/USB",
                 Commands::Wifi(WifiCommand::Recon(WifiReconCommand::DnsCapture(args))),
                 40,
             )? {
-                Some((msg, data)) => {
+                Some((_msg, data)) => {
                     let mut lines = vec!["DNS Query Capture".to_string(), "".to_string()];
 
                     if let Some(queries) = data.get("queries").and_then(|q| q.as_array()) {
@@ -10372,9 +10364,9 @@ Do not remove power/USB",
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No loot files found in directory"))?;
         let data = fs::read_to_string(&latest)
-            .with_context(|| format!("Failed to read loot file: {}", latest))?;
+            .with_context(|| format!("Failed to read loot file: {}", latest.display()))?;
         let parsed: Vec<Value> = serde_json::from_str(&data)
-            .with_context(|| format!("Failed to parse loot JSON from: {}", latest))?;
+            .with_context(|| format!("Failed to parse loot JSON from: {}", latest.display()))?;
         let count = parsed.len();
         let mut samples = Vec::new();
         for dev in parsed.iter().take(4) {
