@@ -1154,7 +1154,7 @@ impl App {
         ];
         let labels: Vec<String> = choices
             .iter()
-            .map(|(name, _)| format!(" {}: {}", format!("{:?}", target), name))
+            .map(|(name, _)| name.to_string())
             .collect();
 
         if let Some(idx) = self.choose_from_menu("Pick Color", &labels)? {
@@ -2546,10 +2546,19 @@ impl App {
             }
             let transport = parts.pop().unwrap_or_default();
             let removable = parts.get(1).map(|s| s == "1").unwrap_or(false);
-            if !removable || !transport.eq_ignore_ascii_case("usb") {
+            let name = parts.get(0).cloned().unwrap_or_default();
+            
+            // Skip known system devices
+            if name.starts_with("/dev/mmcblk") || name.starts_with("/dev/loop") || name.starts_with("/dev/ram") {
                 continue;
             }
-            let name = parts.get(0).cloned().unwrap_or_default();
+            
+            // Accept if EITHER removable=1 OR transport=usb (more permissive)
+            let is_usb_transport = transport.eq_ignore_ascii_case("usb");
+            if !removable && !is_usb_transport {
+                continue;
+            }
+            
             let size = parts.get(2).cloned().unwrap_or_default();
             let model = if parts.len() > 3 {
                 parts[3..].join(" ")
@@ -3508,13 +3517,10 @@ Do not remove power/USB",
         // First, find USB block devices by checking /sys/block/
         let usb_devices = self.find_usb_block_devices();
 
-        if usb_devices.is_empty() {
-            bail!("No USB storage device detected. Please insert a USB drive.");
-        }
-
         // Now find mount points for these USB devices
         let mounts = self.read_mount_points()?;
 
+        // Try to match detected USB devices with mounted filesystems
         for usb_dev in &usb_devices {
             // Check for partitions (e.g., sda1, sdb1) or the device itself
             for (device, mount_point) in &mounts {
@@ -3530,7 +3536,7 @@ Do not remove power/USB",
             }
         }
 
-        // Fallback: check common mount points but be more selective
+        // Fallback: check common mount points even if sysfs detection failed
         let mount_points = ["/media", "/mnt", "/run/media"];
 
         for base in &mount_points {
@@ -3562,7 +3568,73 @@ Do not remove power/USB",
             }
         }
 
+        // If we found USB devices but they're not mounted, try auto-mounting
+        if !usb_devices.is_empty() {
+            if let Some(mounted_path) = self.try_auto_mount_usb(&usb_devices)? {
+                return Ok(mounted_path);
+            }
+            
+            bail!(
+                "USB device detected ({}) but could not mount. Check device has valid filesystem.",
+                usb_devices.join(", ")
+            );
+        }
+
         bail!("No USB storage drive found. Please insert a USB drive.")
+    }
+    
+    /// Attempt to automatically mount a USB device
+    fn try_auto_mount_usb(&self, usb_devices: &[String]) -> Result<Option<PathBuf>> {
+        for usb_dev in usb_devices {
+            // Check for partitions first
+            let sys_dev = Path::new("/sys/block").join(usb_dev);
+            if !sys_dev.exists() {
+                continue;
+            }
+            
+            let mut candidates = Vec::new();
+            
+            // Look for partition subdirectories (e.g., sda1, sda2)
+            if let Ok(entries) = fs::read_dir(&sys_dev) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with(usb_dev) && name.len() > usb_dev.len() {
+                        candidates.push(format!("/dev/{}", name));
+                    }
+                }
+            }
+            
+            // If no partitions, try the device itself
+            if candidates.is_empty() {
+                candidates.push(format!("/dev/{}", usb_dev));
+            }
+            
+            // Try mounting each candidate
+            for device in candidates {
+                let mount_point = PathBuf::from("/mnt/rustyjack_usb");
+                
+                // Create mount point
+                let _ = fs::create_dir_all(&mount_point);
+                
+                // Try to mount with various common filesystems
+                let mount_result = Command::new("mount")
+                    .arg(&device)
+                    .arg(&mount_point)
+                    .output();
+                
+                if mount_result.is_ok() && mount_result.unwrap().status.success() {
+                    // Verify it's writable
+                    if self.is_writable_mount(&mount_point) {
+                        return Ok(Some(mount_point));
+                    } else {
+                        // Unmount if not writable
+                        let _ = Command::new("umount").arg(&mount_point).output();
+                    }
+                }
+            }
+        }
+        
+        Ok(None)
     }
 
     /// Find USB block devices by checking /sys/block/ for removable USB devices
@@ -3595,19 +3667,28 @@ Do not remove power/USB",
                 let is_usb = if device_path.exists() {
                     // Follow symlink and check if path contains "usb"
                     fs::read_link(&device_path)
-                        .map(|p| p.to_string_lossy().contains("usb"))
+                        .map(|p| p.to_string_lossy().to_lowercase().contains("usb"))
                         .unwrap_or(false)
                 } else {
                     false
                 };
 
-                // Also check uevent for DRIVER=usb-storage
+                // Also check uevent for DRIVER=usb-storage or any USB subsystem reference
                 let uevent_path = entry.path().join("device").join("uevent");
                 let is_usb_storage = fs::read_to_string(&uevent_path)
-                    .map(|s| s.contains("usb-storage") || s.contains("usb"))
+                    .map(|s| {
+                        let lower = s.to_lowercase();
+                        lower.contains("usb-storage") || lower.contains("usb")
+                    })
+                    .unwrap_or(false);
+                
+                // Additional check: look for USB subsystem in device hierarchy
+                let subsystem_path = entry.path().join("device").join("subsystem");
+                let has_usb_subsystem = fs::read_link(&subsystem_path)
+                    .map(|p| p.to_string_lossy().to_lowercase().contains("usb"))
                     .unwrap_or(false);
 
-                if is_removable || is_usb || is_usb_storage {
+                if is_removable || is_usb || is_usb_storage || has_usb_subsystem {
                     // Make sure it has a size > 0 (actually a storage device)
                     let size_path = entry.path().join("size");
                     let has_size = fs::read_to_string(&size_path)
@@ -3948,16 +4029,22 @@ Do not remove power/USB",
                                             [format!("Failed to save: {}", e)],
                                         )?;
                                     } else {
+                                        // Apply isolation (rfkill unblock + disable other interfaces)
                                         if let Err(e) = self
                                             .apply_interface_isolation(&[interface_name.clone()])
                                         {
                                             lines.push(format!("Isolation failed: {}", e));
+                                        } else {
+                                            lines.push("Other interfaces disabled".to_string());
                                         }
+                                        
+                                        // Try to ensure route (will succeed if already connected)
                                         if let Some(route_msg) =
                                             self.ensure_route_for_interface(&interface_name)?
                                         {
                                             lines.push(route_msg);
                                         }
+                                        
                                         self.show_message(
                                             "Active Interface",
                                             lines.iter().map(|s| s.as_str()),

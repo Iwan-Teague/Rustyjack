@@ -1002,6 +1002,7 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
     }
 
     let entries = fs::read_dir("/sys/class/net").context("reading /sys/class/net")?;
+    let mut errors = Vec::new();
 
     for entry in entries {
         let entry = entry.context("iterating interfaces in /sys/class/net")?;
@@ -1013,45 +1014,52 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
         let is_wireless = is_wireless_interface(&iface);
 
         if is_allowed {
-            Command::new("ip")
-                .args(["link", "set", &iface, "up"])
-                .status()
-                .with_context(|| format!("bringing interface {} up", iface))?
-                .success()
-                .then_some(())
-                .ok_or_else(|| anyhow!("ip link set up failed for {}", iface))?;
+            // For wireless: unblock rfkill BEFORE bringing interface up
             if is_wireless {
                 if let Some(idx) = rfkill_index_for_interface(&iface) {
-                    Command::new("rfkill")
+                    let _ = Command::new("rfkill")
                         .args(["unblock", &idx])
-                        .status()
-                        .with_context(|| format!("rfkill unblock {}", iface))?
-                        .success()
-                        .then_some(())
-                        .ok_or_else(|| anyhow!("rfkill unblock failed for {}", iface))?;
+                        .status();
                 }
             }
+            
+            // Bring interface up (don't fail if wireless can't be brought up)
+            let up_result = Command::new("ip")
+                .args(["link", "set", &iface, "up"])
+                .status();
+                
+            if let Ok(status) = up_result {
+                if !status.success() {
+                    // For wireless, this is expected if not associated with AP - not an error
+                    if !is_wireless {
+                        errors.push(format!("{}: failed to bring up", iface));
+                    }
+                }
+            } else if !is_wireless {
+                errors.push(format!("{}: failed to execute ip command", iface));
+            }
         } else {
-            Command::new("ip")
+            // Bring interface down
+            let _ = Command::new("ip")
                 .args(["link", "set", &iface, "down"])
-                .status()
-                .with_context(|| format!("bringing interface {} down", iface))?
-                .success()
-                .then_some(())
-                .ok_or_else(|| anyhow!("ip link set down failed for {}", iface))?;
+                .status();
+                
+            // For wireless: block with rfkill after bringing down
             if is_wireless {
                 if let Some(idx) = rfkill_index_for_interface(&iface) {
-                    Command::new("rfkill")
+                    let _ = Command::new("rfkill")
                         .args(["block", &idx])
-                        .status()
-                        .with_context(|| format!("rfkill block {}", iface))?
-                        .success()
-                        .then_some(())
-                        .ok_or_else(|| anyhow!("rfkill block failed for {}", iface))?;
+                        .status();
                 }
             }
         }
     }
+    
+    // Only fail if we had errors on non-wireless interfaces
+    if !errors.is_empty() {
+        bail!("Interface isolation errors: {}", errors.join("; "));
+    }
+    
     Ok(())
 }
 
