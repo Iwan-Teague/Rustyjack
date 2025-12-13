@@ -44,7 +44,7 @@ use rustyjack_wireless::{
 };
 
 use crate::{
-    config::GuiConfig,
+    config::{BlacklistedDevice, GuiConfig},
     core::CoreBridge,
     display::{
         wrap_text, DashboardView, Display, StatusOverlay, DIALOG_MAX_CHARS, DIALOG_VISIBLE_LINES,
@@ -898,6 +898,18 @@ impl App {
                     };
                     entry.label = format!("WiFi Profiles [{}]", state);
                 }
+                MenuAction::ToggleResponder => {
+                    use rustyjack_core::system::process_running_pattern;
+                    let is_running = process_running_pattern("Responder.py").unwrap_or(false);
+                    let state = if is_running { "ON" } else { "OFF" };
+                    entry.label = format!("Responder [{}]", state);
+                }
+                MenuAction::ToggleDnsSpoof => {
+                    use rustyjack_core::system::process_running_exact;
+                    let is_running = process_running_exact("ettercap").unwrap_or(false);
+                    let state = if is_running { "ON" } else { "OFF" };
+                    entry.label = format!("DNS Spoof [{}]", state);
+                }
                 _ => {}
             }
         }
@@ -989,8 +1001,10 @@ impl App {
             MenuAction::ReconDnsCapture => self.recon_dns_capture()?,
             MenuAction::ResponderOn => self.start_responder()?,
             MenuAction::ResponderOff => self.stop_responder()?,
+            MenuAction::ToggleResponder => self.toggle_responder()?,
             MenuAction::DnsSpoofStart => self.start_dns_spoof()?,
             MenuAction::DnsSpoofStop => self.stop_dns_spoof()?,
+            MenuAction::ToggleDnsSpoof => self.toggle_dns_spoof()?,
             MenuAction::ReverseShell => self.launch_reverse_shell()?,
             MenuAction::AutopilotStart(mode) => self.start_autopilot(mode)?,
             MenuAction::AutopilotStop => self.stop_autopilot()?,
@@ -2464,6 +2478,27 @@ impl App {
     }
 
     fn generate_encryption_key_on_usb(&mut self) -> Result<()> {
+        // Guard rail: Prevent key generation if encryption is active with encrypted data
+        if self.config.settings.encryption_enabled {
+            let has_encrypted_data = self.config.settings.encrypt_loot 
+                || self.config.settings.encrypt_wifi_profiles 
+                || self.config.settings.encrypt_webhook;
+            
+            if has_encrypted_data {
+                let warning = vec![
+                    "DANGER: Encryption Active".to_string(),
+                    "".to_string(),
+                    "Generating a new key will".to_string(),
+                    "make existing encrypted".to_string(),
+                    "data UNRECOVERABLE.".to_string(),
+                    "".to_string(),
+                    "Disable encryption first".to_string(),
+                    "or load existing key.".to_string(),
+                ];
+                return self.show_message("Encryption Warning", warning.iter().map(|s| s.as_str()));
+            }
+        }
+
         let Some(usb_root) = self.select_usb_mount()? else {
             return Ok(());
         };
@@ -4430,6 +4465,30 @@ Do not remove power/USB",
         }
     }
 
+    fn toggle_responder(&mut self) -> Result<()> {
+        // Check current status
+        use rustyjack_core::system::process_running_pattern;
+        let is_running = process_running_pattern("Responder.py").unwrap_or(false);
+        
+        if is_running {
+            self.stop_responder()
+        } else {
+            self.start_responder()
+        }
+    }
+
+    fn toggle_dns_spoof(&mut self) -> Result<()> {
+        // Check current status
+        use rustyjack_core::system::process_running_exact;
+        let is_running = process_running_exact("ettercap").unwrap_or(false);
+        
+        if is_running {
+            self.stop_dns_spoof()
+        } else {
+            self.start_dns_spoof()
+        }
+    }
+
     fn recon_gateway(&mut self) -> Result<()> {
         use rustyjack_core::cli::{WifiReconCommand, WifiReconGatewayArgs};
 
@@ -5432,6 +5491,23 @@ Do not remove power/USB",
             );
         }
 
+        // Duration selection
+        let durations = vec![
+            "1 minute".to_string(),
+            "2 minutes".to_string(),
+            "5 minutes".to_string(),
+            "10 minutes".to_string(),
+        ];
+        let dur_choice = self.choose_from_list("Attack Duration", &durations)?;
+
+        let duration_secs = match dur_choice {
+            Some(0) => 60,
+            Some(1) => 120,
+            Some(2) => 300,
+            Some(3) => 600,
+            _ => return Ok(()),
+        };
+
         // Show attack configuration
         self.show_message(
             "Deauth Attack",
@@ -5447,7 +5523,7 @@ Do not remove power/USB",
                 &format!("BSSID: {}", target_bssid),
                 &format!("Channel: {}", target_channel),
                 &format!("Interface: {}", active_interface),
-                "Duration: 120s",
+                &format!("Duration: {}s", duration_secs),
                 "Press SELECT to start",
             ],
         )?;
@@ -5459,22 +5535,22 @@ Do not remove power/USB",
             return Ok(());
         }
 
-        // Show progress stages for 120 second attack
+        // Show progress stages (scaled to selected duration)
+        let quarter = duration_secs / 4;
+        let half = duration_secs / 2;
+        let three_quarter = (duration_secs * 3) / 4;
+        
         let progress_stages = vec![
             (0, "Killing processes..."),
             (2, "Monitor mode enabled"),
             (5, "Setting channel..."),
             (8, "Starting capture..."),
             (10, "Sending deauth burst"),
-            (15, "Attack in progress..."),
-            (30, "Monitoring for handshake"),
-            (45, "Deauth burst sent..."),
-            (60, "Halfway complete..."),
-            (75, "Still capturing..."),
-            (90, "Checking for handshake"),
-            (100, "Attack continuing..."),
-            (110, "Finalizing capture..."),
-            (115, "Stopping monitor mode"),
+            (quarter, "Attack in progress..."),
+            (half, "Monitoring for handshake"),
+            (three_quarter, "Still capturing..."),
+            (duration_secs.saturating_sub(10), "Finalizing capture..."),
+            (duration_secs.saturating_sub(5), "Stopping monitor mode"),
         ];
 
         // Show initial message
@@ -5508,6 +5584,7 @@ Do not remove power/USB",
         };
         let channel = target_channel;
         let iface = active_interface.clone();
+        let attack_duration = duration_secs;
 
         let result = Arc::new(Mutex::new(None));
         let result_clone = Arc::clone(&result);
@@ -5519,7 +5596,7 @@ Do not remove power/USB",
                 ssid,
                 interface: iface,
                 channel,
-                duration: 120,    // 2 minutes for better handshake capture
+                duration: attack_duration as u32,
                 packets: 64,      // More packets per burst
                 client: None,     // Broadcast to all clients
                 continuous: true, // Keep sending deauth throughout
@@ -5533,8 +5610,7 @@ Do not remove power/USB",
                 .unwrap_or_else(|_| panic!("Failed to lock result mutex")) = Some(r);
         });
 
-        // Show progress updates while attack runs (120 seconds)
-        let attack_duration = 120u64;
+        // Show progress updates while attack runs
         let start = std::time::Instant::now();
         let mut cancelled = false;
         let mut last_displayed_elapsed: u64 = u64::MAX; // Track to avoid redundant redraws
@@ -5776,12 +5852,30 @@ Do not remove power/USB",
             );
         }
 
+        // Duration selection
+        let durations = vec![
+            "5 minutes".to_string(),
+            "10 minutes".to_string(),
+            "15 minutes".to_string(),
+            "30 minutes".to_string(),
+        ];
+        let dur_choice = self.choose_from_list("Attack Duration", &durations)?;
+
+        let duration_secs = match dur_choice {
+            Some(0) => 300,
+            Some(1) => 600,
+            Some(2) => 900,
+            Some(3) => 1800,
+            _ => return Ok(()),
+        };
+
         // Show attack configuration
         self.show_message(
             "Evil Twin Attack",
             [
                 &format!("SSID: {}", target_network),
                 &format!("Ch: {} Iface: {}", target_channel, attack_interface),
+                &format!("Duration: {} min", duration_secs / 60),
                 "",
                 "Creates fake AP with same",
                 "SSID to capture client",
@@ -5807,11 +5901,11 @@ Do not remove power/USB",
             target_bssid: Some(target_bssid),
             channel: target_channel,
             interface: attack_interface.clone(),
-            duration: 300, // 5 minutes
+            duration: duration_secs as u32,
             open: true,
         }));
 
-        let result = self.dispatch_cancellable("Evil Twin", cmd, 300)?;
+        let result = self.dispatch_cancellable("Evil Twin", cmd, duration_secs as u32)?;
 
         let Some((msg, data)) = result else {
             return Ok(()); // Cancelled
@@ -7042,6 +7136,37 @@ Do not remove power/USB",
             return Ok(());
         }
 
+        // Select mode: Standard or Indefinite
+        let mode_options = vec![
+            "Standard Mode".to_string(),
+            "Indefinite Mode".to_string(),
+            "Cancel".to_string(),
+        ];
+        let mode_choice = self.choose_from_list(
+            "Pipeline Mode",
+            &mode_options,
+        )?;
+
+        let indefinite_mode = match mode_choice {
+            Some(0) => false, // Standard
+            Some(1) => true,  // Indefinite
+            _ => return Ok(()), // Cancel
+        };
+
+        if indefinite_mode {
+            self.show_message(
+                "Indefinite Mode",
+                [
+                    "Each step will run until",
+                    "it captures required data",
+                    "or reaches max duration.",
+                    "",
+                    "Progress only when",
+                    "resources are obtained.",
+                ],
+            )?;
+        }
+
         // If target needed and not set, prompt for network selection
         let needs_target = matches!(
             pipeline_type,
@@ -7070,7 +7195,7 @@ Do not remove power/USB",
         let (pipeline_dir, started_at) = self.prepare_pipeline_loot_dir(&target_dir)?;
 
         // Execute pipeline steps using actual attack implementations
-        let result = self.execute_pipeline_steps(pipeline_type, title, &steps)?;
+        let result = self.execute_pipeline_steps(pipeline_type, title, &steps, indefinite_mode)?;
         let loot_copy = self.capture_pipeline_loot(started_at, &target_dir, &pipeline_dir);
         let loot_dir_display = pipeline_dir
             .strip_prefix(&self.root)
@@ -7242,6 +7367,7 @@ Do not remove power/USB",
         pipeline_type: PipelineType,
         title: &str,
         steps: &[&str],
+        indefinite_mode: bool,
     ) -> Result<PipelineResult> {
         let mut result = PipelineResult {
             cancelled: false,
@@ -7269,65 +7395,123 @@ Do not remove power/USB",
                 }
             }
 
-            // Show progress
-            let progress = (i as f32 / total_steps as f32) * 100.0;
-            let overlay = self.stats.snapshot();
-            self.display.draw_progress_dialog(
-                title,
-                &format!("{} [LEFT=Cancel]", step),
-                progress,
-                &overlay,
-            )?;
+            // In indefinite mode, retry steps until they produce results
+            let mut step_successful = false;
+            let mut retry_count = 0;
+            const MAX_RETRIES: usize = 10; // Safety limit to prevent infinite loops
 
-            // Execute the step based on pipeline type and step index
-            let step_result = match pipeline_type {
-                PipelineType::GetPassword => self.execute_get_password_step(
-                    i,
-                    &active_interface,
-                    &target_bssid,
-                    target_channel,
-                    &target_ssid,
-                )?,
-                PipelineType::MassCapture => {
-                    self.execute_mass_capture_step(i, &active_interface)?
-                }
-                PipelineType::StealthRecon => {
-                    self.execute_stealth_recon_step(i, &active_interface)?
-                }
-                PipelineType::CredentialHarvest => self.execute_credential_harvest_step(
-                    i,
-                    &active_interface,
-                    &target_ssid,
-                    target_channel,
-                )?,
-                PipelineType::FullPentest => self.execute_full_pentest_step(
-                    i,
-                    &active_interface,
-                    &target_bssid,
-                    target_channel,
-                    &target_ssid,
-                )?,
-            };
+            while !step_successful && (!indefinite_mode || retry_count < MAX_RETRIES) {
+                // Show progress
+                let progress = (i as f32 / total_steps as f32) * 100.0;
+                let overlay = self.stats.snapshot();
+                let status_text = if indefinite_mode && retry_count > 0 {
+                    format!("{} [Retry {}] [LEFT=Cancel]", step, retry_count)
+                } else {
+                    format!("{} [LEFT=Cancel]", step)
+                };
+                self.display.draw_progress_dialog(
+                    title,
+                    &status_text,
+                    progress,
+                    &overlay,
+                )?;
 
-            // Update result from step
-            match step_result {
-                StepOutcome::Completed(Some((pmkids, handshakes, password, networks, clients))) => {
-                    result.pmkids_captured += pmkids;
-                    result.handshakes_captured += handshakes;
-                    if password.is_some() {
-                        result.password_found = password;
+                // Execute the step based on pipeline type and step index
+                let step_result = match pipeline_type {
+                    PipelineType::GetPassword => self.execute_get_password_step(
+                        i,
+                        &active_interface,
+                        &target_bssid,
+                        target_channel,
+                        &target_ssid,
+                        indefinite_mode,
+                    )?,
+                    PipelineType::MassCapture => {
+                        self.execute_mass_capture_step(i, &active_interface)?
                     }
-                    result.networks_found += networks;
-                    result.clients_found += clients;
+                    PipelineType::StealthRecon => {
+                        self.execute_stealth_recon_step(i, &active_interface)?
+                    }
+                    PipelineType::CredentialHarvest => self.execute_credential_harvest_step(
+                        i,
+                        &active_interface,
+                        &target_ssid,
+                        target_channel,
+                    )?,
+                    PipelineType::FullPentest => self.execute_full_pentest_step(
+                        i,
+                        &active_interface,
+                        &target_bssid,
+                        target_channel,
+                        &target_ssid,
+                    )?,
+                };
+
+                // Update result from step
+                match step_result {
+                    StepOutcome::Completed(Some((pmkids, handshakes, password, networks, clients))) => {
+                        result.pmkids_captured += pmkids;
+                        result.handshakes_captured += handshakes;
+                        if password.is_some() {
+                            result.password_found = password;
+                        }
+                        result.networks_found += networks;
+                        result.clients_found += clients;
+                        
+                        // In indefinite mode, check if step actually captured what it needed
+                        if indefinite_mode {
+                            step_successful = match i {
+                                0 => networks > 0,  // Scan needs to find networks
+                                1 => pmkids > 0,    // PMKID needs captures
+                                2 | 3 => handshakes > 0, // Deauth/capture needs handshakes
+                                4 => password.is_some(), // Crack needs password (always check)
+                                _ => true, // Other steps always progress
+                            };
+                        } else {
+                            step_successful = true; // Standard mode always progresses
+                        }
+                    }
+                    StepOutcome::Completed(None) => {
+                        step_successful = true; // No specific requirement
+                    }
+                    StepOutcome::Skipped(reason) => {
+                        result.cancelled = true;
+                        self.show_message(
+                            "Pipeline stopped",
+                            [&format!("Step {} halted", i + 1), "", &reason],
+                        )?;
+                        return Ok(result);
+                    }
                 }
-                StepOutcome::Completed(None) => {}
-                StepOutcome::Skipped(reason) => {
-                    result.cancelled = true;
-                    self.show_message(
-                        "Pipeline stopped",
-                        [&format!("Step {} halted", i + 1), "", &reason],
-                    )?;
-                    return Ok(result);
+
+                if !step_successful && indefinite_mode {
+                    retry_count += 1;
+                    if retry_count >= MAX_RETRIES {
+                        result.cancelled = true;
+                        self.show_message(
+                            "Pipeline stopped",
+                            [
+                                &format!("Step {} failed", i + 1),
+                                "",
+                                "Max retries reached",
+                                "No results obtained",
+                            ],
+                        )?;
+                        return Ok(result);
+                    }
+                    // Brief pause before retry
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+
+                // Check for cancel during retries
+                if indefinite_mode && !step_successful {
+                    match self.check_attack_cancel(title)? {
+                        CancelAction::Continue => {}
+                        CancelAction::GoBack | CancelAction::GoMainMenu => {
+                            result.cancelled = true;
+                            return Ok(result);
+                        }
+                    }
                 }
             }
 
@@ -7351,6 +7535,7 @@ Do not remove power/USB",
         bssid: &str,
         channel: u8,
         ssid: &str,
+        indefinite_mode: bool,
     ) -> Result<StepOutcome> {
         use rustyjack_core::{Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiScanArgs};
 
@@ -11243,8 +11428,14 @@ Do not remove power/USB",
                 }
 
                 let options = if running {
-                    lines.push("Turn off to exit this view".to_string());
-                    vec!["Turn off hotspot".to_string(), "Refresh".to_string()]
+                    vec![
+                        "Network Info".to_string(),
+                        "Connected Devices".to_string(),
+                        "Device Blacklist".to_string(),
+                        "Network Speed".to_string(),
+                        "Turn off hotspot".to_string(),
+                        "Refresh".to_string(),
+                    ]
                 } else {
                     vec![
                         "Start hotspot".to_string(),
@@ -11257,12 +11448,52 @@ Do not remove power/USB",
                 let choice = self.choose_from_list("Hotspot", &options)?;
                 match (running, choice) {
                     (true, Some(0)) => {
-                        let _ = self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop));
+                        // Network Info
+                        self.show_hotspot_network_info(&current_ssid, &current_password, &ap_iface, &upstream_iface)?;
                     }
                     (true, Some(1)) => {
+                        // Connected Devices
+                        self.show_hotspot_connected_devices(&ap_iface)?;
+                    }
+                    (true, Some(2)) => {
+                        // Device Blacklist
+                        self.manage_hotspot_blacklist()?;
+                    }
+                    (true, Some(3)) => {
+                        // Network Speed
+                        self.show_hotspot_network_speed(&upstream_iface)?;
+                    }
+                    (true, Some(4)) => {
+                        // Turn off hotspot
+                        let _ = self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop));
+                    }
+                    (true, Some(5)) => {
+                        // Refresh
                         continue;
                     }
-                    (true, None) => return Ok(()),
+                    (true, None) => {
+                        // User is trying to exit while hotspot is running - confirm
+                        let confirm_options = vec![
+                            "Turn off & exit".to_string(),
+                            "Keep running".to_string(),
+                        ];
+                        let confirm = self.choose_from_list(
+                            "Hotspot Active",
+                            &confirm_options,
+                        )?;
+                        
+                        match confirm {
+                            Some(0) => {
+                                // Turn off hotspot and exit
+                                let _ = self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop));
+                                return Ok(());
+                            }
+                            _ => {
+                                // Keep running, stay in menu
+                                continue;
+                            }
+                        }
+                    }
                     (false, Some(0)) => {
                         // Select interfaces using hardware detect
                         let (_msg, detect) = self
@@ -11498,5 +11729,378 @@ Do not remove power/USB",
                 }
             }
         }
+    }
+
+    fn show_hotspot_network_info(
+        &mut self,
+        ssid: &str,
+        password: &str,
+        ap_iface: &str,
+        upstream_iface: &str,
+    ) -> Result<()> {
+        let mut lines = vec![
+            format!("SSID: {}", ssid),
+            format!("Password: {}", password),
+            "".to_string(),
+            format!("AP Interface: {}", ap_iface),
+        ];
+
+        if upstream_iface.is_empty() {
+            lines.push("Upstream: None (offline)".to_string());
+        } else {
+            lines.push(format!("Upstream: {}", upstream_iface));
+            
+            // Check if upstream has IP/internet
+            if interface_has_ip(upstream_iface) {
+                lines.push("Status: Online".to_string());
+            } else {
+                lines.push("Status: No IP".to_string());
+            }
+        }
+
+        self.show_message("Network Info", lines.iter().map(|s| s.as_str()))
+    }
+
+    fn show_hotspot_connected_devices(&mut self, ap_iface: &str) -> Result<()> {
+        use std::process::Command;
+
+        // Get connected clients from dnsmasq leases
+        let lease_path = "/var/lib/misc/dnsmasq.leases";
+        let mut clients = Vec::new();
+
+        if let Ok(content) = std::fs::read_to_string(lease_path) {
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5 {
+                    // Format: timestamp mac ip hostname client-id
+                    let mac = parts[1];
+                    let ip = parts[2];
+                    let hostname = if parts[3] == "*" { "Unknown" } else { parts[3] };
+                    
+                    // Skip blacklisted devices
+                    if self.config.settings.hotspot_blacklist.iter().any(|d| d.mac == mac) {
+                        continue;
+                    }
+                    
+                    clients.push((mac.to_string(), ip.to_string(), hostname.to_string()));
+                }
+            }
+        }
+
+        if clients.is_empty() {
+            return self.show_message("Connected Devices", ["No devices connected"]);
+        }
+
+        // Create list of device summaries
+        let device_labels: Vec<String> = clients
+            .iter()
+            .map(|(mac, ip, hostname)| {
+                if hostname == "Unknown" {
+                    format!("{} - {}", ip, mac)
+                } else {
+                    format!("{} - {}", hostname, ip)
+                }
+            })
+            .collect();
+
+        // Let user select a device to see details
+        let choice = self.choose_from_list("Connected Devices", &device_labels)?;
+
+        if let Some(idx) = choice {
+            if let Some((mac, ip, hostname)) = clients.get(idx) {
+                // Show device details first
+                let mut details = vec![
+                    format!("Device: {}", hostname),
+                    format!("MAC: {}", mac),
+                    format!("IP: {}", ip),
+                    "".to_string(),
+                ];
+
+                // Try to get vendor from MAC OUI
+                let oui = &mac[..8].replace(":", "");
+                if let Ok(vendor) = rustyjack_evasion::MacManager::new()
+                    .and_then(|mgr| Ok(mgr.get_vendor_by_oui(oui).unwrap_or("Unknown")))
+                {
+                    details.push(format!("Vendor: {}", vendor));
+                }
+
+                self.show_message("Device Details", details.iter().map(|s| s.as_str()))?;
+
+                // Offer options to disconnect or blacklist
+                let options = vec![
+                    "Add to Blacklist".to_string(),
+                    "Disconnect Device".to_string(),
+                    "Back".to_string(),
+                ];
+                
+                let action_choice = self.choose_from_list("Device Actions", &options)?;
+                
+                match action_choice {
+                    Some(0) => {
+                        // Add to blacklist
+                        self.add_to_hotspot_blacklist(mac, hostname, ip)?;
+                    }
+                    Some(1) => {
+                        // Disconnect device
+                        self.disconnect_hotspot_client(mac, ip)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn show_hotspot_network_speed(&mut self, upstream_iface: &str) -> Result<()> {
+        if upstream_iface.is_empty() {
+            return self.show_message(
+                "Network Speed",
+                ["No upstream configured", "Hotspot is offline"],
+            );
+        }
+
+        use std::fs;
+        use std::thread;
+        use std::time::Duration;
+
+        let rx_path = format!("/sys/class/net/{}/statistics/rx_bytes", upstream_iface);
+        let tx_path = format!("/sys/class/net/{}/statistics/tx_bytes", upstream_iface);
+
+        // Monitor for ~30 seconds with 5 second intervals
+        for _ in 0..6 {
+            // Read initial values
+            let rx_start = fs::read_to_string(&rx_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let tx_start = fs::read_to_string(&tx_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+
+            // Wait 5 seconds
+            thread::sleep(Duration::from_secs(5));
+
+            // Read final values
+            let rx_end = fs::read_to_string(&rx_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let tx_end = fs::read_to_string(&tx_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+
+            // Calculate speeds (bytes per second)
+            let rx_speed = (rx_end.saturating_sub(rx_start)) / 5;
+            let tx_speed = (tx_end.saturating_sub(tx_start)) / 5;
+
+            // Convert to human-readable format
+            let rx_display = format_bytes_per_sec(rx_speed);
+            let tx_display = format_bytes_per_sec(tx_speed);
+
+            let lines = vec![
+                format!("Interface: {}", upstream_iface),
+                "".to_string(),
+                format!("Download: {}", rx_display),
+                format!("Upload: {}", tx_display),
+                "".to_string(),
+                "Updates every 5 seconds".to_string(),
+                "Press any key to exit".to_string(),
+            ];
+
+            self.show_message("Network Speed", lines.iter().map(|s| s.as_str()))?;
+
+            // Check for button press to exit
+            if let Ok(action) = self.buttons.read_with_timeout(Duration::from_millis(100)) {
+                if action.is_some() {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn manage_hotspot_blacklist(&mut self) -> Result<()> {
+        let blacklist = self.config.settings.hotspot_blacklist.clone();
+        
+        if blacklist.is_empty() {
+            return self.show_message("Device Blacklist", ["No devices blacklisted"]);
+        }
+
+        // Create list of blacklisted devices showing name and MAC
+        let device_labels: Vec<String> = blacklist
+            .iter()
+            .map(|device| {
+                if device.name == "Unknown" || device.name.is_empty() {
+                    device.mac.clone()
+                } else {
+                    format!("{} - {}", device.name, device.mac)
+                }
+            })
+            .collect();
+
+        let choice = self.choose_from_list("Blacklisted Devices", &device_labels)?;
+
+        if let Some(idx) = choice {
+            if let Some(device) = blacklist.get(idx) {
+                let mut details = vec![
+                    format!("Device: {}", device.name),
+                    format!("MAC: {}", device.mac),
+                    format!("IP: {}", device.ip),
+                    "".to_string(),
+                    "This device is blocked",
+                    "from connecting to",
+                    "the hotspot.",
+                ];
+
+                self.show_message("Blacklisted Device", details.iter().map(|s| s.as_str()))?;
+
+                // Offer to remove from blacklist
+                let options = vec![
+                    "Remove from Blacklist".to_string(),
+                    "Back".to_string(),
+                ];
+
+                let action = self.choose_from_list("Actions", &options)?;
+
+                if action == Some(0) {
+                    self.remove_from_hotspot_blacklist(&device.mac)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn add_to_hotspot_blacklist(&mut self, mac: &str, hostname: &str, ip: &str) -> Result<()> {
+        if self.config.settings.hotspot_blacklist.iter().any(|d| d.mac == mac) {
+            return self.show_message("Blacklist", ["Device already", "in blacklist"]);
+        }
+
+        let device = BlacklistedDevice::new(
+            mac.to_string(),
+            hostname.to_string(),
+            ip.to_string(),
+        );
+
+        self.config.settings.hotspot_blacklist.push(device);
+        let config_path = self.root.join("gui_conf.json");
+        self.config.save(&config_path)?;
+
+        // Update dnsmasq to block this MAC
+        self.apply_hotspot_blacklist()?;
+
+        // Disconnect the device immediately
+        self.disconnect_hotspot_client(mac, ip)?;
+
+        let msg = if hostname == "Unknown" || hostname.is_empty() {
+            vec![
+                "Device added to",
+                "blacklist and",
+                "disconnected.",
+                "",
+                &format!("MAC: {}", mac),
+            ]
+        } else {
+            vec![
+                &format!("{} added to", hostname),
+                "blacklist and",
+                "disconnected.",
+                "",
+                &format!("MAC: {}", mac),
+            ]
+        };
+
+        self.show_message("Blacklist Updated", msg.iter().map(|s| *s))
+    }
+
+    fn remove_from_hotspot_blacklist(&mut self, mac: &str) -> Result<()> {
+        self.config.settings.hotspot_blacklist.retain(|d| d.mac != mac);
+        let config_path = self.root.join("gui_conf.json");
+        self.config.save(&config_path)?;
+
+        // Update dnsmasq configuration
+        self.apply_hotspot_blacklist()?;
+
+        self.show_message(
+            "Blacklist Updated",
+            [
+                "Device removed from",
+                "blacklist.",
+                "",
+                "It can now connect",
+                "to the hotspot.",
+            ],
+        )
+    }
+
+    fn disconnect_hotspot_client(&mut self, mac: &str, ip: &str) -> Result<()> {
+        use std::process::Command;
+
+        // Remove DHCP lease
+        if !ip.is_empty() {
+            let _ = Command::new("dhcp_release")
+                .args(["wlan0", ip, mac])
+                .status();
+        }
+
+        // Deauth the client (force disconnect)
+        let _ = Command::new("hostapd_cli")
+            .args(["deauthenticate", mac])
+            .status();
+
+        self.show_message(
+            "Device Disconnected",
+            ["Client has been", "disconnected from", "the hotspot."],
+        )
+    }
+
+    fn apply_hotspot_blacklist(&mut self) -> Result<()> {
+        use std::fs;
+        use std::process::Command;
+
+        let conf_dir = "/tmp/rustyjack_hotspot";
+        let dnsmasq_conf_path = format!("{}/dnsmasq.conf", conf_dir);
+
+        // Read existing config
+        let mut config = if let Ok(content) = fs::read_to_string(&dnsmasq_conf_path) {
+            content
+        } else {
+            return Ok(()); // No hotspot running
+        };
+
+        // Remove old dhcp-host entries
+        config.retain(|c| {
+            let line = c.to_string();
+            !line.contains("dhcp-host=") || !line.contains("ignore")
+        });
+
+        // Add blacklist entries
+        for device in &self.config.settings.hotspot_blacklist {
+            config.push_str(&format!("dhcp-host={},ignore\n", device.mac));
+        }
+
+        // Write updated config
+        fs::write(&dnsmasq_conf_path, config)?;
+
+        // Reload dnsmasq
+        let _ = Command::new("pkill").args(["-HUP", "dnsmasq"]).status();
+
+        Ok(())
+    }
+}
+
+fn format_bytes_per_sec(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B/s", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB/s", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB/s", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB/s", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }

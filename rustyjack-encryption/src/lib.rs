@@ -112,7 +112,7 @@ pub fn decrypt_bytes(data: &[u8]) -> anyhow::Result<Vec<u8>> {
     let nonce = Nonce::from_slice(nonce_bytes);
     let plaintext = cipher
         .decrypt(nonce, ct)
-        .map_err(|e| anyhow!("Decryption failed: {e}"))?;
+        .map_err(|e| anyhow!("Decryption failed - wrong key or corrupted data: {e}"))?;
     Ok(plaintext)
 }
 
