@@ -2482,7 +2482,7 @@ impl App {
         if self.config.settings.encryption_enabled {
             let has_encrypted_data = self.config.settings.encrypt_loot 
                 || self.config.settings.encrypt_wifi_profiles 
-                || self.config.settings.encrypt_webhook;
+                || self.config.settings.encrypt_discord_webhook;
             
             if has_encrypted_data {
                 let warning = vec![
@@ -5500,7 +5500,7 @@ Do not remove power/USB",
         ];
         let dur_choice = self.choose_from_list("Attack Duration", &durations)?;
 
-        let duration_secs = match dur_choice {
+        let duration_secs: u64 = match dur_choice {
             Some(0) => 60,
             Some(1) => 120,
             Some(2) => 300,
@@ -5905,7 +5905,7 @@ Do not remove power/USB",
             open: true,
         }));
 
-        let result = self.dispatch_cancellable("Evil Twin", cmd, duration_secs as u32)?;
+        let result = self.dispatch_cancellable("Evil Twin", cmd, duration_secs)?;
 
         let Some((msg, data)) = result else {
             return Ok(()); // Cancelled
@@ -7452,6 +7452,7 @@ Do not remove power/USB",
                     StepOutcome::Completed(Some((pmkids, handshakes, password, networks, clients))) => {
                         result.pmkids_captured += pmkids;
                         result.handshakes_captured += handshakes;
+                        let password_found = password.is_some();
                         if password.is_some() {
                             result.password_found = password;
                         }
@@ -7464,7 +7465,7 @@ Do not remove power/USB",
                                 0 => networks > 0,  // Scan needs to find networks
                                 1 => pmkids > 0,    // PMKID needs captures
                                 2 | 3 => handshakes > 0, // Deauth/capture needs handshakes
-                                4 => password.is_some(), // Crack needs password (always check)
+                                4 => password_found, // Crack needs password (always check)
                                 _ => true, // Other steps always progress
                             };
                         } else {
@@ -7535,7 +7536,7 @@ Do not remove power/USB",
         bssid: &str,
         channel: u8,
         ssid: &str,
-        indefinite_mode: bool,
+        _indefinite_mode: bool,
     ) -> Result<StepOutcome> {
         use rustyjack_core::{Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiScanArgs};
 
@@ -11762,8 +11763,6 @@ Do not remove power/USB",
     }
 
     fn show_hotspot_connected_devices(&mut self, ap_iface: &str) -> Result<()> {
-        use std::process::Command;
-
         // Get connected clients from dnsmasq leases
         let lease_path = "/var/lib/misc/dnsmasq.leases";
         let mut clients = Vec::new();
@@ -11817,11 +11816,19 @@ Do not remove power/USB",
                 ];
 
                 // Try to get vendor from MAC OUI
-                let oui = &mac[..8].replace(":", "");
-                if let Ok(vendor) = rustyjack_evasion::MacManager::new()
-                    .and_then(|mgr| Ok(mgr.get_vendor_by_oui(oui).unwrap_or("Unknown")))
-                {
-                    details.push(format!("Vendor: {}", vendor));
+                if mac.len() >= 17 {
+                    let oui_parts: Vec<&str> = mac.split(':').take(3).collect();
+                    if oui_parts.len() == 3 {
+                        if let (Ok(b0), Ok(b1), Ok(b2)) = (
+                            u8::from_str_radix(oui_parts[0], 16),
+                            u8::from_str_radix(oui_parts[1], 16),
+                            u8::from_str_radix(oui_parts[2], 16),
+                        ) {
+                            if let Some(vendor_oui) = rustyjack_evasion::VendorOui::from_oui([b0, b1, b2]) {
+                                details.push(format!("Vendor: {}", vendor_oui.name));
+                            }
+                        }
+                    }
                 }
 
                 self.show_message("Device Details", details.iter().map(|s| s.as_str()))?;
@@ -11913,10 +11920,8 @@ Do not remove power/USB",
             self.show_message("Network Speed", lines.iter().map(|s| s.as_str()))?;
 
             // Check for button press to exit
-            if let Ok(action) = self.buttons.read_with_timeout(Duration::from_millis(100)) {
-                if action.is_some() {
-                    break;
-                }
+            if let Ok(Some(_)) = self.buttons.try_read_timeout(Duration::from_millis(100)) {
+                break;
             }
         }
 
@@ -11951,9 +11956,9 @@ Do not remove power/USB",
                     format!("MAC: {}", device.mac),
                     format!("IP: {}", device.ip),
                     "".to_string(),
-                    "This device is blocked",
-                    "from connecting to",
-                    "the hotspot.",
+                    "This device is blocked".to_string(),
+                    "from connecting to".to_string(),
+                    "the hotspot.".to_string(),
                 ];
 
                 self.show_message("Blacklisted Device", details.iter().map(|s| s.as_str()))?;
@@ -11997,24 +12002,27 @@ Do not remove power/USB",
         self.disconnect_hotspot_client(mac, ip)?;
 
         let msg = if hostname == "Unknown" || hostname.is_empty() {
+            let mac_msg = format!("MAC: {}", mac);
             vec![
-                "Device added to",
-                "blacklist and",
-                "disconnected.",
-                "",
-                &format!("MAC: {}", mac),
+                "Device added to".to_string(),
+                "blacklist and".to_string(),
+                "disconnected.".to_string(),
+                "".to_string(),
+                mac_msg,
             ]
         } else {
+            let host_msg = format!("{} added to", hostname);
+            let mac_msg = format!("MAC: {}", mac);
             vec![
-                &format!("{} added to", hostname),
-                "blacklist and",
-                "disconnected.",
-                "",
-                &format!("MAC: {}", mac),
+                host_msg,
+                "blacklist and".to_string(),
+                "disconnected.".to_string(),
+                "".to_string(),
+                mac_msg,
             ]
         };
 
-        self.show_message("Blacklist Updated", msg.iter().map(|s| *s))
+        self.show_message("Blacklist Updated", msg.iter().map(|s| s.as_str()))
     }
 
     fn remove_from_hotspot_blacklist(&mut self, mac: &str) -> Result<()> {
