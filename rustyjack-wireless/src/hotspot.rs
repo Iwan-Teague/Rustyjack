@@ -76,16 +76,30 @@ pub fn random_password() -> String {
 
 /// Start a hotspot using hostapd + dnsmasq + iptables NAT.
 pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
+    log::info!("Starting hotspot: AP={}, upstream={}, SSID={}, channel={}", 
+        config.ap_interface, config.upstream_interface, config.ssid, config.channel);
+    
     ensure_tools_present()?;
+    log::debug!("Tools check passed");
+    
     ensure_interface_exists(&config.ap_interface)?;
+    log::debug!("AP interface {} exists", config.ap_interface);
+    
     if !config.upstream_interface.is_empty() {
         ensure_interface_exists(&config.upstream_interface)?;
+        log::debug!("Upstream interface {} exists", config.upstream_interface);
     }
+    
     ensure_ap_capability(&config.ap_interface)?;
+    log::debug!("AP capability check passed for {}", config.ap_interface);
+    
     let mut upstream_ready = false;
     if !config.upstream_interface.is_empty() {
         match ensure_upstream_ready(&config.upstream_interface) {
-            Ok(_) => upstream_ready = true,
+            Ok(_) => {
+                upstream_ready = true;
+                log::info!("Upstream {} is ready with IP", config.upstream_interface);
+            }
             Err(WirelessError::Interface(msg)) if msg.contains("has no IPv4 address") => {
                 // Allow offline hotspot; continue without upstream/NAT
                 upstream_ready = false;
@@ -93,14 +107,20 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             }
             Err(err) => return Err(err),
         }
+    } else {
+        log::info!("No upstream interface specified; running in local-only mode");
     }
+    
     fs::create_dir_all(CONF_DIR).map_err(|e| WirelessError::System(format!("mkdir: {e}")))?;
 
     // Ensure previous instances are stopped to avoid dhcp bind failures
+    log::debug!("Stopping any existing hotspot processes");
     let _ = Command::new("pkill").args(["-f", "hostapd"]).status();
     let _ = Command::new("pkill").args(["-f", "dnsmasq"]).status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Bring AP interface up with static IP
+    log::debug!("Configuring AP interface {} with IP {}", config.ap_interface, AP_GATEWAY);
     run_cmd("ip", &["link", "set", &config.ap_interface, "down"])?;
     run_cmd("ip", &["addr", "flush", "dev", &config.ap_interface])?;
     run_cmd(
@@ -114,12 +134,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         ],
     )?;
     run_cmd("ip", &["link", "set", &config.ap_interface, "up"])?;
+    log::debug!("AP interface {} is up", config.ap_interface);
 
     // Enable forwarding
     let _ = run_cmd("sysctl", &["-w", "net.ipv4.ip_forward=1"]);
 
     // NAT rules (only if upstream is present and ready)
     if upstream_ready && !config.upstream_interface.is_empty() {
+        log::debug!("Setting up NAT rules for upstream {}", config.upstream_interface);
         let _ = run_cmd(
             "iptables",
             &[
@@ -163,6 +185,9 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
                 "ACCEPT",
             ],
         );
+        log::debug!("NAT rules configured");
+    } else {
+        log::info!("Skipping NAT setup (local-only mode)");
     }
 
     // Write hostapd.conf
@@ -213,16 +238,78 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     let dns_path = format!("{CONF_DIR}/dnsmasq.conf");
     fs::write(&dns_path, dns_conf)
         .map_err(|e| WirelessError::System(format!("writing dnsmasq.conf: {e}")))?;
+    
+    log::debug!("Configuration files written");
 
     // Give interface time to stabilize
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    let hostapd = spawn_background("hostapd", &["-B", &hostapd_path])?;
+    // Start hostapd (it daemonizes itself with -B, so we don't track PID directly)
+    log::info!("Starting hostapd...");
+    let hostapd_output = Command::new("hostapd")
+        .args(&["-B", &hostapd_path])
+        .output()
+        .map_err(|e| WirelessError::System(format!("spawn hostapd: {}", e)))?;
+    
+    if !hostapd_output.status.success() {
+        let stderr = String::from_utf8_lossy(&hostapd_output.stderr);
+        let stdout = String::from_utf8_lossy(&hostapd_output.stdout);
+        log::error!("hostapd failed: stderr={}, stdout={}", stderr, stdout);
+        return Err(WirelessError::System(format!(
+            "hostapd failed to start: {}",
+            stderr
+        )));
+    }
+    
+    log::debug!("hostapd command executed, waiting for initialization...");
     
     // Give hostapd time to initialize AP before starting DHCP
     std::thread::sleep(std::time::Duration::from_secs(2));
     
+    // Verify hostapd is actually running
+    let hostapd_running = Command::new("pgrep")
+        .arg("-f")
+        .arg("hostapd")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    
+    if !hostapd_running {
+        log::error!("hostapd is not running after start");
+        return Err(WirelessError::System(
+            "hostapd started but is not running; check interface AP mode support or hostapd logs".to_string()
+        ));
+    }
+    
+    log::info!("hostapd is running, starting dnsmasq...");
+    
     let dnsmasq = spawn_background("dnsmasq", &["--conf-file", &dns_path])?;
+    
+    // Verify dnsmasq is actually running
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let dnsmasq_running = Command::new("pgrep")
+        .arg("-f")
+        .arg(&format!("dnsmasq.*{}", dns_path))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    
+    if !dnsmasq_running {
+        log::error!("dnsmasq failed to start");
+        // Clean up hostapd before returning error
+        let _ = Command::new("pkill").args(["-f", "hostapd"]).status();
+        return Err(WirelessError::System(
+            "dnsmasq failed to start; port may be in use".to_string()
+        ));
+    }
+    
+    log::info!("dnsmasq is running");
+    
+    // Get actual PIDs after verification
+    let hostapd_pid = get_pid_by_pattern("hostapd");
+    let dnsmasq_pid = get_pid_by_pattern(&format!("dnsmasq.*{}", dns_path));
+    
+    log::info!("Hotspot started successfully: hostapd_pid={:?}, dnsmasq_pid={:?}", hostapd_pid, dnsmasq_pid);
 
     let state = HotspotState {
         ssid: config.ssid,
@@ -231,8 +318,8 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         upstream_interface: config.upstream_interface,
         channel: config.channel,
         upstream_ready,
-        hostapd_pid: hostapd,
-        dnsmasq_pid: dnsmasq,
+        hostapd_pid,
+        dnsmasq_pid,
     };
     persist_state(&state)?;
     Ok(state)
@@ -369,6 +456,21 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+fn get_pid_by_pattern(pattern: &str) -> Option<i32> {
+    let output = Command::new("pgrep")
+        .arg("-f")
+        .arg(pattern)
+        .output()
+        .ok()?;
+    
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.lines().next()?.trim().parse().ok()
+    } else {
+        None
+    }
+}
+
 fn ensure_interface_exists(name: &str) -> Result<()> {
     let path = format!("/sys/class/net/{}", name);
     if !Path::new(&path).exists() {
@@ -381,24 +483,41 @@ fn ensure_interface_exists(name: &str) -> Result<()> {
 }
 
 fn ensure_ap_capability(interface: &str) -> Result<()> {
-    // Basic check: ensure interface is wireless and supports AP mode using `iw list`.
+    // First check if the interface is wireless
+    let phy_check = Command::new("iw")
+        .args(["dev", interface, "info"])
+        .output()
+        .map_err(|e| WirelessError::System(format!("iw dev info failed: {}", e)))?;
+    
+    if !phy_check.status.success() {
+        let stderr = String::from_utf8_lossy(&phy_check.stderr);
+        return Err(WirelessError::Interface(format!(
+            "{} is not a wireless interface: {}",
+            interface, stderr
+        )));
+    }
+    
+    // Check if the PHY supports AP mode using `iw list`
     let output = Command::new("iw")
         .arg("list")
         .output()
         .map_err(|e| WirelessError::System(format!("iw list failed: {}", e)))?;
+    
     if !output.status.success() {
         return Err(WirelessError::System(format!(
             "iw list failed: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
     }
+    
     let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    // Look for AP mode support - be more lenient and just warn if not found
     if !stdout.contains("* AP") && !stdout.contains("AP/VLAN") {
-        return Err(WirelessError::Unsupported(format!(
-            "{} does not appear to support AP mode",
-            interface
-        )));
+        log::warn!("{} may not support AP mode; attempting anyway", interface);
+        // Don't fail here - let hostapd determine if it can run
     }
+    
     Ok(())
 }
 

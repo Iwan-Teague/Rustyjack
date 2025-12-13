@@ -11398,16 +11398,20 @@ Do not remove power/USB",
                     .unwrap_or(&self.config.settings.hotspot_password)
                     .to_string();
 
-                // Enforce isolation: keep active + hotspot interfaces alive
-                let mut allow_list = vec![self.config.settings.active_network_interface.clone()];
-                if !ap_iface.is_empty() {
-                    allow_list.push(ap_iface.clone());
-                }
-                if !upstream_iface.is_empty() {
-                    allow_list.push(upstream_iface.clone());
-                }
-                if let Err(e) = self.apply_interface_isolation(&allow_list) {
-                    self.show_message("Hotspot", [format!("Isolation failed: {}", e)])?;
+                // Enforce isolation only when hotspot is running
+                if running {
+                    let mut allow_list = Vec::new();
+                    if !ap_iface.is_empty() {
+                        allow_list.push(ap_iface.clone());
+                    }
+                    if !upstream_iface.is_empty() {
+                        allow_list.push(upstream_iface.clone());
+                    }
+                    if !allow_list.is_empty() {
+                        if let Err(e) = self.apply_interface_isolation(&allow_list) {
+                            self.show_message("Hotspot", [format!("Isolation failed: {}", e)])?;
+                        }
+                    }
                 }
 
                 let mut lines = vec![
@@ -11639,9 +11643,10 @@ Do not remove power/USB",
                                 let config_path = self.root.join("gui_conf.json");
                                 let _ = self.config.save(&config_path);
 
-                                // Keep AP/upstream/active interfaces alive, block others
+                                // Keep AP/upstream interfaces alive, block others
+                                // Note: Do NOT include active_network_interface here - hotspot mode
+                                // uses its own interfaces independent of the WiFi attack interface setting
                                 let mut allow_list = vec![
-                                    self.config.settings.active_network_interface.clone(),
                                     ap_iface.clone(),
                                     upstream_iface.clone(),
                                 ];
@@ -11869,60 +11874,73 @@ Do not remove power/USB",
 
         use std::fs;
         use std::thread;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         let rx_path = format!("/sys/class/net/{}/statistics/rx_bytes", upstream_iface);
         let tx_path = format!("/sys/class/net/{}/statistics/tx_bytes", upstream_iface);
 
-        // Monitor for ~30 seconds with 5 second intervals
-        for _ in 0..6 {
-            // Read initial values
-            let rx_start = fs::read_to_string(&rx_path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-            let tx_start = fs::read_to_string(&tx_path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-
-            // Wait 5 seconds
-            thread::sleep(Duration::from_secs(5));
-
-            // Read final values
-            let rx_end = fs::read_to_string(&rx_path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-            let tx_end = fs::read_to_string(&tx_path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-
-            // Calculate speeds (bytes per second)
-            let rx_speed = (rx_end.saturating_sub(rx_start)) / 5;
-            let tx_speed = (tx_end.saturating_sub(tx_start)) / 5;
-
-            // Convert to human-readable format
-            let rx_display = format_bytes_per_sec(rx_speed);
-            let tx_display = format_bytes_per_sec(tx_speed);
-
-            let lines = vec![
-                format!("Interface: {}", upstream_iface),
-                "".to_string(),
-                format!("Download: {}", rx_display),
-                format!("Upload: {}", tx_display),
-                "".to_string(),
-                "Updates every 5 seconds".to_string(),
-                "Press any key to exit".to_string(),
-            ];
-
-            self.show_message("Network Speed", lines.iter().map(|s| s.as_str()))?;
-
-            // Check for button press to exit
-            if let Ok(Some(_)) = self.buttons.try_read_timeout(Duration::from_millis(100)) {
+        // Read initial values
+        let mut rx_start = fs::read_to_string(&rx_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        let mut tx_start = fs::read_to_string(&tx_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        
+        let mut last_update = Instant::now();
+        let update_interval = Duration::from_secs(2);
+        
+        loop {
+            // Check for button press first (non-blocking)
+            if let Ok(Some(_)) = self.buttons.try_read() {
                 break;
             }
+            
+            // Update stats if enough time has passed
+            if last_update.elapsed() >= update_interval {
+                // Read current values
+                let rx_end = fs::read_to_string(&rx_path)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(0);
+                let tx_end = fs::read_to_string(&tx_path)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(0);
+
+                // Calculate speeds (bytes per second)
+                let elapsed_secs = last_update.elapsed().as_secs().max(1);
+                let rx_speed = (rx_end.saturating_sub(rx_start)) / elapsed_secs;
+                let tx_speed = (tx_end.saturating_sub(tx_start)) / elapsed_secs;
+
+                // Convert to human-readable format
+                let rx_display = format_bytes_per_sec(rx_speed);
+                let tx_display = format_bytes_per_sec(tx_speed);
+
+                let lines = vec![
+                    format!("Interface: {}", upstream_iface),
+                    "".to_string(),
+                    format!("Download: {}", rx_display),
+                    format!("Upload: {}", tx_display),
+                    "".to_string(),
+                    "Updates every 2 seconds".to_string(),
+                    "Press any button to exit".to_string(),
+                ];
+
+                // Draw dialog without blocking
+                let status = self.stats.current_overlay();
+                self.display.draw_dialog(&lines, &status)?;
+                
+                // Update for next iteration
+                rx_start = rx_end;
+                tx_start = tx_end;
+                last_update = Instant::now();
+            }
+            
+            // Small sleep to avoid busy waiting
+            thread::sleep(Duration::from_millis(100));
         }
 
         Ok(())
