@@ -11767,7 +11767,7 @@ Do not remove power/USB",
         self.show_message("Network Info", lines.iter().map(|s| s.as_str()))
     }
 
-    fn show_hotspot_connected_devices(&mut self, ap_iface: &str) -> Result<()> {
+    fn show_hotspot_connected_devices(&mut self, _ap_iface: &str) -> Result<()> {
         // Get connected clients from dnsmasq leases
         let lease_path = "/var/lib/misc/dnsmasq.leases";
         let mut clients = Vec::new();
@@ -11930,7 +11930,7 @@ Do not remove power/USB",
                 ];
 
                 // Draw dialog without blocking
-                let status = self.stats.current_overlay();
+                let status = self.stats.snapshot();
                 self.display.draw_dialog(&lines, &status)?;
                 
                 // Update for next iteration
@@ -11969,7 +11969,7 @@ Do not remove power/USB",
 
         if let Some(idx) = choice {
             if let Some(device) = blacklist.get(idx) {
-                let mut details = vec![
+                let details = vec![
                     format!("Device: {}", device.name),
                     format!("MAC: {}", device.mac),
                     format!("IP: {}", device.ip),
