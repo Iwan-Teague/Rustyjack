@@ -260,8 +260,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         dns_logging = dns_logging
     );
     let dns_path = format!("{CONF_DIR}/dnsmasq.conf");
-    fs::write(&dns_path, dns_conf)
+    fs::write(&dns_path, &dns_conf)
         .map_err(|e| WirelessError::System(format!("writing dnsmasq.conf: {e}")))?;
+    
+    eprintln!("[HOTSPOT] dnsmasq.conf written to {}", dns_path);
+    eprintln!("[HOTSPOT] dnsmasq config:\n{}", dns_conf);
     
     log::debug!("Configuration files written");
 
@@ -337,9 +340,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     log::info!("hostapd is running, starting dnsmasq...");
     
     // Start dnsmasq
-    eprintln!("[HOTSPOT] Starting dnsmasq...");
+    eprintln!("[HOTSPOT] Starting dnsmasq with config: {}", dns_path);
+    let dnsmasq_cmd_str = format!("--conf-file={}", dns_path);
+    eprintln!("[HOTSPOT] Command: dnsmasq {}", dnsmasq_cmd_str);
     let dnsmasq_output = Command::new("dnsmasq")
-        .args(&["--conf-file", &dns_path])
+        .arg(&dnsmasq_cmd_str)
         .output()
         .map_err(|e| {
             eprintln!("[HOTSPOT] ERROR: Failed to spawn dnsmasq: {}", e);
