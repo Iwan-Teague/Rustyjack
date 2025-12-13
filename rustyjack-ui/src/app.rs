@@ -11398,21 +11398,8 @@ Do not remove power/USB",
                     .unwrap_or(&self.config.settings.hotspot_password)
                     .to_string();
 
-                // Enforce isolation only when hotspot is running
-                if running {
-                    let mut allow_list = Vec::new();
-                    if !ap_iface.is_empty() {
-                        allow_list.push(ap_iface.clone());
-                    }
-                    if !upstream_iface.is_empty() {
-                        allow_list.push(upstream_iface.clone());
-                    }
-                    if !allow_list.is_empty() {
-                        if let Err(e) = self.apply_interface_isolation(&allow_list) {
-                            self.show_message("Hotspot", [format!("Isolation failed: {}", e)])?;
-                        }
-                    }
-                }
+                // Note: Interface isolation is handled by the core operations when starting/stopping
+                // the hotspot. We don't need to apply it in the status loop as it causes race conditions.
 
                 let mut lines = vec![
                     format!("SSID: {}", current_ssid),
@@ -11643,20 +11630,8 @@ Do not remove power/USB",
                                 let config_path = self.root.join("gui_conf.json");
                                 let _ = self.config.save(&config_path);
 
-                                // Keep AP/upstream interfaces alive, block others
-                                // Note: Do NOT include active_network_interface here - hotspot mode
-                                // uses its own interfaces independent of the WiFi attack interface setting
-                                let mut allow_list = vec![
-                                    ap_iface.clone(),
-                                    upstream_iface.clone(),
-                                ];
-                                allow_list.retain(|s| !s.is_empty());
-                                if let Err(e) = self.apply_interface_isolation(&allow_list) {
-                                    self.show_message(
-                                        "Hotspot",
-                                        [format!("Isolation failed: {}", e)],
-                                    )?;
-                                }
+                                // Note: Interface isolation is handled by core operations during hotspot start.
+                                // We don't apply it here to avoid race conditions.
 
                                 let upstream_line = if upstream_iface.is_empty() {
                                     "Upstream: none (offline)".to_string()
