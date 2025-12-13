@@ -24,6 +24,7 @@ impl CoreBridge {
         dispatch_command(&self.root, command)
     }
 
+    #[allow(dead_code)]
     pub fn run_scan_with_progress<F>(
         &self,
         args: ScanRunArgs,
@@ -36,6 +37,7 @@ impl CoreBridge {
         run_scan_with_progress(&self.root, args, on_progress)
     }
 
+    #[allow(dead_code)]
     pub fn run_system_update_with_progress<F>(
         &self,
         args: SystemUpdateArgs,

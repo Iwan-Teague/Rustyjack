@@ -111,6 +111,7 @@ pub struct Display {
     // Hold the backlight pin so it remains reserved for the lifetime of the
     // Display instance. Previously this was kept in a temporary local which
     // caused the line to be released when the constructor returned.
+    #[allow(dead_code)]
     backlight: CdevPin,
     palette: Palette,
     text_style_regular: MonoTextStyle<'static, Rgb565>,
@@ -1356,6 +1357,7 @@ impl Display {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn palette(&self) -> &Palette {
         &self.palette
     }

@@ -63,6 +63,7 @@ fn get_active_interface(root: &Path) -> Result<Option<String>> {
     read_interface_preference(root, "system_preferred")
 }
 
+#[allow(dead_code)]
 fn validate_and_enforce_interface(
     root: &Path,
     requested: Option<&str>,

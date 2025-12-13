@@ -696,6 +696,7 @@ struct UsbDevice {
     name: String,
     size: String,
     model: String,
+    #[allow(dead_code)]
     transport: String,
 }
 
@@ -1037,6 +1038,7 @@ impl App {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn simple_command(&mut self, command: Commands, success: &str) -> Result<()> {
         if let Err(err) = self.core.dispatch(command) {
             self.show_message("Error", [format!("{err}")])?;
@@ -1121,6 +1123,7 @@ impl App {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn execute_with_progress<F, T>(&mut self, title: &str, message: &str, operation: F) -> Result<T>
     where
         F: FnOnce() -> Result<T>,
@@ -1725,6 +1728,7 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     fn handle_network_selection(&mut self, network: &WifiNetworkEntry) -> Result<()> {
         let Some(ssid) = network
             .ssid
@@ -1814,6 +1818,7 @@ impl App {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn handle_profile_selection(&mut self, profile: &WifiProfileSummary) -> Result<()> {
         let actions = vec![
             "Connect".to_string(),
@@ -2073,6 +2078,7 @@ impl App {
         result
     }
 
+    #[allow(dead_code)]
     fn fetch_wifi_interfaces(&mut self) -> Result<Vec<InterfaceSummary>> {
         let (_, data) = self.core.dispatch(Commands::Wifi(WifiCommand::List))?;
         let resp: WifiListResponse = serde_json::from_value(data)?;
@@ -2096,6 +2102,7 @@ impl App {
         Ok(status)
     }
 
+    #[allow(dead_code)]
     fn connect_profile_by_ssid(&mut self, ssid: &str) -> Result<bool> {
         let profiles = self.fetch_wifi_profiles()?;
         if !profiles.iter().any(|profile| profile.ssid == ssid) {
@@ -3188,6 +3195,7 @@ impl App {
             ),
         }
     }
+    #[allow(dead_code)]
     fn run_fde_migrate(&mut self, target: &str, keyfile: &str, execute: bool) -> Result<()> {
         let script = self.root.join("scripts").join("fde_migrate_root.sh");
         if !script.exists() {
@@ -3568,6 +3576,7 @@ Do not remove power/USB",
         }
     }
 
+    #[allow(dead_code)]
     fn find_usb_mount(&self) -> Result<PathBuf> {
         let all_usb = self.find_all_usb_mounts()?;
         if all_usb.is_empty() {
@@ -3931,6 +3940,7 @@ Do not remove power/USB",
             .map(|idx| names[idx].clone()))
     }
 
+    #[allow(dead_code)]
     fn choose_interface_prompt(&mut self, title: &str) -> Result<Option<String>> {
         let (_, data) = self
             .core
@@ -7979,7 +7989,7 @@ Do not remove power/USB",
 
         #[cfg(target_os = "linux")]
         {
-            self.show_progress("Hostname", ["Randomizing...", ""]);
+            let _ = self.show_progress("Hostname", ["Randomizing...", ""]);
             match self
                 .core
                 .dispatch(Commands::System(SystemCommand::RandomizeHostname))
@@ -8371,7 +8381,7 @@ Do not remove power/USB",
             sorted_vendors.sort_by_key(|v| v.name);
             let selected_vendor = sorted_vendors[idx];
 
-            self.show_progress("MAC Address", ["Setting vendor MAC...", "Please wait"]);
+            let _ = self.show_progress("MAC Address", ["Setting vendor MAC...", "Please wait"]);
 
             let mut manager = MacManager::new().context("creating MacManager")?;
             manager.set_auto_restore(false);

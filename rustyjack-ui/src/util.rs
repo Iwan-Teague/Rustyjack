@@ -100,6 +100,7 @@ pub fn port_role(port: u16) -> &'static str {
 }
 
 /// Get a description of common vulnerabilities or weaknesses for a port
+#[allow(dead_code)]
 pub fn port_weakness(port: u16) -> Option<&'static str> {
     match port {
         21 => Some("FTP (cleartext creds)"),
@@ -179,6 +180,7 @@ pub fn randomize_mac_with_reconnect(
 
 /// Auto-randomize MAC before attack if enabled in settings
 /// Returns true if MAC was randomized (so caller knows to restore later)
+#[allow(dead_code)]
 pub fn auto_randomize_mac_if_enabled(
     interface: &str,
     settings: &crate::config::SettingsConfig,
@@ -199,6 +201,7 @@ pub fn auto_randomize_mac_if_enabled(
 }
 
 /// Restore original MAC from saved settings
+#[allow(dead_code)]
 pub fn restore_original_mac(interface: &str, original_mac: &str) -> bool {
     if original_mac.is_empty() {
         return false;

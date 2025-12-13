@@ -22,18 +22,21 @@ pub struct WifiNetworkEntry {
     pub bssid: Option<String>,
     pub signal_dbm: Option<i32>,
     pub channel: Option<u8>,
+    #[allow(dead_code)]
     pub encrypted: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WifiScanResponse {
     pub networks: Vec<WifiNetworkEntry>,
+    #[allow(dead_code)]
     pub count: usize,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WifiProfileSummary {
     pub ssid: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub interface: Option<String>,
 }
@@ -43,6 +46,7 @@ pub struct WifiProfilesResponse {
     pub profiles: Vec<WifiProfileSummary>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct WifiListResponse {
     pub interfaces: Vec<InterfaceSummary>,
@@ -178,6 +182,7 @@ pub struct TraversalResult {
 // ==================== Pipeline & Attack Types ====================
 
 /// Result from pipeline execution
+#[allow(dead_code)]
 pub struct PipelineResult {
     pub cancelled: bool,
     pub steps_completed: usize,
@@ -188,12 +193,14 @@ pub struct PipelineResult {
     pub clients_found: u32,
 }
 
+#[allow(dead_code)]
 pub enum StepOutcome {
     Completed(Option<(u32, u32, Option<String>, u32, u32)>),
     Skipped(String),
 }
 
 /// Result of checking for cancel during an attack
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelAction {
     Continue,   // User wants to continue attack
@@ -203,6 +210,7 @@ pub enum CancelAction {
 
 // ==================== System Operation Types ====================
 
+#[allow(dead_code)]
 pub struct PurgeReport {
     pub removed: usize,
     pub service_disabled: bool,
@@ -213,6 +221,7 @@ pub struct PurgeReport {
 
 use std::time::Instant;
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct MitmSession {
     pub started: Instant,

@@ -215,6 +215,7 @@ impl MenuTree {
 #[derive(Debug, Clone)]
 pub enum ColorTarget {
     Background,
+    #[allow(dead_code)]
     Border,
     Text,
     SelectedText,
