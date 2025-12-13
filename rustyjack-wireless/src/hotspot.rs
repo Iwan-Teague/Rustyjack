@@ -1,10 +1,15 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 
 use crate::error::{Result, WirelessError};
+
+// Global lock to prevent concurrent hotspot operations
+static HOTSPOT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Configuration for starting an access point hotspot.
 #[derive(Debug, Clone)]
@@ -76,6 +81,11 @@ pub fn random_password() -> String {
 
 /// Start a hotspot using hostapd + dnsmasq + iptables NAT.
 pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
+    // Acquire lock to prevent concurrent hotspot start attempts
+    let _lock = HOTSPOT_LOCK.lock().unwrap();
+    let start_time = Instant::now();
+    
+    eprintln!("[HOTSPOT] ========== HOTSPOT START ATTEMPT ==========");
     eprintln!("[HOTSPOT] Starting hotspot: AP={}, upstream={}, SSID={}, channel={}", 
         config.ap_interface, config.upstream_interface, config.ssid, config.channel);
     log::info!("Starting hotspot: AP={}, upstream={}, SSID={}, channel={}", 
@@ -141,8 +151,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     // Bring AP interface up with static IP
     eprintln!("[HOTSPOT] Configuring AP interface {} with IP {}", config.ap_interface, AP_GATEWAY);
     log::debug!("Configuring AP interface {} with IP {}", config.ap_interface, AP_GATEWAY);
+    
+    eprintln!("[HOTSPOT] Bringing interface down...");
     run_cmd("ip", &["link", "set", &config.ap_interface, "down"])?;
+    
+    eprintln!("[HOTSPOT] Flushing addresses...");
     run_cmd("ip", &["addr", "flush", "dev", &config.ap_interface])?;
+    
+    eprintln!("[HOTSPOT] Adding IP address {}...", AP_GATEWAY);
     run_cmd(
         "ip",
         &[
@@ -153,17 +169,35 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             &config.ap_interface,
         ],
     )?;
+    
+    eprintln!("[HOTSPOT] Bringing interface up...");
     run_cmd("ip", &["link", "set", &config.ap_interface, "up"])?;
+    
     eprintln!("[HOTSPOT] AP interface {} is up", config.ap_interface);
     log::debug!("AP interface {} is up", config.ap_interface);
     
     // Unblock rfkill for the AP interface BEFORE starting hostapd
     eprintln!("[HOTSPOT] Unblocking rfkill for {}...", config.ap_interface);
-    let _ = Command::new("rfkill")
+    let rfkill_result = Command::new("rfkill")
         .args(&["unblock", "wifi"])
-        .status();
+        .output();
+    
+    match rfkill_result {
+        Ok(output) => {
+            if !output.status.success() {
+                eprintln!("[HOTSPOT] WARNING: rfkill unblock failed: {}", 
+                    String::from_utf8_lossy(&output.stderr));
+            } else {
+                eprintln!("[HOTSPOT] rfkill unblocked successfully");
+            }
+        }
+        Err(e) => {
+            eprintln!("[HOTSPOT] WARNING: rfkill command failed: {}", e);
+        }
+    }
     
     // Give interface time to fully initialize with its IP
+    eprintln!("[HOTSPOT] Waiting 2 seconds for interface to stabilize...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Enable forwarding
@@ -543,18 +577,34 @@ fn ensure_tools_present() -> Result<()> {
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
+    eprintln!("[HOTSPOT] Running command: {} {}", cmd, args.join(" "));
+    let start = Instant::now();
+    
     let output = Command::new(cmd)
         .args(args)
         .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run {} {:?}: {}", cmd, args, e)))?;
+        .map_err(|e| {
+            eprintln!("[HOTSPOT] ERROR: Command failed to execute: {} {:?}: {}", cmd, args, e);
+            WirelessError::System(format!("Failed to run {} {:?}: {}", cmd, args, e))
+        })?;
+    
+    let duration = start.elapsed();
+    eprintln!("[HOTSPOT] Command completed in {:?}", duration);
+    
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        eprintln!("[HOTSPOT] ERROR: Command failed with status {}", output.status);
+        eprintln!("[HOTSPOT]   stderr: {}", stderr);
+        eprintln!("[HOTSPOT]   stdout: {}", stdout);
         return Err(WirelessError::System(format!(
             "{} {:?} failed: {}",
             cmd,
             args,
-            String::from_utf8_lossy(&output.stderr)
+            stderr
         )));
     }
+    
     Ok(())
 }
 
