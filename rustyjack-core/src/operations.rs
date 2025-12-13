@@ -461,13 +461,20 @@ fn handle_hotspot_start(args: HotspotStartArgs) -> Result<HandlerResult> {
         channel: args.channel,
     };
 
+    // Start hotspot FIRST (it handles interface configuration and rfkill)
+    let state = start_hotspot(cfg).context("starting hotspot")?;
+    
+    // Now apply interface isolation to block other interfaces
+    // This runs AFTER hotspot is up to avoid interfering with startup
     let mut allowed_interfaces = vec![args.ap_interface.clone()];
     if !args.upstream_interface.is_empty() {
         allowed_interfaces.push(args.upstream_interface.clone());
     }
-    apply_interface_isolation(&allowed_interfaces)?;
-
-    let state = start_hotspot(cfg).context("starting hotspot")?;
+    
+    // Best-effort isolation - don't fail hotspot if isolation fails
+    if let Err(e) = apply_interface_isolation(&allowed_interfaces) {
+        log::warn!("Interface isolation failed: {}", e);
+    }
 
     let data = json!({
         "running": true,
