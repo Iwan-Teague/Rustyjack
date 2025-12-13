@@ -7,6 +7,13 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlacklistedDevice {
+    pub mac: String,
+    pub name: String,
+    pub ip: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuiConfig {
     #[serde(default)]
@@ -262,6 +269,9 @@ pub struct SettingsConfig {
     /// Hotspot password
     #[serde(default = "SettingsConfig::default_hotspot_password")]
     pub hotspot_password: String,
+    /// Hotspot device blacklist (MAC addresses with metadata)
+    #[serde(default)]
+    pub hotspot_blacklist: Vec<BlacklistedDevice>,
 }
 
 impl Default for SettingsConfig {
@@ -287,7 +297,14 @@ impl Default for SettingsConfig {
             passive_mode_enabled: false,
             hotspot_ssid: Self::default_hotspot_ssid(),
             hotspot_password: Self::default_hotspot_password(),
+            hotspot_blacklist: Vec::new(),
         }
+    }
+}
+
+impl BlacklistedDevice {
+    pub fn new(mac: String, name: String, ip: String) -> Self {
+        Self { mac, name, ip }
     }
 }
 

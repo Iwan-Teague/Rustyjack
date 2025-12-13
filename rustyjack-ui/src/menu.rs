@@ -44,8 +44,10 @@ pub enum MenuAction {
     /// Post-connection wireless offensive actions
     ResponderOn,
     ResponderOff,
+    ToggleResponder,
     DnsSpoofStart,
     DnsSpoofStop,
+    ToggleDnsSpoof,
     ReverseShell,
     /// Autopilot control
     AutopilotStart(rustyjack_core::cli::AutopilotMode),
@@ -231,6 +233,7 @@ pub enum LootSection {
 
 fn main_menu() -> Vec<MenuEntry> {
     vec![
+        MenuEntry::new("Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new("Operation Mode", MenuAction::Submenu("aops")),
         MenuEntry::new("Hardware Detect", MenuAction::HardwareDetect),
         MenuEntry::new("Wireless", MenuAction::Submenu("aw")),
@@ -238,7 +241,6 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Obfuscation", MenuAction::Submenu("ao")),
         MenuEntry::new("Encryption", MenuAction::Submenu("enc")),
         MenuEntry::new("Loot", MenuAction::Submenu("ah")),
-        MenuEntry::new("Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new("Settings", MenuAction::Submenu("as")),
     ]
 }
@@ -254,6 +256,7 @@ fn wifi_menu() -> Vec<MenuEntry> {
 fn wireless_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("Get Connected", MenuAction::Submenu("awa")),
+        MenuEntry::new("Manage Saved Networks", MenuAction::ManageSavedNetworks),
         MenuEntry::new("Post Connection", MenuAction::Submenu("awc")),
         MenuEntry::new("Hotspot", MenuAction::Hotspot),
     ]
@@ -262,26 +265,25 @@ fn wireless_menu() -> Vec<MenuEntry> {
 fn wifi_access_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("Select Target Network", MenuAction::ScanNetworks),
+        MenuEntry::new("Connect Network", MenuAction::ConnectKnownNetwork),
+        MenuEntry::new("Pipelines", MenuAction::Submenu("ap")),
         MenuEntry::new("Recon", MenuAction::Submenu("awar")),
         MenuEntry::new("Offence", MenuAction::Submenu("awao")),
         MenuEntry::new("Import WiFi from USB", MenuAction::ImportWifiFromUsb),
-        MenuEntry::new("Connect Network", MenuAction::ConnectKnownNetwork),
     ]
 }
 
 fn wifi_connected_menu() -> Vec<MenuEntry> {
     vec![
+        MenuEntry::new("Ensure Route", MenuAction::WifiEnsureRoute),
         MenuEntry::new("Recon", MenuAction::Submenu("awcr")),
         MenuEntry::new("Offence", MenuAction::Submenu("awco")),
-        MenuEntry::new("Ensure Route", MenuAction::WifiEnsureRoute),
-        MenuEntry::new("Manage Saved Networks", MenuAction::ManageSavedNetworks),
         MenuEntry::new("Disconnect WiFi", MenuAction::WifiDisconnect),
     ]
 }
 
 fn wifi_access_recon_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new("Select Target Network", MenuAction::ScanNetworks),
         MenuEntry::new("Probe Sniff", MenuAction::ProbeSniff),
         MenuEntry::new("PMKID Capture", MenuAction::PmkidCapture),
     ]
@@ -289,7 +291,6 @@ fn wifi_access_recon_menu() -> Vec<MenuEntry> {
 
 fn wifi_access_offence_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new("Attack Pipelines", MenuAction::Submenu("ap")),
         MenuEntry::new("Deauth Attack", MenuAction::DeauthAttack),
         MenuEntry::new("Evil Twin AP", MenuAction::EvilTwinAttack),
         MenuEntry::new("Karma Attack", MenuAction::KarmaAttack),
@@ -311,10 +312,8 @@ fn wifi_connected_recon_menu() -> Vec<MenuEntry> {
 
 fn wifi_connected_offence_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new("Responder On", MenuAction::ResponderOn),
-        MenuEntry::new("Responder Off", MenuAction::ResponderOff),
-        MenuEntry::new("DNS Spoof", MenuAction::DnsSpoofStart),
-        MenuEntry::new("Stop DNS Spoof", MenuAction::DnsSpoofStop),
+        MenuEntry::new("Responder [OFF]", MenuAction::ToggleResponder),
+        MenuEntry::new("DNS Spoof [OFF]", MenuAction::ToggleDnsSpoof),
         MenuEntry::new("Reverse Shell", MenuAction::ReverseShell),
     ]
 }
@@ -499,8 +498,8 @@ fn logs_menu() -> Vec<MenuEntry> {
 
 fn discord_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new("Import Webhook from USB", MenuAction::ImportWebhookFromUsb),
         MenuEntry::new("Toggle Discord", MenuAction::ToggleDiscord),
+        MenuEntry::new("Import Whook from USB", MenuAction::ImportWebhookFromUsb),
         MenuEntry::new("Upload Loot", MenuAction::DiscordUpload),
     ]
 }

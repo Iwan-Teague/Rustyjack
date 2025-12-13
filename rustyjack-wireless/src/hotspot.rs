@@ -200,7 +200,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
          dhcp-option=6,{gw}\n\
          dhcp-authoritative\n\
          no-resolv\n\
+         no-poll\n\
          domain-needed\n\
+         bogus-priv\n\
+         server=8.8.8.8\n\
+         server=8.8.4.4\n\
 {dns_logging}",
         config.ap_interface,
         gw = AP_GATEWAY,
@@ -210,7 +214,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     fs::write(&dns_path, dns_conf)
         .map_err(|e| WirelessError::System(format!("writing dnsmasq.conf: {e}")))?;
 
+    // Give interface time to stabilize
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
     let hostapd = spawn_background("hostapd", &["-B", &hostapd_path])?;
+    
+    // Give hostapd time to initialize AP before starting DHCP
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    
     let dnsmasq = spawn_background("dnsmasq", &["--conf-file", &dns_path])?;
 
     let state = HotspotState {
