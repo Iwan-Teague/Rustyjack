@@ -1229,32 +1229,44 @@ impl Display {
     }
 
     fn draw_network_interfaces(&mut self, status: &StatusOverlay) -> Result<()> {
-        use std::process::Command;
-
         self.draw_toolbar_with_title(Some("NETWORK IFS"), status)?;
 
         let mut entries = Vec::new();
 
         #[cfg(target_os = "linux")]
         {
-            if let Ok(output) = Command::new("ip")
-                .args(["-o", "-4", "addr", "show"])
-                .output()
-            {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        let iface = parts[1];
-                        if let Some(ip_part) = parts
-                            .iter()
-                            .position(|&p| p == "inet")
-                            .and_then(|i| parts.get(i + 1))
-                        {
-                            let ip = ip_part.split('/').next().unwrap_or(ip_part);
-                            entries.push(format!("{}: {}", iface, ip));
-                        }
+            use std::fs;
+            
+            if let Ok(dir_entries) = fs::read_dir("/sys/class/net") {
+                for entry in dir_entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    
+                    if name == "lo" {
+                        continue;
                     }
+                    
+                    let kind = if entry.path().join("wireless").exists() {
+                        "wifi"
+                    } else {
+                        "eth"
+                    };
+                    
+                    let oper_state = fs::read_to_string(entry.path().join("operstate"))
+                        .unwrap_or_else(|_| "?".into())
+                        .trim()
+                        .to_string();
+                    
+                    let state_symbol = match oper_state.as_str() {
+                        "up" => "UP",
+                        "down" => "DN",
+                        _ => "??",
+                    };
+                    
+                    let ip = self.get_interface_ip(&name);
+                    let ip_display = ip.as_deref().unwrap_or("-");
+                    
+                    entries.push(format!("{} [{}] {}", name, state_symbol, kind));
+                    entries.push(format!("  IP: {}", ip_display));
                 }
             }
         }
@@ -1265,7 +1277,7 @@ impl Display {
         }
 
         if entries.is_empty() {
-            entries.push("No IP addresses".to_string());
+            entries.push("No interfaces found".to_string());
         }
 
         let mut y = 16;
@@ -1283,7 +1295,7 @@ impl Display {
                 )
                 .draw(&mut self.lcd)
                 .map_err(|_| anyhow::anyhow!("Draw error"))?;
-                y += 12;
+                y += 10;
             }
         }
 
@@ -1296,6 +1308,30 @@ impl Display {
         .draw(&mut self.lcd)
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
         Ok(())
+    }
+    
+    fn get_interface_ip(&self, interface: &str) -> Option<String> {
+        use std::process::Command;
+        
+        let output = Command::new("ip")
+            .args(["-4", "addr", "show", "dev", interface])
+            .output()
+            .ok()?;
+        
+        if !output.status.success() {
+            return None;
+        }
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.starts_with("inet ") {
+                if let Some(addr) = line.split_whitespace().nth(1) {
+                    return Some(addr.split('/').next().unwrap_or(addr).to_string());
+                }
+            }
+        }
+        None
     }
 
     fn draw_progress_bar(&mut self, pos: Point, fill_width: u32) -> Result<()> {

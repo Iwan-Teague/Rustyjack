@@ -1367,9 +1367,75 @@ impl App {
     }
 
     fn view_loot_file(&mut self, path: &str) -> Result<()> {
-        // Read the file with a high line limit
+        let file_path = PathBuf::from(path);
+        
+        // Check if file is encrypted
+        if path.ends_with(".enc") {
+            let opts = vec![
+                "Decrypt in RAM".to_string(),
+                "Cancel".to_string(),
+            ];
+            
+            let choice = self.choose_from_list("Encrypted File", &opts)?;
+            if choice != Some(0) {
+                return Ok(());
+            }
+            
+            // Decrypt in RAM
+            let decrypted_bytes = match rustyjack_encryption::decrypt_file(&file_path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    return self.show_message(
+                        "Decryption Failed",
+                        [
+                            "Could not decrypt file",
+                            &shorten_for_display(&e.to_string(), 90),
+                        ],
+                    );
+                }
+            };
+            
+            // Convert to string
+            let content = match String::from_utf8(decrypted_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    return self.show_message(
+                        "View Error",
+                        ["File contains binary data", "Cannot display as text"],
+                    );
+                }
+            };
+            
+            // Split into lines with limit
+            let max_lines = 5000;
+            let mut lines = Vec::new();
+            let mut truncated = false;
+            
+            for (idx, line) in content.lines().enumerate() {
+                if idx >= max_lines {
+                    truncated = true;
+                    break;
+                }
+                lines.push(line.to_string());
+            }
+            
+            if lines.is_empty() {
+                return self.show_message("Loot", ["File is empty"]);
+            }
+            
+            let filename = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+            
+            // Display decrypted content (content will be dropped after this returns)
+            return self.scrollable_text_viewer(&filename, &lines, truncated);
+        }
+        
+        // For non-encrypted files, use the normal read path
         let read_args = LootReadArgs {
-            path: PathBuf::from(path),
+            path: file_path.clone(),
             max_lines: 5000,
         };
         let (_, data) = self
@@ -1396,7 +1462,7 @@ impl App {
             return self.show_message("Loot", ["File is empty"]);
         }
 
-        let filename = Path::new(path)
+        let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file")
@@ -1767,7 +1833,12 @@ impl App {
     }
 
     fn fetch_wifi_scan(&mut self) -> Result<WifiScanResponse> {
-        let args = WifiScanArgs { interface: None };
+        let interface = if !self.config.settings.active_network_interface.is_empty() {
+            Some(self.config.settings.active_network_interface.clone())
+        } else {
+            None
+        };
+        let args = WifiScanArgs { interface };
         let (_, data) = self
             .core
             .dispatch(Commands::Wifi(WifiCommand::Scan(args)))?;
@@ -1842,18 +1913,17 @@ impl App {
             if self.wifi_encryption_active() && !used_key {
                 return Ok(());
             }
-            // Load full profile to read password
-            let args = WifiProfileConnectArgs {
-                profile: Some(ssid.to_string()),
-                ssid: None,
-                password: None,
-                interface: None,
-                remember: false,
-            };
-            let (_, data) = match self.core.dispatch(Commands::Wifi(WifiCommand::Profile(
-                WifiProfileCommand::Connect(args),
-            ))) {
-                Ok(resp) => resp,
+            
+            // Directly load profile from disk without connecting
+            use rustyjack_core::system::load_wifi_profile;
+            let profile_data = match load_wifi_profile(&self.root, ssid) {
+                Ok(Some(stored)) => stored,
+                Ok(None) => {
+                    return self.show_message(
+                        "Saved Networks",
+                        ["Profile not found"],
+                    );
+                }
                 Err(e) => {
                     return self.show_message(
                         "Saved Networks",
@@ -1865,9 +1935,8 @@ impl App {
                 }
             };
 
-            let pwd = data
-                .get("password")
-                .and_then(|v| v.as_str())
+            let pwd = profile_data.profile.password
+                .as_deref()
                 .unwrap_or("<no password>");
 
             self.show_message(
@@ -1964,11 +2033,16 @@ impl App {
                 None => "Network NOT seen in scan",
             };
 
+            let interface = if !self.config.settings.active_network_interface.is_empty() {
+                Some(self.config.settings.active_network_interface.clone())
+            } else {
+                None
+            };
             let args = WifiProfileConnectArgs {
                 profile: Some(ssid.to_string()),
                 ssid: None,
                 password: None,
-                interface: None,
+                interface,
                 remember: false,
             };
 
@@ -2040,11 +2114,16 @@ impl App {
             self.apply_identity_hardening();
             self.show_progress("Wi-Fi", ["Connecting...", ssid, "Please wait"])?;
 
+            let interface = if !self.config.settings.active_network_interface.is_empty() {
+                Some(self.config.settings.active_network_interface.clone())
+            } else {
+                None
+            };
             let args = WifiProfileConnectArgs {
                 profile: Some(ssid.to_string()),
                 ssid: None,
                 password: None,
-                interface: None,
+                interface,
                 remember: false,
             };
 
@@ -2378,14 +2457,8 @@ impl App {
     }
 
     fn generate_encryption_key_on_usb(&mut self) -> Result<()> {
-        let usb_root = match self.find_usb_mount() {
-            Ok(p) => p,
-            Err(_) => {
-                return self.show_message(
-                    "Encryption",
-                    ["No USB drive detected", "Insert USB and retry"],
-                );
-            }
+        let Some(usb_root) = self.select_usb_mount()? else {
+            return Ok(());
         };
 
         let key_path = usb_root.join("rustyjack.key");
@@ -3269,19 +3342,8 @@ Do not remove power/USB",
 
     fn transfer_to_usb(&mut self) -> Result<()> {
         // Find USB mount point
-        let usb_path = match self.find_usb_mount() {
-            Ok(path) => path,
-            Err(_e) => {
-                self.show_message(
-                    "USB Transfer Error",
-                    [
-                        "No USB drive detected",
-                        "Please insert a USB drive",
-                        "and try again",
-                    ],
-                )?;
-                return Ok(());
-            }
+        let Some(usb_path) = self.select_usb_mount()? else {
+            return Ok(());
         };
 
         let loot_dir = self.root.join("loot");
@@ -3371,15 +3433,8 @@ Do not remove power/USB",
         title: &str,
         allowed_ext: Option<&[&str]>,
     ) -> Result<Option<PathBuf>> {
-        let usb_root = match self.find_usb_mount() {
-            Ok(p) => p,
-            Err(_) => {
-                self.show_message(
-                    "USB",
-                    ["No USB drive detected", "Insert a USB drive and retry"],
-                )?;
-                return Ok(None);
-            }
+        let Some(usb_root) = self.select_usb_mount()? else {
+            return Ok(None);
         };
 
         let mut current = usb_root.clone();
@@ -3514,6 +3569,16 @@ Do not remove power/USB",
     }
 
     fn find_usb_mount(&self) -> Result<PathBuf> {
+        let all_usb = self.find_all_usb_mounts()?;
+        if all_usb.is_empty() {
+            bail!("No USB storage drive found. Please insert a USB drive.")
+        }
+        Ok(all_usb.into_iter().next().unwrap())
+    }
+
+    fn find_all_usb_mounts(&self) -> Result<Vec<PathBuf>> {
+        let mut found_mounts = Vec::new();
+        
         // First, find USB block devices by checking /sys/block/
         let usb_devices = self.find_usb_block_devices();
 
@@ -3529,8 +3594,9 @@ Do not remove power/USB",
                 let dev_name = device.strip_prefix("/dev/").unwrap_or(device);
                 if dev_name.starts_with(usb_dev) {
                     // Verify it's writable
-                    if self.is_writable_mount(Path::new(mount_point)) {
-                        return Ok(PathBuf::from(mount_point));
+                    let path = PathBuf::from(mount_point);
+                    if self.is_writable_mount(&path) && !found_mounts.contains(&path) {
+                        found_mounts.push(path);
                     }
                 }
             }
@@ -3554,14 +3620,15 @@ Do not remove power/USB",
                         if let Ok(sub_entries) = fs::read_dir(&path) {
                             for sub_entry in sub_entries.flatten() {
                                 let sub_path = sub_entry.path();
-                                if sub_path.is_dir() && self.is_usb_storage_mount(&sub_path) {
-                                    return Ok(sub_path);
+                                if sub_path.is_dir() && self.is_usb_storage_mount(&sub_path) 
+                                    && !found_mounts.contains(&sub_path) {
+                                    found_mounts.push(sub_path);
                                 }
                             }
                         }
                         // Also check direct mount
-                        if self.is_usb_storage_mount(&path) {
-                            return Ok(path);
+                        if self.is_usb_storage_mount(&path) && !found_mounts.contains(&path) {
+                            found_mounts.push(path);
                         }
                     }
                 }
@@ -3569,18 +3636,51 @@ Do not remove power/USB",
         }
 
         // If we found USB devices but they're not mounted, try auto-mounting
-        if !usb_devices.is_empty() {
+        if found_mounts.is_empty() && !usb_devices.is_empty() {
             if let Some(mounted_path) = self.try_auto_mount_usb(&usb_devices)? {
-                return Ok(mounted_path);
+                found_mounts.push(mounted_path);
+            } else {
+                bail!(
+                    "USB device detected ({}) but could not mount. Check device has valid filesystem.",
+                    usb_devices.join(", ")
+                );
             }
-            
-            bail!(
-                "USB device detected ({}) but could not mount. Check device has valid filesystem.",
-                usb_devices.join(", ")
-            );
         }
 
-        bail!("No USB storage drive found. Please insert a USB drive.")
+        Ok(found_mounts)
+    }
+
+    fn select_usb_mount(&mut self) -> Result<Option<PathBuf>> {
+        let all_usb = self.find_all_usb_mounts()?;
+        
+        if all_usb.is_empty() {
+            self.show_message(
+                "USB",
+                ["No USB drive detected", "Insert a USB drive and retry"],
+            )?;
+            return Ok(None);
+        }
+        
+        if all_usb.len() == 1 {
+            return Ok(Some(all_usb.into_iter().next().unwrap()));
+        }
+        
+        // Multiple USB drives found, let user choose
+        let options: Vec<String> = all_usb
+            .iter()
+            .map(|p| {
+                let name = p.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("USB");
+                format!("{} ({})", name, p.display())
+            })
+            .collect();
+        
+        if let Some(idx) = self.choose_from_list("Select USB Drive", &options)? {
+            Ok(Some(all_usb[idx].clone()))
+        } else {
+            Ok(None)
+        }
     }
     
     /// Attempt to automatically mount a USB device

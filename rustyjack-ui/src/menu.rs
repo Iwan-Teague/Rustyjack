@@ -234,10 +234,9 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Hardware Detect", MenuAction::HardwareDetect),
         MenuEntry::new("Wireless", MenuAction::Submenu("aw")),
         MenuEntry::new("Ethernet", MenuAction::Submenu("aeth")),
-        MenuEntry::new("Autopilot", MenuAction::Submenu("apt")),
         MenuEntry::new("Obfuscation", MenuAction::Submenu("ao")),
-        MenuEntry::new("Loot", MenuAction::Submenu("ah")),
         MenuEntry::new("Encryption", MenuAction::Submenu("enc")),
+        MenuEntry::new("Loot", MenuAction::Submenu("ah")),
         MenuEntry::new("Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new("Settings", MenuAction::Submenu("as")),
     ]
@@ -246,7 +245,7 @@ fn main_menu() -> Vec<MenuEntry> {
 fn wifi_menu() -> Vec<MenuEntry> {
     // Legacy menu, kept for safety but replaced by awa/awc
     vec![
-        MenuEntry::new("Scan Networks", MenuAction::ScanNetworks),
+        MenuEntry::new("Select Target Network", MenuAction::ScanNetworks),
         MenuEntry::new("Attack Pipelines", MenuAction::Submenu("ap")),
     ]
 }
@@ -261,7 +260,7 @@ fn wireless_menu() -> Vec<MenuEntry> {
 
 fn wifi_access_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new("Scan Networks", MenuAction::ScanNetworks),
+        MenuEntry::new("Select Target Network", MenuAction::ScanNetworks),
         MenuEntry::new("Recon", MenuAction::Submenu("awar")),
         MenuEntry::new("Offence", MenuAction::Submenu("awao")),
         MenuEntry::new("Import WiFi from USB", MenuAction::ImportWifiFromUsb),
@@ -281,7 +280,7 @@ fn wifi_connected_menu() -> Vec<MenuEntry> {
 
 fn wifi_access_recon_menu() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::new("Scan Networks", MenuAction::ScanNetworks),
+        MenuEntry::new("Select Target Network", MenuAction::ScanNetworks),
         MenuEntry::new("Probe Sniff", MenuAction::ProbeSniff),
         MenuEntry::new("PMKID Capture", MenuAction::PmkidCapture),
     ]
@@ -328,6 +327,7 @@ fn ethernet_menu() -> Vec<MenuEntry> {
         MenuEntry::new("MITM Status", MenuAction::EthernetMitmStatus),
         MenuEntry::new("Stop MITM/DNS", MenuAction::EthernetMitmStop),
         MenuEntry::new("Pipelines", MenuAction::EthernetSiteCredPipeline),
+        MenuEntry::new("Autopilot", MenuAction::Submenu("apt")),
     ]
 }
 

@@ -120,7 +120,7 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             WifiCommand::Status(args) => handle_wifi_status(root, args),
             WifiCommand::Best(args) => handle_wifi_best(root, args),
             WifiCommand::Switch(args) => handle_wifi_switch(root, args),
-            WifiCommand::Scan(args) => handle_wifi_scan(args),
+            WifiCommand::Scan(args) => handle_wifi_scan(root, args),
             WifiCommand::Profile(profile) => match profile {
                 WifiProfileCommand::List => handle_wifi_profile_list(root),
                 WifiProfileCommand::Save(args) => handle_wifi_profile_save(root, args),
@@ -2017,12 +2017,21 @@ fn handle_autopilot_status() -> Result<HandlerResult> {
     Ok(("Autopilot status".to_string(), data))
 }
 
-fn handle_wifi_scan(args: WifiScanArgs) -> Result<HandlerResult> {
+fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
     log::info!("Starting WiFi scan");
 
     let interface = match args.interface {
         Some(iface) => iface,
-        None => select_wifi_interface(None)?,
+        None => {
+            // Try to get active interface from config first
+            if let Ok(Some(active)) = get_active_interface(root) {
+                log::info!("Using active interface from config: {}", active);
+                active
+            } else {
+                // Fall back to auto-detection
+                select_wifi_interface(None)?
+            }
+        }
     };
 
     enforce_single_interface(&interface)?;
