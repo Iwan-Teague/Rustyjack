@@ -76,50 +76,70 @@ pub fn random_password() -> String {
 
 /// Start a hotspot using hostapd + dnsmasq + iptables NAT.
 pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
+    eprintln!("[HOTSPOT] Starting hotspot: AP={}, upstream={}, SSID={}, channel={}", 
+        config.ap_interface, config.upstream_interface, config.ssid, config.channel);
     log::info!("Starting hotspot: AP={}, upstream={}, SSID={}, channel={}", 
         config.ap_interface, config.upstream_interface, config.ssid, config.channel);
     
+    eprintln!("[HOTSPOT] Checking tools...");
     ensure_tools_present()?;
+    eprintln!("[HOTSPOT] Tools check passed");
     log::debug!("Tools check passed");
     
+    eprintln!("[HOTSPOT] Checking AP interface {}...", config.ap_interface);
     ensure_interface_exists(&config.ap_interface)?;
+    eprintln!("[HOTSPOT] AP interface {} exists", config.ap_interface);
     log::debug!("AP interface {} exists", config.ap_interface);
     
     if !config.upstream_interface.is_empty() {
+        eprintln!("[HOTSPOT] Checking upstream interface {}...", config.upstream_interface);
         ensure_interface_exists(&config.upstream_interface)?;
+        eprintln!("[HOTSPOT] Upstream interface {} exists", config.upstream_interface);
         log::debug!("Upstream interface {} exists", config.upstream_interface);
     }
     
+    eprintln!("[HOTSPOT] Checking AP capability for {}...", config.ap_interface);
     ensure_ap_capability(&config.ap_interface)?;
+    eprintln!("[HOTSPOT] AP capability check passed");
     log::debug!("AP capability check passed for {}", config.ap_interface);
     
     let mut upstream_ready = false;
     if !config.upstream_interface.is_empty() {
+        eprintln!("[HOTSPOT] Checking if upstream {} is ready...", config.upstream_interface);
         match ensure_upstream_ready(&config.upstream_interface) {
             Ok(_) => {
                 upstream_ready = true;
+                eprintln!("[HOTSPOT] Upstream {} is ready with IP", config.upstream_interface);
                 log::info!("Upstream {} is ready with IP", config.upstream_interface);
             }
             Err(WirelessError::Interface(msg)) if msg.contains("has no IPv4 address") => {
                 // Allow offline hotspot; continue without upstream/NAT
                 upstream_ready = false;
+                eprintln!("[HOTSPOT] Upstream not ready: {} (continuing in offline mode)", msg);
                 log::warn!("Hotspot upstream not ready: {msg}");
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                eprintln!("[HOTSPOT] ERROR: Upstream check failed: {}", err);
+                return Err(err);
+            }
         }
     } else {
+        eprintln!("[HOTSPOT] No upstream interface specified; running in local-only mode");
         log::info!("No upstream interface specified; running in local-only mode");
     }
     
+    eprintln!("[HOTSPOT] Creating config directory...");
     fs::create_dir_all(CONF_DIR).map_err(|e| WirelessError::System(format!("mkdir: {e}")))?;
 
     // Ensure previous instances are stopped to avoid dhcp bind failures
+    eprintln!("[HOTSPOT] Stopping any existing hotspot processes");
     log::debug!("Stopping any existing hotspot processes");
     let _ = Command::new("pkill").args(["-f", "hostapd"]).status();
     let _ = Command::new("pkill").args(["-f", "dnsmasq"]).status();
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Bring AP interface up with static IP
+    eprintln!("[HOTSPOT] Configuring AP interface {} with IP {}", config.ap_interface, AP_GATEWAY);
     log::debug!("Configuring AP interface {} with IP {}", config.ap_interface, AP_GATEWAY);
     run_cmd("ip", &["link", "set", &config.ap_interface, "down"])?;
     run_cmd("ip", &["addr", "flush", "dev", &config.ap_interface])?;
@@ -134,6 +154,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         ],
     )?;
     run_cmd("ip", &["link", "set", &config.ap_interface, "up"])?;
+    eprintln!("[HOTSPOT] AP interface {} is up", config.ap_interface);
     log::debug!("AP interface {} is up", config.ap_interface);
 
     // Enable forwarding
@@ -248,16 +269,23 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Start hostapd in background mode
+    eprintln!("[HOTSPOT] Starting hostapd on {} (SSID: {})", config.ap_interface, config.ssid);
     log::info!("Starting hostapd on {} (SSID: {})", config.ap_interface, config.ssid);
     
     let hostapd_output = Command::new("hostapd")
         .args(&["-B", &hostapd_path])
         .output()
-        .map_err(|e| WirelessError::System(format!("spawn hostapd: {}", e)))?;
+        .map_err(|e| {
+            eprintln!("[HOTSPOT] ERROR: Failed to spawn hostapd: {}", e);
+            WirelessError::System(format!("spawn hostapd: {}", e))
+        })?;
     
     if !hostapd_output.status.success() {
         let stderr = String::from_utf8_lossy(&hostapd_output.stderr);
         let stdout = String::from_utf8_lossy(&hostapd_output.stdout);
+        eprintln!("[HOTSPOT] ERROR: hostapd command failed");
+        eprintln!("[HOTSPOT]   stderr: {}", stderr);
+        eprintln!("[HOTSPOT]   stdout: {}", stdout);
         log::error!("hostapd command failed: stderr={}, stdout={}", stderr, stdout);
         return Err(WirelessError::System(format!(
             "hostapd failed to start: {}",
@@ -265,12 +293,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         )));
     }
     
+    eprintln!("[HOTSPOT] hostapd command executed, waiting for initialization...");
     log::debug!("hostapd command executed, waiting for initialization...");
     
     // Give hostapd more time to initialize AP before checking
     std::thread::sleep(std::time::Duration::from_secs(3));
     
     // Verify hostapd is actually running by checking for our specific config file
+    eprintln!("[HOTSPOT] Verifying hostapd is running...");
     let hostapd_running = Command::new("pgrep")
         .arg("-f")
         .arg(&format!("hostapd.*{}", hostapd_path))
@@ -279,6 +309,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         .unwrap_or(false);
     
     if !hostapd_running {
+        eprintln!("[HOTSPOT] ERROR: hostapd is not running after start - checking logs");
         log::error!("hostapd is not running after start - checking logs");
         
         // Try to get error info from syslog
@@ -289,7 +320,9 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         if let Ok(output) = log_output {
             let logs = String::from_utf8_lossy(&output.stdout);
             let recent_lines: Vec<&str> = logs.lines().rev().take(5).collect();
+            eprintln!("[HOTSPOT] Recent syslog entries:");
             for line in recent_lines.iter().rev() {
+                eprintln!("[HOTSPOT]   {}", line);
                 log::error!("syslog: {}", line);
             }
         }
@@ -299,17 +332,26 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         ));
     }
     
+    eprintln!("[HOTSPOT] hostapd is running successfully");
+    eprintln!("[HOTSPOT] hostapd is running successfully");
     log::info!("hostapd is running, starting dnsmasq...");
     
     // Start dnsmasq
+    eprintln!("[HOTSPOT] Starting dnsmasq...");
     let dnsmasq_output = Command::new("dnsmasq")
         .args(&["--conf-file", &dns_path])
         .output()
-        .map_err(|e| WirelessError::System(format!("spawn dnsmasq: {}", e)))?;
+        .map_err(|e| {
+            eprintln!("[HOTSPOT] ERROR: Failed to spawn dnsmasq: {}", e);
+            WirelessError::System(format!("spawn dnsmasq: {}", e))
+        })?;
     
     if !dnsmasq_output.status.success() {
         let stderr = String::from_utf8_lossy(&dnsmasq_output.stderr);
         let stdout = String::from_utf8_lossy(&dnsmasq_output.stdout);
+        eprintln!("[HOTSPOT] ERROR: dnsmasq command failed");
+        eprintln!("[HOTSPOT]   stderr: {}", stderr);
+        eprintln!("[HOTSPOT]   stdout: {}", stdout);
         log::error!("dnsmasq failed: stderr={}, stdout={}", stderr, stdout);
         // Clean up hostapd before returning error
         let _ = Command::new("pkill").args(["-f", "hostapd"]).status();
@@ -321,6 +363,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     
     // Verify dnsmasq is actually running
     std::thread::sleep(std::time::Duration::from_millis(500));
+    eprintln!("[HOTSPOT] Verifying dnsmasq is running...");
     let dnsmasq_running = Command::new("pgrep")
         .arg("-f")
         .arg(&format!("dnsmasq.*{}", dns_path))
@@ -329,6 +372,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         .unwrap_or(false);
     
     if !dnsmasq_running {
+        eprintln!("[HOTSPOT] ERROR: dnsmasq is not running after start");
         log::error!("dnsmasq is not running after start");
         // Clean up hostapd before returning error
         let _ = Command::new("pkill").args(["-f", "hostapd"]).status();
@@ -337,12 +381,18 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         ));
     }
     
+    eprintln!("[HOTSPOT] dnsmasq is running successfully");
     log::info!("dnsmasq is running");
     
     // Get actual PIDs after verification
     let hostapd_pid = get_pid_by_pattern(&format!("hostapd.*{}", hostapd_path));
     let dnsmasq_pid = get_pid_by_pattern(&format!("dnsmasq.*{}", dns_path));
     
+    eprintln!("[HOTSPOT] Hotspot started successfully!");
+    eprintln!("[HOTSPOT]   hostapd PID: {:?}", hostapd_pid);
+    eprintln!("[HOTSPOT]   dnsmasq PID: {:?}", dnsmasq_pid);
+    eprintln!("[HOTSPOT]   SSID: {}", config.ssid);
+    eprintln!("[HOTSPOT]   Password: {}", config.password);
     log::info!("Hotspot started successfully: hostapd_pid={:?}, dnsmasq_pid={:?}", hostapd_pid, dnsmasq_pid);
 
     let state = HotspotState {
