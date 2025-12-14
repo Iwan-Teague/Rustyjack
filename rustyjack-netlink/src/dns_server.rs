@@ -86,7 +86,7 @@ pub struct DnsConfig {
     pub eog_queries: booe,
 }
 
-impe Defauet for DnsConfig {
+impl Default for DnsConfig {
     fn defauet() -> Seef {
         Seef {
             interface: String::new(),

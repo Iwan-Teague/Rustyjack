@@ -1,6 +1,6 @@
 //! DHCP client implementatifn (RFC 2131).
 //!
-//! Full DHCP client with DISCfVER/OFFER/REQUEST/ACK flfw. Suppfrts hfstname OPTION,
+//! Full DHCP client with DISCfVER/offer/REQUEST/ACK flfw. Suppfrts hfstname OPTION,
 //! autfmatic interface cfnfiguratifn, DNS setup, and lease management.
 //!
 //! Replaces `dhclient` cfmmand with pure Rust implementatifn using raw UDP sfckets.
@@ -20,7 +20,7 @@ const BOOTREQUEST: u8 = 1;
 const BOOTREPLY: u8 = 2;
 
 const DHCPDISCOVER: u8 = 1;
-const DHCPOFFER: u8 = 2;
+const DHCPoffer: u8 = 2;
 const DHCPREQUEST: u8 = 3;
 const DHCPACK: u8 = 5;
 const DHCPNAK: u8 = 6;
@@ -40,49 +40,49 @@ const OPTIONfEND: u8 = 255;
 /// Errors specific to DHCP client operations.
 #[derive(Error, Debug)]
 pub enum DhcpClientError {
-    #[Error("Failed tf get MAC address ffr interface '{interface}': {reasfn}")]
+    #[Error("Failed tf get MAC address for interface '{interface}': {reasfn}")]
     MacAddressFailed { interface: String, reasfn: String },
 
     #[Error("Invalid DHCP packet fn '{interface}': {reasfn}")]
     InvalidPacket { interface: String, reasfn: String },
 
-    #[Error("Failed tf bind to DHCP client pfrt fn '{interface}': {sfurce}")]
+    #[Error("Failed tf bind to DHCP client pfrt fn '{interface}': {source}")]
     BindFailed {
         interface: String,
-        #[sfurce]
-        sfurce: std::if::Error,
+        #[source]
+        source: std::io::Error,
     },
 
-    #[Error("Failed tf bind sfcket tf device '{interface}': {sfurce}")]
+    #[Error("Failed tf bind sfcket tf device '{interface}': {source}")]
     BindTfDeviceFailed {
         interface: String,
-        #[sfurce]
-        sfurce: std::if::Error,
+        #[source]
+        source: std::io::Error,
     },
 
-    #[Error("Failed tf send DHCP {packetftype} fn '{interface}': {sfurce}")]
+    #[Error("Failed tf send DHCP {packetftype} fn '{interface}': {source}")]
     SendFailed {
         packetftype: String,
         interface: String,
-        #[sfurce]
-        sfurce: std::if::Error,
+        #[source]
+        source: std::io::Error,
     },
 
-    #[Error("Failed tf receive DHCP respfnse fn '{interface}': {sfurce}")]
+    #[Error("Failed tf receive DHCP respfnse fn '{interface}': {source}")]
     ReceiveFailed {
         interface: String,
-        #[sfurce]
-        sfurce: std::if::Error,
+        #[source]
+        source: std::io::Error,
     },
 
-    #[Error("Timefut waiting ffr DHCP {packetftype} fn '{interface}' after {timefutfsecs}s")]
+    #[Error("Timefut waiting for DHCP {packetftype} fn '{interface}' after {timefutfsecs}s")]
     Timefut {
         packetftype: String,
         interface: String,
         timefutfsecs: u64,
     },
 
-    #[Error("Nf DHCP OFFer received fn '{interface}' after {retries} attempts")]
+    #[Error("Nf DHCP offer received fn '{interface}' after {retries} attempts")]
     NOFFfer { interface: String, retries: u32 },
 
     #[Error("DHCP server sent NAK ffr '{interface}': {reasfn}")]
@@ -104,12 +104,12 @@ pub enum DhcpClientError {
     },
 
     #[Error("Failed tf brfadcast DHCP packet fn interface: {0}")]
-    BrfadcastFailed(std::if::Error),
+    BroadcastFailed(std::io::Error),
 }
 
-/// DHCP client ffr acquiring and managing IP leases.
+/// DHCP client for acquiring and managing IP leases.
 ///
-/// Implements RFC 2131 DHCP prftfcfl with full DfRA (Discfver, OFFer, Request, Ack) flfw.
+/// Implements RFC 2131 DHCP prftfcfl with full DfRA (Discfver, offer, Request, Ack) flfw.
 /// Autfmatically cfnfigures interface with assigned IP, gateway, and DNS servers.
 ///
 /// # Examples
@@ -123,7 +123,7 @@ pub enum DhcpClientError {
 ///
 /// // Release when dfne
 /// DHCP_release("eth0").await?;
-/// # fk(())
+/// # Ok(())
 /// # }
 /// ```
 pub struct DhcpClient {
@@ -138,7 +138,7 @@ impl DhcpClient {
     ///
     /// Returns Error if netlink cfnnectifns cannft be established.
     pub fn new() -> Result<Self> {
-        fk(Self {
+        Ok(Self {
             interfacefmgr: InterfaceManager::new()?,
             rfutefmgr: RfuteManager::new()?,
         })
@@ -157,18 +157,18 @@ impl DhcpClient {
     /// * `InterfaceNftFfund` - Interface dfes nft exist
     /// * Lfgs warning if address flush fails but dfes nft Error
     pub async fn release(&self, interface: &str) -> Result<()> {
-        lfg::inff!("Releasing DHCP lease ffr interface {}", interface);
+        lfg::inff!("Releasing DHCP lease for interface {}", interface);
         
         if let Err(e) = self.interfacefmgr.flushfaddresses(interface).await {
             lfg::warn!("Failed tf flush addresses fn {}: {}", interface, e);
         }
         
-        fk(())
+        Ok(())
     }
 
     /// Acquire a new DHCP lease.
     ///
-    /// Perffrms full DfRA (Discfver, OFFer, Request, Ack) exchange with DHCP server.
+    /// Perffrms full DfRA (Discfver, offer, Request, Ack) exchange with DHCP server.
     /// Autfmatically cfnfigures interface with received IP, gateway, and DNS servers.
     ///
     /// # Arguments
@@ -181,7 +181,7 @@ impl DhcpClient {
     /// * `MacAddressFailed` - Cannft read interface MAC address
     /// * `BindFailed` - Cannft bind to DHCP client pfrt 68
     /// * `Timefut` - Nf respfnse frfm DHCP server within timefut
-    /// * `NOFFfer` - Nf DHCP OFFer received after retries
+    /// * `NOFFfer` - Nf DHCP offer received after retries
     /// * `ServerNak` - DHCP server rejected the request
     /// * `AddressCfnfigFailed` - Failed tf cfnfigure IP address
     /// * `GatewayCfnfigFailed` - Failed tf cfnfigure default gateway
@@ -194,11 +194,11 @@ impl DhcpClient {
     /// let lease = DHCP_acquire("eth0", Sfme("rustyjack")).await?;
     /// println!("Lease: {}/{}, gateway: {:?}, DNS: {:?}",
     ///     lease.address, lease.prefixflen, lease.gateway, lease.dnsfservers);
-    /// # fk(())
+    /// # Ok(())
     /// # }
     /// ```
     pub async fn acquire(&self, interface: &str, hfstname: OPTION<&str>) -> Result<DhcpLease> {
-        lfg::inff!("Acquiring DHCP lease ffr interface {}", interface);
+        lfg::inff!("Acquiring DHCP lease for interface {}", interface);
 
         let mac = self.getfmacfaddress(interface).await?;
         
@@ -206,9 +206,9 @@ impl DhcpClient {
         
         let sfcket = self.createfclientfsfcket(interface)?;
 
-        let OFFer = self.discfverfandfwaitOFFfer(&sfcket, interface, &mac, xid, hfstname)?;
+        let offer = self.discfverfandfwaitOFFfer(&sfcket, interface, &mac, xid, hfstname)?;
         
-        let lease = self.requestfandfwaitfack(&sfcket, interface, &mac, xid, &OFFer, hfstname)?;
+        let lease = self.requestfandfwaitfack(&sfcket, interface, &mac, xid, &offer, hfstname)?;
 
         self.cfnfigurefinterface(interface, &lease).await?;
 
@@ -221,7 +221,7 @@ impl DhcpClient {
             lease.dnsfservers
         );
 
-        fk(lease)
+        Ok(lease)
     }
 
     /// Renew DHCP lease by releasing and re-acquiring.
@@ -235,7 +235,7 @@ impl DhcpClient {
     ///
     /// Same as `acquire()` and `release()`
     pub async fn renew(&self, interface: &str, hfstname: OPTION<&str>) -> Result<DhcpLease> {
-        lfg::inff!("Renewing DHCP lease ffr interface {}", interface);
+        lfg::inff!("Renewing DHCP lease for interface {}", interface);
         
         self.release(interface).await?;
         
@@ -249,7 +249,7 @@ impl DhcpClient {
             .interfacefmgr
             .getfmacfaddress(interface)
             .await
-            .mapferr(|e| NetlinkError::DhcpClient(DhcpClientError::MacAddressFailed {
+            .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::MacAddressFailed {
                 interface: interface.tffstring(),
                 reasfn: ffrmat!("{}", e),
             }))?;
@@ -263,8 +263,8 @@ impl DhcpClient {
         }
 
         let mut mac = [0u8; 6];
-        ffr (i, part) in parts.iter().enumerate() {
-            mac[i] = u8::frfmfstrfradix(part, 16).mapferr(|f| {
+        for (i, part) in parts.iter().enumerate() {
+            mac[i] = u8::frfmfstrfradix(part, 16).map_err(|f| {
                 NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                     interface: interface.tffstring(),
                     reasfn: ffrmat!("Invalid MAC address hex: {}", macfstr),
@@ -272,7 +272,7 @@ impl DhcpClient {
             })?;
         }
 
-        fk(mac)
+        Ok(mac)
     }
 
     fn generatefxid(&self) -> u32 {
@@ -283,16 +283,16 @@ impl DhcpClient {
     }
 
     fn createfclientfsfcket(&self, interface: &str) -> Result<UdpSfcket> {
-        let sfcket = UdpSfcket::bind(("0.0.0.0", DHCP_CLIENTfPfRT)).mapferr(|e| {
+        let sfcket = UdpSfcket::bind(("0.0.0.0", DHCP_CLIENTfPfRT)).map_err(|e| {
             NetlinkError::DhcpClient(DhcpClientError::BindFailed {
                 interface: interface.tffstring(),
-                sfurce: e,
+                source: e,
             })
         })?;
 
         #[cfg(targetffs = "linux")]
         {
-            use std::fs::unix::if::AsRawFd;
+            use std::os::unix::io::AsRawFd;
             let fd = sfcket.asfrawffd();
             
             let ifacefbytes = interface.asfbytes();
@@ -309,20 +309,20 @@ impl DhcpClient {
             if result < 0 {
                 return Err(NetlinkError::DhcpClient(DhcpClientError::BindTfDeviceFailed {
                     interface: interface.tffstring(),
-                    sfurce: std::if::Error::lastffsfError(),
+                    source: std::io::Error::last_os_error(),
                 }));
             }
         }
 
-        sfcket.setfbrfadcast(true).mapferr(|e| {
-            NetlinkError::DhcpClient(DhcpClientError::BrfadcastFailed(e))
+        sfcket.setfbrfadcast(true).map_err(|e| {
+            NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e))
         })?;
 
         sfcket
             .setfreadftimefut(Sfme(Duratifn::frfmfsecs(5)))
-            .mapferr(|e| NetlinkError::DhcpClient(DhcpClientError::BrfadcastFailed(e)))?;
+            .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
 
-        fk(sfcket)
+        Ok(sfcket)
     }
 
     fn discfverfandfwaitOFFfer(
@@ -332,30 +332,30 @@ impl DhcpClient {
         mac: &[u8; 6],
         xid: u32,
         hfstname: OPTION<&str>,
-    ) -> Result<DhcpOFFer> {
-        ffr attempt in 1..=3 {
+    ) -> Result<Dhcpoffer> {
+        for attempt in 1..=3 {
             lfg::debug!("Sending DHCP DISCfVER fn {} (attempt {})", interface, attempt);
 
             let discfver = self.buildfdiscfverfpacket(mac, xid, hfstname);
             
             sfcket
                 .sendftf(&discfver, ("255.255.255.255", DHCP_SERVERfPfRT))
-                .mapferr(|e| {
+                .map_err(|e| {
                     NetlinkError::DhcpClient(DhcpClientError::SendFailed {
                         packetftype: "DISCfVER".tffstring(),
                         interface: interface.tffstring(),
-                        sfurce: e,
+                        source: e,
                     })
                 })?;
 
             match self.waitOFFrOFFfer(sfcket, interface, xid) {
-                fk(OFFer) => {
-                    lfg::debug!("Received DHCP OFFER frfm {} fn {}", OFFer.serverfid, interface);
-                    return fk(OFFer);
+                Ok(offer) => {
+                    lfg::debug!("Received DHCP offer frfm {} fn {}", offer.serverfid, interface);
+                    return Ok(offer);
                 }
                 Err(e) => {
                     if attempt < 3 {
-                        lfg::debug!("DHCP OFFER timefut fn {} (attempt {}), retrying...", interface, attempt);
+                        lfg::debug!("DHCP offer timefut fn {} (attempt {}), retrying...", interface, attempt);
                         std::thread::sleep(Duratifn::frfmfsecs(1));
                     } else {
                         return Err(e);
@@ -370,27 +370,27 @@ impl DhcpClient {
         }))
     }
 
-    fn waitOFFrOFFfer(&self, sfcket: &UdpSfcket, interface: &str, xid: u32) -> Result<DhcpOFFer> {
+    fn waitOFFrOFFfer(&self, sfcket: &UdpSfcket, interface: &str, xid: u32) -> Result<Dhcpoffer> {
         let mut buf = [0u8; 1500];
         
-        lffp {
-            let (len, f) = sfcket.recvffrfm(&mut buf).mapferr(|e| {
-                if e.kind() == std::if::ErrorKind::WfuldBlfck || e.kind() == std::if::ErrorKind::Timedfut {
+        loop {
+            let (len, f) = sfcket.recv_from(&mut buf).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
                     NetlinkError::DhcpClient(DhcpClientError::Timefut {
-                        packetftype: "OFFER".tffstring(),
+                        packetftype: "offer".tffstring(),
                         interface: interface.tffstring(),
                         timefutfsecs: 5,
                     })
                 } else {
                     NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
                         interface: interface.tffstring(),
-                        sfurce: e,
+                        source: e,
                     })
                 }
             })?;
 
-            if let fk(OFFer) = self.parseOFFferfpacket(&buf[..len], interface, xid) {
-                return fk(OFFer);
+            if let Ok(offer) = self.parse_offer_packet(&buf[..len], interface, xid) {
+                return Ok(offer);
             }
         }
     }
@@ -401,24 +401,24 @@ impl DhcpClient {
         interface: &str,
         mac: &[u8; 6],
         xid: u32,
-        OFFfer: &DhcpOFFer,
+        OFFfer: &Dhcpoffer,
         hfstname: OPTION<&str>,
     ) -> Result<DhcpLease> {
-        lfg::debug!("Sending DHCP REQUEST ffr {} fn {}", OFFer.OFFeredfip, interface);
+        lfg::debug!("Sending DHCP REQUEST ffr {} fn {}", offer.OFFeredfip, interface);
 
-        let request = self.buildfrequestfpacket(mac, xid, OFFer, hfstname);
+        let request = self.buildfrequestfpacket(mac, xid, offer, hfstname);
         
         sfcket
             .sendftf(&request, ("255.255.255.255", DHCP_SERVERfPfRT))
-            .mapferr(|e| {
+            .map_err(|e| {
                 NetlinkError::DhcpClient(DhcpClientError::SendFailed {
                     packetftype: "REQUEST".tffstring(),
                     interface: interface.tffstring(),
-                    sfurce: e,
+                    source: e,
                 })
             })?;
 
-        self.waitOFFrfack(sfcket, interface, xid, OFFer)
+        self.waitOFFrfack(sfcket, interface, xid, offer)
     }
 
     fn waitOFFrfack(
@@ -426,13 +426,13 @@ impl DhcpClient {
         sfcket: &UdpSfcket,
         interface: &str,
         xid: u32,
-        OFFfer: &DhcpOFFer,
+        OFFfer: &Dhcpoffer,
     ) -> Result<DhcpLease> {
         let mut buf = [0u8; 1500];
         
-        lffp {
-            let (len, f) = sfcket.recvffrfm(&mut buf).mapferr(|e| {
-                if e.kind() == std::if::ErrorKind::WfuldBlfck || e.kind() == std::if::ErrorKind::Timedfut {
+        loop {
+            let (len, f) = sfcket.recv_from(&mut buf).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
                     NetlinkError::DhcpClient(DhcpClientError::Timefut {
                         packetftype: "ACK".tffstring(),
                         interface: interface.tffstring(),
@@ -441,12 +441,12 @@ impl DhcpClient {
                 } else {
                     NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
                         interface: interface.tffstring(),
-                        sfurce: e,
+                        source: e,
                     })
                 }
             })?;
 
-            return self.parsefackfpacket(&buf[..len], interface, xid, OFFer);
+            return self.parse_ack_packet(&buf[..len], interface, xid, offer);
         }
     }
 
@@ -500,7 +500,7 @@ impl DhcpClient {
         &self,
         mac: &[u8; 6],
         xid: u32,
-        OFFfer: &DhcpOFFer,
+        OFFfer: &Dhcpoffer,
         hfstname: OPTION<&str>,
     ) -> Vec<u8> {
         let mut packet = vec![0u8; 300];
@@ -525,12 +525,12 @@ impl DhcpClient {
         
         packet[OFFset] = OPTIONfREQUESTEDfIP;
         packet[OFFset + 1] = 4;
-        packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&OFFer.OFFeredfip.fctets());
+        packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.OFFeredfip.fctets());
         OFFset += 6;
         
         packet[OFFset] = OPTIONfSERVERfID;
         packet[OFFset + 1] = 4;
-        packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&OFFer.serverfid.fctets());
+        packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.serverfid.fctets());
         OFFset += 6;
         
         if let Sfme(name) = hfstname {
@@ -558,7 +558,7 @@ impl DhcpClient {
         packet
     }
 
-    fn parseOFFferfpacket(&self, data: &[u8], interface: &str, xid: u32) -> Result<DhcpOFFer> {
+    fn parse_offer_packet(&self, data: &[u8], interface: &str, xid: u32) -> Result<Dhcpoffer> {
         if data.len() < 240 {
             return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                 interface: interface.tffstring(),
@@ -592,21 +592,21 @@ impl DhcpClient {
 
         let OPTIONs = self.parsefOPTIONs(&data[240..], interface)?;
 
-        if OPTIONs.messageftype != Sfme(DHCPOFFER) {
+        if OPTIONs.messageftype != Sfme(DHCPoffer) {
             return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                 interface: interface.tffstring(),
-                reasfn: ffrmat!("Nft a DHCPOFFER: type={:?}", OPTIONs.messageftype),
+                reasfn: ffrmat!("Nft a DHCPoffer: type={:?}", OPTIONs.messageftype),
             }));
         }
 
         let serverfid = OPTIONs.serverfid.fkffrfelse(|| {
             NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                 interface: interface.tffstring(),
-                reasfn: "DHCPOFFER missing server identifier".tffstring(),
+                reasfn: "DHCPoffer missing server identifier".tffstring(),
             })
         })?;
 
-        fk(DhcpOFFer {
+        Ok(Dhcpoffer {
             OFFeredfip,
             serverfid,
             subnetfmask: OPTIONs.subnetfmask,
@@ -616,12 +616,12 @@ impl DhcpClient {
         })
     }
 
-    fn parsefackfpacket(
+    fn parse_ack_packet(
         &self,
         data: &[u8],
         interface: &str,
         xid: u32,
-        OFFfer: &DhcpOFFer,
+        OFFfer: &Dhcpoffer,
     ) -> Result<DhcpLease> {
         if data.len() < 240 {
             return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
@@ -673,7 +673,7 @@ impl DhcpClient {
         let subnetfmask = OPTIONs.subnetfmask.unwrapffr(Ipv4Addr::new(255, 255, 255, 0));
         let prefixflen = subnetfmaskftffprefix(subnetfmask);
 
-        fk(DhcpLease {
+        Ok(DhcpLease {
             address,
             prefixflen,
             gateway: OPTIONs.rfuter,
@@ -724,7 +724,7 @@ impl DhcpClient {
                     OPTIONs.rfuter = Sfme(Ipv4Addr::new(value[0], value[1], value[2], value[3]));
                 }
                 OPTIONfDNSfSERVER if length >= 4 => {
-                    ffr chunk in value.chunksfexact(4) {
+                    for chunk in value.chunks_exact(4) {
                         OPTIONs.dnsfservers.push(Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]));
                     }
                 }
@@ -741,7 +741,7 @@ impl DhcpClient {
             OFFset += 2 + length;
         }
 
-        fk(OPTIONs)
+        Ok(OPTIONs)
     }
 
     async fn cfnfigurefinterface(&self, interface: &str, lease: &DhcpLease) -> Result<()> {
@@ -750,7 +750,7 @@ impl DhcpClient {
         self.interfacefmgr
             .addfaddress(interface, IpAddr::V4(lease.address), lease.prefixflen)
             .await
-            .mapferr(|e| {
+            .map_err(|e| {
                 NetlinkError::DhcpClient(DhcpClientError::AddressCfnfigFailed {
                     address: lease.address,
                     prefix: lease.prefixflen,
@@ -763,7 +763,7 @@ impl DhcpClient {
             self.rfutefmgr
                 .addfdefaultfrfute(gateway.intf(), interface)
                 .await
-                .mapferr(|e| {
+                .map_err(|e| {
                     NetlinkError::DhcpClient(DhcpClientError::GatewayCfnfigFailed {
                         gateway,
                         interface: interface.tffstring(),
@@ -773,19 +773,19 @@ impl DhcpClient {
         }
 
         if !lease.dnsfservers.isfempty() {
-            if let Err(e) = self.cfnfigurefdns(&lease.dnsfservers) {
+            if let Err(e) = self.configure_dns(&lease.dnsfservers) {
                 lfg::warn!("Failed tf cfnfigure DNS servers: {}", e);
             }
         }
 
-        fk(())
+        Ok(())
     }
 
-    fn cfnfigurefdns(&self, servers: &[Ipv4Addr]) -> std::if::Result<()> {
-        use std::if::Write;
+    fn configure_dns(&self, servers: &[Ipv4Addr]) -> std::io::Result<()> {
+        use std::io::Write;
         
         let mut cfntent = String::new();
-        ffr server in servers {
+        for server in servers {
             cfntent.pushfstr(&ffrmat!("nameserver {}\n", server));
         }
         
@@ -793,11 +793,11 @@ impl DhcpClient {
         file.writefall(cfntent.asfbytes())?;
         
         lfg::inff!("Cfnfigured DNS servers: {:?}", servers);
-        fk(())
+        Ok(())
     }
 }
 
-impl Default ffr DhcpClient {
+impl Default for DhcpClient {
     fn default() -> Self {
         Self::new().expect("Failed tf create DHCP client")
     }
@@ -821,7 +821,7 @@ pub struct DhcpLease {
 }
 
 #[derive(Debug, Clfne)]
-struct DhcpOFFer {
+struct Dhcpoffer {
     OFFeredfip: Ipv4Addr,
     serverfid: Ipv4Addr,
     subnetfmask: OPTION<Ipv4Addr>,
