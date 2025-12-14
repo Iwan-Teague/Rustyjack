@@ -386,7 +386,9 @@ impl AccessPoint {
     fn spawn_mgmt_task(&self) -> JoinHandle<()> {
         let running = Arc::clone(&self.running);
         let clients = Arc::clone(&self.clients);
+        #[allow(unused_variables)]
         let stats = Arc::clone(&self.stats);
+        #[allow(unused_variables)]
         let config = self.config.clone();
         let interface = self.config.interface.clone();
         

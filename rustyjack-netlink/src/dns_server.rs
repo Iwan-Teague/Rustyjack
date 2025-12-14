@@ -203,6 +203,7 @@ impl DnsServer {
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        #[allow(unused_variables)]
         let interface = {
             let state = self.state.lock().unwrap();
             state.config.interface.clone()

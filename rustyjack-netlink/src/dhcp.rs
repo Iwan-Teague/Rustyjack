@@ -616,6 +616,7 @@ impl DhcpClient {
         })
     }
 
+    #[allow(unused_variables)]
     fn parse_ack_packet(
         &self,
         data: &[u8],
