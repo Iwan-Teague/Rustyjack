@@ -289,11 +289,11 @@ impl InterfaceManager {
                     let addr_matches = match addr {
                         IpAddr::V4(v4) => {
                             let octets = v4.octets();
-                            ip_bytes == &octets[..]
+                            ip_bytes.as_slice() == &octets[..]
                         }
                         IpAddr::V6(v6) => {
                             let octets = v6.octets();
-                            ip_bytes == &octets[..]
+                            ip_bytes.as_slice() == &octets[..]
                         }
                     };
                     if addr_matches && addr_msg.header.prefix_len == prefix_len {
@@ -544,7 +544,7 @@ impl InterfaceManager {
                         IpAddr::V4(v4)
                     } else if ip_bytes.len() == 16 {
                         let mut bytes = [0u8; 16];
-                        bytes.copy_from_slice(&ip_bytes);
+                        bytes.copy_from_slice(ip_bytes.as_slice());
                         IpAddr::V6(std::net::Ipv6Addr::from(bytes))
                     } else {
                         continue;

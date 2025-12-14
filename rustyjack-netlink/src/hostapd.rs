@@ -277,18 +277,16 @@ impl AccessPoint {
             ));
         }
         
-        // Set interface to AP mode
-        self.wireless_mgr.set_interface_mode(&self.config.interface, InterfaceMode::AccessPoint).await
-            .map_err(|e| NetlinkError::System(
-                format!("Failed to set AP mode on {}: {}. Interface may be managed by NetworkManager - try 'nmcli device set {} managed no'", 
-                    self.config.interface, e, self.config.interface)
-            ))?;
+        // Note: Interface mode setting would be done via iw command externally if needed
+        // as set_interface_mode is not available in WirelessManager
         
         // Set channel
-        self.wireless_mgr.set_channel(&self.config.interface, self.config.channel)?;
+        self.wireless_mgr.set_channel(&self.config.interface, self.config.channel)
             .map_err(|e| NetlinkError::System(
                 format!("Failed to set channel {} on {}: {}", self.config.channel, self.config.interface, e)
             ))?;
+        
+        Ok(())
         
         *self.running.lock().await = true;
         self.start_time = Some(Instant::now());

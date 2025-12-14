@@ -1,14 +1,13 @@
 use crate::error::{NetlinkError, Result};
 use neli::{
-    consts::{nl::*, socket::*},
+    consts::nl::NlmF,
     genl::{Genlmsghdr, Nlattr},
     nl::{NlPayload, Nlmsghdr},
     socket::NlSocketHandle,
-    types::GenlBuffer,
+    types::{GenlBuffer, NlmFFlags},
 };
 
 // Re-export commonly used types from neli
-use neli::consts::nl::{NlmF, Nlmsg};
 use neli::consts::socket::NlFamily;
 
 // Nlmsg type for error checking
@@ -233,7 +232,7 @@ impl WirelessManager {
         let nlhdr = Nlmsghdr::new(
             None,
             self.family_id,
-            vec![NlmF::Request, NlmF::Ack],
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
             None,
             None,
             NlPayload::Payload(genlhdr),
@@ -306,7 +305,7 @@ impl WirelessManager {
         let nlhdr = Nlmsghdr::new(
             None,
             self.family_id,
-            vec![NlmF::Request, NlmF::Ack],
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
             None,
             None,
             NlPayload::Payload(genlhdr),
@@ -421,7 +420,7 @@ impl WirelessManager {
         let nlhdr = Nlmsghdr::new(
             None,
             self.family_id,
-            vec![NlmF::Request, NlmF::Ack],
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
             None,
             None,
             NlPayload::Payload(genlhdr),
@@ -467,7 +466,7 @@ impl WirelessManager {
         let nlhdr = Nlmsghdr::new(
             None,
             self.family_id,
-            vec![NlmF::Request, NlmF::Ack],
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
             None,
             None,
             NlPayload::Payload(genlhdr),
@@ -509,7 +508,7 @@ impl WirelessManager {
         let nlhdr = Nlmsghdr::new(
             None,
             self.family_id,
-            vec![NlmF::Request],
+            NlmFFlags::new(&[NlmF::Request]),
             None,
             None,
             NlPayload::Payload(genlhdr),
@@ -533,7 +532,7 @@ impl WirelessManager {
         };
 
         if let NlPayload::Payload(genlhdr) = &response.nl_payload {
-            for attr in genlhdr.attrs.iter() {
+            for attr in genlhdr.get_attr_handle().iter() {
                 match attr.nla_type.nla_type() {
                     NL80211_ATTR_WIPHY => {
                         if let Ok(wiphy) = attr.get_payload_as::<u32>() {
@@ -579,7 +578,7 @@ impl WirelessManager {
         let nlhdr = Nlmsghdr::new(
             None,
             self.family_id,
-            vec![NlmF::Request],
+            NlmFFlags::new(&[NlmF::Request]),
             None,
             None,
             NlPayload::Payload(genlhdr),
@@ -602,7 +601,7 @@ impl WirelessManager {
         };
 
         if let NlPayload::Payload(genlhdr) = &response.nl_payload {
-            for attr in genlhdr.attrs.iter() {
+            for attr in genlhdr.get_attr_handle().iter() {
                 match attr.nla_type.nla_type() {
                     NL80211_ATTR_WIPHY_NAME => {
                         if let Ok(name) = std::str::from_utf8(attr.payload()) {
@@ -720,4 +719,7 @@ impl WirelessManager {
         }
     }
 }
+
+
+
 
