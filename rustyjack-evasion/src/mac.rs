@@ -522,7 +522,7 @@ impl MacManager {
                     if e.to_string().contains("Operation not permitted") || e.to_string().contains("Permission denied") {
                         EvasionError::PermissionDenied("setting MAC address".into())
                     } else {
-                        EvasionError::MacError(format!("Failed to set MAC on {}: {}", interface, e))
+                        EvasionError::InterfaceError(format!("Failed to set MAC on {}: {}", interface, e))
                     }
                 })
         })

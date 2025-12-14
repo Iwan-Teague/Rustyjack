@@ -21,6 +21,9 @@ path = "src/lib.rs"
 # Network management
 rustyjack-netlink = { path = "../rustyjack-netlink" }
 
+# Async runtime
+tokio = { version = "1", features = ["rt", "sync"] }
+
 # Error handling
 thiserror = "1.0"
 anyhow = "1.0"
