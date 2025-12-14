@@ -148,10 +148,42 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     let _ = Command::new("pkill").args(["-f", "dnsmasq"]).status();
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // Unblock rfkill FIRST before configuring interface
-    eprintln!("[HOTSPOT] Unblocking rfkill for {}...", config.ap_interface);
+    // Stop wpa_supplicant on the AP interface to prevent interference
+    eprintln!("[HOTSPOT] Stopping wpa_supplicant on {}...", config.ap_interface);
+    let _ = Command::new("pkill")
+        .args(["-f", &format!("wpa_supplicant.*{}", config.ap_interface)])
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Set interface to unmanaged by NetworkManager to prevent interference
+    eprintln!("[HOTSPOT] Setting {} to unmanaged by NetworkManager...", config.ap_interface);
+    let nmcli_result = Command::new("nmcli")
+        .args(["device", "set", &config.ap_interface, "managed", "no"])
+        .output();
+    
+    match nmcli_result {
+        Ok(output) => {
+            if output.status.success() {
+                eprintln!("[HOTSPOT] Interface set to unmanaged successfully");
+                log::info!("Set {} to unmanaged by NetworkManager", config.ap_interface);
+            } else {
+                eprintln!("[HOTSPOT] WARNING: Failed to set interface unmanaged: {}", 
+                    String::from_utf8_lossy(&output.stderr));
+                log::warn!("Could not set {} unmanaged: may not have NetworkManager", config.ap_interface);
+            }
+        }
+        Err(e) => {
+            eprintln!("[HOTSPOT] WARNING: nmcli not available: {}", e);
+            log::warn!("nmcli not available: {}", e);
+        }
+    }
+    
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Unblock rfkill for all wireless devices
+    eprintln!("[HOTSPOT] Unblocking rfkill for all wireless devices...");
     let rfkill_result = Command::new("rfkill")
-        .args(&["unblock", "wifi"])
+        .args(&["unblock", "all"])
         .output();
     
     match rfkill_result {
@@ -171,6 +203,17 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     // Give rfkill unblock time to take effect
     eprintln!("[HOTSPOT] Waiting 1 second for rfkill to take effect...");
     std::thread::sleep(std::time::Duration::from_secs(1));
+    
+    // Verify rfkill status
+    eprintln!("[HOTSPOT] Verifying rfkill status...");
+    if let Ok(output) = Command::new("rfkill").arg("list").output() {
+        let status = String::from_utf8_lossy(&output.stdout);
+        eprintln!("[HOTSPOT] rfkill status:\n{}", status);
+        if status.contains("Soft blocked: yes") || status.contains("Hard blocked: yes") {
+            eprintln!("[HOTSPOT] WARNING: Wireless is still blocked by rfkill!");
+            log::warn!("Wireless still blocked after rfkill unblock attempt");
+        }
+    }
 
     // Now configure AP interface with static IP
     eprintln!("[HOTSPOT] Configuring AP interface {} with IP {}", config.ap_interface, AP_GATEWAY);
@@ -316,6 +359,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     log::debug!("Configuration files written");
 
     // Give interface time to stabilize
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Double-check rfkill is still unblocked right before starting hostapd
+    eprintln!("[HOTSPOT] Final rfkill unblock before starting hostapd...");
+    let _ = Command::new("rfkill").args(&["unblock", "all"]).status();
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Start hostapd in background mode
@@ -527,6 +575,12 @@ pub fn stop_hotspot() -> Result<()> {
                 ])
                 .status();
         }
+        
+        // Restore NetworkManager management of the AP interface
+        eprintln!("[HOTSPOT] Restoring NetworkManager management of {}...", s.ap_interface);
+        let _ = Command::new("nmcli")
+            .args(["device", "set", &s.ap_interface, "managed", "yes"])
+            .status();
     }
 
     let _ = fs::remove_file(STATE_PATH);
