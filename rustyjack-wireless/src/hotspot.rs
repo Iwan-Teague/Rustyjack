@@ -515,25 +515,43 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
 
 /// Stop a running hotspot and clean up.
 pub fn stop_hotspot() -> Result<()> {
+    eprintln!("[HOTSPOT] ========== HOTSPOT STOP ATTEMPT ==========");
+    log::info!("Stopping hotspot");
+    
     let state = status_hotspot();
 
     // Best-effort kill processes
     if let Some(s) = state {
+        eprintln!("[HOTSPOT] Stopping hotspot processes...");
+        
+        // Kill hostapd
         if let Some(pid) = s.hostapd_pid {
+            eprintln!("[HOTSPOT] Killing hostapd PID {}...", pid);
             let _ = Command::new("kill").arg(pid.to_string()).status();
         } else {
+            eprintln!("[HOTSPOT] Killing any hostapd processes...");
             let _ = Command::new("pkill")
-                .args(["-f", "hostapd.*rustyjack"])
+                .args(["-f", "hostapd"])
                 .status();
         }
+        
+        // Small delay to let hostapd clean up
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
+        // Kill dnsmasq
         if let Some(pid) = s.dnsmasq_pid {
+            eprintln!("[HOTSPOT] Killing dnsmasq PID {}...", pid);
             let _ = Command::new("kill").arg(pid.to_string()).status();
         } else {
+            eprintln!("[HOTSPOT] Killing any dnsmasq processes...");
             let _ = Command::new("pkill").args(["-f", "dnsmasq"]).status();
         }
+        
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Remove iptables rules (ignore errors if not present)
         if s.upstream_ready && !s.upstream_interface.is_empty() {
+            eprintln!("[HOTSPOT] Removing iptables rules...");
             let _ = Command::new("iptables")
                 .args([
                     "-t",
@@ -578,12 +596,42 @@ pub fn stop_hotspot() -> Result<()> {
         
         // Restore NetworkManager management of the AP interface
         eprintln!("[HOTSPOT] Restoring NetworkManager management of {}...", s.ap_interface);
-        let _ = Command::new("nmcli")
-            .args(["device", "set", &s.ap_interface, "managed", "yes"])
+        log::info!("Restoring NetworkManager management of {}", s.ap_interface);
+        
+        // Use timeout to prevent hanging
+        let nmcli_result = std::process::Command::new("timeout")
+            .args(["5", "nmcli", "device", "set", &s.ap_interface, "managed", "yes"])
             .status();
+        
+        match nmcli_result {
+            Ok(status) if status.success() => {
+                eprintln!("[HOTSPOT] NetworkManager management restored");
+                log::info!("NetworkManager management restored for {}", s.ap_interface);
+            }
+            Ok(_) => {
+                eprintln!("[HOTSPOT] WARNING: Failed to restore NetworkManager management (non-critical)");
+                log::warn!("Failed to restore NetworkManager management for {}", s.ap_interface);
+            }
+            Err(e) => {
+                eprintln!("[HOTSPOT] WARNING: nmcli command failed: {} (non-critical)", e);
+                log::warn!("nmcli command failed: {}", e);
+            }
+        }
+    } else {
+        eprintln!("[HOTSPOT] No hotspot state found, performing general cleanup...");
+        
+        // Kill any running processes anyway
+        let _ = Command::new("pkill").args(["-f", "hostapd"]).status();
+        let _ = Command::new("pkill").args(["-f", "dnsmasq"]).status();
     }
 
+    // Remove state file
+    eprintln!("[HOTSPOT] Removing state file...");
     let _ = fs::remove_file(STATE_PATH);
+    
+    eprintln!("[HOTSPOT] Hotspot stopped successfully");
+    log::info!("Hotspot stopped successfully");
+    
     Ok(())
 }
 
