@@ -7,7 +7,7 @@ use crate::error::{NetlinkError, Result};
 use futures::stream::TryStreamExt;
 use netlink_packet_route::route::RouteAttribute;
 use rtnetlink::{new_connection, Handle};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 
 /// Manager for routing table operations.
 ///

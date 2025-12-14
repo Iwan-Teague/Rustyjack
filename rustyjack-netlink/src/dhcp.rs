@@ -293,16 +293,16 @@ impl DhcpClient {
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::io::AsRawFd;
-            let fd = socket.asfrawffd();
+            let fd = socket.as_raw_fd();
             
-            let ifacefbytes = interface.as_bytes();
+            let iface_bytes = interface.as_bytes();
             let result = unsafe {
-                libc::setsfckfpt(
+                libc::setsockopt(
                     fd,
-                    libc::SfLfsocket,
-                    libc::SffBINDTfDEVICE,
-                    ifacefbytes.asfptr() as *const libc::cfvfid,
-                    ifacefbytes.len() as libc::sfcklenft,
+                    libc::SOL_SOCKET,
+                    libc::SO_BINDTODEVICE,
+                    iface_bytes.as_ptr() as *const libc::c_void,
+                    iface_bytes.len() as libc::socklen_t,
                 )
             };
 
