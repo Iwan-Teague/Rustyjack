@@ -787,25 +787,125 @@ fn ensure_ap_capability(interface: &str) -> Result<()> {
         )));
     }
     
-    // Check if the PHY supports AP mode using `iw list`
-    let output = Command::new("iw")
-        .arg("list")
-        .output()
-        .map_err(|e| WirelessError::System(format!("iw list failed: {}", e)))?;
+    // Get the PHY for this interface
+    let iw_info = String::from_utf8_lossy(&phy_check.stdout);
     
-    if !output.status.success() {
-        return Err(WirelessError::System(format!(
-            "iw list failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+    // Extract wiphy number if available
+    let mut phy_num = None;
+    for line in iw_info.lines() {
+        if line.contains("wiphy") {
+            if let Some(num_str) = line.split_whitespace().last() {
+                phy_num = num_str.parse::<u32>().ok();
+                break;
+            }
+        }
     }
     
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Check if the specific PHY supports AP mode using `iw phy<N> info`
+    let mut supports_ap = false;
+    if let Some(num) = phy_num {
+        eprintln!("[HOTSPOT] Checking if phy{} supports AP mode...", num);
+        let phy_output = Command::new("iw")
+            .args(&[&format!("phy{}", num), "info"])
+            .output()
+            .ok();
+        
+        if let Some(output) = phy_output {
+            if output.status.success() {
+                let phy_info = String::from_utf8_lossy(&output.stdout);
+                // Look for AP mode under "Supported interface modes:"
+                let mut in_modes_section = false;
+                for line in phy_info.lines() {
+                    if line.contains("Supported interface modes:") {
+                        in_modes_section = true;
+                        continue;
+                    }
+                    if in_modes_section {
+                        // End of section when we hit a non-indented line
+                        if !line.starts_with('\t') && !line.starts_with("         ") {
+                            break;
+                        }
+                        if line.contains("* AP") {
+                            supports_ap = true;
+                            eprintln!("[HOTSPOT] ✓ Interface {} (phy{}) supports AP mode", interface, num);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     
-    // Look for AP mode support - be more lenient and just warn if not found
-    if !stdout.contains("* AP") && !stdout.contains("AP/VLAN") {
-        log::warn!("{} may not support AP mode; attempting anyway", interface);
-        // Don't fail here - let hostapd determine if it can run
+    // If we couldn't determine AP support or it's not supported, do a real hostapd test
+    if !supports_ap {
+        eprintln!("[HOTSPOT] WARNING: {} may not support AP mode according to driver", interface);
+        eprintln!("[HOTSPOT] Performing hostapd compatibility test...");
+        
+        // Create a minimal test config
+        let test_dir = "/tmp/rustyjack_hotspot_test";
+        let _ = fs::create_dir_all(test_dir);
+        let test_config = format!("{}/test_hostapd.conf", test_dir);
+        
+        let test_config_content = format!(
+            "interface={}\n\
+             driver=nl80211\n\
+             ssid=test\n\
+             hw_mode=g\n\
+             channel=6\n",
+            interface
+        );
+        
+        if let Err(e) = fs::write(&test_config, test_config_content) {
+            eprintln!("[HOTSPOT] WARNING: Could not write test config: {}", e);
+            // Continue anyway - let actual start attempt fail if it must
+            return Ok(());
+        }
+        
+        // Try to start hostapd with -t (test mode - just validates config)
+        eprintln!("[HOTSPOT] Testing with: hostapd -t {}", test_config);
+        let test_result = Command::new("hostapd")
+            .args(&["-t", &test_config])
+            .output();
+        
+        // Clean up test config
+        let _ = fs::remove_file(&test_config);
+        let _ = fs::remove_dir(test_dir);
+        
+        match test_result {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    
+                    eprintln!("[HOTSPOT] ✗ hostapd test FAILED for {}", interface);
+                    eprintln!("[HOTSPOT]   stdout: {}", stdout);
+                    eprintln!("[HOTSPOT]   stderr: {}", stderr);
+                    
+                    // Check for specific error messages
+                    let combined = format!("{} {}", stdout, stderr);
+                    if combined.contains("Could not connect to kernel driver") ||
+                       combined.contains("does not support") ||
+                       combined.contains("AP mode not supported") {
+                        return Err(WirelessError::Interface(format!(
+                            "{} does not support AP mode (hostapd test failed). \
+                             This interface cannot be used as a hotspot. \
+                             Try a different wireless interface or use a USB WiFi adapter with AP support.",
+                            interface
+                        )));
+                    }
+                    
+                    // Other errors might be transient, so warn but don't fail
+                    eprintln!("[HOTSPOT] WARNING: hostapd test failed, but will attempt to start anyway");
+                    log::warn!("hostapd test failed for {}, but continuing", interface);
+                } else {
+                    eprintln!("[HOTSPOT] ✓ hostapd test PASSED for {}", interface);
+                }
+            }
+            Err(e) => {
+                eprintln!("[HOTSPOT] WARNING: Could not run hostapd test: {}", e);
+                // Continue anyway
+            }
+        }
     }
     
     Ok(())

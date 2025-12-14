@@ -7465,15 +7465,32 @@ Do not remove power/USB",
                                 0 => networks > 0,  // Scan needs to find networks
                                 1 => pmkids > 0,    // PMKID needs captures
                                 2 | 3 => handshakes > 0, // Deauth/capture needs handshakes
-                                4 => password_found, // Crack needs password (always check)
+                                4 => password_found, // Crack needs password
                                 _ => true, // Other steps always progress
                             };
+                            
+                            // Log what we're waiting for if not successful
+                            if !step_successful {
+                                let waiting_for = match i {
+                                    0 => "networks to be found",
+                                    1 => "PMKID to be captured",
+                                    2 | 3 => "handshake to be captured",
+                                    4 => "password to be cracked",
+                                    _ => "results",
+                                };
+                                eprintln!("[PIPELINE] Step {} incomplete: waiting for {}", i + 1, waiting_for);
+                            }
                         } else {
                             step_successful = true; // Standard mode always progresses
                         }
                     }
                     StepOutcome::Completed(None) => {
-                        step_successful = true; // No specific requirement
+                        // This shouldn't happen with our fixed code, but handle it anyway
+                        if indefinite_mode {
+                            step_successful = false; // In indefinite mode, no results = retry
+                        } else {
+                            step_successful = true; // Standard mode progresses anyway
+                        }
                     }
                     StepOutcome::Skipped(reason) => {
                         result.cancelled = true;
@@ -7489,17 +7506,29 @@ Do not remove power/USB",
                     retry_count += 1;
                     if retry_count >= MAX_RETRIES {
                         result.cancelled = true;
+                        let waiting_for = match i {
+                            0 => "No networks found",
+                            1 => "No PMKIDs captured",
+                            2 | 3 => "No handshakes captured",
+                            4 => "Password not cracked",
+                            _ => "No results obtained",
+                        };
                         self.show_message(
                             "Pipeline stopped",
                             [
                                 &format!("Step {} failed", i + 1),
                                 "",
-                                "Max retries reached",
-                                "No results obtained",
+                                waiting_for,
+                                &format!("{} retries exhausted", MAX_RETRIES),
                             ],
                         )?;
                         return Ok(result);
                     }
+                    
+                    // Show brief message before retry
+                    let retry_msg = format!("Retry {}/{}", retry_count, MAX_RETRIES);
+                    eprintln!("[PIPELINE] {}", retry_msg);
+                    
                     // Brief pause before retry
                     std::thread::sleep(std::time::Duration::from_secs(2));
                 }
@@ -7550,6 +7579,8 @@ Do not remove power/USB",
                     let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, count, 0))));
                 }
+                // If dispatch_cancellable returned None, the step was cancelled or failed
+                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             1 => {
                 // Step 2: PMKID capture
@@ -7572,6 +7603,8 @@ Do not remove power/USB",
                         .unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((pmkids, 0, None, 0, 0))));
                 }
+                // Step was cancelled or failed - return no results
+                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             2 => {
                 // Step 3: Deauth attack
@@ -7603,6 +7636,8 @@ Do not remove power/USB",
                     };
                     return Ok(StepOutcome::Completed(Some((0, handshakes, None, 0, 0))));
                 }
+                // Step was cancelled or failed - return no results
+                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             3 => {
                 // Step 4: Handshake capture (continuation of deauth with longer capture)
@@ -7634,6 +7669,8 @@ Do not remove power/USB",
                     };
                     return Ok(StepOutcome::Completed(Some((0, handshakes, None, 0, 0))));
                 }
+                // Step was cancelled or failed - return no results
+                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             4 => {
                 // Step 5: Quick crack - look for handshake files and try to crack
@@ -7660,7 +7697,11 @@ Do not remove power/USB",
                                     0,
                                 ))));
                             }
+                            // Crack completed but no password found
+                            return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
                         }
+                        // Crack was cancelled - return no results
+                        return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
                     }
                 }
                 return Ok(StepOutcome::Skipped(
@@ -7669,7 +7710,7 @@ Do not remove power/USB",
             }
             _ => {}
         }
-        Ok(StepOutcome::Completed(None))
+        Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))))
     }
 
     /// Execute a step in the MassCapture pipeline
@@ -11426,7 +11467,6 @@ Do not remove power/USB",
                         "Device Blacklist".to_string(),
                         "Network Speed".to_string(),
                         "Turn off hotspot".to_string(),
-                        "Refresh".to_string(),
                     ]
                 } else {
                     vec![
@@ -11458,10 +11498,6 @@ Do not remove power/USB",
                     (true, Some(4)) => {
                         // Turn off hotspot
                         let _ = self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop));
-                    }
-                    (true, Some(5)) => {
-                        // Refresh
-                        continue;
                     }
                     (true, None) => {
                         // User is trying to exit while hotspot is running - confirm
@@ -11739,35 +11775,101 @@ Do not remove power/USB",
             }
         }
 
+        // Add Rustyjack IP for SSH access
+        lines.push("".to_string());
+        lines.push("Rustyjack IP: 10.20.30.1".to_string());
+        lines.push("SSH: ssh user@10.20.30.1".to_string());
+
         self.show_message("Network Info", lines.iter().map(|s| s.as_str()))
     }
 
-    fn show_hotspot_connected_devices(&mut self, _ap_iface: &str) -> Result<()> {
-        // Get connected clients from dnsmasq leases
+    fn show_hotspot_connected_devices(&mut self, ap_iface: &str) -> Result<()> {
+        // Get currently connected clients by checking ARP table for active devices
         let lease_path = "/var/lib/misc/dnsmasq.leases";
         let mut clients = Vec::new();
+        let mut active_macs = HashSet::new();
+
+        // Query ARP table to find currently connected devices
+        // ARP entries for devices on our AP subnet (10.20.30.x)
+        if let Ok(output) = Command::new("ip")
+            .args(&["neigh", "show", "dev", ap_iface])
+            .output()
+        {
+            let arp_output = String::from_utf8_lossy(&output.stdout);
+            for line in arp_output.lines() {
+                // Parse lines like: "10.20.30.15 lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5 && parts[1] == "lladdr" {
+                    let mac = parts[2].to_lowercase();
+                    let state = parts.get(3).unwrap_or(&"");
+                    // Only consider REACHABLE or STALE as "connected"
+                    if state == &"REACHABLE" || state == &"STALE" || state == &"DELAY" {
+                        active_macs.insert(mac);
+                    }
+                }
+            }
+        }
+
+        // Read lease file for device info and record all devices to history
+        let loot_hotspot_dir = self.root.join("loot").join("Hotspot");
+        fs::create_dir_all(&loot_hotspot_dir).ok();
+        let history_path = loot_hotspot_dir.join("device_history.txt");
+        
+        // Read existing history to avoid duplicate logging
+        let mut logged_devices = HashSet::new();
+        if let Ok(history_content) = fs::read_to_string(&history_path) {
+            for line in history_content.lines() {
+                // Extract MAC from history line format: "timestamp | MAC: xx:xx:xx:xx:xx:xx | ..."
+                if let Some(mac_part) = line.split(" | MAC: ").nth(1) {
+                    if let Some(mac) = mac_part.split(" | ").next() {
+                        logged_devices.insert(mac.to_lowercase());
+                    }
+                }
+            }
+        }
 
         if let Ok(content) = std::fs::read_to_string(lease_path) {
             for line in content.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 5 {
                     // Format: timestamp mac ip hostname client-id
-                    let mac = parts[1];
+                    let lease_timestamp = parts[0];
+                    let mac = parts[1].to_lowercase();
                     let ip = parts[2];
                     let hostname = if parts[3] == "*" { "Unknown" } else { parts[3] };
                     
+                    // Log to history file only if this MAC hasn't been logged before
+                    if !logged_devices.contains(&mac) {
+                        let now = Local::now().format("%Y-%m-%d %H:%M:%S");
+                        let history_entry = format!(
+                            "{} | MAC: {} | IP: {} | Hostname: {} | Lease Timestamp: {}\n",
+                            now, mac, ip, hostname, lease_timestamp
+                        );
+                        if let Ok(mut file) = fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&history_path)
+                        {
+                            let _ = file.write_all(history_entry.as_bytes());
+                        }
+                        logged_devices.insert(mac.clone());
+                    }
+                    
                     // Skip blacklisted devices
-                    if self.config.settings.hotspot_blacklist.iter().any(|d| d.mac == mac) {
+                    if self.config.settings.hotspot_blacklist.iter().any(|d| d.mac.to_lowercase() == mac) {
                         continue;
                     }
                     
-                    clients.push((mac.to_string(), ip.to_string(), hostname.to_string()));
+                    // Only add to display list if currently active
+                    if active_macs.contains(&mac) {
+                        clients.push((mac.to_string(), ip.to_string(), hostname.to_string()));
+                    }
                 }
             }
         }
 
         if clients.is_empty() {
-            return self.show_message("Connected Devices", ["No devices connected"]);
+            return self.show_message("Connected Devices", ["No devices currently connected"]);
         }
 
         // Create list of device summaries

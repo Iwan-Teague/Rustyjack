@@ -33,7 +33,7 @@ Project structure (selected):
 - `install_rustyjack.sh`, `install_rustyjack_dev.sh` — production and debug installers that build and deploy the UI service.
 - `WAVESHARE_PINS.md`, `WAVESHARE_BUTTONS.md` — validated pinout and button behavior references.
 - `rustyjack-ethernet/` — Rust-only Ethernet recon (ICMP sweep + TCP port scan) used by the UI Ethernet menu.
-- Loot storage: wireless captures are grouped per target under `loot/Wireless/<target>/` (target = SSID, else BSSID); reuse that when saving handshakes, PMKIDs, logs.
+- Loot storage: wireless captures are grouped per target under `loot/Wireless/<target>/` (target = SSID, else BSSID); reuse that when saving handshakes, PMKIDs, logs. Hotspot device connection history is logged to `loot/Hotspot/device_history.txt` with timestamps, MAC, IP, and hostname for every device that obtains a DHCP lease.
 - MAC randomization: `rustyjack-evasion::MacManager` sets locally administered, unicast MACs with CSPRNG; vendor-match OUI from the current interface when available.
 - UI dialogs/windows must require explicit user confirmation before advancing; do not auto-dismiss after a timeout or hide errors without acknowledgment.
 

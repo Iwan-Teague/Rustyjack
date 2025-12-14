@@ -2,7 +2,7 @@
 # Quick hotspot fix deployment script
 
 echo "=========================================="
-echo "Deploying Hotspot RF-kill Fix"
+echo "Deploying Hotspot RF-kill & AP Detection Fix"
 echo "=========================================="
 echo
 
@@ -93,10 +93,16 @@ echo "Watch logs with:"
 echo "  journalctl -u rustyjack -f"
 echo
 echo "Test the hotspot:"
-echo "  1. Start hotspot from UI"
-echo "  2. Stop hotspot"
-echo "  3. Start hotspot again ← Should now work!"
+echo "  1. Try wlan0 → Should show clear error (no AP support)"
+echo "  2. Try wlan1 → Should work (USB WiFi adapter)"
+echo "  3. Start hotspot"
+echo "  4. Stop hotspot"
+echo "  5. Start hotspot again ← Should now work!"
 echo
-echo "NOTE: Wireless interfaces are now left UNMANAGED"
-echo "      to prevent NetworkManager from blocking RF-kill"
+echo "NOTES:"
+echo "  - Wireless interfaces are now left UNMANAGED"
+echo "    to prevent NetworkManager from blocking RF-kill"
+echo "  - wlan0 (Pi Zero 2 W built-in) does NOT support AP mode"
+echo "  - You need a USB WiFi adapter (wlan1) for hotspot"
 echo
+
