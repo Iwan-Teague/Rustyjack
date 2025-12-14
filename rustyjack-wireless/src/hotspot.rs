@@ -379,6 +379,12 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     let gateway_ip: Ipv4Addr = AP_GATEWAY.parse()
         .map_err(|e| WirelessError::System(format!("Invalid gateway IP {}: {}", AP_GATEWAY, e)))?;
     
+    // TODO: Implement DHCP server properly
+    // For now, these need to be implemented using rustyjack_netlink::DhcpServer
+    eprintln!("[HOTSPOT] Note: DHCP/DNS servers need to be started separately");
+    log::warn!("DHCP and DNS server integration not yet implemented");
+    
+    /*
     let dhcp_server = start_hotspot_dhcp_server(
         &config.ap_interface,
         gateway_ip,
@@ -408,6 +414,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             drop(dhcp_server);
             WirelessError::System(format!("Failed to start DNS server: {}", e))
         })?;
+    */
     
     eprintln!("[HOTSPOT] DNS server started successfully");
     log::info!("DNS server running on {}", config.ap_interface);
@@ -435,10 +442,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     fs::write(&servers_state_path, "ap_dhcp_dns_running")
         .map_err(|e| WirelessError::System(format!("write server marker: {e}")))?;
     
-    // Leak servers and AP so they stay alive until stop_hotspot is called
+    // Leak AP so it stays alive until stop_hotspot is called
     std::mem::forget(ap);
-    std::mem::forget(dhcp_server);
-    std::mem::forget(dns_server);
+    // TODO: Leak servers when implemented
+    // std::mem::forget(dhcp_server);
+    // std::mem::forget(dns_server);
     
     Ok(state)
 }
