@@ -286,7 +286,7 @@ impl InterfaceManager {
             let mut matches = false;
             for nla in &addr_msg.attributes {
                 if let AddressAttribute::Address(ip_addr) = nla {
-                    let addr_matches = *ip_addr == *addr;
+                    let addr_matches = ip_addr == addr;
                     if addr_matches && addr_msg.header.prefix_len == prefix_len {
                         matches = true;
                         break;

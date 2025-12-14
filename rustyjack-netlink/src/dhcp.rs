@@ -264,7 +264,7 @@ impl DhcpClient {
 
         let mut mac = [0u8; 6];
         for (i, part) in parts.iter().enumerate() {
-            mac[i] = u8::from_str_radix(part, 16).map_err(|f| {
+            mac[i] = u8::from_str_radix(part, 16).map_err(|_| {
                 NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                     interface: interface.to_string(),
                     reason: format!("Invalid MAC address hex: {}", mac_str),
@@ -374,7 +374,7 @@ impl DhcpClient {
         let mut buf = [0u8; 1500];
         
         loop {
-            let (len, f) = socket.recv_from(&mut buf).map_err(|e| {
+            let (len, _) = socket.recv_from(&mut buf).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut {
                     NetlinkError::DhcpClient(DhcpClientError::Timeout {
                         packet_type: "offer".to_string(),
@@ -401,7 +401,7 @@ impl DhcpClient {
         interface: &str,
         mac: &[u8; 6],
         xid: u32,
-        offer: &DhcpOffer,
+        _offer: &DhcpOffer,
         hostname: Option<&str>,
     ) -> Result<DhcpLease> {
         log::debug!("Sending DHCP REQUEST for {} on {}", offer.offered_ip, interface);
@@ -426,12 +426,12 @@ impl DhcpClient {
         socket: &UdpSocket,
         interface: &str,
         xid: u32,
-        offer: &DhcpOffer,
+        _offer: &DhcpOffer,
     ) -> Result<DhcpLease> {
         let mut buf = [0u8; 1500];
         
         loop {
-            let (len, f) = socket.recv_from(&mut buf).map_err(|e| {
+            let (len, _) = socket.recv_from(&mut buf).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut {
                     NetlinkError::DhcpClient(DhcpClientError::Timeout {
                         packet_type: "ACK".to_string(),
@@ -500,7 +500,7 @@ impl DhcpClient {
         &self,
         mac: &[u8; 6],
         xid: u32,
-        offer: &DhcpOffer,
+        _offer: &DhcpOffer,
         hostname: Option<&str>,
     ) -> Vec<u8> {
         let mut packet = vec![0u8; 300];
@@ -621,7 +621,7 @@ impl DhcpClient {
         data: &[u8],
         interface: &str,
         xid: u32,
-        offer: &DhcpOffer,
+        _offer: &DhcpOffer,
     ) -> Result<DhcpLease> {
         if data.len() < 240 {
             return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
@@ -735,7 +735,7 @@ impl DhcpClient {
                     let secs = u32::from_be_bytes([value[0], value[1], value[2], value[3]]);
                     Options.lease_time = Some(Duration::from_secs(secs as u64));
                 }
-                f => {}
+                _ => {}
             }
 
             offset += 2 + length;
