@@ -62,10 +62,14 @@ pub mod inject;
 pub mod interface;
 pub mod karma;
 pub mod nl80211;
+pub mod nl80211_queries;
 pub mod pmkid;
 pub mod probe;
 pub mod radiotap;
 pub mod recon;
+mod netlink_helpers;
+mod rfkill_helpers;
+mod process_helpers;
 
 // Re-export evasion crate for convenience (stealth functionality now in separate crate)
 pub use hotspot::{

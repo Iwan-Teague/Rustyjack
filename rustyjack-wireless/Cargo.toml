@@ -19,19 +19,18 @@ path = "src/lib.rs"
 [dependencies]
 # Evasion and obfuscation (shared library)
 rustyjack-evasion = { path = "../rustyjack-evasion" }
+rustyjack-netlink = { path = "../rustyjack-netlink" }
 
 # Low-level system interfaces
 libc = "0.2"
 nix = { version = "0.27", features = ["socket", "net", "ioctl", "fs"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 
 # Netlink for nl80211 interface management
 netlink-packet-core = "0.7"
 netlink-packet-generic = "0.3"
 netlink-sys = "0.8"
 genetlink = "0.2"
-
-# Async runtime (optional, for non-blocking capture)
-tokio = { version = "1", features = ["rt", "sync", "time", "macros"], optional = true }
 
 # Error handling
 thiserror = "1.0"
@@ -68,6 +67,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [features]
 default = []
-async = ["tokio"]
 
 # Build configuration

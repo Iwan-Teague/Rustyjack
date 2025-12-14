@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use walkdir::WalkDir;
 
 use crate::cli::{
-    AutopilotCommand, AutopilotStartArgs, BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands,
+    BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands,
     DiscordCommand, DiscordSendArgs, DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand,
     EthernetDiscoverArgs, EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs,
     HardwareCommand, HotspotCommand, HotspotStartArgs, LootCommand, LootKind, LootListArgs,
@@ -170,11 +170,7 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             BridgeCommand::Start(args) => handle_bridge_start(root, args),
             BridgeCommand::Stop(args) => handle_bridge_stop(root, args),
         },
-        Commands::Autopilot(sub) => match sub {
-            AutopilotCommand::Start(args) => handle_autopilot_start(root, args),
-            AutopilotCommand::Stop => handle_autopilot_stop(),
-            AutopilotCommand::Status => handle_autopilot_status(),
-        },
+
         Commands::Hardware(cmd) => match cmd {
             HardwareCommand::Detect => handle_hardware_detect(),
         },
@@ -1618,11 +1614,12 @@ fn ensure_route_health_check() -> Result<()> {
         _ => bail!("Unable to determine UID (need root to manage interfaces)"),
     }
 
-    // rfkill availability
-    let rfkill_check = Command::new("rfkill").arg("list").output();
-    match rfkill_check {
-        Ok(out) if out.status.success() => {}
-        _ => bail!("rfkill command missing or not working (install rfkill/util-linux)"),
+    // rfkill availability - check /dev/rfkill exists
+    #[cfg(target_os = "linux")]
+    {
+        if !std::path::Path::new("/dev/rfkill").exists() {
+            bail!("/dev/rfkill not found (rfkill subsystem missing in kernel)");
+        }
     }
 
     // /etc/resolv.conf must be writable by root
@@ -1958,72 +1955,6 @@ fn handle_bridge_stop(root: &Path, args: BridgeStopArgs) -> Result<HandlerResult
     Ok(("Transparent bridge disabled".to_string(), data))
 }
 
-// Global autopilot engine instance (lazy initialized)
-use crate::autopilot::{AutopilotConfig, AutopilotEngine};
-use std::sync::OnceLock;
-
-static AUTOPILOT: OnceLock<AutopilotEngine> = OnceLock::new();
-
-fn get_autopilot() -> &'static AutopilotEngine {
-    AUTOPILOT.get_or_init(|| AutopilotEngine::new())
-}
-
-fn handle_autopilot_start(root: &Path, args: AutopilotStartArgs) -> Result<HandlerResult> {
-    let config = AutopilotConfig {
-        mode: format!("{:?}", args.mode),
-        interface: args.interface.clone(),
-        scan: args.scan,
-        mitm: args.mitm,
-        responder: args.responder,
-        dns_spoof: args.dns_spoof.clone(),
-        duration: args.duration,
-        check_interval: args.check_interval,
-    };
-
-    let autopilot = get_autopilot();
-    autopilot.start(root, args.mode, config)?;
-
-    let data = json!({
-        "mode": format!("{:?}", args.mode),
-        "interface": args.interface,
-        "scan": args.scan,
-        "mitm": args.mitm,
-        "responder": args.responder,
-        "dns_spoof": args.dns_spoof,
-        "duration": args.duration,
-    });
-
-    Ok(("Autopilot started".to_string(), data))
-}
-
-fn handle_autopilot_stop() -> Result<HandlerResult> {
-    let autopilot = get_autopilot();
-    autopilot.stop()?;
-
-    let data = json!({
-        "stopped": true,
-    });
-
-    Ok(("Autopilot stopped".to_string(), data))
-}
-
-fn handle_autopilot_status() -> Result<HandlerResult> {
-    let autopilot = get_autopilot();
-    let status = autopilot.get_status();
-
-    let data = json!({
-        "running": status.running,
-        "mode": status.mode,
-        "phase": status.phase,
-        "elapsed_secs": status.elapsed_secs,
-        "hosts_found": status.hosts_found,
-        "credentials_captured": status.credentials_captured,
-        "packets_captured": status.packets_captured,
-        "errors": status.errors,
-    });
-
-    Ok(("Autopilot status".to_string(), data))
-}
 
 fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
     log::info!("Starting WiFi scan");

@@ -18,6 +18,9 @@ path = "src/lib.rs"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 
 [dependencies]
+# Network management
+rustyjack-netlink = { path = "../rustyjack-netlink" }
+
 # Error handling
 thiserror = "1.0"
 anyhow = "1.0"

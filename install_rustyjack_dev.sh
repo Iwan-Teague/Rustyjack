@@ -122,10 +122,11 @@ add_dtparam() {
 PACKAGES=(
   # build tools for Rust compilation
   build-essential pkg-config libssl-dev
-  # WiFi interface tools (for native Rust wireless operations)
-  wireless-tools wpasupplicant iw iproute2 isc-dhcp-client network-manager rfkill
-  # Evil Twin / Karma AP requirements
-  hostapd dnsmasq iptables
+  # WiFi interface tools
+  # - wireless-tools: legacy WiFi tools (iwconfig, etc.) - needed by some scripts
+  # - wpasupplicant: provides wpa_supplicant daemon and wpa_cli for WPA auth fallback
+  # - network-manager: provides NetworkManager daemon for D-Bus WiFi management (nmcli not used - we use D-Bus directly)
+  wireless-tools wpasupplicant network-manager
   # misc
   git i2c-tools curl
 )
@@ -379,14 +380,8 @@ sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles"
 sudo chmod 755 "$PROJECT_ROOT/wifi/profiles"
 
-# Ensure WLAN interfaces are unblocked and up (avoid default DOWN state)
-step "Ensuring WLAN interfaces are unblocked and up"
-sudo rfkill unblock all || true
-for dev in /sys/class/net/wlan*; do
-  [ -e "$dev" ] || continue
-  iface=$(basename "$dev")
-  sudo ip link set "$iface" up || warn "Could not bring up $iface"
-done
+# Note: rfkill unblock and interface up operations now handled by rustyjack-netlink
+info "Network interface management delegated to rustyjack-netlink crate"
 
 if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then
   sudo tee "$PROJECT_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
@@ -451,30 +446,22 @@ else
   warn "[X] SPI device NOT found - reboot may be required"
 fi
 
-if cmd iw && cmd iwconfig; then
-  info "[OK] Wireless tools found"
+if cmd iwconfig; then
+  info "[OK] Wireless tools found (legacy reference only)"
 else
-  warn "[X] Wireless tools missing"
-fi
-
-# MAC randomization runtime deps
-if cmd ip; then
-  info "[OK] iproute2 present (ip command)"
-else
-  warn "[X] ip command missing - install iproute2"
-fi
-
-if cmd dhclient; then
-  info "[OK] dhclient present (DHCP renew for MAC changes)"
-else
-  warn "[X] dhclient missing - install isc-dhcp-client"
+  warn "[X] wireless-tools missing (optional)"
 fi
 
 if cmd wpa_cli || cmd nmcli; then
-  info "[OK] WiFi control present (wpa_cli/nmcli) for reconnect"
+  info "[OK] WiFi control present (wpa_cli/nmcli) for client authentication"
 else
-  warn "[X] Neither wpa_cli nor nmcli found - WiFi reconnect after MAC change may need manual intervention"
+  warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
 fi
+
+# rustyjack-netlink replaces most external binaries
+info "[OK] rustyjack-netlink provides native Rust implementations for:"
+info "     ip, rfkill, pgrep/pkill, iw, hostapd, wpa_supplicant,"
+info "     iptables, dhclient, dnsmasq, and ARP operations"
 
 if [ -x /usr/local/bin/rustyjack-ui ]; then
   info "[OK] DEBUG binary installed: rustyjack-ui"

@@ -124,18 +124,71 @@ pub fn port_weakness(port: u16) -> Option<&'static str> {
 
 #[cfg(target_os = "linux")]
 pub fn renew_dhcp_and_reconnect(interface: &str) -> bool {
-    let _dhcp_release = Command::new("dhclient").args(["-r", interface]).status();
-    let dhcp_renew = Command::new("dhclient").arg(interface).status();
-    let wpa = Command::new("wpa_cli")
-        .args(["-i", interface, "reconnect"])
-        .status();
-    let nm = Command::new("nmcli")
-        .args(["device", "reconnect", interface])
-        .status();
+    use tokio::runtime::Handle;
 
-    dhcp_renew.map(|s| s.success()).unwrap_or(false)
-        || wpa.map(|s| s.success()).unwrap_or(false)
-        || nm.map(|s| s.success()).unwrap_or(false)
+    let dhcp_success = match Handle::try_current() {
+        Ok(handle) => {
+            tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    if let Err(e) = rustyjack_netlink::dhcp_renew(interface, None).await {
+                        log::warn!("DHCP renew failed for {}: {}", interface, e);
+                        false
+                    } else {
+                        log::info!("DHCP lease renewed for {}", interface);
+                        true
+                    }
+                })
+            })
+        }
+        Err(_) => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                if let Err(e) = rustyjack_netlink::dhcp_renew(interface, None).await {
+                    log::warn!("DHCP renew failed for {}: {}", interface, e);
+                    false
+                } else {
+                    log::info!("DHCP lease renewed for {}", interface);
+                    true
+                }
+            })
+        }
+    };
+
+    // Try WPA reconnect via rustyjack-netlink
+    let wpa_success = match rustyjack_netlink::WpaManager::new(interface) {
+        Ok(mgr) => match mgr.reconnect() {
+            Ok(_) => {
+                log::info!("WPA reconnect triggered for {}", interface);
+                true
+            }
+            Err(e) => {
+                log::debug!("WPA reconnect failed (may not be using wpa_supplicant): {}", e);
+                false
+            }
+        },
+        Err(e) => {
+            log::debug!("WPA manager creation failed: {}", e);
+            false
+        }
+    };
+
+    // Fallback to NetworkManager if needed
+    let nm_success = if !wpa_success {
+        let rt = tokio::runtime::Runtime::new().ok();
+        if let Some(rt) = rt {
+            rt.block_on(async {
+                rustyjack_netlink::networkmanager::reconnect_device(interface)
+                    .await
+                    .is_ok()
+            })
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    dhcp_success || wpa_success || nm_success
 }
 
 #[cfg(target_os = "linux")]

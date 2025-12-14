@@ -7,6 +7,7 @@ use std::fs;
 use std::process::Command;
 
 use crate::error::{Result, WirelessError};
+use crate::process_helpers::pkill_pattern_force;
 
 /// nl80211 command types
 #[repr(u8)]
@@ -289,76 +290,33 @@ pub fn set_interface_type_iw(name: &str, mode: Nl80211IfType) -> Result<()> {
     Ok(())
 }
 
-/// Set channel using iw command
+/// Set channel using netlink
 pub fn set_channel_iw(name: &str, channel: u8) -> Result<()> {
-    use std::process::Command;
-
-    let status = Command::new("iw")
-        .args(["dev", name, "set", "channel", &channel.to_string()])
-        .status()
-        .map_err(|e| WirelessError::Channel(format!("Failed to run iw command: {}", e)))?;
-
-    if !status.success() {
-        // Try with iwconfig as fallback
-        let status2 = Command::new("iwconfig")
-            .args([name, "channel", &channel.to_string()])
-            .status()
-            .map_err(|e| WirelessError::Channel(format!("Failed to run iwconfig: {}", e)))?;
-
-        if !status2.success() {
-            return Err(WirelessError::Channel(format!(
-                "Failed to set channel {} on {}",
-                channel, name
-            )));
-        }
-    }
-
-    Ok(())
+    let mut mgr = rustyjack_netlink::WirelessManager::new()
+        .map_err(|e| WirelessError::Channel(format!("Failed to create wireless manager: {}", e)))?;
+    
+    mgr.set_channel(name, channel)
+        .map_err(|e| WirelessError::Channel(format!("Failed to set channel {} on {}: {}", channel, name, e)))
 }
 
-/// Set frequency using iw command
+/// Set frequency using netlink
 pub fn set_frequency_iw(name: &str, freq_mhz: u32) -> Result<()> {
-    use std::process::Command;
-
-    let status = Command::new("iw")
-        .args(["dev", name, "set", "freq", &freq_mhz.to_string()])
-        .status()
-        .map_err(|e| WirelessError::Channel(format!("Failed to run iw command: {}", e)))?;
-
-    if !status.success() {
-        return Err(WirelessError::Channel(format!(
-            "Failed to set frequency {} MHz on {}",
-            freq_mhz, name
-        )));
-    }
-
-    Ok(())
+    let mut mgr = rustyjack_netlink::WirelessManager::new()
+        .map_err(|e| WirelessError::Channel(format!("Failed to create wireless manager: {}", e)))?;
+    
+    mgr.set_frequency(name, freq_mhz, rustyjack_netlink::ChannelWidth::NoHT)
+        .map_err(|e| WirelessError::Channel(format!("Failed to set frequency {} MHz on {}: {}", freq_mhz, name, e)))
 }
 
 /// Get current channel
 pub fn get_channel(name: &str) -> Result<Option<u8>> {
-    use std::process::Command;
-
-    let output = Command::new("iw")
-        .args(["dev", name, "info"])
-        .output()
-        .map_err(|e| WirelessError::Channel(format!("Failed to run iw: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse "channel X" from output
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.starts_with("channel ") {
-            if let Some(ch_str) = line.split_whitespace().nth(1) {
-                if let Ok(ch) = ch_str.parse() {
-                    return Ok(Some(ch));
-                }
-            }
-        }
-    }
-
-    Ok(None)
+    let mut mgr = rustyjack_netlink::WirelessManager::new()
+        .map_err(|e| WirelessError::Channel(format!("Failed to create wireless manager: {}", e)))?;
+    
+    let info = mgr.get_interface_info(name)
+        .map_err(|e| WirelessError::Channel(format!("Failed to get interface info for {}: {}", name, e)))?;
+    
+    Ok(info.channel)
 }
 
 /// Kill processes that might interfere with monitor mode
@@ -374,7 +332,7 @@ pub fn kill_interfering_processes() -> Result<()> {
     ];
 
     for proc in processes {
-        let _ = Command::new("pkill").args(["-9", proc]).status();
+        let _ = pkill_pattern_force(proc);
     }
 
     Ok(())

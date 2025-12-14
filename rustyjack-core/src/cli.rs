@@ -59,8 +59,7 @@ pub enum Commands {
     System(SystemCommand),
     #[command(subcommand)]
     Bridge(BridgeCommand),
-    #[command(subcommand)]
-    Autopilot(AutopilotCommand),
+
     #[command(subcommand)]
     Hardware(HardwareCommand),
     #[command(subcommand)]
@@ -825,59 +824,4 @@ pub struct BridgeStopArgs {
     pub interface_b: String,
 }
 
-#[derive(Subcommand, Debug)]
-pub enum AutopilotCommand {
-    /// Start autopilot with specified mode
-    Start(AutopilotStartArgs),
-    /// Stop autopilot
-    Stop,
-    /// Get current autopilot status
-    Status,
-}
 
-#[derive(Args, Debug)]
-pub struct AutopilotStartArgs {
-    /// Autopilot mode to run
-    #[arg(long, value_enum, default_value_t = AutopilotMode::Standard)]
-    pub mode: AutopilotMode,
-
-    /// Optional interface override
-    #[arg(long)]
-    pub interface: Option<String>,
-
-    /// Run scan phase
-    #[arg(long, default_value_t = true)]
-    pub scan: bool,
-
-    /// Run MITM attack
-    #[arg(long, default_value_t = true)]
-    pub mitm: bool,
-
-    /// Run Responder
-    #[arg(long, default_value_t = true)]
-    pub responder: bool,
-
-    /// DNS spoofing site template (empty to skip)
-    #[arg(long)]
-    pub dns_spoof: Option<String>,
-
-    /// Max duration in seconds (0 = unlimited)
-    #[arg(long, default_value_t = 0)]
-    pub duration: u64,
-
-    /// Interval between status checks in seconds
-    #[arg(long, default_value_t = 30)]
-    pub check_interval: u64,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum AutopilotMode {
-    /// Standard mode: scan -> MITM -> responder
-    Standard,
-    /// Aggressive mode: all attacks simultaneously
-    Aggressive,
-    /// Stealth mode: slow scan, passive monitoring
-    Stealth,
-    /// Credential harvesting focus
-    Harvest,
-}

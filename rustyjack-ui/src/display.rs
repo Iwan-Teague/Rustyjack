@@ -672,7 +672,7 @@ impl Display {
 
         // Draw title in top left if provided, clipped to avoid overlapping temp
         if let Some(t) = title {
-            // Leave room for temp/autopilot but allow longer labels
+            // Leave room for temp display but allow longer labels
             const MAX_TITLE_CHARS: usize = 16;
             let mut title_text = t.to_string();
             if title_text.len() > MAX_TITLE_CHARS {
@@ -699,32 +699,6 @@ impl Display {
         )
         .draw(&mut self.lcd)
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
-
-        // Display autopilot indicator if running (center of toolbar)
-        if status.autopilot_running {
-            let ap_indicator = if status.autopilot_mode.is_empty() {
-                "[AP]".to_string()
-            } else {
-                let mode_abbr = match status.autopilot_mode.as_str() {
-                    "Standard" => "STD",
-                    "Aggressive" => "AGR",
-                    "Stealth" => "STH",
-                    "Harvest" => "HRV",
-                    _ => "AP",
-                };
-                format!("[{}]", mode_abbr)
-            };
-
-            let center_x = (LCD_WIDTH / 2) as i32 - 12;
-            Text::with_baseline(
-                &ap_indicator,
-                Point::new(center_x, 3),
-                self.text_style_highlight,
-                Baseline::Top,
-            )
-            .draw(&mut self.lcd)
-            .map_err(|_| anyhow::anyhow!("Draw error"))?;
-        }
 
         Ok(())
     }
@@ -1390,13 +1364,8 @@ impl Display {
 
     #[allow(dead_code)]
     pub fn draw_toolbar(&mut self, status: &StatusOverlay) -> Result<()> {
-        let ap_status = if status.autopilot_running {
-            format!(" [AP:{}]", status.autopilot_mode)
-        } else {
-            String::new()
-        };
         println!(
-            "[status] {:.0} °C{} | {}",
+            "[status] {:.0} °C | {}",
             status.temp_c,
             ap_status,
             status.text.as_str()
@@ -1622,8 +1591,6 @@ pub struct StatusOverlay {
     pub disk_used_gb: f32,
     pub disk_total_gb: f32,
     pub uptime_secs: u64,
-    pub autopilot_running: bool,
-    pub autopilot_mode: String,
     pub target_network: String,
     pub target_bssid: String,
     pub target_channel: u8,

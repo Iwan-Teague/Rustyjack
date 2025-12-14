@@ -8,11 +8,18 @@ compile_error!(
 );
 
 pub mod anti_forensics;
-pub mod autopilot;
+
 pub mod cli;
+pub mod dhcp_helpers;
+pub mod dns_helpers;
 pub mod operations;
 pub mod system;
 pub mod wireless_native;
+pub mod netlink_helpers;
+pub mod arp_helpers;
+
+pub mod evasion;
+pub mod physical_access;
 
 // Re-export encryption helpers from dedicated crate.
 pub use rustyjack_encryption as crypto;

@@ -90,24 +90,6 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
         eprintln!("[isolation] watchdog error: {err:?}");
     }
 
-    // Check autopilot status
-    if let Ok((_, data)) = core.dispatch(Commands::Autopilot(
-        rustyjack_core::cli::AutopilotCommand::Status,
-    )) {
-        overlay.autopilot_running = data
-            .get("running")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        overlay.autopilot_mode = data
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-    } else {
-        overlay.autopilot_running = false;
-        overlay.autopilot_mode = String::new();
-    }
-
     if let Ok(mut guard) = shared.lock() {
         *guard = overlay;
     }

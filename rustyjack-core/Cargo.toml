@@ -26,3 +26,5 @@ rustyjack-encryption = { path = "../rustyjack-encryption" }
 # Native wireless toolkit (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
 rustyjack-wireless = { path = "../rustyjack-wireless" }
+rustyjack-netlink = { path = "../rustyjack-netlink" }
+tokio = { version = "1.0", features = ["rt", "macros"] }

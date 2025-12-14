@@ -261,17 +261,17 @@ impl StateManager {
     // Helper methods for restoration
 
     fn delete_monitor(&self, monitor: &str) -> Result<()> {
-        let output = std::process::Command::new("iw")
-            .args(["dev", monitor, "del"])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run iw: {}", e)))?;
-
-        if !output.status.success() {
-            // Try airmon-ng
-            let _ = std::process::Command::new("airmon-ng")
-                .args(["stop", monitor])
-                .output();
+        // Try netlink first
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            if mgr.delete_interface(monitor).is_ok() {
+                return Ok(());
+            }
         }
+
+        // Fall back to airmon-ng
+        let _ = std::process::Command::new("airmon-ng")
+            .args(["stop", monitor])
+            .output();
 
         Ok(())
     }
@@ -303,19 +303,10 @@ impl StateManager {
     fn restore_tx_power(&self, interface: &str, dbm: i32) -> Result<()> {
         let mbm = dbm * 100;
 
-        let result = std::process::Command::new("iw")
-            .args([
-                "dev",
-                interface,
-                "set",
-                "txpower",
-                "fixed",
-                &mbm.to_string(),
-            ])
-            .output();
-
-        if let Ok(output) = result {
-            if output.status.success() {
+        // Try netlink first
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
+            if mgr.set_tx_power(interface, power_setting).is_ok() {
                 return Ok(());
             }
         }

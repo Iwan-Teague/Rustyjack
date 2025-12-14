@@ -224,45 +224,42 @@ impl PassiveManager {
         let mon_name = format!("{}mon", interface);
 
         // Delete existing monitor if present
-        let _ = std::process::Command::new("iw")
-            .args(["dev", &mon_name, "del"])
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            let _ = mgr.delete_interface(&mon_name);
+        }
+
+        // Create monitor interface using netlink
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            if mgr.create_interface(interface, &mon_name, rustyjack_netlink::InterfaceMode::Monitor).is_ok() {
+                // Bring it up
+                let _ = std::process::Command::new("ip")
+                    .args(["link", "set", &mon_name, "up"])
+                    .output();
+
+                self.active_monitors.push(mon_name.clone());
+
+                log::info!("Created monitor interface: {}", mon_name);
+                return Ok(mon_name);
+            }
+        }
+
+        // Fall back to airmon-ng if netlink fails
+        let airmon = std::process::Command::new("airmon-ng")
+            .args(["start", interface])
             .output();
 
-        // Create monitor interface
-        let create = std::process::Command::new("iw")
-            .args([
-                "dev",
-                interface,
-                "interface",
-                "add",
-                &mon_name,
-                "type",
-                "monitor",
-            ])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run iw: {}", e)))?;
-
-        if !create.status.success() {
-            // Try airmon-ng as fallback
-            let airmon = std::process::Command::new("airmon-ng")
-                .args(["start", interface])
-                .output();
-
-            if let Ok(output) = airmon {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&create.stderr);
-                    return Err(EvasionError::InterfaceError(format!(
-                        "Failed to create monitor interface: {}",
-                        stderr
-                    )));
-                }
-            } else {
-                let stderr = String::from_utf8_lossy(&create.stderr);
+        if let Ok(output) = airmon {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(EvasionError::InterfaceError(format!(
                     "Failed to create monitor interface: {}",
                     stderr
                 )));
             }
+        } else {
+            return Err(EvasionError::InterfaceError(
+                "Failed to create monitor interface with airmon-ng".to_string()
+            ));
         }
 
         // Bring up the monitor interface

@@ -49,10 +49,6 @@ pub enum MenuAction {
     DnsSpoofStop,
     ToggleDnsSpoof,
     ReverseShell,
-    /// Autopilot control
-    AutopilotStart(rustyjack_core::cli::AutopilotMode),
-    AutopilotStop,
-    AutopilotStatus,
     /// Attack pipelines - automated sequences
     AttackPipeline(PipelineType),
     /// Toggle MAC randomization on/off
@@ -197,7 +193,6 @@ impl MenuTree {
         nodes.insert("atx", MenuNode::Static(tx_power_menu));
         nodes.insert("aeth", MenuNode::Static(ethernet_menu));
         nodes.insert("aethp", MenuNode::Static(ethernet_pipeline_menu));
-        nodes.insert("apt", MenuNode::Static(autopilot_menu));
         nodes.insert("enc", MenuNode::Static(encryption_menu));
         nodes.insert("encadv", MenuNode::Static(encryption_advanced_menu));
         Self { nodes }
@@ -326,7 +321,6 @@ fn ethernet_menu() -> Vec<MenuEntry> {
         MenuEntry::new("MITM Status", MenuAction::EthernetMitmStatus),
         MenuEntry::new("Stop MITM/DNS", MenuAction::EthernetMitmStop),
         MenuEntry::new("Pipelines", MenuAction::EthernetSiteCredPipeline),
-        MenuEntry::new("Autopilot", MenuAction::Submenu("apt")),
     ]
 }
 
@@ -384,29 +378,6 @@ fn pipeline_menu() -> Vec<MenuEntry> {
     ]
 }
 
-fn autopilot_menu() -> Vec<MenuEntry> {
-    use rustyjack_core::cli::AutopilotMode;
-    vec![
-        MenuEntry::new(
-            "Start Standard",
-            MenuAction::AutopilotStart(AutopilotMode::Standard),
-        ),
-        MenuEntry::new(
-            "Start Aggressive",
-            MenuAction::AutopilotStart(AutopilotMode::Aggressive),
-        ),
-        MenuEntry::new(
-            "Start Stealth",
-            MenuAction::AutopilotStart(AutopilotMode::Stealth),
-        ),
-        MenuEntry::new(
-            "Start Harvest",
-            MenuAction::AutopilotStart(AutopilotMode::Harvest),
-        ),
-        MenuEntry::new("Stop Autopilot", MenuAction::AutopilotStop),
-        MenuEntry::new("Status / Refresh", MenuAction::AutopilotStatus),
-    ]
-}
 
 #[allow(dead_code)]
 fn stealth_menu() -> Vec<MenuEntry> {
@@ -558,7 +529,6 @@ pub fn menu_title(id: &str) -> &'static str {
         "awco" => "Connected Offence",
         "aeth" => "Ethernet Recon",
         "aethp" => "Ethernet Pipelines",
-        "apt" => "Autopilot",
         "as" => "Settings",
         "asl" => "Logs",
         "asd" => "Discord",

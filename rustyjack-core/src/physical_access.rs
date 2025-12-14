@@ -185,8 +185,8 @@ fn extract_from_dhcp(interface: &str) -> Result<Vec<WifiCredential>> {
     
     // Check DHCP lease file
     let lease_paths = vec![
-        "/var/lib/dhcp/dhclient.leases",
-        "/var/lib/dhclient/dhclient.leases",
+        "/var/lib/dhcp/dhclient.leases".to_string(),
+        "/var/lib/dhclient/dhclient.leases".to_string(),
         format!("/var/lib/dhcp/dhclient.{}.leases", interface),
     ];
     

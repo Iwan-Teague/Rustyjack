@@ -117,10 +117,13 @@ PACKAGES=(
   build-essential pkg-config libssl-dev
   # DKMS for WiFi driver compilation (kernel headers added separately, best-effort)
   dkms bc libelf-dev
-  # network / offensive tools
-  nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps iproute2 isc-dhcp-client network-manager rfkill
-  # WiFi interface tools (for native Rust wireless operations)
-  wireless-tools wpasupplicant iw hostapd dnsmasq iptables
+  # network / offensive tools (nmap, tcpdump, etc. still useful for advanced operations)
+  nmap ncat tcpdump dsniff ettercap-text-only php
+  # WiFi interface tools
+  # - wireless-tools: legacy WiFi tools (iwconfig, etc.) - needed by some scripts
+  # - wpasupplicant: provides wpa_supplicant daemon and wpa_cli for WPA auth fallback
+  # - network-manager: provides NetworkManager daemon for D-Bus WiFi management (nmcli not used - we use D-Bus directly)
+  wireless-tools wpasupplicant network-manager
   # misc
   git i2c-tools curl
 )
@@ -327,14 +330,8 @@ sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles"
 sudo chmod 755 "$PROJECT_ROOT/wifi/profiles"
 
-# Ensure WLAN interfaces are unblocked and up (avoid default DOWN state)
-step "Ensuring WLAN interfaces are unblocked and up"
-sudo rfkill unblock all || true
-for dev in /sys/class/net/wlan*; do
-  [ -e "$dev" ] || continue
-  iface=$(basename "$dev")
-  sudo ip link set "$iface" up || warn "Could not bring up $iface"
-done
+# Note: rfkill unblock and interface up operations now handled by rustyjack-netlink
+info "Network interface management delegated to rustyjack-netlink crate"
 
 # Install WiFi driver scripts
 step "Installing WiFi driver auto-install scripts..."
@@ -415,32 +412,32 @@ else
   warn "[X] SPI device NOT found - a reboot may be required"
 fi
 
-# 6-b Wireless tools check (native rustyjack-wireless is used)
-if cmd iw && cmd iwconfig; then
-  info "[OK] Wireless interface tools found (iw, iwconfig)"
-  info "     Native rustyjack-wireless crate handles all wireless attacks"
+# 6-b Wireless tools check
+if cmd iwconfig; then
+  info "[OK] Wireless tools found (iwconfig - legacy reference only)"
 else
-  warn "[X] Wireless tools missing - install 'iw' and 'wireless-tools'"
+  warn "[X] wireless-tools missing (optional - used for legacy reference only)"
 fi
 
-# 6-b2 MAC randomization runtime deps
-if cmd ip; then
-  info "[OK] iproute2 present (ip command)"
-else
-  warn "[X] ip command missing - install iproute2"
-fi
-
-if cmd dhclient; then
-  info "[OK] dhclient present (DHCP renew for MAC changes)"
-else
-  warn "[X] dhclient missing - install isc-dhcp-client"
-fi
-
+# 6-b2 WiFi client mode dependencies
 if cmd wpa_cli || cmd nmcli; then
-  info "[OK] WiFi control present (wpa_cli/nmcli) for reconnect"
+  info "[OK] WiFi control present (wpa_cli/nmcli) for client authentication"
 else
-  warn "[X] Neither wpa_cli nor nmcli found - WiFi reconnect after MAC change may need manual intervention"
+  warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
 fi
+
+# 6-b3 rustyjack-netlink replaces: ip, rfkill, pgrep/pkill, iw, hostapd, iptables, dhclient, dnsmasq
+info "[OK] rustyjack-netlink provides native Rust implementations for:"
+info "     - ip (network interface management via netlink)"
+info "     - rfkill (radio management via /dev/rfkill)"
+info "     - pgrep/pkill (process management via /proc)"
+info "     - iw (nl80211 wireless operations)"
+info "     - hostapd (software AP via nl80211)"
+info "     - wpa_supplicant (WPA/WPA2 client authentication)"
+info "     - iptables (netfilter via nfnetlink)"
+info "     - dhclient (DHCP client)"
+info "     - dnsmasq (DHCP + DNS server)"
+info "     - ARP operations (raw sockets)"
 
 # 6-c USB WiFi dongle detection
 if lsusb | grep -q -i "realtek\|ralink\|atheros\|broadcom"; then

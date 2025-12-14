@@ -10,6 +10,7 @@ use anyhow::{Result, Context, anyhow};
 use log::{info, warn, debug};
 use rand::Rng;
 use serde::{Serialize, Deserialize};
+use crate::netlink_helpers::{netlink_set_interface_down, netlink_set_interface_up};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvasionConfig {
@@ -72,21 +73,17 @@ pub fn generate_random_mac(preserve_vendor: bool, current_mac: Option<&str>) -> 
 /// Set MAC address for an interface
 pub fn set_mac_address(interface: &str, mac: &str) -> Result<()> {
     // Bring interface down
-    Command::new("ip")
-        .args(["link", "set", interface, "down"])
-        .status()
+    netlink_set_interface_down(interface)
         .context("bringing interface down")?;
     
-    // Set new MAC
+    // Set new MAC (still requires ip command - netlink MAC setting pending)
     Command::new("ip")
         .args(["link", "set", interface, "address", mac])
         .status()
         .context("setting MAC address")?;
     
     // Bring interface back up
-    Command::new("ip")
-        .args(["link", "set", interface, "up"])
-        .status()
+    netlink_set_interface_up(interface)
         .context("bringing interface up")?;
     
     info!("MAC address changed to {} on {}", mac, interface);
@@ -179,21 +176,19 @@ pub fn randomize_ttl() -> Result<()> {
     Ok(())
 }
 
-/// Configure iptables for packet fragmentation
+/// Configure packet fragmentation using TCP MSS clamping
 pub fn enable_packet_fragmentation(enable: bool) -> Result<()> {
+    use rustyjack_netlink::IptablesManager;
+    
+    let ipt = IptablesManager::new()
+        .context("Failed to initialize iptables manager for packet fragmentation")?;
+    
     if enable {
-        // Fragment packets to evade IDS
-        Command::new("iptables")
-            .args(["-A", "OUTPUT", "-j", "TCPMSS", "--set-mss", "500"])
-            .status()
-            .context("enabling packet fragmentation")?;
-        info!("Packet fragmentation enabled");
+        ipt.add_tcp_mss(500)
+            .context("Failed to enable packet fragmentation via TCP MSS")?;
+        info!("Packet fragmentation enabled (TCP MSS=500)");
     } else {
-        // Remove fragmentation rule
-        Command::new("iptables")
-            .args(["-D", "OUTPUT", "-j", "TCPMSS", "--set-mss", "500"])
-            .status()
-            .ok(); // Ignore errors if rule doesn't exist
+        ipt.delete_tcp_mss(500).ok();
         info!("Packet fragmentation disabled");
     }
     
@@ -209,18 +204,20 @@ pub fn random_delay(min_ms: u64, max_ms: u64) {
 
 /// Start MAC rotation daemon
 pub fn start_mac_rotation(interface: String, interval_secs: u64) -> Result<()> {
+    let iface_clone = interface.clone();
+    
     thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_secs(interval_secs));
             
-            match get_mac_address(&interface) {
+            match get_mac_address(&iface_clone) {
                 Ok(current_mac) => {
                     match generate_random_mac(true, Some(&current_mac)) {
                         Ok(new_mac) => {
-                            if let Err(e) = set_mac_address(&interface, &new_mac) {
+                            if let Err(e) = set_mac_address(&iface_clone, &new_mac) {
                                 warn!("Failed to rotate MAC: {}", e);
                             } else {
-                                info!("MAC rotated on {}: {}", interface, new_mac);
+                                info!("MAC rotated on {}: {}", iface_clone, new_mac);
                             }
                         }
                         Err(e) => warn!("Failed to generate MAC: {}", e),

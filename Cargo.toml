@@ -6,7 +6,7 @@ members = [
     "rustyjack-ui",
     "rustyjack-wireless",
     "rustyjack-ethernet",
-    "rustyjack-encryption",
+    "rustyjack-encryption", "rustyjack-netlink",
 ]
 
 [workspace.package]

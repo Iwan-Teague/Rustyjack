@@ -210,24 +210,11 @@ impl TxPowerManager {
             }
         }
 
-        // Try iw as fallback
-        let output = std::process::Command::new("iw")
-            .args(["dev", interface, "info"])
-            .output();
-
-        if let Ok(output) = output {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if line.contains("txpower") {
-                    // Parse "txpower X.XX dBm"
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if let Some(pos) = parts.iter().position(|&p| p == "txpower") {
-                        if let Some(value) = parts.get(pos + 1) {
-                            if let Ok(power) = value.parse::<f32>() {
-                                return Ok(power as i32);
-                            }
-                        }
-                    }
+        // Try netlink via rustyjack-netlink
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            if let Ok(info) = mgr.get_interface_info(interface) {
+                if let Some(txpower_mbm) = info.txpower_mbm {
+                    return Ok(txpower_mbm / 100);
                 }
             }
         }
@@ -266,21 +253,11 @@ impl TxPowerManager {
         let mbm = level.to_mbm();
         let dbm = level.to_dbm();
 
-        // Try iw first (modern, uses mBm)
-        let iw_result = std::process::Command::new("iw")
-            .args([
-                "dev",
-                interface,
-                "set",
-                "txpower",
-                "fixed",
-                &mbm.to_string(),
-            ])
-            .output();
-
-        if let Ok(output) = iw_result {
-            if output.status.success() {
-                log::debug!("Set TX power on {} to {} dBm using iw", interface, dbm);
+        // Try netlink first
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
+            if mgr.set_tx_power(interface, power_setting).is_ok() {
+                log::debug!("Set TX power on {} to {} dBm using netlink", interface, dbm);
                 return Ok(());
             }
         }

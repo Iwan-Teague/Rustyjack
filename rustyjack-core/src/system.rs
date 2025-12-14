@@ -42,6 +42,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use zeroize::Zeroize;
 
+use crate::netlink_helpers::{
+    netlink_set_interface_up, netlink_set_interface_down, netlink_flush_addresses, 
+    rfkill_block, rfkill_unblock, rfkill_find_index,
+    process_kill_pattern, process_kill_pattern_force, process_find_pattern, process_running
+};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InterfaceInfo {
     pub name: String,
@@ -452,47 +458,62 @@ pub fn send_discord_payload(
 }
 
 pub fn kill_process(name: &str) -> Result<KillResult> {
-    let status = Command::new("pkill")
-        .args(["-9", "-x", name])
-        .status()
-        .with_context(|| format!("terminating process {name}"))?;
-    if status.success() {
-        Ok(KillResult::Terminated)
-    } else if status.code() == Some(1) {
-        Ok(KillResult::NotFound)
-    } else {
-        bail!("pkill returned status {status}", status = status);
+    #[cfg(target_os = "linux")]
+    {
+        use rustyjack_netlink::process;
+        match process::pkill_exact_force(name) {
+            Ok(n) if n > 0 => Ok(KillResult::Terminated),
+            Ok(_) => Ok(KillResult::NotFound),
+            Err(e) => bail!("Failed to kill process {}: {}", name, e),
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    {
+        let status = Command::new("pkill")
+            .args(["-9", "-x", name])
+            .status()
+            .with_context(|| format!("terminating process {name}"))?;
+        if status.success() {
+            Ok(KillResult::Terminated)
+        } else if status.code() == Some(1) {
+            Ok(KillResult::NotFound)
+        } else {
+            bail!("pkill returned status {status}", status = status);
+        }
     }
 }
 
 pub fn kill_process_pattern(pattern: &str) -> Result<KillResult> {
-    let status = Command::new("pkill")
-        .args(["-f", pattern])
-        .status()
-        .with_context(|| format!("terminating processes matching {pattern}"))?;
-    if status.success() {
-        Ok(KillResult::Terminated)
-    } else if status.code() == Some(1) {
-        Ok(KillResult::NotFound)
-    } else {
-        bail!("pkill returned status {}", status);
+    match process_kill_pattern(pattern) {
+        Ok(n) if n > 0 => Ok(KillResult::Terminated),
+        Ok(_) => Ok(KillResult::NotFound),
+        Err(e) => bail!("Failed to kill processes matching {}: {}", pattern, e),
     }
 }
 
 pub fn process_running_exact(name: &str) -> Result<bool> {
-    let status = Command::new("pgrep")
-        .args(["-x", name])
-        .status()
-        .with_context(|| format!("checking for process {name}"))?;
-    Ok(status.success())
+    #[cfg(target_os = "linux")]
+    {
+        use rustyjack_netlink::process;
+        process::ProcessManager::new()
+            .exists_name(name)
+            .with_context(|| format!("checking for process {name}"))
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    {
+        let status = Command::new("pgrep")
+            .args(["-x", name])
+            .status()
+            .with_context(|| format!("checking for process {name}"))?;
+        Ok(status.success())
+    }
 }
 
 pub fn process_running_pattern(pattern: &str) -> Result<bool> {
-    let status = Command::new("pgrep")
-        .args(["-f", pattern])
-        .status()
-        .with_context(|| format!("checking for pattern {pattern}"))?;
-    Ok(status.success())
+    process_running(pattern)
+        .with_context(|| format!("checking for pattern {pattern}"))
 }
 
 pub fn compose_status_text(
@@ -1016,40 +1037,28 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
         if is_allowed {
             // For wireless: unblock rfkill BEFORE bringing interface up
             if is_wireless {
-                if let Some(idx) = rfkill_index_for_interface(&iface) {
-                    let _ = Command::new("rfkill")
-                        .args(["unblock", &idx])
-                        .status();
+                if let Ok(Some(idx)) = rfkill_find_index(&iface) {
+                    let _ = rfkill_unblock(idx);
                 }
             }
             
             // Bring interface up (don't fail if wireless can't be brought up)
-            let up_result = Command::new("ip")
-                .args(["link", "set", &iface, "up"])
-                .status();
+            let up_result = netlink_set_interface_up(&iface);
                 
-            if let Ok(status) = up_result {
-                if !status.success() {
-                    // For wireless, this is expected if not associated with AP - not an error
-                    if !is_wireless {
-                        errors.push(format!("{}: failed to bring up", iface));
-                    }
+            if let Err(e) = up_result {
+                // For wireless, this is expected if not associated with AP - not an error
+                if !is_wireless {
+                    errors.push(format!("{}: failed to bring up: {}", iface, e));
                 }
-            } else if !is_wireless {
-                errors.push(format!("{}: failed to execute ip command", iface));
             }
         } else {
             // Bring interface down
-            let _ = Command::new("ip")
-                .args(["link", "set", &iface, "down"])
-                .status();
+            let _ = netlink_set_interface_down(&iface);
                 
             // For wireless: block with rfkill after bringing down
             if is_wireless {
-                if let Some(idx) = rfkill_index_for_interface(&iface) {
-                    let _ = Command::new("rfkill")
-                        .args(["block", &idx])
-                        .status();
+                if let Ok(Some(idx)) = rfkill_find_index(&iface) {
+                    let _ = rfkill_block(idx);
                 }
             }
         }
@@ -1071,25 +1080,34 @@ pub fn enforce_single_interface(interface: &str) -> Result<()> {
 }
 
 pub fn set_default_route(interface: &str, gateway: Ipv4Addr) -> Result<()> {
-    let _ = Command::new("ip")
-        .args(["route", "del", "default"])
-        .status();
-    Command::new("ip")
-        .args([
-            "route",
-            "add",
-            "default",
-            "via",
-            &gateway.to_string(),
-            "dev",
-            interface,
-        ])
-        .status()
-        .with_context(|| format!("setting default route via {interface}"))?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("Failed to add default route"))?;
-    Ok(())
+    use std::net::IpAddr;
+    
+    #[cfg(target_os = "linux")]
+    {
+        let iface = interface.to_string();
+        let gw = IpAddr::V4(gateway);
+        
+        tokio::runtime::Handle::try_current()
+            .map(|handle| {
+                handle.block_on(async {
+                    let _ = rustyjack_netlink::delete_default_route().await;
+                    rustyjack_netlink::add_default_route(gw, &iface)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to set default route: {}", e))
+                })
+            })
+            .unwrap_or_else(|_| {
+                tokio::runtime::Runtime::new()?.block_on(async {
+                    let _ = rustyjack_netlink::delete_default_route().await;
+                    rustyjack_netlink::add_default_route(gw, &iface)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to set default route: {}", e))
+                })
+            })
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    bail!("Route management only supported on Linux")
 }
 
 pub fn rewrite_dns_servers(interface: &str, gateway: Ipv4Addr) -> Result<()> {
@@ -2069,91 +2087,71 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
 
     log::info!("Connecting to WiFi: ssid={ssid}, interface={interface}");
 
-    // Clean up existing connections with retry logic
-    for attempt in 1..=3 {
-        let result = Command::new("pkill")
-            .args(["-f", &format!("wpa_supplicant.*{interface}")])
-            .status();
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
-        if result.is_ok() {
-            break;
-        }
-
-        if attempt < 3 {
-            log::warn!("pkill attempt {attempt} failed, retrying...");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
+    // Stop wpa_supplicant if running
+    if let Err(e) = rustyjack_netlink::stop_wpa_supplicant(interface) {
+        log::warn!("Failed to stop wpa_supplicant for {}: {}", interface, e);
     }
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Release DHCP lease
-    let _ = Command::new("dhclient").args(["-r", interface]).status();
+    if let Err(e) = rt.block_on(async {
+        rustyjack_netlink::dhcp_release(interface).await
+    }) {
+        log::warn!("Failed to release DHCP lease for {}: {}", interface, e);
+    }
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Ensure interface is up
-    let up_result = Command::new("ip")
-        .args(["link", "set", interface, "up"])
-        .status()
+    netlink_set_interface_up(interface)
         .with_context(|| format!("bringing interface {interface} up"))?;
-
-    if !up_result.success() {
-        log::error!("Failed to bring interface {interface} up");
-        let _ = cleanup_wifi_interface(interface);
-        bail!("Failed to bring interface {interface} up");
-    }
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // Connect with nmcli with timeout
-    let mut cmd = Command::new("nmcli");
-    cmd.args(["--terse", "--wait", "20", "device", "wifi", "connect", ssid]);
-
-    if !interface.is_empty() {
-        cmd.args(["ifname", interface]);
-    }
-
-    if let Some(pass) = password {
-        if !pass.is_empty() {
-            cmd.args(["password", pass]);
-        }
-    }
-
-    log::info!("Executing nmcli connect command...");
-    let output = cmd.output().context("executing nmcli to connect WiFi")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        log::error!("nmcli connect failed for {ssid} on {interface}");
-        log::error!("stderr: {stderr}");
-        log::error!("stdout: {stdout}");
-
+    // Connect via NetworkManager D-Bus
+    log::info!("Connecting via NetworkManager...");
+    if let Err(e) = rt.block_on(async {
+        rustyjack_netlink::networkmanager::connect_wifi(
+            interface,
+            ssid,
+            password,
+            20, // 20 second timeout
+        )
+        .await
+    }) {
+        log::error!("NetworkManager connection failed for {ssid} on {interface}: {e}");
+        
         // Attempt cleanup before failing
         let _ = cleanup_wifi_interface(interface);
-
-        bail!("Failed to connect to {ssid} on {interface}: {stderr}");
+        
+        bail!("Failed to connect to {ssid} on {interface}: {e}");
     }
 
-    log::info!("nmcli connection successful, requesting DHCP lease...");
+    log::info!("NetworkManager connection successful, requesting DHCP lease...");
 
     // Request DHCP lease with retry
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let mut dhcp_success = false;
     for attempt in 1..=3 {
-        let dhcp_result = Command::new("dhclient").arg(interface).output();
+        let dhcp_result = rt.block_on(async {
+            rustyjack_netlink::dhcp_acquire(interface, None).await
+        });
 
         match dhcp_result {
-            Ok(output) if output.status.success() => {
+            Ok(lease) => {
                 dhcp_success = true;
-                log::info!("DHCP lease acquired on attempt {attempt}");
+                log::info!(
+                    "DHCP lease acquired on attempt {}: {}/{}, gateway: {:?}",
+                    attempt,
+                    lease.address,
+                    lease.prefix_len,
+                    lease.gateway
+                );
                 break;
             }
-            Ok(output) => {
-                log::warn!(
-                    "DHCP attempt {attempt} failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
             Err(e) => {
-                log::warn!("DHCP attempt {attempt} error: {e}");
+                log::warn!("DHCP attempt {} failed: {}", attempt, e);
             }
         }
 
@@ -2184,19 +2182,21 @@ pub fn disconnect_wifi_interface(interface: Option<String>) -> Result<String> {
 
     log::info!("Disconnecting WiFi interface: {iface}");
 
-    let output = Command::new("nmcli")
-        .args(["device", "disconnect", &iface])
-        .output()
-        .with_context(|| format!("disconnecting {iface}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        log::error!("nmcli disconnect failed for {iface}: {stderr}");
-        bail!("Failed to disconnect {iface}: {stderr}");
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    if let Err(e) = rt.block_on(async {
+        rustyjack_netlink::networkmanager::disconnect_device(&iface).await
+    }) {
+        log::error!("NetworkManager disconnect failed for {iface}: {e}");
+        bail!("Failed to disconnect {iface}: {e}");
     }
 
     log::info!("Releasing DHCP lease for {iface}");
-    let _ = Command::new("dhclient").args(["-r", &iface]).status();
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    if let Err(e) = rt.block_on(async {
+        rustyjack_netlink::dhcp_release(&iface).await
+    }) {
+        log::warn!("Failed to release DHCP lease for {}: {}", iface, e);
+    }
 
     log::info!("Interface {iface} disconnected successfully");
     Ok(iface)
@@ -2225,18 +2225,21 @@ fn check_network_permissions() -> Result<()> {
 pub fn cleanup_wifi_interface(interface: &str) -> Result<()> {
     log::info!("Performing cleanup for interface: {interface}");
 
-    // Kill any hanging wpa_supplicant processes
-    let _ = Command::new("pkill")
-        .args(["-f", &format!("wpa_supplicant.*{interface}")])
-        .status();
+    // Stop wpa_supplicant if running
+    if let Err(e) = rustyjack_netlink::stop_wpa_supplicant(interface) {
+        log::warn!("Failed to stop wpa_supplicant during cleanup: {}", e);
+    }
 
     // Release DHCP if any
-    let _ = Command::new("dhclient").args(["-r", interface]).status();
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    if let Err(e) = rt.block_on(async {
+        rustyjack_netlink::dhcp_release(interface).await
+    }) {
+        log::warn!("Failed to release DHCP lease during cleanup for {}: {}", interface, e);
+    }
 
     // Ensure interface is up
-    let _ = Command::new("ip")
-        .args(["link", "set", interface, "up"])
-        .status();
+    let _ = netlink_set_interface_up(interface);
 
     log::info!("Cleanup completed for {interface}");
     Ok(())
