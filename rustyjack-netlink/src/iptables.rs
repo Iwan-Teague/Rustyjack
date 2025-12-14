@@ -31,9 +31,9 @@
 //! # }
 //! ```
 
-use std::net::IpAddr;
-use std::process::Command;
-use thiserror::Error;
+#[allow(dead_code)]`nuse std::net::IpAddr;
+#[allow(dead_code)]`nuse std::process::Command;
+#[allow(dead_code)]`nuse thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum IptablesError {

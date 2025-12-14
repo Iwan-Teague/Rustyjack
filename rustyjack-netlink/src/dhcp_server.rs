@@ -1,35 +1,35 @@
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use thiserror::Error;
+#[allow(dead_code)]`nuse std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+#[allow(dead_code)]`nuse std::sync::{Arc, Mutex};
+#[allow(dead_code)]`nuse std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[allow(dead_code)]`nuse thiserror::Error;
 
-const DHCP_SERVER_PORT: u16 = 67;
-const DHCP_CLIENT_PORT: u16 = 68;
-const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+#[allow(dead_code)]`nconst DHCP_SERVER_PORT: u16 = 67;
+#[allow(dead_code)]`nconst DHCP_CLIENT_PORT: u16 = 68;
+#[allow(dead_code)]`nconst DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
 
-const BOOTREQUEST: u8 = 1;
-const BOOTREPLY: u8 = 2;
+#[allow(dead_code)]`nconst BOOTREQUEST: u8 = 1;
+#[allow(dead_code)]`nconst BOOTREPLY: u8 = 2;
 
-const DHCPDISCOVER: u8 = 1;
-const DHCPOFFER: u8 = 2;
-const DHCPREQUEST: u8 = 3;
-const DHCPDECLINE: u8 = 4;
-const DHCPACK: u8 = 5;
-const DHCPNAK: u8 = 6;
-const DHCPRELEASE: u8 = 7;
-const DHCPINFORM: u8 = 8;
+#[allow(dead_code)]`nconst DHCPDISCOVER: u8 = 1;
+#[allow(dead_code)]`nconst DHCPOFFER: u8 = 2;
+#[allow(dead_code)]`nconst DHCPREQUEST: u8 = 3;
+#[allow(dead_code)]`nconst DHCPDECLINE: u8 = 4;
+#[allow(dead_code)]`nconst DHCPACK: u8 = 5;
+#[allow(dead_code)]`nconst DHCPNAK: u8 = 6;
+#[allow(dead_code)]`nconst DHCPRELEASE: u8 = 7;
+#[allow(dead_code)]`nconst DHCPINFORM: u8 = 8;
 
-const OPTION_SUBNET_MASK: u8 = 1;
-const OPTION_ROUTER: u8 = 3;
-const OPTION_DNS_SERVER: u8 = 6;
-const OPTION_REQUESTED_IP: u8 = 50;
-const OPTION_LEASE_TIME: u8 = 51;
-const OPTION_MESSAGE_TYPE: u8 = 53;
-const OPTION_SERVER_ID: u8 = 54;
-const OPTION_RENEWAL_TIME: u8 = 58;
-const OPTION_REBINDING_TIME: u8 = 59;
-const OPTION_END: u8 = 255;
+#[allow(dead_code)]`nconst OPTION_SUBNET_MASK: u8 = 1;
+#[allow(dead_code)]`nconst OPTION_ROUTER: u8 = 3;
+#[allow(dead_code)]`nconst OPTION_DNS_SERVER: u8 = 6;
+#[allow(dead_code)]`nconst OPTION_REQUESTED_IP: u8 = 50;
+#[allow(dead_code)]`nconst OPTION_LEASE_TIME: u8 = 51;
+#[allow(dead_code)]`nconst OPTION_MESSAGE_TYPE: u8 = 53;
+#[allow(dead_code)]`nconst OPTION_SERVER_ID: u8 = 54;
+#[allow(dead_code)]`nconst OPTION_RENEWAL_TIME: u8 = 58;
+#[allow(dead_code)]`nconst OPTION_REBINDING_TIME: u8 = 59;
+#[allow(dead_code)]`nconst OPTION_END: u8 = 255;
 
 #[derive(Error, Debug)]
 pub enum DhcpError {

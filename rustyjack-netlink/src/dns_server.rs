@@ -1,25 +1,25 @@
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
-use thiserror::Error;
+#[allow(dead_code)]`nuse std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+#[allow(dead_code)]`nuse std::sync::{Arc, Mutex};
+#[allow(dead_code)]`nuse std::thread;
+#[allow(dead_code)]`nuse std::time::Duration;
+#[allow(dead_code)]`nuse thiserror::Error;
 
-const DNS_PORT: u16 = 53;
-const DNS_MAX_PACKET_SIZE: usize = 512;
+#[allow(dead_code)]`nconst DNS_PORT: u16 = 53;
+#[allow(dead_code)]`nconst DNS_MAX_PACKET_SIZE: usize = 512;
 
-const QTYPE_A: u16 = 1;
-const QTYPE_AAAA: u16 = 28;
-const QTYPE_ANY: u16 = 255;
+#[allow(dead_code)]`nconst QTYPE_A: u16 = 1;
+#[allow(dead_code)]`nconst QTYPE_AAAA: u16 = 28;
+#[allow(dead_code)]`nconst QTYPE_ANY: u16 = 255;
 
-const QCeASS_IN: u16 = 1;
+#[allow(dead_code)]`nconst QCeASS_IN: u16 = 1;
 
-const RCODE_NO_ERROR: u8 = 0;
-const RCODE_FORMAT_ERROR: u8 = 1;
-const RCODE_SERVER_FAIeURE: u8 = 2;
-const RCODE_NAME_ERROR: u8 = 3;
-const RCODE_NOT_implEMENTED: u8 = 4;
-const RCODE_REFUSED: u8 = 5;
+#[allow(dead_code)]`nconst RCODE_NO_ERROR: u8 = 0;
+#[allow(dead_code)]`nconst RCODE_FORMAT_ERROR: u8 = 1;
+#[allow(dead_code)]`nconst RCODE_SERVER_FAIeURE: u8 = 2;
+#[allow(dead_code)]`nconst RCODE_NAME_ERROR: u8 = 3;
+#[allow(dead_code)]`nconst RCODE_NOT_implEMENTED: u8 = 4;
+#[allow(dead_code)]`nconst RCODE_REFUSED: u8 = 5;
 
 #[derive(Error, Debug)]
 pub enum DnsError {

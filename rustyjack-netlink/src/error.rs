@@ -23,6 +23,13 @@ pub enum NetlinkError {
     #[error("Failed to get MAC address for interface '{interface}': {reason}")]
     MacAddressError { interface: String, reason: String },
 
+    #[error("Failed to set MAC address '{mac}' on interface '{interface}': {reason}")]
+    SetMacAddressError {
+        interface: String,
+        mac: String,
+        reason: String,
+    },
+
     // Address management errors
     #[error("Failed to add address {address}/{prefix} to interface '{interface}': {reason}")]
     AddAddressError {

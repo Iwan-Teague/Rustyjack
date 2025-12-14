@@ -1,5 +1,5 @@
 use crate::error::{NetlinkError, Result};
-use neli::{
+#[allow(dead_code)]`nuse neli::{
     consts::nl::{NlmF, NlmFFlags},
     genl::{Genlmsghdr, Nlattr},
     nl::{NlPayload, Nlmsghdr},
@@ -8,60 +8,60 @@ use neli::{
 };
 
 // Re-export commonly used types from neli
-use neli::consts::socket::NlFamily;
+#[allow(dead_code)]`nuse neli::consts::socket::NlFamily;
 
 // Nlmsg type for error checking
-const NlmsgErr: u16 = 2; // NLMSG_ERROR value
+#[allow(dead_code)]`nconst NlmsgErr: u16 = 2; // NLMSG_ERROR value
 
-const NL80211_GENL_NAME: &str = "nl80211";
+#[allow(dead_code)]`nconst NL80211_GENL_NAME: &str = "nl80211";
 
 // nl80211 commands
-const NL80211_CMD_GET_WIPHY: u8 = 1;
-const NL80211_CMD_SET_WIPHY: u8 = 2;
-const NL80211_CMD_GET_INTERFACE: u8 = 5;
-const NL80211_CMD_SET_INTERFACE: u8 = 6;
-const NL80211_CMD_NEW_INTERFACE: u8 = 7;
-const NL80211_CMD_DEL_INTERFACE: u8 = 8;
-const NL80211_CMD_GET_STATION: u8 = 17;
-const NL80211_CMD_SET_CHANNEL: u8 = 65;
+#[allow(dead_code)]`nconst NL80211_CMD_GET_WIPHY: u8 = 1;
+#[allow(dead_code)]`nconst NL80211_CMD_SET_WIPHY: u8 = 2;
+#[allow(dead_code)]`nconst NL80211_CMD_GET_INTERFACE: u8 = 5;
+#[allow(dead_code)]`nconst NL80211_CMD_SET_INTERFACE: u8 = 6;
+#[allow(dead_code)]`nconst NL80211_CMD_NEW_INTERFACE: u8 = 7;
+#[allow(dead_code)]`nconst NL80211_CMD_DEL_INTERFACE: u8 = 8;
+#[allow(dead_code)]`nconst NL80211_CMD_GET_STATION: u8 = 17;
+#[allow(dead_code)]`nconst NL80211_CMD_SET_CHANNEL: u8 = 65;
 
 // nl80211 attributes
-const NL80211_ATTR_WIPHY: u16 = 1;
-const NL80211_ATTR_WIPHY_NAME: u16 = 2;
-const NL80211_ATTR_IFINDEX: u16 = 3;
-const NL80211_ATTR_IFNAME: u16 = 4;
-const NL80211_ATTR_IFTYPE: u16 = 5;
-const NL80211_ATTR_WIPHY_FREQ: u16 = 38;
-const NL80211_ATTR_WIPHY_CHANNEL_TYPE: u16 = 39;
-const NL80211_ATTR_WIPHY_TX_POWER_SETTING: u16 = 58;
-const NL80211_ATTR_WIPHY_TX_POWER_LEVEL: u16 = 59;
-const NL80211_ATTR_SUPPORTED_IFTYPES: u16 = 32;
-const NL80211_ATTR_WIPHY_BANDS: u16 = 22;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY: u16 = 1;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY_NAME: u16 = 2;
+#[allow(dead_code)]`nconst NL80211_ATTR_IFINDEX: u16 = 3;
+#[allow(dead_code)]`nconst NL80211_ATTR_IFNAME: u16 = 4;
+#[allow(dead_code)]`nconst NL80211_ATTR_IFTYPE: u16 = 5;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY_FREQ: u16 = 38;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY_CHANNEL_TYPE: u16 = 39;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY_TX_POWER_SETTING: u16 = 58;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY_TX_POWER_LEVEL: u16 = 59;
+#[allow(dead_code)]`nconst NL80211_ATTR_SUPPORTED_IFTYPES: u16 = 32;
+#[allow(dead_code)]`nconst NL80211_ATTR_WIPHY_BANDS: u16 = 22;
 
 // Interface types
-const NL80211_IFTYPE_ADHOC: u32 = 1;
-const NL80211_IFTYPE_STATION: u32 = 2;
-const NL80211_IFTYPE_AP: u32 = 3;
-const NL80211_IFTYPE_AP_VLAN: u32 = 4;
-const NL80211_IFTYPE_WDS: u32 = 5;
-const NL80211_IFTYPE_MONITOR: u32 = 6;
-const NL80211_IFTYPE_MESH_POINT: u32 = 7;
-const NL80211_IFTYPE_P2P_CLIENT: u32 = 8;
-const NL80211_IFTYPE_P2P_GO: u32 = 9;
-const NL80211_IFTYPE_P2P_DEVICE: u32 = 10;
-const NL80211_IFTYPE_OCB: u32 = 11;
-const NL80211_IFTYPE_NAN: u32 = 12;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_ADHOC: u32 = 1;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_STATION: u32 = 2;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_AP: u32 = 3;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_AP_VLAN: u32 = 4;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_WDS: u32 = 5;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_MONITOR: u32 = 6;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_MESH_POINT: u32 = 7;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_P2P_CLIENT: u32 = 8;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_P2P_GO: u32 = 9;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_P2P_DEVICE: u32 = 10;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_OCB: u32 = 11;
+#[allow(dead_code)]`nconst NL80211_IFTYPE_NAN: u32 = 12;
 
 // TX power settings
-const NL80211_TX_POWER_AUTOMATIC: u32 = 0;
-const NL80211_TX_POWER_LIMITED: u32 = 1;
-const NL80211_TX_POWER_FIXED: u32 = 2;
+#[allow(dead_code)]`nconst NL80211_TX_POWER_AUTOMATIC: u32 = 0;
+#[allow(dead_code)]`nconst NL80211_TX_POWER_LIMITED: u32 = 1;
+#[allow(dead_code)]`nconst NL80211_TX_POWER_FIXED: u32 = 2;
 
 // Channel types
-const NL80211_CHAN_NO_HT: u32 = 0;
-const NL80211_CHAN_HT20: u32 = 1;
-const NL80211_CHAN_HT40MINUS: u32 = 2;
-const NL80211_CHAN_HT40PLUS: u32 = 3;
+#[allow(dead_code)]`nconst NL80211_CHAN_NO_HT: u32 = 0;
+#[allow(dead_code)]`nconst NL80211_CHAN_HT20: u32 = 1;
+#[allow(dead_code)]`nconst NL80211_CHAN_HT40MINUS: u32 = 2;
+#[allow(dead_code)]`nconst NL80211_CHAN_HT40PLUS: u32 = 3;
 
 /// Wireless interface mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

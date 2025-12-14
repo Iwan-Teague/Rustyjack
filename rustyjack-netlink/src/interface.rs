@@ -540,7 +540,66 @@ impl InterfaceManager {
         
         Ok(addresses)
     }
+
+    /// Alias for set_interface_up for backward compatibility
+    pub async fn set_link_up(&self, name: &str) -> Result<()> {
+        self.set_interface_up(name).await
+    }
+
+    /// Alias for set_interface_down for backward compatibility
+    pub async fn set_link_down(&self, name: &str) -> Result<()> {
+        self.set_interface_down(name).await
+    }
+
+    /// Set MAC address for an interface (requires interface to be down)
+    pub async fn set_mac_address(&self, interface: &str, mac: &str) -> Result<()> {
+        // Interface must be down to change MAC
+        self.set_interface_down(interface).await?;
+        
+        // Parse MAC address
+        let mac_bytes: Vec<u8> = mac.split(':')
+            .map(|s| u8::from_str_radix(s, 16))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| NetlinkError::InvalidArgument {
+                parameter: "mac".to_string(),
+                value: mac.to_string(),
+                reason: format!("Invalid MAC address format: {}", e),
+            })?;
+        
+        if mac_bytes.len() != 6 {
+            return Err(NetlinkError::InvalidArgument {
+                parameter: "mac".to_string(),
+                value: mac.to_string(),
+                reason: "MAC address must have 6 bytes".to_string(),
+            });
+        }
+
+        let index = self.get_interface_index(interface).await?;
+        
+        self.handle
+            .link()
+            .set(index)
+            .address(mac_bytes)
+            .execute()
+            .await
+            .map_err(|e| NetlinkError::SetMacAddressError {
+                interface: interface.to_string(),
+                mac: mac.to_string(),
+                reason: e.to_string(),
+            })?;
+        
+        Ok(())
+    }
+
+    /// Get IPv4 addresses only
+    pub async fn get_ipv4_addresses(&self, interface: &str) -> Result<Vec<AddressInfo>> {
+        let all_addrs = self.get_addresses(interface).await?;
+        Ok(all_addrs.into_iter()
+            .filter(|a| matches!(a.address, std::net::IpAddr::V4(_)))
+            .collect())
+    }
 }
+
 
 /// Network interface information.
 ///

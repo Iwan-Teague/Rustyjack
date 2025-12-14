@@ -5,37 +5,37 @@
 //!
 //! Replaces `dhclient` command with pure Rust implementation using raw UDP sockets.
 
-use crate::error::{NetlinkError, Result};
-use crate::interface::InterfaceManager;
-use crate::route::RouteManager;
-use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use thiserror::Error;
+#[allow(dead_code)]`nuse crate::error::{NetlinkError, Result};
+#[allow(dead_code)]`nuse crate::interface::InterfaceManager;
+#[allow(dead_code)]`nuse crate::route::RouteManager;
+#[allow(dead_code)]`nuse std::net::{IpAddr, Ipv4Addr, UdpSocket};
+#[allow(dead_code)]`nuse std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[allow(dead_code)]`nuse thiserror::Error;
 
-const DHCP_SERVER_PORT: u16 = 67;
-const DHCP_CLIENT_PORT: u16 = 68;
-const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+#[allow(dead_code)]`nconst DHCP_SERVER_PORT: u16 = 67;
+#[allow(dead_code)]`nconst DHCP_CLIENT_PORT: u16 = 68;
+#[allow(dead_code)]`nconst DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
 
-const BOOTREQUEST: u8 = 1;
-const BOOTREPLY: u8 = 2;
+#[allow(dead_code)]`nconst BOOTREQUEST: u8 = 1;
+#[allow(dead_code)]`nconst BOOTREPLY: u8 = 2;
 
-const DHCPDISCOVER: u8 = 1;
-const DhcpOffer: u8 = 2;
-const DHCPREQUEST: u8 = 3;
-const DHCPACK: u8 = 5;
-const DHCPNAK: u8 = 6;
-const DHCPRELEASE: u8 = 7;
+#[allow(dead_code)]`nconst DHCPDISCOVER: u8 = 1;
+#[allow(dead_code)]`nconst DhcpOffer: u8 = 2;
+#[allow(dead_code)]`nconst DHCPREQUEST: u8 = 3;
+#[allow(dead_code)]`nconst DHCPACK: u8 = 5;
+#[allow(dead_code)]`nconst DHCPNAK: u8 = 6;
+#[allow(dead_code)]`nconst DHCPRELEASE: u8 = 7;
 
-const Optionfsubnet_mask: u8 = 1;
-const OPTION_ROUTER: u8 = 3;
-const Option_DNS_SERVER: u8 = 6;
-const OPTION_HOSTNAME: u8 = 12;
-const Option_REQUESTED_IP: u8 = 50;
-const Optionflease_time: u8 = 51;
-const Optionfmessage_type: u8 = 53;
-const OPTION_SERVER_ID: u8 = 54;
-const Option_PARAMETER_REQUEST: u8 = 55;
-const OPTION_END: u8 = 255;
+#[allow(dead_code)]`nconst Optionfsubnet_mask: u8 = 1;
+#[allow(dead_code)]`nconst OPTION_ROUTER: u8 = 3;
+#[allow(dead_code)]`nconst Option_DNS_SERVER: u8 = 6;
+#[allow(dead_code)]`nconst OPTION_HOSTNAME: u8 = 12;
+#[allow(dead_code)]`nconst Option_REQUESTED_IP: u8 = 50;
+#[allow(dead_code)]`nconst Optionflease_time: u8 = 51;
+#[allow(dead_code)]`nconst Optionfmessage_type: u8 = 53;
+#[allow(dead_code)]`nconst OPTION_SERVER_ID: u8 = 54;
+#[allow(dead_code)]`nconst Option_PARAMETER_REQUEST: u8 = 55;
+#[allow(dead_code)]`nconst OPTION_END: u8 = 255;
 
 /// Errors specific to DHCP client operations.
 #[derive(Error, Debug)]
