@@ -163,6 +163,12 @@ pub enum NetlinkError {
     #[error("Operation failed: {0}")]
     OperationFailed(String),
 
+    #[error("Operation not supported: {0}")]
+    OperationNotSupported(String),
+
+    #[error("System error: {0}")]
+    System(String),
+
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
 

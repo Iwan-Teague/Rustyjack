@@ -6,11 +6,13 @@ use neli::{
     socket::NlSocketHandle,
     types::GenlBuffer,
 };
-use std::collections::HashMap;
 
 // Re-export commonly used types from neli
-use neli::consts::nl::NlmF;
+use neli::consts::nl::{NlmF, Nlmsg};
 use neli::consts::socket::NlFamily;
+
+// Nlmsg type for error checking
+const NlmsgErr: u16 = Nlmsg::Error as u16;
 
 const NL80211_GENL_NAME: &str = "nl80211";
 
@@ -192,7 +194,9 @@ impl WirelessManager {
     /// Get interface index from name
     fn get_ifindex(&self, interface: &str) -> Result<u32> {
         let interfaces = std::fs::read_to_string("/sys/class/net/".to_string() + interface + "/ifindex")
-            .map_err(|e| NetlinkError::InterfaceNotFound(format!("Interface '{}' not found: {}", interface, e)))?;
+            .map_err(|e| NetlinkError::InterfaceNotFound { 
+                name: format!("Interface '{}' not found: {}", interface, e)
+            })?;
         
         interfaces.trim().parse::<u32>()
             .map_err(|e| NetlinkError::OperationFailed(format!("Failed to parse ifindex for '{}': {}", interface, e)))

@@ -43,8 +43,8 @@ pub enum DhcpClientError {
     #[error("Failed to get MAC address for interface '{interface}': {reason}")]
     MacAddressFailed { interface: String, reason: String },
 
-    #[error("Invalid DHCP packet from {source}: {reason}")]
-    InvalidPacket { source: String, reason: String },
+    #[error("Invalid DHCP packet on '{interface}': {reason}")]
+    InvalidPacket { interface: String, reason: String },
 
     #[error("Failed to bind to DHCP client port on '{interface}': {source}")]
     BindFailed {
@@ -102,6 +102,9 @@ pub enum DhcpClientError {
         interface: String,
         reason: String,
     },
+
+    #[error("Failed to broadcast DHCP packet on '{interface}': {0}")]
+    BroadcastFailed(std::io::Error),
 }
 
 /// DHCP client for acquiring and managing IP leases.
@@ -248,7 +251,7 @@ impl DhcpClient {
             .await
             .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::MacAddressFailed {
                 interface: interface.to_string(),
-                source: e,
+                reason: format!("{}", e),
             }))?;
 
         let parts: Vec<&str> = mac_str.split(':').collect();
@@ -363,7 +366,7 @@ impl DhcpClient {
 
         Err(NetlinkError::DhcpClient(DhcpClientError::NoOffer {
             interface: interface.to_string(),
-            attempts: 3,
+            retries: 3,
         }))
     }
 
@@ -654,6 +657,7 @@ impl DhcpClient {
         if options.message_type == Some(DHCPNAK) {
             return Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak {
                 interface: interface.to_string(),
+                reason: "Server rejected the request".to_string(),
             }));
         }
 
@@ -744,14 +748,14 @@ impl DhcpClient {
         log::debug!("Configuring interface {} with lease", interface);
 
         self.interface_mgr
-            .add_address(interface, lease.address, lease.prefix_len)
+            .add_address(interface, IpAddr::V4(lease.address), lease.prefix_len)
             .await
             .map_err(|e| {
                 NetlinkError::DhcpClient(DhcpClientError::AddressConfigFailed {
                     address: lease.address,
                     prefix: lease.prefix_len,
                     interface: interface.to_string(),
-                    source: e,
+                    reason: format!("{}", e),
                 })
             })?;
 
@@ -763,7 +767,7 @@ impl DhcpClient {
                     NetlinkError::DhcpClient(DhcpClientError::GatewayConfigFailed {
                         gateway,
                         interface: interface.to_string(),
-                        source: e,
+                        reason: format!("{}", e),
                     })
                 })?;
         }
