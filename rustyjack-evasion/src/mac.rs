@@ -527,23 +527,6 @@ impl MacManager {
                 })
         })
     }
-        let mac_str = mac.to_string();
-
-        let mgr = rustyjack_netlink::InterfaceManager::new()
-            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
-        
-        mgr.set_mac_address(interface, &mac_str)
-            .map_err(|e| {
-                let err_str = e.to_string();
-                if err_str.contains("Operation not permitted") || err_str.contains("Permission denied") {
-                    EvasionError::PermissionDenied("setting MAC address".into())
-                } else if err_str.contains("not permitted") || err_str.contains("RTNETLINK") || err_str.contains("not support") {
-                    EvasionError::NotSupported(format!("Driver for {} may not support MAC changes", interface))
-                } else {
-                    EvasionError::InterfaceError(format!("Failed to set MAC on {}: {}", interface, e))
-                }
-            })
-    }
 
     fn restore_state(&self, state: &MacState) -> Result<()> {
         self.interface_down(&state.interface)?;

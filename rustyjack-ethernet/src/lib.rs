@@ -461,7 +461,10 @@ async fn read_iface_ipv4(interface: &str) -> Result<Ipv4Addr> {
         .with_context(|| format!("reading IPv4 addresses for {}", interface))?;
     
     if let Some(addr) = addrs.first() {
-        Ok(addr.address.into())
+        match addr.address {
+            std::net::IpAddr::V4(v4) => Ok(v4),
+            _ => Err(anyhow!("No IPv4 address found on {}", interface))
+        }
     } else {
         Err(anyhow!("No IPv4 address found on {}", interface))
     }
