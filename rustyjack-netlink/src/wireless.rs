@@ -537,19 +537,27 @@ impl WirelessManager {
             for attr in attrs.iter() {
                 match attr.nla_type.nla_type {
                     NL80211_ATTR_WIPHY => {
-                        if let Ok(wiphy) = attr.get_payload_as::<u32>() {
-                            info.wiphy = *wiphy;
+                        if let Ok(wiphy_bytes) = attr.get_payload_as::<&[u8]>() {
+                            if wiphy_bytes.len() >= 4 {
+                                info.wiphy = u32::from_ne_bytes([wiphy_bytes[0], wiphy_bytes[1], wiphy_bytes[2], wiphy_bytes[3]]);
+                            }
                         }
                     }
                     NL80211_ATTR_IFTYPE => {
-                        if let Ok(iftype) = attr.get_payload_as::<u32>() {
-                            info.mode = InterfaceMode::from_nl80211(*iftype);
+                        if let Ok(iftype_bytes) = attr.get_payload_as::<&[u8]>() {
+                            if iftype_bytes.len() >= 4 {
+                                let iftype = u32::from_ne_bytes([iftype_bytes[0], iftype_bytes[1], iftype_bytes[2], iftype_bytes[3]]);
+                                info.mode = InterfaceMode::from_nl80211(iftype);
+                            }
                         }
                     }
                     NL80211_ATTR_WIPHY_FREQ => {
-                        if let Ok(freq) = attr.get_payload_as::<u32>() {
-                            info.frequency = Some(*freq);
-                            info.channel = Self::frequency_to_channel(*freq);
+                        if let Ok(freq_bytes) = attr.get_payload_as::<&[u8]>() {
+                            if freq_bytes.len() >= 4 {
+                                let freq = u32::from_ne_bytes([freq_bytes[0], freq_bytes[1], freq_bytes[2], freq_bytes[3]]);
+                                info.frequency = Some(freq);
+                                info.channel = Self::frequency_to_channel(freq);
+                            }
                         }
                     }
                     _ => {}

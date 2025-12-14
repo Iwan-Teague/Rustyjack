@@ -295,7 +295,7 @@ impl DhcpServer {
     }
 
     pub fn release_lease(&self, mac: &[u8; 6]) {
-        let leases = self.leases.lock().unwrap();
+        let mut leases = self.leases.lock().unwrap();
         leases.remove(mac);
     }
 
