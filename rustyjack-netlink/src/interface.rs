@@ -285,17 +285,8 @@ impl InterfaceManager {
             // Check if this is the address we want to delete
             let mut matches = false;
             for nla in &addr_msg.attributes {
-                if let AddressAttribute::Address(ip_bytes) = nla {
-                    let addr_matches = match addr {
-                        IpAddr::V4(v4) => {
-                            let octets = v4.octets();
-                            &ip_bytes[..] == &octets[..]
-                        }
-                        IpAddr::V6(v6) => {
-                            let octets = v6.octets();
-                            &ip_bytes[..] == &octets[..]
-                        }
-                    };
+                if let AddressAttribute::Address(ip_addr) = nla {
+                    let addr_matches = ip_addr == addr;
                     if addr_matches && addr_msg.header.prefix_len == prefix_len {
                         matches = true;
                         break;
@@ -538,20 +529,9 @@ impl InterfaceManager {
             })? 
         {
             for nla in addr_msg.attributes {
-                if let AddressAttribute::Address(ip_bytes) = nla {
-                    let addr = if ip_bytes.len() == 4 {
-                        let v4 = Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
-                        IpAddr::V4(v4)
-                    } else if ip_bytes.len() == 16 {
-                        let mut bytes = [0u8; 16];
-                        bytes.copy_from_slice(&ip_bytes);
-                        IpAddr::V6(std::net::Ipv6Addr::from(bytes))
-                    } else {
-                        continue;
-                    };
-                    
+                if let AddressAttribute::Address(ip_addr) = nla {
                     addresses.push(AddressInfo {
-                        address: addr,
+                        address: ip_addr,
                         prefix_len: addr_msg.header.prefix_len,
                     });
                 }

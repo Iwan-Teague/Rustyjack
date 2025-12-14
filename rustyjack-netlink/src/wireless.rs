@@ -545,20 +545,20 @@ impl WirelessManager {
                 match attr.nla_type.nla_type {
                     NL80211_ATTR_WIPHY => {
                         // Nlattr has a payload field of type Buffer (Vec<u8>)
-                        let payload = &attr.nla_payload;
+                        let payload = attr.nla_payload.as_ref();
                         if payload.len() >= 4 {
                             info.wiphy = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
                         }
                     }
                     NL80211_ATTR_IFTYPE => {
-                        let payload = &attr.nla_payload;
+                        let payload = attr.nla_payload.as_ref();
                         if payload.len() >= 4 {
                             let iftype = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
                             info.mode = InterfaceMode::from_nl80211(iftype);
                         }
                     }
                     NL80211_ATTR_WIPHY_FREQ => {
-                        let payload = &attr.nla_payload;
+                        let payload = attr.nla_payload.as_ref();
                         if payload.len() >= 4 {
                             let freq = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
                             info.frequency = Some(freq);
@@ -620,7 +620,7 @@ impl WirelessManager {
             for attr in attrs.iter() {
                 match attr.nla_type.nla_type {
                     NL80211_ATTR_WIPHY_NAME => {
-                        let payload = &attr.nla_payload;
+                        let payload = attr.nla_payload.as_ref();
                         if let Ok(name) = std::str::from_utf8(payload) {
                             caps.name = name.trim_end_matches('\0').to_string();
                         }

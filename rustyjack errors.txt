@@ -1,0 +1,1933 @@
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows
+
+PS C:\Users\Iwan> ssh rustyjack@192.168.18.33
+rustyjack@192.168.18.33's password:
+Linux rustyjack 6.12.47+rpt-rpi-v7 #1 SMP Raspbian 1:6.12.47-1+rpt1 (2025-09-16) armv7l
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+Last login: Sun Dec 14 20:30:01 2025 from 192.168.18.24
+rustyjack@rustyjack:~ $ sudo su -
+root@rustyjack:~# cd Rustyjack
+root@rustyjack:~/Rustyjack# git pull
+Already up to date.
+root@rustyjack:~/Rustyjack# ./install_rustyjack_dev.sh
+
+[INFO] ==========================================
+[INFO]   DEVELOPMENT BUILD (debug mode)
+[INFO]   Faster compile, slower runtime
+[INFO] ==========================================
+
+[INFO] Using config file: /boot/firmware/config.txt
+[STEP] Updating APT and installing dependencies...
+W: https://deb.nodesource.com/node_22.x/dists/nodistro/InRelease: Policy will reject signature within a year, see --audit for details
+[INFO] All packages already installed and up-to-date.
+[STEP] Enabling I2C and SPI...
+[STEP] Checking swap space for Rust compilation...
+[INFO] [OK] Sufficient swap available: 2047MB
+[STEP] Building DEBUG binaries (faster compile)...
+[INFO] Using project root: /root/Rustyjack
+[INFO] Stopping rustyjack service for rebuild...
+[INFO] Removing old binary...
+
+[INFO] ==========================================
+[INFO]   BUILD OPTIONS
+[INFO] ==========================================
+
+  [1] Incremental build (fast - recompiles only changed files)
+  [2] Clean build (slow - removes all cached artifacts first)
+
+Select build type [1/2] (default: 1): 1
+[INFO] Performing INCREMENTAL build (faster)...
+[INFO] Building rustyjack-ui (debug)...
+   Compiling rustyjack-netlink v0.1.0 (/root/Rustyjack/rustyjack-netlink)
+error: expected one of `!` or `::`, found `DnsServer`
+   --> rustyjack-netlink/src/dns_server.rs:115:6
+    |
+115 | impe DnsServer {
+    |      ^^^^^^^^^ expected one of `!` or `::`
+    |
+help: there is a keyword `impl` with a similar name
+    |
+115 - impe DnsServer {
+115 + impl DnsServer {
+    |
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:43:7
+   |
+43 |     #[Error("Failed tf get MAC address for interface '{interface}': {reasfn}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:46:7
+   |
+46 |     #[Error("Invalid DHCP packet fn '{interface}': {reasfn}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:49:7
+   |
+49 |     #[Error("Failed tf bind to DHCP client pfrt fn '{interface}': {source}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:56:7
+   |
+56 |     #[Error("Failed tf bind sfcket tf device '{interface}': {source}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:63:7
+   |
+63 |     #[Error("Failed tf send DHCP {packetftype} fn '{interface}': {source}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:71:7
+   |
+71 |     #[Error("Failed tf receive DHCP respfnse fn '{interface}': {source}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:78:7
+   |
+78 |     #[Error("Timefut waiting for DHCP {packetftype} fn '{interface}' after {timefutfsecs}s")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:85:7
+   |
+85 |     #[Error("Nf DHCP offer received fn '{interface}' after {retries} attempts")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:88:7
+   |
+88 |     #[Error("DHCP server sent NAK ffr '{interface}': {reasfn}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:91:7
+   |
+91 |     #[Error("Failed tf cfnfigure IP address {address}/{prefix} fn '{interface}': {reasfn}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+  --> rustyjack-netlink/src/dhcp.rs:99:7
+   |
+99 |     #[Error("Failed tf cfnfigure gateway {gateway} fn '{interface}': {reasfn}")]
+   |       ^^^^^ not an attribute
+
+error: expected attribute, found derive macro `Error`
+   --> rustyjack-netlink/src/dhcp.rs:106:7
+    |
+106 |     #[Error("Failed tf brfadcast DHCP packet fn interface: {0}")]
+    |       ^^^^^ not an attribute
+
+error[E0432]: unresolved import `crate::Error`
+ --> rustyjack-netlink/src/dhcp.rs:8:12
+  |
+8 | use crate::Error::{NetlinkError, Result};
+  |            ^^^^^ could not find `Error` in the crate root
+
+error[E0432]: unresolved import `crate::rfute`
+  --> rustyjack-netlink/src/dhcp.rs:10:12
+   |
+10 | use crate::rfute::RfuteManager;
+   |            ^^^^^ could not find `rfute` in the crate root
+
+error[E0432]: unresolved import `std::net::UdpSfcket`
+  --> rustyjack-netlink/src/dhcp.rs:11:34
+   |
+11 | use std::net::{IpAddr, Ipv4Addr, UdpSfcket};
+   |                                  ^^^^^^^^^
+   |                                  |
+   |                                  no `UdpSfcket` in `net`
+   |                                  help: a similar name exists in the module: `UdpSocket`
+
+error[E0432]: unresolved imports `std::time::Duratifn`, `std::time::UNIXfEPfCH`
+  --> rustyjack-netlink/src/dhcp.rs:12:17
+   |
+12 | use std::time::{Duratifn, SystemTime, UNIXfEPfCH};
+   |                 ^^^^^^^^              ^^^^^^^^^^ no `UNIXfEPfCH` in `time`
+   |                 |
+   |                 no `Duratifn` in `time`
+   |
+help: a similar name exists in the module
+   |
+12 - use std::time::{Duratifn, SystemTime, UNIXfEPfCH};
+12 + use std::time::{Duration, SystemTime, UNIXfEPfCH};
+   |
+help: a similar name exists in the module
+   |
+12 - use std::time::{Duratifn, SystemTime, UNIXfEPfCH};
+12 + use std::time::{Duratifn, SystemTime, UNIX_EPOCH};
+   |
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:160:9
+    |
+160 |         lfg::inff!("Releasing DHCP lease for interface {}", interface);
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:163:13
+    |
+163 |             lfg::warn!("Failed tf flush addresses fn {}: {}", interface, e);
+    |             ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:201:9
+    |
+201 |         lfg::inff!("Acquiring DHCP lease for interface {}", interface);
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:215:9
+    |
+215 |         lfg::inff!(
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:238:9
+    |
+238 |         lfg::inff!("Renewing DHCP lease for interface {}", interface);
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:337:13
+    |
+337 |             lfg::debug!("Sending DHCP DISCfVER fn {} (attempt {})", interface, attempt);
+    |             ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:353:21
+    |
+353 |                     lfg::debug!("Received DHCP offer frfm {} fn {}", offer.serverfid, interface);
+    |                     ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:358:25
+    |
+358 |                         lfg::debug!("DHCP offer timefut fn {} (attempt {}), retrying...", interface, attempt);
+    |                         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:407:9
+    |
+407 |         lfg::debug!("Sending DHCP REQUEST ffr {} fn {}", offer.OFFeredfip, interface);
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:748:9
+    |
+748 |         lfg::debug!("Cfnfiguring interface {} with lease", interface);
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:777:17
+    |
+777 |                 lfg::warn!("Failed tf cfnfigure DNS servers: {}", e);
+    |                 ^^^ use of unresolved module or unlinked crate `lfg`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `lfg`
+   --> rustyjack-netlink/src/dhcp.rs:795:9
+    |
+795 |         lfg::inff!("Cfnfigured DNS servers: {:?}", servers);
+    |         ^^^ use of unresolved module or unlinked crate `lfg`
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:254:25
+    |
+254 |                 reasfn: ffrmat!("{}", e),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:261:25
+    |
+261 |                 reasfn: ffrmat!("Invalid MAC address ffrmat: {}", macfstr),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:270:29
+    |
+270 |                     reasfn: ffrmat!("Invalid MAC address hex: {}", macfstr),
+    |                             ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:565:25
+    |
+565 |                 reasfn: ffrmat!("Packet tff shfrt: {} bytes", data.len()),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:572:25
+    |
+572 |                 reasfn: ffrmat!("Nft a BOOTREPLY: fp={}", data[0]),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:580:25
+    |
+580 |                 reasfn: ffrmat!("XID mismatch: expected {}, gft {}", xid, packetfxid),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:598:25
+    |
+598 |                 reasfn: ffrmat!("Nft a DHCPoffer: type={:?}", OPTIONs.messageftype),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:629:25
+    |
+629 |                 reasfn: ffrmat!("Packet tff shfrt: {} bytes", data.len()),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:636:25
+    |
+636 |                 reasfn: ffrmat!("Nft a BOOTREPLY: fp={}", data[0]),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:644:25
+    |
+644 |                 reasfn: ffrmat!("XID mismatch: expected {}, gft {}", xid, packetfxid),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:667:25
+    |
+667 |                 reasfn: ffrmat!("Nft a DHCPACK: type={:?}", OPTIONs.messageftype),
+    |                         ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:710:29
+    |
+710 |                     reasfn: ffrmat!("OPTION {} extends beyfnd packet bfundary", OPTIONftype),
+    |                             ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:758:29
+    |
+758 |                     reasfn: ffrmat!("{}", e),
+    |                             ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:770:33
+    |
+770 |                         reasfn: ffrmat!("{}", e),
+    |                                 ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find macro `ffrmat` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:789:31
+    |
+789 |             cfntent.pushfstr(&ffrmat!("nameserver {}\n", server));
+    |                               ^^^^^^ help: a macro with a similar name exists: `format`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/macros.rs:105:1
+    |
+    = note: similarly named macro `format` defined here
+
+error: cannot find derive macro `Clfne` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:809:17
+    |
+809 | #[derive(Debug, Clfne)]
+    |                 ^^^^^ help: a derive macro with a similar name exists: `Clone`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/clone.rs:257:1
+    |
+    = note: similarly named derive macro `Clone` defined here
+
+error: cannot find derive macro `Clfne` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:823:17
+    |
+823 | #[derive(Debug, Clfne)]
+    |                 ^^^^^ help: a derive macro with a similar name exists: `Clone`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/clone.rs:257:1
+    |
+    = note: similarly named derive macro `Clone` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:200:60
+    |
+200 |     pub async fn acquire(&self, interface: &str, hfstname: OPTION<&str>) -> Result<DhcpLease> {
+    |                                                            ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:237:58
+    |
+237 |     pub async fn renew(&self, interface: &str, hfstname: OPTION<&str>) -> Result<DhcpLease> {
+    |                                                          ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `tfkif`
+   --> rustyjack-netlink/src/dhcp.rs:242:9
+    |
+242 |         tfkif::time::sleep(Duratifn::frfmfmillis(500)).await;
+    |         ^^^^^ use of unresolved module or unlinked crate `tfkif`
+    |
+    = help: if you wanted to use a crate named `tfkif`, use `cargo add tfkif` to add it to your `Cargo.toml`
+help: consider importing this module
+    |
+  8 + use tokio::time;
+    |
+help: if you import `time`, refer to it directly
+    |
+242 -         tfkif::time::sleep(Duratifn::frfmfmillis(500)).await;
+242 +         time::sleep(Duratifn::frfmfmillis(500)).await;
+    |
+
+error[E0425]: cannot find value `DHCP_CLIENTfPfRT` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:286:50
+    |
+ 16 | const DHCP_CLIENT_PORT: u16 = 68;
+    | --------------------------------- similarly named constant `DHCP_CLIENT_PORT` defined here
+...
+286 |         let sfcket = UdpSfcket::bind(("0.0.0.0", DHCP_CLIENTfPfRT)).map_err(|e| {
+    |                                                  ^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_CLIENT_PORT`
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:334:19
+    |
+334 |         hfstname: OPTION<&str>,
+    |                   ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0425]: cannot find value `DHCP_SERVERfPfRT` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:342:57
+    |
+ 15 | const DHCP_SERVER_PORT: u16 = 67;
+    | --------------------------------- similarly named constant `DHCP_SERVER_PORT` defined here
+...
+342 |                 .sendftf(&discfver, ("255.255.255.255", DHCP_SERVERfPfRT))
+    |                                                         ^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_SERVER_PORT`
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:405:19
+    |
+405 |         hfstname: OPTION<&str>,
+    |                   ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0425]: cannot find value `offer` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:409:59
+    |
+409 |         let request = self.buildfrequestfpacket(mac, xid, offer, hfstname);
+    |                                                           ^^^^^ not found in this scope
+
+error[E0425]: cannot find value `DHCP_SERVERfPfRT` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:412:52
+    |
+ 15 | const DHCP_SERVER_PORT: u16 = 67;
+    | --------------------------------- similarly named constant `DHCP_SERVER_PORT` defined here
+...
+412 |             .sendftf(&request, ("255.255.255.255", DHCP_SERVERfPfRT))
+    |                                                    ^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_SERVER_PORT`
+
+error[E0425]: cannot find value `offer` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:421:51
+    |
+421 |         self.waitOFFrfack(sfcket, interface, xid, offer)
+    |                                                   ^^^^^ not found in this scope
+
+error[E0425]: cannot find value `offer` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:449:71
+    |
+449 |             return self.parse_ack_packet(&buf[..len], interface, xid, offer);
+    |                                                                       ^^^^^ not found in this scope
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:453:72
+    |
+453 |     fn buildfdiscfverfpacket(&self, mac: &[u8; 6], xid: u32, hfstname: OPTION<&str>) -> Vec<u8> {
+    |                                                                        ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0425]: cannot find value `DHCP_MAGICfCffKIE` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:465:43
+    |
+ 17 | const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+    | ------------------------------------------------------------ similarly named constant `DHCP_MAGIC_COOKIE` defined here
+...
+465 |         packet[236..240].cfpyffrfmfslice(&DHCP_MAGICfCffKIE);
+    |                                           ^^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_MAGIC_COOKIE`
+
+error[E0531]: cannot find tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:474:16
+    |
+474 |         if let Sfme(name) = hfstname {
+    |                ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:504:19
+    |
+504 |         hfstname: OPTION<&str>,
+    |                   ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0425]: cannot find value `DHCP_MAGICfCffKIE` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:517:43
+    |
+ 17 | const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+    | ------------------------------------------------------------ similarly named constant `DHCP_MAGIC_COOKIE` defined here
+...
+517 |         packet[236..240].cfpyffrfmfslice(&DHCP_MAGICfCffKIE);
+    |                                           ^^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_MAGIC_COOKIE`
+
+error[E0425]: cannot find value `offer` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:528:57
+    |
+528 |         packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.OFFeredfip.fctets());
+    |                                                         ^^^^^ not found in this scope
+
+error[E0425]: cannot find value `offer` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:533:57
+    |
+533 |         packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.serverfid.fctets());
+    |                                                         ^^^^^ not found in this scope
+
+error[E0531]: cannot find tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:536:16
+    |
+536 |         if let Sfme(name) = hfstname {
+    |                ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0425]: cannot find value `DHCP_MAGICfCffKIE` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:584:31
+    |
+ 17 | const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+    | ------------------------------------------------------------ similarly named constant `DHCP_MAGIC_COOKIE` defined here
+...
+584 |         if &data[236..240] != DHCP_MAGICfCffKIE {
+    |                               ^^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_MAGIC_COOKIE`
+
+error[E0425]: cannot find value `DHCP_MAGICfCffKIE` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:648:31
+    |
+ 17 | const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+    | ------------------------------------------------------------ similarly named constant `DHCP_MAGIC_COOKIE` defined here
+...
+648 |         if &data[236..240] != DHCP_MAGICfCffKIE {
+    |                               ^^^^^^^^^^^^^^^^^ help: a constant with a similar name exists: `DHCP_MAGIC_COOKIE`
+
+error[E0425]: cannot find value `cfntinue` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:698:17
+    |
+698 |                 cfntinue;
+    |                 ^^^^^^^^ not found in this scope
+
+error[E0531]: cannot find tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:762:16
+    |
+762 |         if let Sfme(gateway) = lease.gateway {
+    |                ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:816:18
+    |
+816 |     pub gateway: OPTION<Ipv4Addr>,
+    |                  ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:827:18
+    |
+827 |     subnetfmask: OPTION<Ipv4Addr>,
+    |                  ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:828:13
+    |
+828 |     rfuter: OPTION<Ipv4Addr>,
+    |             ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:830:17
+    |
+830 |     leaseftime: OPTION<Duratifn>,
+    |                 ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:835:19
+    |
+835 |     messageftype: OPTION<u8>,
+    |                   ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:836:18
+    |
+836 |     subnetfmask: OPTION<Ipv4Addr>,
+    |                  ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:837:13
+    |
+837 |     rfuter: OPTION<Ipv4Addr>,
+    |             ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:839:16
+    |
+839 |     serverfid: OPTION<Ipv4Addr>,
+    |                ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+error[E0412]: cannot find type `OPTION` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:840:17
+    |
+840 |     leaseftime: OPTION<Duratifn>,
+    |                 ^^^^^^ help: an enum with a similar name exists: `Option`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:594:1
+    |
+    = note: similarly named enum `Option` defined here
+
+warning: unexpected `cfg` condition name: `targetffs`
+   --> rustyjack-netlink/src/dhcp.rs:293:15
+    |
+293 |         #[cfg(targetffs = "linux")]
+    |               ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(targetffs, values("linux"))'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(targetffs, values(\"linux\"))");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+help: there is a config with a similar name and value
+    |
+293 -         #[cfg(targetffs = "linux")]
+293 +         #[cfg(target_os = "linux")]
+    |
+
+warning: unused import: `std::io::Write`
+   --> rustyjack-netlink/src/dhcp.rs:785:13
+    |
+785 |         use std::io::Write;
+    |             ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0277]: `DhcpClientError` doesn't implement `std::fmt::Display`
+  --> rustyjack-netlink/src/dhcp.rs:42:10
+   |
+42 | pub enum DhcpClientError {
+   |          ^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `std::fmt::Display` is not implemented for `DhcpClientError`
+  --> rustyjack-netlink/src/dhcp.rs:42:1
+   |
+42 | pub enum DhcpClientError {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `StdError`
+  --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/error.rs:53:1
+
+error[E0608]: cannot index into a value of type `&IpAddr`
+   --> rustyjack-netlink/src/interface.rs:292:38
+    |
+292 | ...                   &ip_bytes[..] == &octets[..]
+    |                                ^^^^
+
+error[E0608]: cannot index into a value of type `&IpAddr`
+   --> rustyjack-netlink/src/interface.rs:296:38
+    |
+296 | ...                   &ip_bytes[..] == &octets[..]
+    |                                ^^^^
+
+error[E0599]: no method named `len` found for enum `IpAddr` in the current scope
+   --> rustyjack-netlink/src/interface.rs:542:44
+    |
+542 |                     let addr = if ip_bytes.len() == 4 {
+    |                                            ^^^
+    |
+help: there is a method `le` with a similar name, but with different arguments
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/cmp.rs:1417:5
+
+error[E0608]: cannot index into a value of type `IpAddr`
+   --> rustyjack-netlink/src/interface.rs:543:56
+    |
+543 |                         let v4 = Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+    |                                                        ^^^
+
+error[E0608]: cannot index into a value of type `IpAddr`
+   --> rustyjack-netlink/src/interface.rs:543:69
+    |
+543 |                         let v4 = Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+    |                                                                     ^^^
+
+error[E0608]: cannot index into a value of type `IpAddr`
+   --> rustyjack-netlink/src/interface.rs:543:82
+    |
+543 |                         let v4 = Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+    |                                                                                  ^^^
+
+error[E0608]: cannot index into a value of type `IpAddr`
+   --> rustyjack-netlink/src/interface.rs:543:95
+    |
+543 |                         let v4 = Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+    |                                                                                               ^^^
+
+error[E0599]: no method named `len` found for enum `IpAddr` in the current scope
+   --> rustyjack-netlink/src/interface.rs:545:40
+    |
+545 |                     } else if ip_bytes.len() == 16 {
+    |                                        ^^^
+    |
+help: there is a method `le` with a similar name, but with different arguments
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/cmp.rs:1417:5
+
+error[E0308]: mismatched types
+   --> rustyjack-netlink/src/interface.rs:547:47
+    |
+547 |                         bytes.copy_from_slice(&ip_bytes);
+    |                               --------------- ^^^^^^^^^ expected `&[u8]`, found `&IpAddr`
+    |                               |
+    |                               arguments to this method are incorrect
+    |
+    = note: expected reference `&[u8]`
+               found reference `&IpAddr`
+note: method defined here
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/slice/mod.rs:3855:18
+
+error[E0599]: no method named `is_empty` found for reference `&RouteAddress` in the current scope
+   --> rustyjack-netlink/src/route.rs:124:32
+    |
+124 |                         if dst.is_empty() || dst.iter().all(|&b| b == 0) {
+    |                                ^^^^^^^^ method not found in `&RouteAddress`
+
+error[E0599]: no method named `iter` found for reference `&RouteAddress` in the current scope
+   --> rustyjack-netlink/src/route.rs:124:50
+    |
+124 |                         if dst.is_empty() || dst.iter().all(|&b| b == 0) {
+    |                                                  ^^^^ method not found in `&RouteAddress`
+
+error[E0599]: no method named `len` found for reference `&RouteAddress` in the current scope
+   --> rustyjack-netlink/src/route.rs:129:31
+    |
+129 |                         if gw.len() == 4 {
+    |                               ^^^ method not found in `&RouteAddress`
+
+error[E0608]: cannot index into a value of type `&RouteAddress`
+   --> rustyjack-netlink/src/route.rs:130:71
+    |
+130 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                 ^^^
+
+error[E0608]: cannot index into a value of type `&RouteAddress`
+   --> rustyjack-netlink/src/route.rs:130:78
+    |
+130 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                        ^^^
+
+error[E0608]: cannot index into a value of type `&RouteAddress`
+   --> rustyjack-netlink/src/route.rs:130:85
+    |
+130 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                               ^^^
+
+error[E0608]: cannot index into a value of type `&RouteAddress`
+   --> rustyjack-netlink/src/route.rs:130:92
+    |
+130 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                                      ^^^
+
+error[E0599]: no method named `len` found for enum `RouteAddress` in the current scope
+   --> rustyjack-netlink/src/route.rs:194:32
+    |
+194 |                         if dst.len() == 4 {
+    |                                ^^^ method not found in `RouteAddress`
+    |
+note: the method `len` exists on the type `Vec<u8>`
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/vec/mod.rs:2895:5
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:195:76
+    |
+195 | ...                   destination = Some(IpAddr::V4(Ipv4Addr::new(dst[0], dst[1], dst[2], dst[3])));
+    |                                                                      ^^^
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:195:84
+    |
+195 | ...                   destination = Some(IpAddr::V4(Ipv4Addr::new(dst[0], dst[1], dst[2], dst[3])));
+    |                                                                              ^^^
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:195:92
+    |
+195 | ...                   destination = Some(IpAddr::V4(Ipv4Addr::new(dst[0], dst[1], dst[2], dst[3])));
+    |                                                                                      ^^^
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:195:100
+    |
+195 | ...                   destination = Some(IpAddr::V4(Ipv4Addr::new(dst[0], dst[1], dst[2], dst[3])));
+    |                                                                                              ^^^
+
+error[E0599]: no method named `len` found for enum `RouteAddress` in the current scope
+   --> rustyjack-netlink/src/route.rs:199:31
+    |
+199 |                         if gw.len() == 4 {
+    |                               ^^^ method not found in `RouteAddress`
+    |
+note: the method `len` exists on the type `Vec<u8>`
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/alloc/src/vec/mod.rs:2895:5
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:200:71
+    |
+200 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                 ^^^
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:200:78
+    |
+200 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                        ^^^
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:200:85
+    |
+200 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                               ^^^
+
+error[E0608]: cannot index into a value of type `RouteAddress`
+   --> rustyjack-netlink/src/route.rs:200:92
+    |
+200 | ...                   gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
+    |                                                                                      ^^^
+
+error[E0599]: no method named `flushfaddresses` found for struct `InterfaceManager` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:162:44
+    |
+162 |         if let Err(e) = self.interfacefmgr.flushfaddresses(interface).await {
+    |                                            ^^^^^^^^^^^^^^^
+    |
+   ::: rustyjack-netlink/src/interface.rs:17:1
+    |
+ 17 | pub struct InterfaceManager {
+    | --------------------------- method `flushfaddresses` not found for this struct
+    |
+help: there is a method `flush_addresses` with a similar name
+    |
+162 -         if let Err(e) = self.interfacefmgr.flushfaddresses(interface).await {
+162 +         if let Err(e) = self.interfacefmgr.flush_addresses(interface).await {
+    |
+
+error[E0599]: no method named `getfmacfaddress` found for struct `InterfaceManager` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:250:14
+    |
+248 |           let macfstr = self
+    |  _______________________-
+249 | |             .interfacefmgr
+250 | |             .getfmacfaddress(interface)
+    | |_____________-^^^^^^^^^^^^^^^
+    |
+   ::: rustyjack-netlink/src/interface.rs:17:1
+    |
+ 17 |   pub struct InterfaceManager {
+    |   --------------------------- method `getfmacfaddress` not found for this struct
+    |
+help: there is a method `get_mac_address` with a similar name
+    |
+250 -             .getfmacfaddress(interface)
+250 +             .get_mac_address(interface)
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:253:38
+    |
+253 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+253 -                 interface: interface.tffstring(),
+253 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:260:38
+    |
+260 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+260 -                 interface: interface.tffstring(),
+260 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no function or associated item named `frfmfstrfradix` found for type `u8` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:267:26
+    |
+267 |             mac[i] = u8::frfmfstrfradix(part, 16).map_err(|f| {
+    |                          ^^^^^^^^^^^^^^ function or associated item not found in `u8`
+    |
+help: there is an associated function `from_str_radix` with a similar name
+    |
+267 -             mac[i] = u8::frfmfstrfradix(part, 16).map_err(|f| {
+267 +             mac[i] = u8::from_str_radix(part, 16).map_err(|f| {
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:269:42
+    |
+269 |                     interface: interface.tffstring(),
+    |                                          ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+269 -                     interface: interface.tffstring(),
+269 +                     interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `addfaddress` found for struct `InterfaceManager` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:751:14
+    |
+750 | /         self.interfacefmgr
+751 | |             .addfaddress(interface, IpAddr::V4(lease.address), lease.prefixflen)
+    | |_____________-^^^^^^^^^^^
+    |
+   ::: rustyjack-netlink/src/interface.rs:17:1
+    |
+ 17 |   pub struct InterfaceManager {
+    |   --------------------------- method `addfaddress` not found for this struct
+    |
+help: there is a method `add_address` with a similar name
+    |
+751 -             .addfaddress(interface, IpAddr::V4(lease.address), lease.prefixflen)
+751 +             .add_address(interface, IpAddr::V4(lease.address), lease.prefixflen)
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:757:42
+    |
+757 |                     interface: interface.tffstring(),
+    |                                          ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+757 -                     interface: interface.tffstring(),
+757 +                     interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:769:46
+    |
+769 |                         interface: interface.tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+769 -                         interface: interface.tffstring(),
+769 +                         interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `isfempty` found for struct `Vec<Ipv4Addr>` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:775:31
+    |
+775 |         if !lease.dnsfservers.isfempty() {
+    |                               ^^^^^^^^
+    |
+help: there is a method `is_empty` with a similar name
+    |
+775 -         if !lease.dnsfservers.isfempty() {
+775 +         if !lease.dnsfservers.is_empty() {
+    |
+
+error[E0599]: no function or associated item named `nfw` found for struct `SystemTime` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:279:21
+    |
+279 |         SystemTime::nfw()
+    |                     ^^^ function or associated item not found in `SystemTime`
+    |
+note: if you're trying to build a new `SystemTime`, consider using `SystemTime::now` which returns `SystemTime`
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/time.rs:525:5
+help: there is an associated function `now` with a similar name
+    |
+279 -         SystemTime::nfw()
+279 +         SystemTime::now()
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:288:38
+    |
+288 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+288 -                 interface: interface.tffstring(),
+288 +                 interface: interface.to_string(),
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:322:31
+    |
+322 |             .setfreadftimefut(Sfme(Duratifn::frfmfsecs(5)))
+    |                               ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:345:49
+    |
+345 |                         packetftype: "DISCfVER".tffstring(),
+    |                                                 ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+345 -                         packetftype: "DISCfVER".tffstring(),
+345 +                         packetftype: "DISCfVER".to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:346:46
+    |
+346 |                         interface: interface.tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+346 -                         interface: interface.tffstring(),
+346 +                         interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:368:34
+    |
+368 |             interface: interface.tffstring(),
+    |                                  ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+368 -             interface: interface.tffstring(),
+368 +             interface: interface.to_string(),
+    |
+
+error[E0599]: no variant or associated item named `WfuldBlfck` found for enum `ErrorKind` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:378:52
+    |
+378 |                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+    |                                                    ^^^^^^^^^^ variant or associated item not found in `ErrorKind`
+    |
+help: there is a variant with a similar name
+    |
+378 -                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+378 +                 if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Timedfut {
+    |
+
+error[E0599]: no variant or associated item named `Timedfut` found for enum `ErrorKind` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:378:98
+    |
+378 |                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+    |                                                                                                  ^^^^^^^^ variant or associated item not found in `ErrorKind`
+    |
+help: there is a variant with a similar name
+    |
+378 -                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+378 +                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::TimedOut {
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:380:46
+    |
+380 |                         packetftype: "offer".tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+380 -                         packetftype: "offer".tffstring(),
+380 +                         packetftype: "offer".to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:381:46
+    |
+381 |                         interface: interface.tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+381 -                         interface: interface.tffstring(),
+381 +                         interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:386:46
+    |
+386 |                         interface: interface.tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+386 -                         interface: interface.tffstring(),
+386 +                         interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:415:44
+    |
+415 |                     packetftype: "REQUEST".tffstring(),
+    |                                            ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+415 -                     packetftype: "REQUEST".tffstring(),
+415 +                     packetftype: "REQUEST".to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:416:42
+    |
+416 |                     interface: interface.tffstring(),
+    |                                          ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+416 -                     interface: interface.tffstring(),
+416 +                     interface: interface.to_string(),
+    |
+
+error[E0599]: no variant or associated item named `WfuldBlfck` found for enum `ErrorKind` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:435:52
+    |
+435 |                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+    |                                                    ^^^^^^^^^^ variant or associated item not found in `ErrorKind`
+    |
+help: there is a variant with a similar name
+    |
+435 -                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+435 +                 if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Timedfut {
+    |
+
+error[E0599]: no variant or associated item named `Timedfut` found for enum `ErrorKind` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:435:98
+    |
+435 |                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+    |                                                                                                  ^^^^^^^^ variant or associated item not found in `ErrorKind`
+    |
+help: there is a variant with a similar name
+    |
+435 -                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::Timedfut {
+435 +                 if e.kind() == std::io::ErrorKind::WfuldBlfck || e.kind() == std::io::ErrorKind::TimedOut {
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:437:44
+    |
+437 |                         packetftype: "ACK".tffstring(),
+    |                                            ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+437 -                         packetftype: "ACK".tffstring(),
+437 +                         packetftype: "ACK".to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:438:46
+    |
+438 |                         interface: interface.tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+438 -                         interface: interface.tffstring(),
+438 +                         interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:443:46
+    |
+443 |                         interface: interface.tffstring(),
+    |                                              ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+443 -                         interface: interface.tffstring(),
+443 +                         interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:461:22
+    |
+461 |         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+    |                      ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+461 -         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+461 +         packet[4..8].copy_from_slice(&xid.tffbefbytes());
+    |
+
+error[E0599]: no method named `tffbefbytes` found for type `u32` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:461:43
+    |
+461 |         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+    |                                           ^^^^^^^^^^^
+    |
+help: there is a method `to_be_bytes` with a similar name
+    |
+461 -         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+461 +         packet[4..8].cfpyffrfmfslice(&xid.to_be_bytes());
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:463:24
+    |
+463 |         packet[28..34].cfpyffrfmfslice(mac);
+    |                        ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+463 -         packet[28..34].cfpyffrfmfslice(mac);
+463 +         packet[28..34].copy_from_slice(mac);
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:465:26
+    |
+465 |         packet[236..240].cfpyffrfmfslice(&DHCP_MAGICfCffKIE);
+    |                          ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+465 -         packet[236..240].cfpyffrfmfslice(&DHCP_MAGICfCffKIE);
+465 +         packet[236..240].copy_from_slice(&DHCP_MAGICfCffKIE);
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:479:67
+    |
+479 |                 packet[OFFset + 2..OFFset + 2 + namefbytes.len()].cfpyffrfmfslice(namefbytes);
+    |                                                                   ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+479 -                 packet[OFFset + 2..OFFset + 2 + namefbytes.len()].cfpyffrfmfslice(namefbytes);
+479 +                 packet[OFFset + 2..OFFset + 2 + namefbytes.len()].copy_from_slice(namefbytes);
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:513:22
+    |
+513 |         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+    |                      ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+513 -         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+513 +         packet[4..8].copy_from_slice(&xid.tffbefbytes());
+    |
+
+error[E0599]: no method named `tffbefbytes` found for type `u32` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:513:43
+    |
+513 |         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+    |                                           ^^^^^^^^^^^
+    |
+help: there is a method `to_be_bytes` with a similar name
+    |
+513 -         packet[4..8].cfpyffrfmfslice(&xid.tffbefbytes());
+513 +         packet[4..8].cfpyffrfmfslice(&xid.to_be_bytes());
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:515:24
+    |
+515 |         packet[28..34].cfpyffrfmfslice(mac);
+    |                        ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+515 -         packet[28..34].cfpyffrfmfslice(mac);
+515 +         packet[28..34].copy_from_slice(mac);
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:517:26
+    |
+517 |         packet[236..240].cfpyffrfmfslice(&DHCP_MAGICfCffKIE);
+    |                          ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+517 -         packet[236..240].cfpyffrfmfslice(&DHCP_MAGICfCffKIE);
+517 +         packet[236..240].copy_from_slice(&DHCP_MAGICfCffKIE);
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:528:40
+    |
+528 |         packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.OFFeredfip.fctets());
+    |                                        ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+528 -         packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.OFFeredfip.fctets());
+528 +         packet[OFFset + 2..OFFset + 6].copy_from_slice(&offer.OFFeredfip.fctets());
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:533:40
+    |
+533 |         packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.serverfid.fctets());
+    |                                        ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+533 -         packet[OFFset + 2..OFFset + 6].cfpyffrfmfslice(&offer.serverfid.fctets());
+533 +         packet[OFFset + 2..OFFset + 6].copy_from_slice(&offer.serverfid.fctets());
+    |
+
+error[E0599]: no method named `cfpyffrfmfslice` found for slice `[u8]` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:541:67
+    |
+541 |                 packet[OFFset + 2..OFFset + 2 + namefbytes.len()].cfpyffrfmfslice(namefbytes);
+    |                                                                   ^^^^^^^^^^^^^^^
+    |
+help: there is a method `copy_from_slice` with a similar name
+    |
+541 -                 packet[OFFset + 2..OFFset + 2 + namefbytes.len()].cfpyffrfmfslice(namefbytes);
+541 +                 packet[OFFset + 2..OFFset + 2 + namefbytes.len()].copy_from_slice(namefbytes);
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:564:38
+    |
+564 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+564 -                 interface: interface.tffstring(),
+564 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:571:38
+    |
+571 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+571 -                 interface: interface.tffstring(),
+571 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no function or associated item named `frfmfbefbytes` found for type `u32` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:576:31
+    |
+576 |         let packetfxid = u32::frfmfbefbytes([data[4], data[5], data[6], data[7]]);
+    |                               ^^^^^^^^^^^^^ function or associated item not found in `u32`
+    |
+help: there is an associated function `from_be_bytes` with a similar name
+    |
+576 -         let packetfxid = u32::frfmfbefbytes([data[4], data[5], data[6], data[7]]);
+576 +         let packetfxid = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:579:38
+    |
+579 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+579 -                 interface: interface.tffstring(),
+579 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:586:38
+    |
+586 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+586 -                 interface: interface.tffstring(),
+586 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:587:53
+    |
+587 |                 reasfn: "Invalid DHCP magic cffkie".tffstring(),
+    |                                                     ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+587 -                 reasfn: "Invalid DHCP magic cffkie".tffstring(),
+587 +                 reasfn: "Invalid DHCP magic cffkie".to_string(),
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:595:36
+    |
+595 |         if OPTIONs.messageftype != Sfme(DHCPoffer) {
+    |                                    ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:597:38
+    |
+597 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+597 -                 interface: interface.tffstring(),
+597 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:604:38
+    |
+604 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+604 -                 interface: interface.tffstring(),
+604 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:605:63
+    |
+605 |                 reasfn: "DHCPoffer missing server identifier".tffstring(),
+    |                                                               ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+605 -                 reasfn: "DHCPoffer missing server identifier".tffstring(),
+605 +                 reasfn: "DHCPoffer missing server identifier".to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:628:38
+    |
+628 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+628 -                 interface: interface.tffstring(),
+628 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:635:38
+    |
+635 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+635 -                 interface: interface.tffstring(),
+635 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no function or associated item named `frfmfbefbytes` found for type `u32` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:640:31
+    |
+640 |         let packetfxid = u32::frfmfbefbytes([data[4], data[5], data[6], data[7]]);
+    |                               ^^^^^^^^^^^^^ function or associated item not found in `u32`
+    |
+help: there is an associated function `from_be_bytes` with a similar name
+    |
+640 -         let packetfxid = u32::frfmfbefbytes([data[4], data[5], data[6], data[7]]);
+640 +         let packetfxid = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:643:38
+    |
+643 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+643 -                 interface: interface.tffstring(),
+643 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:650:38
+    |
+650 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+650 -                 interface: interface.tffstring(),
+650 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:651:53
+    |
+651 |                 reasfn: "Invalid DHCP magic cffkie".tffstring(),
+    |                                                     ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+651 -                 reasfn: "Invalid DHCP magic cffkie".tffstring(),
+651 +                 reasfn: "Invalid DHCP magic cffkie".to_string(),
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:657:36
+    |
+657 |         if OPTIONs.messageftype == Sfme(DHCPNAK) {
+    |                                    ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:659:38
+    |
+659 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+659 -                 interface: interface.tffstring(),
+659 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&'static str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:660:55
+    |
+660 |                 reasfn: "Server rejected the request".tffstring(),
+    |                                                       ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+660 -                 reasfn: "Server rejected the request".tffstring(),
+660 +                 reasfn: "Server rejected the request".to_string(),
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:664:36
+    |
+664 |         if OPTIONs.messageftype != Sfme(DHCPACK) {
+    |                                    ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:666:38
+    |
+666 |                 interface: interface.tffstring(),
+    |                                      ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+666 -                 interface: interface.tffstring(),
+666 +                 interface: interface.to_string(),
+    |
+
+error[E0599]: no method named `tffstring` found for reference `&str` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:709:42
+    |
+709 |                     interface: interface.tffstring(),
+    |                                          ^^^^^^^^^
+    |
+help: there is a method `to_string` with a similar name
+    |
+709 -                     interface: interface.tffstring(),
+709 +                     interface: interface.to_string(),
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:718:44
+    |
+718 |                     OPTIONs.messageftype = Sfme(value[0]);
+    |                                            ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:721:43
+    |
+721 |                     OPTIONs.subnetfmask = Sfme(Ipv4Addr::new(value[0], value[1], value[2], value[3]));
+    |                                           ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:724:38
+    |
+724 |                     OPTIONs.rfuter = Sfme(Ipv4Addr::new(value[0], value[1], value[2], value[3]));
+    |                                      ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:732:41
+    |
+732 |                     OPTIONs.serverfid = Sfme(Ipv4Addr::new(value[0], value[1], value[2], value[3]));
+    |                                         ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0599]: no function or associated item named `frfmfbefbytes` found for type `u32` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:735:37
+    |
+735 |                     let secs = u32::frfmfbefbytes([value[0], value[1], value[2], value[3]]);
+    |                                     ^^^^^^^^^^^^^ function or associated item not found in `u32`
+    |
+help: there is an associated function `from_be_bytes` with a similar name
+    |
+735 -                     let secs = u32::frfmfbefbytes([value[0], value[1], value[2], value[3]]);
+735 +                     let secs = u32::from_be_bytes([value[0], value[1], value[2], value[3]]);
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Sfme` in this scope
+   --> rustyjack-netlink/src/dhcp.rs:736:42
+    |
+736 |                     OPTIONs.leaseftime = Sfme(Duratifn::frfmfsecs(secs as u64));
+    |                                          ^^^^ help: a tuple variant with a similar name exists: `Some`
+    |
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/option.rs:602:5
+    |
+    = note: similarly named tuple variant `Some` defined here
+
+error[E0599]: no method named `pushfstr` found for struct `std::string::String` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:789:21
+    |
+789 |             cfntent.pushfstr(&ffrmat!("nameserver {}\n", server));
+    |                     ^^^^^^^^
+    |
+help: there is a method `push_str` with a similar name
+    |
+789 -             cfntent.pushfstr(&ffrmat!("nameserver {}\n", server));
+789 +             cfntent.push_str(&ffrmat!("nameserver {}\n", server));
+    |
+
+error[E0599]: no method named `writefall` found for struct `std::fs::File` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:793:14
+    |
+793 |         file.writefall(cfntent.asfbytes())?;
+    |              ^^^^^^^^^
+    |
+help: there is a method `write_all` with a similar name
+    |
+793 -         file.writefall(cfntent.asfbytes())?;
+793 +         file.write_all(cfntent.asfbytes())?;
+    |
+
+error[E0599]: no method named `asfbytes` found for struct `std::string::String` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:793:32
+    |
+793 |         file.writefall(cfntent.asfbytes())?;
+    |                                ^^^^^^^^
+    |
+help: there is a method `as_bytes` with a similar name
+    |
+793 -         file.writefall(cfntent.asfbytes())?;
+793 +         file.writefall(cfntent.as_bytes())?;
+    |
+
+error[E0599]: no method named `fctets` found for struct `Ipv4Addr` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:844:23
+    |
+844 |     let fctets = mask.fctets();
+    |                       ^^^^^^
+    |
+help: there is a method `octets` with a similar name
+    |
+844 -     let fctets = mask.fctets();
+844 +     let fctets = mask.octets();
+    |
+
+error[E0599]: no function or associated item named `frfmfbefbytes` found for type `u32` in the current scope
+   --> rustyjack-netlink/src/dhcp.rs:845:21
+    |
+845 |     let bits = u32::frfmfbefbytes(fctets);
+    |                     ^^^^^^^^^^^^^ function or associated item not found in `u32`
+    |
+help: there is an associated function `from_be_bytes` with a similar name
+    |
+845 -     let bits = u32::frfmfbefbytes(fctets);
+845 +     let bits = u32::from_be_bytes(fctets);
+    |
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:550:69
+    |
+550 | ...                   info.wiphy = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                               ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:550:81
+    |
+550 | ...                   info.wiphy = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                           ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:550:93
+    |
+550 | ...                   info.wiphy = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                                       ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:550:105
+    |
+550 | ...                   info.wiphy = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                                                   ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:556:69
+    |
+556 | ...                   let iftype = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                               ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:556:81
+    |
+556 | ...                   let iftype = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                           ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:556:93
+    |
+556 | ...                   let iftype = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                                       ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:556:105
+    |
+556 | ...                   let iftype = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                                                   ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:563:67
+    |
+563 | ...                   let freq = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                             ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:563:79
+    |
+563 | ...                   let freq = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                         ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:563:91
+    |
+563 | ...                   let freq = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                                     ^^^
+
+error[E0608]: cannot index into a value of type `&neli::types::Buffer`
+   --> rustyjack-netlink/src/wireless.rs:563:103
+    |
+563 | ...                   let freq = u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    |                                                                                                 ^^^
+
+error[E0308]: mismatched types
+   --> rustyjack-netlink/src/wireless.rs:624:63
+    |
+624 |                         if let Ok(name) = std::str::from_utf8(payload) {
+    |                                           ------------------- ^^^^^^^ expected `&[u8]`, found `&Buffer`
+    |                                           |
+    |                                           arguments to this function are incorrect
+    |
+    = note: expected reference `&[u8]`
+               found reference `&neli::types::Buffer`
+note: function defined here
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/str/converts.rs:89:14
+
+error[E0599]: the method `as_display` exists for reference `&DhcpClientError`, but its trait bounds were not satisfied
+   --> rustyjack-netlink/src/error.rs:138:13
+    |
+138 |     #[error("DHCP client error: {0}")]
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called on `&DhcpClientError` due to unsatisfied trait bounds
+    |
+   ::: rustyjack-netlink/src/dhcp.rs:42:1
+    |
+ 42 | pub enum DhcpClientError {
+    | ------------------------ doesn't satisfy `DhcpClientError: std::fmt::Display`
+    |
+    = note: the following trait bounds were not satisfied:
+            `DhcpClientError: std::fmt::Display`
+            which is required by `&DhcpClientError: AsDisplay<'_>`
+note: the trait `std::fmt::Display` must be implemented
+   --> /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/fmt/mod.rs:1006:1
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `as_display`, perhaps you need to implement one of them:
+            candidate #1: `AsDisplay`
+            candidate #2: `thiserror::display::AsDisplay`
+
+warning: unused variable: `stats`
+   --> rustyjack-netlink/src/hostapd.rs:389:13
+    |
+389 |         let stats = Arc::clone(&self.stats);
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_stats`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `config`
+   --> rustyjack-netlink/src/hostapd.rs:390:13
+    |
+390 |         let config = self.config.clone();
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+
+Some errors have detailed explanations: E0277, E0308, E0412, E0425, E0432, E0433, E0531, E0599, E0608.
+For more information about an error, try `rustc --explain E0277`.
+warning: `rustyjack-netlink` (lib) generated 4 warnings
+error: could not compile `rustyjack-netlink` (lib) due to 192 previous errors; 4 warnings emitted
+[FAIL] Failed to build rustyjack-ui
+root@rustyjack:~/Rustyjack#

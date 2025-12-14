@@ -120,15 +120,18 @@ impl RouteManager {
             for nla in &route.attributes {
                 match nla {
                     RouteAttribute::Destination(dst) => {
-                        // RouteAddress is Vec<u8>
-                        if dst.is_empty() || dst.iter().all(|&b| b == 0) {
-                            is_default = true;
+                        // Check if all octets are zero (default route)
+                        match dst {
+                            IpAddr::V4(v4) => {
+                                is_default = v4.octets().iter().all(|&b| b == 0);
+                            }
+                            IpAddr::V6(v6) => {
+                                is_default = v6.octets().iter().all(|&b| b == 0);
+                            }
                         }
                     }
                     RouteAttribute::Gateway(gw) => {
-                        if gw.len() == 4 {
-                            gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
-                        }
+                        gateway = Some(*gw);
                     }
                     RouteAttribute::Oif(idx) => {
                         oif = Some(*idx);
@@ -191,14 +194,10 @@ impl RouteManager {
             for nla in route.attributes {
                 match nla {
                     RouteAttribute::Destination(dst) => {
-                        if dst.len() == 4 {
-                            destination = Some(IpAddr::V4(Ipv4Addr::new(dst[0], dst[1], dst[2], dst[3])));
-                        }
+                        destination = Some(dst);
                     }
                     RouteAttribute::Gateway(gw) => {
-                        if gw.len() == 4 {
-                            gateway = Some(IpAddr::V4(Ipv4Addr::new(gw[0], gw[1], gw[2], gw[3])));
-                        }
+                        gateway = Some(gw);
                     }
                     RouteAttribute::Oif(idx) => {
                         oif = Some(idx);
