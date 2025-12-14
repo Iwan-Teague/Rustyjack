@@ -180,38 +180,70 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // Unblock rfkill for all wireless devices
+    // Unblock rfkill for all wireless devices - AGGRESSIVELY
     eprintln!("[HOTSPOT] Unblocking rfkill for all wireless devices...");
-    let rfkill_result = Command::new("rfkill")
-        .args(&["unblock", "all"])
-        .output();
     
-    match rfkill_result {
-        Ok(output) => {
-            if !output.status.success() {
-                eprintln!("[HOTSPOT] WARNING: rfkill unblock failed: {}", 
-                    String::from_utf8_lossy(&output.stderr));
-            } else {
-                eprintln!("[HOTSPOT] rfkill unblocked successfully");
+    // Try multiple times because something keeps re-blocking it
+    for attempt in 1..=3 {
+        eprintln!("[HOTSPOT] RF-kill unblock attempt {}...", attempt);
+        let rfkill_result = Command::new("rfkill")
+            .args(&["unblock", "all"])
+            .output();
+        
+        match rfkill_result {
+            Ok(output) => {
+                if !output.status.success() {
+                    eprintln!("[HOTSPOT] WARNING: rfkill unblock failed: {}", 
+                        String::from_utf8_lossy(&output.stderr));
+                } else {
+                    eprintln!("[HOTSPOT] rfkill unblocked successfully");
+                }
+            }
+            Err(e) => {
+                eprintln!("[HOTSPOT] WARNING: rfkill command failed: {}", e);
             }
         }
-        Err(e) => {
-            eprintln!("[HOTSPOT] WARNING: rfkill command failed: {}", e);
-        }
+        
+        std::thread::sleep(std::time::Duration::from_millis(300));
     }
     
     // Give rfkill unblock time to take effect
-    eprintln!("[HOTSPOT] Waiting 1 second for rfkill to take effect...");
+    eprintln!("[HOTSPOT] Waiting for rfkill to stabilize...");
     std::thread::sleep(std::time::Duration::from_secs(1));
     
     // Verify rfkill status
     eprintln!("[HOTSPOT] Verifying rfkill status...");
+    let mut is_blocked = false;
     if let Ok(output) = Command::new("rfkill").arg("list").output() {
         let status = String::from_utf8_lossy(&output.stdout);
         eprintln!("[HOTSPOT] rfkill status:\n{}", status);
         if status.contains("Soft blocked: yes") || status.contains("Hard blocked: yes") {
             eprintln!("[HOTSPOT] WARNING: Wireless is still blocked by rfkill!");
+            eprintln!("[HOTSPOT] Attempting aggressive unblock...");
             log::warn!("Wireless still blocked after rfkill unblock attempt");
+            is_blocked = true;
+        }
+    }
+    
+    // If still blocked, try more aggressive unblocking
+    if is_blocked {
+        eprintln!("[HOTSPOT] Performing aggressive RF-kill unblock...");
+        // Unblock by device ID specifically
+        for id in 0..10 {
+            let _ = Command::new("rfkill")
+                .args(&["unblock", &id.to_string()])
+                .status();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
+        // Final unblock all
+        let _ = Command::new("rfkill").args(&["unblock", "all"]).status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
+        // Check again
+        if let Ok(output) = Command::new("rfkill").arg("list").output() {
+            let status = String::from_utf8_lossy(&output.stdout);
+            eprintln!("[HOTSPOT] rfkill status after aggressive unblock:\n{}", status);
         }
     }
 
@@ -594,29 +626,29 @@ pub fn stop_hotspot() -> Result<()> {
                 .status();
         }
         
-        // Restore NetworkManager management of the AP interface
-        eprintln!("[HOTSPOT] Restoring NetworkManager management of {}...", s.ap_interface);
-        log::info!("Restoring NetworkManager management of {}", s.ap_interface);
+        // DO NOT restore NetworkManager management immediately
+        // NetworkManager re-blocks RF-kill when it takes control, which breaks subsequent hotspot starts
+        // Instead, leave interface unmanaged but ensure it's in a clean state
+        eprintln!("[HOTSPOT] Cleaning up interface {} (leaving unmanaged to prevent RF-kill issues)...", s.ap_interface);
+        log::info!("Cleaning up interface {} after hotspot stop", s.ap_interface);
         
-        // Use timeout to prevent hanging
-        let nmcli_result = std::process::Command::new("timeout")
-            .args(["5", "nmcli", "device", "set", &s.ap_interface, "managed", "yes"])
+        // Bring interface down to clean state
+        let _ = Command::new("ip")
+            .args(["link", "set", &s.ap_interface, "down"])
             .status();
         
-        match nmcli_result {
-            Ok(status) if status.success() => {
-                eprintln!("[HOTSPOT] NetworkManager management restored");
-                log::info!("NetworkManager management restored for {}", s.ap_interface);
-            }
-            Ok(_) => {
-                eprintln!("[HOTSPOT] WARNING: Failed to restore NetworkManager management (non-critical)");
-                log::warn!("Failed to restore NetworkManager management for {}", s.ap_interface);
-            }
-            Err(e) => {
-                eprintln!("[HOTSPOT] WARNING: nmcli command failed: {} (non-critical)", e);
-                log::warn!("nmcli command failed: {}", e);
-            }
-        }
+        // Flush any remaining IPs
+        let _ = Command::new("ip")
+            .args(["addr", "flush", "dev", &s.ap_interface])
+            .status();
+        
+        // Ensure RF-kill stays unblocked
+        eprintln!("[HOTSPOT] Ensuring RF-kill stays unblocked...");
+        let _ = Command::new("rfkill").args(&["unblock", "all"]).status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
+        eprintln!("[HOTSPOT] NOTE: Interface {} left unmanaged to prevent RF-kill blocking", s.ap_interface);
+        log::info!("Interface {} left unmanaged to prevent RF-kill issues", s.ap_interface);
     } else {
         eprintln!("[HOTSPOT] No hotspot state found, performing general cleanup...");
         
