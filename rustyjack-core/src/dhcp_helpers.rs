@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::net::Ipv4Addr;
 
 #[cfg(target_os = "linux")]
-pub use rustyjack_netlink::{DhcpServer, DhcpConfig, DhcpLease as DhcpServerLease};
+pub use rustyjack_netlink::{DhcpServer, DhcpConfig, DhcpLease};
 
 #[cfg(target_os = "linux")]
 pub fn create_dhcp_server(
