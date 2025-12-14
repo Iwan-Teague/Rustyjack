@@ -7,8 +7,9 @@ use std::net::Ipv4Addr;
 
 use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use rustyjack_netlink::{AccessPoint, ApConfig, ApSecurity, DhcpServer, DhcpConfig as NetlinkDhcpConfig, DnsServer, IptablesManager};
-use rustyjack_core::dhcp_helpers::start_hotspot_dhcp_server;
-use rustyjack_core::dns_helpers::start_hotspot_dns;
+// TODO: These helpers need to be implemented
+// use rustyjack_core::dhcp_helpers::start_hotspot_dhcp_server;
+// use rustyjack_core::dns_helpers::start_hotspot_dns;
 
 use crate::error::{Result, WirelessError};
 use crate::netlink_helpers::{netlink_set_interface_down, netlink_flush_addresses, netlink_add_address};
@@ -345,10 +346,10 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         .map(|handle| {
             handle.block_on(async {
                 ap.start().await
+                    .map_err(|e| WirelessError::System(format!("AP start failed: {}", e)))
             })
         })
         .unwrap_or_else(|_| {
-            // No active runtime, create a new one
             tokio::runtime::Runtime::new()
                 .map_err(|e| WirelessError::System(format!("Failed to create tokio runtime: {}", e)))
                 .and_then(|rt| {
