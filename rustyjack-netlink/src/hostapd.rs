@@ -358,9 +358,9 @@ impl AccessPoint {
     
     /// Spawn beacon transmission task
     fn spawn_beacon_task(&self) -> JoinHandle<()> {
-        let config = self.config.clone();
+        let _config = self.config.clone();
         let running = Arc::clone(&self.running);
-        let stats = Arc::clone(&self.stats);
+        let _stats = Arc::clone(&self.stats);
         let interface = self.config.interface.clone();
         
         tokio::spawn(async move {
@@ -386,8 +386,8 @@ impl AccessPoint {
     fn spawn_mgmt_task(&self) -> JoinHandle<()> {
         let running = Arc::clone(&self.running);
         let clients = Arc::clone(&self.clients);
-        let stats = Arc::clone(&self.stats);
-        let config = self.config.clone();
+        let _stats = Arc::clone(&self.stats);
+        let _config = self.config.clone();
         let interface = self.config.interface.clone();
         
         tokio::spawn(async move {
@@ -531,6 +531,7 @@ mod tests {
         assert!(invalid.is_err());
     }
 }
+
 
 
 
