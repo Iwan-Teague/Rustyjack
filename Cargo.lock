@@ -2172,6 +2172,7 @@ dependencies = [
  "libc",
  "log",
  "rand 0.8.5",
+ "rustyjack-netlink",
  "socket2 0.5.10",
  "uuid",
 ]

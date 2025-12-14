@@ -277,27 +277,20 @@ impl StateManager {
     }
 
     fn restore_mac(&self, interface: &str, mac: &str) -> Result<()> {
+        let mgr = rustyjack_netlink::LinkManager::new()
+            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        
         // Bring down
-        let _ = std::process::Command::new("ip")
-            .args(["link", "set", interface, "down"])
-            .output();
+        let _ = mgr.set_link_down(interface);
 
         // Set MAC
-        let result = std::process::Command::new("ip")
-            .args(["link", "set", interface, "address", mac])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run ip: {}", e)))?;
+        let result = mgr.set_mac_address(interface, mac)
+            .map_err(|e| EvasionError::RestoreError(format!("Failed to set MAC: {}", e)));
 
         // Bring up
-        let _ = std::process::Command::new("ip")
-            .args(["link", "set", interface, "up"])
-            .output();
+        let _ = mgr.set_link_up(interface);
 
-        if !result.status.success() {
-            return Err(EvasionError::RestoreError("Failed to set MAC".into()));
-        }
-
-        Ok(())
+        result
     }
 
     fn restore_tx_power(&self, interface: &str, dbm: i32) -> Result<()> {

@@ -444,13 +444,16 @@ impl InterfaceManager {
     /// ```
     pub async fn get_mac_address(&self, interface: &str) -> Result<String> {
         if interface.is_empty() {
-            return Err(NetlinkError::InterfaceNotFound("Interface name cannot be empty".to_string()));
+            return Err(NetlinkError::InterfaceNotFound { name: "Interface name cannot be empty".to_string() });
         }
 
         let mut links = self.handle.link().get().match_name(interface.to_string()).execute();
         
         if let Some(link) = links.try_next().await
-            .map_err(|e| NetlinkError::InterfaceIndexError(format!("Failed to query interface: {}", e)))? 
+            .map_err(|e| NetlinkError::InterfaceIndexError {
+                interface: interface.to_string(),
+                reason: format!("Failed to query interface: {}", e),
+            })? 
         {
             for nla in link.attributes {
                 if let rtnetlink::packet::link::LinkAttribute::Address(addr) = nla {
@@ -464,7 +467,56 @@ impl InterfaceManager {
             }
         }
         
-        Err(NetlinkError::InterfaceNotFound(format!("Interface {} not found or has no MAC address", interface)))
+        Err(NetlinkError::InterfaceNotFound { name: format!("Interface {} not found or has no MAC address", interface) })
+    }
+
+    /// Get the kernel interface index by name (alias for get_interface_index).
+    pub async fn get_index(&self, name: &str) -> Result<u32> {
+        self.get_interface_index(name).await
+    }
+
+    /// Get all IP addresses assigned to an interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `interface` - Interface name to query
+    ///
+    /// # Returns
+    ///
+    /// Vector of AddressInfo structs containing IP addresses and prefix lengths
+    pub async fn get_addresses(&self, interface: &str) -> Result<Vec<AddressInfo>> {
+        let index = self.get_interface_index(interface).await?;
+        
+        let mut addresses = Vec::new();
+        let mut addr_stream = self.handle.address().get().set_link_index_filter(index).execute();
+        
+        while let Some(addr_msg) = addr_stream.try_next().await
+            .map_err(|e| NetlinkError::ListAddressesError {
+                interface: interface.to_string(),
+                reason: e.to_string(),
+            })? 
+        {
+            for nla in addr_msg.attributes {
+                if let rtnetlink::packet::address::AddressAttribute::Address(ip_bytes) = nla {
+                    let addr = if ip_bytes.len() == 4 {
+                        IpAddr::from([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]])
+                    } else if ip_bytes.len() == 16 {
+                        let mut bytes = [0u8; 16];
+                        bytes.copy_from_slice(&ip_bytes);
+                        IpAddr::from(bytes)
+                    } else {
+                        continue;
+                    };
+                    
+                    addresses.push(AddressInfo {
+                        address: addr,
+                        prefix_len: addr_msg.header.prefix_len,
+                    });
+                }
+            }
+        }
+        
+        Ok(addresses)
     }
 }
 

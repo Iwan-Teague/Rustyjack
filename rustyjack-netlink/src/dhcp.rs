@@ -37,6 +37,73 @@ const OPTION_SERVER_ID: u8 = 54;
 const OPTION_PARAMETER_REQUEST: u8 = 55;
 const OPTION_END: u8 = 255;
 
+/// Errors specific to DHCP client operations.
+#[derive(Error, Debug)]
+pub enum DhcpClientError {
+    #[error("Failed to get MAC address for interface '{interface}': {reason}")]
+    MacAddressFailed { interface: String, reason: String },
+
+    #[error("Invalid DHCP packet from {source}: {reason}")]
+    InvalidPacket { source: String, reason: String },
+
+    #[error("Failed to bind to DHCP client port on '{interface}': {source}")]
+    BindFailed {
+        interface: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to bind socket to device '{interface}': {source}")]
+    BindToDeviceFailed {
+        interface: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to send DHCP {packet_type} on '{interface}': {source}")]
+    SendFailed {
+        packet_type: String,
+        interface: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to receive DHCP response on '{interface}': {source}")]
+    ReceiveFailed {
+        interface: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Timeout waiting for DHCP {packet_type} on '{interface}' after {timeout_secs}s")]
+    Timeout {
+        packet_type: String,
+        interface: String,
+        timeout_secs: u64,
+    },
+
+    #[error("No DHCP offer received on '{interface}' after {retries} attempts")]
+    NoOffer { interface: String, retries: u32 },
+
+    #[error("DHCP server sent NAK for '{interface}': {reason}")]
+    ServerNak { interface: String, reason: String },
+
+    #[error("Failed to configure IP address {address}/{prefix} on '{interface}': {reason}")]
+    AddressConfigFailed {
+        address: Ipv4Addr,
+        prefix: u8,
+        interface: String,
+        reason: String,
+    },
+
+    #[error("Failed to configure gateway {gateway} on '{interface}': {reason}")]
+    GatewayConfigFailed {
+        gateway: Ipv4Addr,
+        interface: String,
+        reason: String,
+    },
+}
+
 /// DHCP client for acquiring and managing IP leases.
 ///
 /// Implements RFC 2131 DHCP protocol with full DORA (Discover, Offer, Request, Ack) flow.

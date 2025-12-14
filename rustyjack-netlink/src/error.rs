@@ -135,6 +135,9 @@ pub enum NetlinkError {
         timeout_secs: u64,
     },
 
+    #[error("DHCP client error: {0}")]
+    DhcpClient(#[from] crate::dhcp::DhcpClientError),
+
     // DNS errors
     #[error("DNS server error on {bind_addr}: {reason}")]
     DnsServerError { bind_addr: String, reason: String },
@@ -147,12 +150,21 @@ pub enum NetlinkError {
     Wpa(String),
 
     // Generic errors
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("Invalid argument: {parameter} = '{value}': {reason}")]
     InvalidArgument {
         parameter: String,
         value: String,
         reason: String,
     },
+
+    #[error("Operation failed: {0}")]
+    OperationFailed(String),
+
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
 
     #[error("Permission denied: {operation}. Root privileges required.")]
     PermissionDenied { operation: String },
@@ -178,6 +190,9 @@ pub enum NetlinkError {
 
     #[error("Runtime error: {context}: {reason}")]
     Runtime { context: String, reason: String },
+
+    #[error("ARP error: {0}")]
+    Arp(#[from] crate::arp::ArpError),
 }
 
 pub type Result<T> = std::result::Result<T, NetlinkError>;

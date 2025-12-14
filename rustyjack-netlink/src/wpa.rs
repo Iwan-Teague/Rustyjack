@@ -673,7 +673,7 @@ pub fn stop_wpa_supplicant(interface: &str) -> Result<()> {
             // Force kill if terminate didn't work
             use crate::process::ProcessManager;
             let pm = ProcessManager::new();
-            let _ = pm.kill_by_pattern(&format!("wpa_supplicant.*{}", interface));
+            let _ = pm.kill_pattern(&format!("wpa_supplicant.*{}", interface));
             break;
         }
         std::thread::sleep(Duration::from_millis(100));

@@ -454,27 +454,17 @@ fn read_iface_mac(interface: &str) -> Result<[u8; 6]> {
 
 #[cfg(target_os = "linux")]
 fn read_iface_ipv4(interface: &str) -> Result<Ipv4Addr> {
-    let output = std::process::Command::new("ip")
-        .args(["-4", "addr", "show", "dev", interface])
-        .output()
-        .with_context(|| format!("reading IPv4 address for {}", interface))?;
-    if !output.status.success() {
-        return Err(anyhow!("ip -4 addr failed for {}", interface));
+    let mgr = rustyjack_netlink::LinkManager::new()
+        .with_context(|| format!("initializing netlink for {}", interface))?;
+    
+    let addrs = mgr.get_ipv4_addresses(interface)
+        .with_context(|| format!("reading IPv4 addresses for {}", interface))?;
+    
+    if let Some(addr) = addrs.first() {
+        Ok(addr.addr())
+    } else {
+        Err(anyhow!("No IPv4 address found on {}", interface))
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if let Some(rest) = line.trim().strip_prefix("inet ") {
-            let mut parts = rest.split_whitespace();
-            if let Some(addr) = parts.next() {
-                if let Some((ip_str, _)) = addr.split_once('/') {
-                    if let Ok(ip) = ip_str.parse() {
-                        return Ok(ip);
-                    }
-                }
-            }
-        }
-    }
-    Err(anyhow!("no IPv4 address found on {}", interface))
 }
 
 fn grab_banner(mut stream: TcpStream, port: u16) -> Option<PortBanner> {

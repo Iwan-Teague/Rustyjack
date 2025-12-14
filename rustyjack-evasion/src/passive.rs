@@ -232,9 +232,9 @@ impl PassiveManager {
         if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
             if mgr.create_interface(interface, &mon_name, rustyjack_netlink::InterfaceMode::Monitor).is_ok() {
                 // Bring it up
-                let _ = std::process::Command::new("ip")
-                    .args(["link", "set", &mon_name, "up"])
-                    .output();
+                if let Ok(link_mgr) = rustyjack_netlink::LinkManager::new() {
+                    let _ = link_mgr.set_link_up(&mon_name);
+                }
 
                 self.active_monitors.push(mon_name.clone());
 
@@ -263,9 +263,9 @@ impl PassiveManager {
         }
 
         // Bring up the monitor interface
-        let _ = std::process::Command::new("ip")
-            .args(["link", "set", &mon_name, "up"])
-            .output();
+        if let Ok(link_mgr) = rustyjack_netlink::LinkManager::new() {
+            let _ = link_mgr.set_link_up(&mon_name);
+        }
 
         // Set TX power to minimum for passive mode
         if let Err(e) = self.tx_manager.set_power(&mon_name, TxPowerLevel::Stealth) {
@@ -289,23 +289,14 @@ impl PassiveManager {
     ///
     /// * `monitor_interface` - The monitor interface to disable
     pub fn disable(&mut self, monitor_interface: &str) -> Result<()> {
-        // Bring down
-        let _ = std::process::Command::new("ip")
-            .args(["link", "set", monitor_interface, "down"])
-            .output();
-
-        // Delete interface
-        let del = std::process::Command::new("iw")
-            .args(["dev", monitor_interface, "del"])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run iw: {}", e)))?;
-
-        if !del.status.success() {
-            // Try airmon-ng stop
-            let _base = monitor_interface.trim_end_matches("mon");
-            let _ = std::process::Command::new("airmon-ng")
-                .args(["stop", monitor_interface])
-                .output();
+        // Bring down and delete interface
+        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+            if mgr.delete_interface(monitor_interface).is_err() {
+                // Try airmon-ng stop as fallback
+                let _ = std::process::Command::new("airmon-ng")
+                    .args(["stop", monitor_interface])
+                    .output();
+            }
         }
 
         // Remove from active list

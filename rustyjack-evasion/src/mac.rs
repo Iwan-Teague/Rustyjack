@@ -486,70 +486,44 @@ impl MacManager {
     }
 
     fn interface_down(&self, interface: &str) -> Result<()> {
-        let output = std::process::Command::new("ip")
-            .args(["link", "set", interface, "down"])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run 'ip': {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("Operation not permitted") || stderr.contains("RTNETLINK") {
-                return Err(EvasionError::PermissionDenied(
-                    "bringing interface down".into(),
-                ));
-            }
-            return Err(EvasionError::InterfaceError(format!(
-                "Failed to bring {} down: {}",
-                interface, stderr
-            )));
-        }
-
-        Ok(())
+        let mgr = rustyjack_netlink::LinkManager::new()
+            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        
+        mgr.set_link_down(interface)
+            .map_err(|e| {
+                if e.to_string().contains("Operation not permitted") || e.to_string().contains("Permission denied") {
+                    EvasionError::PermissionDenied("bringing interface down".into())
+                } else {
+                    EvasionError::InterfaceError(format!("Failed to bring {} down: {}", interface, e))
+                }
+            })
     }
 
     fn interface_up(&self, interface: &str) -> Result<()> {
-        let output = std::process::Command::new("ip")
-            .args(["link", "set", interface, "up"])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run 'ip': {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(EvasionError::InterfaceError(format!(
-                "Failed to bring {} up: {}",
-                interface, stderr
-            )));
-        }
-
-        Ok(())
+        let mgr = rustyjack_netlink::LinkManager::new()
+            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        
+        mgr.set_link_up(interface)
+            .map_err(|e| EvasionError::InterfaceError(format!("Failed to bring {} up: {}", interface, e)))
     }
 
     fn set_mac_raw(&self, interface: &str, mac: &MacAddress) -> Result<()> {
         let mac_str = mac.to_string();
 
-        let output = std::process::Command::new("ip")
-            .args(["link", "set", interface, "address", &mac_str])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run 'ip': {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("Operation not permitted") {
-                return Err(EvasionError::PermissionDenied("setting MAC address".into()));
-            }
-            if stderr.contains("not permitted") || stderr.contains("RTNETLINK") {
-                return Err(EvasionError::NotSupported(format!(
-                    "Driver for {} may not support MAC changes",
-                    interface
-                )));
-            }
-            return Err(EvasionError::InterfaceError(format!(
-                "Failed to set MAC on {}: {}",
-                interface, stderr
-            )));
-        }
-
-        Ok(())
+        let mgr = rustyjack_netlink::LinkManager::new()
+            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        
+        mgr.set_mac_address(interface, &mac_str)
+            .map_err(|e| {
+                let err_str = e.to_string();
+                if err_str.contains("Operation not permitted") || err_str.contains("Permission denied") {
+                    EvasionError::PermissionDenied("setting MAC address".into())
+                } else if err_str.contains("not permitted") || err_str.contains("RTNETLINK") || err_str.contains("not support") {
+                    EvasionError::NotSupported(format!("Driver for {} may not support MAC changes", interface))
+                } else {
+                    EvasionError::InterfaceError(format!("Failed to set MAC on {}: {}", interface, e))
+                }
+            })
     }
 
     fn restore_state(&self, state: &MacState) -> Result<()> {

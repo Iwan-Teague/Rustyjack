@@ -8,6 +8,10 @@ use neli::{
 };
 use std::collections::HashMap;
 
+// Re-export commonly used types from neli
+use neli::consts::nl::NlmF;
+use neli::consts::socket::NlFamily;
+
 const NL80211_GENL_NAME: &str = "nl80211";
 
 // nl80211 commands
