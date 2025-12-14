@@ -401,7 +401,7 @@ impl DhcpClient {
         interface: &str,
         mac: &[u8; 6],
         xid: u32,
-        _offer: &DhcpOffer,
+        offer: &DhcpOffer,
         hostname: Option<&str>,
     ) -> Result<DhcpLease> {
         log::debug!("Sending DHCP REQUEST for {} on {}", offer.offered_ip, interface);
@@ -426,7 +426,7 @@ impl DhcpClient {
         socket: &UdpSocket,
         interface: &str,
         xid: u32,
-        _offer: &DhcpOffer,
+        offer: &DhcpOffer,
     ) -> Result<DhcpLease> {
         let mut buf = [0u8; 1500];
         
@@ -500,7 +500,7 @@ impl DhcpClient {
         &self,
         mac: &[u8; 6],
         xid: u32,
-        _offer: &DhcpOffer,
+        offer: &DhcpOffer,
         hostname: Option<&str>,
     ) -> Vec<u8> {
         let mut packet = vec![0u8; 300];
@@ -621,7 +621,7 @@ impl DhcpClient {
         data: &[u8],
         interface: &str,
         xid: u32,
-        _offer: &DhcpOffer,
+        offer: &DhcpOffer,
     ) -> Result<DhcpLease> {
         if data.len() < 240 {
             return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
