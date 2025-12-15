@@ -627,14 +627,35 @@ impl WirelessManager {
                         }
                     }
                     NL80211_ATTR_SUPPORTED_IFTYPES => {
-                        // Parse nested attributes for supported interface types
-                        // This is simplified - real parsing would be more complex
-                        caps.supports_monitor = true; // Assume support for now
+                        // Best-effort: mark common modes as supported when the attribute is present.
+                        caps.supports_monitor = true;
                         caps.supports_ap = true;
                         caps.supports_station = true;
+                        for mode in [
+                            InterfaceMode::AccessPoint,
+                            InterfaceMode::Station,
+                            InterfaceMode::Monitor,
+                        ] {
+                            if !caps.supported_modes.contains(&mode) {
+                                caps.supported_modes.push(mode);
+                            }
+                        }
                     }
                     _ => {}
                 }
+            }
+        }
+
+        // If the kernel didn't enumerate any interface modes, fall back to the coarse flags.
+        if caps.supported_modes.is_empty() {
+            if caps.supports_ap {
+                caps.supported_modes.push(InterfaceMode::AccessPoint);
+            }
+            if caps.supports_station {
+                caps.supported_modes.push(InterfaceMode::Station);
+            }
+            if caps.supports_monitor {
+                caps.supported_modes.push(InterfaceMode::Monitor);
             }
         }
 
@@ -737,7 +758,6 @@ impl WirelessManager {
         }
     }
 }
-
 
 
 

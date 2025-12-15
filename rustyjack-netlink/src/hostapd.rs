@@ -269,7 +269,9 @@ impl AccessPoint {
         
         // Check if interface supports AP mode
         let phy_caps = self.wireless_mgr.get_phy_capabilities(&self.config.interface)?;
-        if !phy_caps.supported_modes.contains(&InterfaceMode::AccessPoint) {
+        if !phy_caps.supported_modes.is_empty()
+            && !phy_caps.supported_modes.contains(&InterfaceMode::AccessPoint)
+        {
             return Err(NetlinkError::OperationNotSupported(
                 format!("Interface {} does not support AP mode. Supported modes: {:?}", 
                     self.config.interface, phy_caps.supported_modes)
@@ -533,7 +535,6 @@ mod tests {
         assert!(invalid.is_err());
     }
 }
-
 
 
 
