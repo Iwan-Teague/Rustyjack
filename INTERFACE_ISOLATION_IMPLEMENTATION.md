@@ -242,7 +242,7 @@ Possible future improvements:
 2. **Bridge Feature:** If bridge feature is added, whitelist both bridged interfaces
 3. **VPN Support:** Allow VPN tunnel interfaces to remain UP alongside active interface
 4. **Interface Groups:** Allow predefined groups of interfaces for specific operations
-5. **Audit Logging:** Log all isolation enforcement actions to loot/Reports/interface_isolation.log
+5. **Audit Logging:** Log all isolation enforcement actions to loot/reports/interface_isolation.log
 
 ## Compatibility
 

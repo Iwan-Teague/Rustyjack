@@ -41,7 +41,7 @@ install_rustyjack*.sh  Production/dev installers for Pi OS targets
 ```
 
 Runtime directories are created by the installers:
-`loot/` (Wireless, Ethernet, Reports), `wifi/profiles/`, `DNSSpoof/captures/`, and `gui_conf.json` (pins, colors, settings).
+`loot/` (Wireless, Ethernet, reports), `wifi/profiles/`, `DNSSpoof/captures/`, and `gui_conf.json` (pins, colors, settings).
 
 ## Hardware & Wiring
 
@@ -141,8 +141,8 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 ### Loot, reports, and export
 
 - **Loot browser**: Navigate `loot/Wireless` and `loot/Ethernet` targets, drill into folders, and view files with a scrollable viewer.
-- **Reports**: Builds combined Ethernet/Wi-Fi report to `loot/Reports/<network>/report_<ts>.txt` (summaries, insights, next steps, artifact sweep, MAC usage notes).
-- **Discord upload**: Zips `loot/`, `loot/Reports/`, and `Responder/logs` into a temp archive and posts to the webhook in `discord_webhook.txt`.
+- **Reports**: Builds combined Ethernet/Wi-Fi report to `loot/reports/<network>/report_<ts>.txt` (summaries, insights, next steps, artifact sweep, MAC usage notes).
+- **Discord upload**: Zips `loot/`, `loot/reports/`, and `Responder/logs` into a temp archive and posts to the webhook in `discord_webhook.txt`.
 - **Transfer to USB**: Copies loot and Responder logs to `Rustyjack_Loot` on the first writable USB block device mount.
 - **Logs toggle/purge**: Logging can be disabled globally; Purge Logs removes `.log` files and log-like artifacts under loot/Responder.
 
@@ -167,7 +167,7 @@ Responder on/off, DNS spoof start/stop, reverse shell launcher, and transparent 
    - Installs packages: build-essential, pkg-config, libssl-dev, DKMS toolchain, `nmap`, `ncat`, `tcpdump`, `arp-scan`, `dsniff`, `ettercap-text-only`, `php`, `procps`, `network-manager`, `wireless-tools`, `wpa_supplicant`, firmware for Realtek/Atheros/Ralink, git, i2c-tools, curl.
    - Enables I2C/SPI overlays, `dtoverlay=spi0-2cs`, and GPIO pull-ups for all buttons.
    - Ensures ~2 GB swap for compilation, builds `rustyjack-ui` (release), installs to `/usr/local/bin/`.
-   - Creates `loot/{Wireless,Ethernet,Reports}`, `wifi/profiles/sample.json`, and keeps WLAN interfaces up.
+   - Creates `loot/{Wireless,Ethernet,reports}`, `wifi/profiles/sample.json`, and keeps WLAN interfaces up.
    - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT`, installs/enables `rustyjack.service` (root, landscape rotation), starts the service, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
    - Claims `/etc/resolv.conf` for Rustyjack (plain root-owned file), disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present), and sets NetworkManager `dns=none` so `nmcli` stays available but does not rewrite `resolv.conf`.
    - Remounts `/` read-write if needed on fresh images to allow installs/edits.
@@ -180,7 +180,7 @@ Responder on/off, DNS spoof start/stop, reverse shell launcher, and transparent 
 - `gui_conf.json` (auto-created): pins, colors, active interface, target SSID/BSSID/channel, MAC/hostname/passive toggles, hotspot credentials, log/Discord toggles.
 - `discord_webhook.txt`: webhook URL for Discord uploads.
 - `wifi/profiles/*.json`: saved Wi-Fi profiles used by Connect Known Network (sample provided).
-- `loot/`: wireless and Ethernet captures; pipelines are under `loot/Wireless/<target>/pipelines/`; reports live in `loot/Reports/`.
+- `loot/`: wireless and Ethernet captures; pipelines are under `loot/Wireless/<target>/pipelines/`; reports live in `loot/reports/`.
 - `DNSSpoof/sites/`: portal templates for DNS spoof/MITM; captures go to `DNSSpoof/captures/`.
 - `Responder/logs/`: Responder output (included in Discord uploads/USB transfer if present).
 - Splash image: `img/rustyjack.png` (shown on boot).

@@ -1227,24 +1227,46 @@ impl App {
 
 
     fn show_loot(&mut self, section: LootSection) -> Result<()> {
-        let loot_base = match section {
-            LootSection::Wireless => self.root.join("loot/Wireless"),
-            LootSection::Ethernet => self.root.join("loot/Ethernet"),
+        let (bases, menu_title, empty_msg) = match section {
+            LootSection::Wireless => (
+                vec![self.root.join("loot/Wireless")],
+                "Wireless Targets",
+                "No captures yet",
+            ),
+            LootSection::Ethernet => (
+                vec![self.root.join("loot/Ethernet")],
+                "Ethernet Targets",
+                "No captures yet",
+            ),
+            LootSection::Reports => {
+                let lower = self.root.join("loot").join("reports");
+                let fallback = self.root.join("loot").join("Reports");
+                let mut list = Vec::new();
+                list.push(lower);
+                if fallback != list[0] {
+                    list.push(fallback);
+                }
+                (list, "Reports", "No reports yet")
+            }
         };
-
-        if !loot_base.exists() {
-            return self.show_message("Loot", ["No captures yet"]);
-        }
 
         // Get list of network folders (or special folders like probe_sniff, karma)
         let mut networks: Vec<(String, PathBuf)> = Vec::new();
+        let mut seen_networks: HashSet<String> = HashSet::new();
 
-        if let Ok(entries) = std::fs::read_dir(&loot_base) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        networks.push((name.to_string(), path));
+        for base in &bases {
+            if !base.exists() {
+                continue;
+            }
+            if let Ok(entries) = std::fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if seen_networks.insert(name.to_string()) {
+                                networks.push((name.to_string(), path));
+                            }
+                        }
                     }
                 }
             }
@@ -1252,17 +1274,27 @@ impl App {
 
         // Also check for any loose files directly in loot_base
         let mut loose_files: Vec<PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&loot_base) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    loose_files.push(path);
+        let mut seen_files: HashSet<String> = HashSet::new();
+        for base in &bases {
+            if !base.exists() {
+                continue;
+            }
+            if let Ok(entries) = std::fs::read_dir(base) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if seen_files.insert(name.to_string()) {
+                                loose_files.push(path);
+                            }
+                        }
+                    }
                 }
             }
         }
 
         if networks.is_empty() && loose_files.is_empty() {
-            return self.show_message("Loot", ["No captures yet"]);
+            return self.show_message("Loot", [empty_msg]);
         }
 
         // Sort networks alphabetically
@@ -1284,7 +1316,7 @@ impl App {
         }
 
         loop {
-            let Some(index) = self.choose_from_menu("Targets", &labels)? else {
+            let Some(index) = self.choose_from_menu(menu_title, &labels)? else {
                 return Ok(());
             };
 
@@ -2464,6 +2496,28 @@ impl App {
         }
         clear_encryption_key();
         Ok(())
+    }
+
+    fn encrypt_loot_file_in_place(&mut self, path: &Path) -> Result<PathBuf> {
+        self.ensure_saved_key_loaded();
+        if !rustyjack_encryption::encryption_enabled() {
+            bail!("Encryption enabled but key is not loaded");
+        }
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow!("Invalid filename"))?;
+        let mut data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let dest = path.with_file_name(format!("{filename}.enc"));
+        if dest.exists() {
+            let _ = fs::remove_file(&dest);
+        }
+        rustyjack_encryption::encrypt_to_file(&dest, &data)
+            .with_context(|| format!("encrypting {}", dest.display()))?;
+        data.zeroize();
+        let _ = fs::remove_file(path);
+        clear_encryption_key();
+        Ok(dest)
     }
 
     fn generate_encryption_key_on_usb(&mut self) -> Result<()> {
@@ -9545,7 +9599,7 @@ Do not remove power/USB",
     fn collect_network_names(&self) -> Vec<String> {
         let mut set: HashSet<String> = HashSet::new();
         let loot = self.root.join("loot");
-        for name in ["Ethernet", "Wireless", "Reports"] {
+        for name in ["Ethernet", "Wireless", "Reports", "reports"] {
             if let Ok(entries) = fs::read_dir(loot.join(name)) {
                 for entry in entries.flatten() {
                     if entry.path().is_dir() {
@@ -9990,7 +10044,9 @@ Do not remove power/USB",
     }
 
     fn generate_network_report(&self, network: &str) -> Result<(PathBuf, Vec<String>)> {
-        let reports_dir = self.root.join("loot").join("Reports").join(network);
+        let reports_root = self.root.join("loot").join("reports");
+        fs::create_dir_all(&reports_root).ok();
+        let reports_dir = reports_root.join(network);
         fs::create_dir_all(&reports_dir).ok();
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         let path = reports_dir.join(format!("report_{timestamp}.txt"));
@@ -10043,7 +10099,19 @@ Do not remove power/USB",
 
         fs::write(&path, lines.join("\n"))
             .with_context(|| format!("writing {}", path.display()))?;
-        Ok((path, lines))
+
+        let final_path = if self.loot_encryption_active() {
+            match self.encrypt_loot_file_in_place(&path) {
+                Ok(enc_path) => enc_path,
+                Err(e) => {
+                    return Err(e.context("encrypting report output"));
+                }
+            }
+        } else {
+            path
+        };
+
+        Ok((final_path, lines))
     }
 
     fn append_eth_report(
@@ -10463,7 +10531,7 @@ Do not remove power/USB",
     }
 
     fn summarize_mac_usage(&self, network: &str) -> Vec<String> {
-        let log_path = self.root.join("loot").join("Reports").join("mac_usage.log");
+        let log_path = self.root.join("loot").join("reports").join("mac_usage.log");
         let file = match File::open(&log_path) {
             Ok(f) => f,
             Err(_) => return Vec::new(),
@@ -10497,7 +10565,7 @@ Do not remove power/USB",
     }
 
     fn mac_usage_count(&self, network: &str) -> usize {
-        let log_path = self.root.join("loot").join("Reports").join("mac_usage.log");
+        let log_path = self.root.join("loot").join("reports").join("mac_usage.log");
         let file = match File::open(&log_path) {
             Ok(f) => f,
             Err(_) => return 0,
@@ -11145,18 +11213,39 @@ Do not remove power/USB",
     }
 
     fn is_log_file(&self, path: &Path) -> bool {
-        // Delete anything inside a directory named "logs"
-        if path
-            .ancestors()
-            .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("logs"))
-        {
-            return true;
-        }
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_ascii_lowercase(),
             None => return false,
         };
-        name.ends_with(".log") || name.starts_with("log_") || name.contains("log")
+
+        // Strip a trailing .enc when present so encrypted logs are matched by their base name.
+        let normalized = name.strip_suffix(".enc").unwrap_or(&name);
+        let in_logs_dir = path
+            .ancestors()
+            .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("logs"));
+
+        let looks_like_log = Self::is_log_basename(normalized);
+        looks_like_log || (in_logs_dir && Self::is_log_basename(&name))
+    }
+
+    fn is_log_basename(name: &str) -> bool {
+        if name.ends_with(".log") || name.contains(".log.") {
+            return true;
+        }
+
+        if name.starts_with("log.") || name.starts_with("log_") || name.starts_with("log-") {
+            return true;
+        }
+
+        let without_compression = name
+            .strip_suffix(".gz")
+            .or_else(|| name.strip_suffix(".xz"))
+            .or_else(|| name.strip_suffix(".bz2"))
+            .unwrap_or(name);
+
+        without_compression.ends_with("_log")
+            || without_compression.ends_with("-log")
+            || without_compression.ends_with(".log")
     }
 
     /// Manage hotspot (start/stop, randomize credentials)

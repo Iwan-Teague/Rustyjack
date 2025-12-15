@@ -793,7 +793,7 @@ pub fn current_mac(interface: &str) -> Option<String> {
 
 pub fn log_mac_usage(root: &Path, interface: &str, context: &str, tag: Option<&str>) -> Result<()> {
     let mac = current_mac(interface).unwrap_or_else(|| "unknown".to_string());
-    let log_dir = root.join("loot").join("Reports");
+    let log_dir = root.join("loot").join("reports");
     fs::create_dir_all(&log_dir).ok();
     let log_path = log_dir.join("mac_usage.log");
     let timestamp = Local::now().to_rfc3339();
