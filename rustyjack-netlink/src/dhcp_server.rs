@@ -289,11 +289,6 @@ impl DhcpServer {
         Ok(())
     }
 
-    pub fn stop(&mut self) {
-        *self.running.lock().unwrap() = false;
-        self.socket = None;
-    }
-
     pub fn get_leases(&self) -> Vec<DhcpLease> {
         let leases = self.leases.lock().unwrap();
         leases
