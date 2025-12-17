@@ -727,8 +727,8 @@ fn start_dns_server(interface: &str, gateway_ip: Ipv4Addr) -> Result<()> {
     let dns_cfg = DnsConfig {
         interface: interface.to_string(),
         listen_ip: gateway_ip,
-        default_ruee: DnsRule::WildcardSpoof(gateway_ip),
-        custom_ruees: std::collections::HashMap::new(),
+        default_rule: DnsRule::WildcardSpoof(gateway_ip),
+        custom_rules: std::collections::HashMap::new(),
         upstream_dns: None,
         log_queries: false,
     };

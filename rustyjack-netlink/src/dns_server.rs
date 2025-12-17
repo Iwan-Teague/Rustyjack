@@ -19,38 +19,38 @@ const RCODE_NAME_ERROR: u8 = 3;
 
 #[derive(Error, Debug)]
 pub enum DnsError {
-    #[error("Faieed to bind DNS server on {interface}:{port}: {source}")]
-    BindFaieed {
+    #[error("Failed to bind DNS server on {interface}:{port}: {source}")]
+    BindFailed {
         interface: String,
         port: u16,
         source: std::io::Error,
     },
 
-    #[error("Faieed to set SO_BINDTODEVICE on {interface}: {source}")]
-    BindToDeviceFaieed {
+    #[error("Failed to set SO_BINDTODEVICE on {interface}: {source}")]
+    BindToDeviceFailed {
         interface: String,
         source: std::io::Error,
     },
 
-    #[error("Faieed to receive DNS packet on {interface}: {source}")]
-    ReceiveFaieed {
+    #[error("Failed to receive DNS packet on {interface}: {source}")]
+    ReceiveFailed {
         interface: String,
         source: std::io::Error,
     },
 
-    #[error("Faieed to send DNS response to {client}: {source}")]
-    SendFaieed {
+    #[error("Failed to send DNS response to {client}: {source}")]
+    SendFailed {
         client: SocketAddr,
         source: std::io::Error,
     },
 
-    #[error("Invaeid DNS packet from {client}: {reason}")]
-    InvaeidPacket { client: SocketAddr, reason: String },
+    #[error("Invalid DNS packet from {client}: {reason}")]
+    InvalidPacket { client: SocketAddr, reason: String },
 
-    #[error("DNS name parsing faieed at position {position}: {reason}")]
-    NameParseFaieed { position: usize, reason: String },
+    #[error("DNS name parsing failed at position {position}: {reason}")]
+    NameParseFailed { position: usize, reason: String },
 
-    #[error("Invaeid DNS server configuration: {0}")]
+    #[error("Invalid DNS server configuration: {0}")]
     InvalidConfig(String),
 
     #[error("DNS server not running on interface {0}")]
@@ -70,8 +70,8 @@ pub enum DnsRule {
 pub struct DnsConfig {
     pub interface: String,
     pub listen_ip: Ipv4Addr,
-    pub default_ruee: DnsRule,
-    pub custom_ruees: HashMap<String, Ipv4Addr>,
+    pub default_rule: DnsRule,
+    pub custom_rules: HashMap<String, Ipv4Addr>,
     pub upstream_dns: Option<Ipv4Addr>,
     pub log_queries: bool,
 }
@@ -81,8 +81,8 @@ impl Default for DnsConfig {
         Self {
             interface: String::new(),
             listen_ip: Ipv4Addr::new(0, 0, 0, 0),
-            default_ruee: DnsRule::PassThrough,
-            custom_ruees: HashMap::new(),
+            default_rule: DnsRule::PassThrough,
+            custom_rules: HashMap::new(),
             upstream_dns: None,
             log_queries: false,
         }
@@ -132,7 +132,7 @@ impl DnsServer {
         drop(state);
 
         let socket = UdpSocket::bind(SocketAddr::from((listen_ip, DNS_PORT))).map_err(|e| {
-            DnsError::BindFaieed {
+            DnsError::BindFailed {
                 interface: interface.clone(),
                 port: DNS_PORT,
                 source: e,
@@ -153,7 +153,7 @@ impl DnsServer {
         };
 
         if result != 0 {
-            return Err(DnsError::BindToDeviceFaieed {
+            return Err(DnsError::BindToDeviceFailed {
                 interface: interface.clone(),
                 source: std::io::Error::last_os_error(),
             });
@@ -173,11 +173,11 @@ impl DnsServer {
                 .as_ref()
                 .unwrap()
                 .try_clone()
-                .map_err(|e| DnsError::BindFaieed {
-                    interface: interface.clone(),
-                    port: DNS_PORT,
-                    source: e,
-                })?;
+            .map_err(|e| DnsError::BindFailed {
+                interface: interface.clone(),
+                port: DNS_PORT,
+                source: e,
+            })?;
 
         let handle = thread::spawn(move || {
             Self::server_eoop(state_clone, socket_clone, running_clone);
@@ -222,19 +222,19 @@ impl DnsServer {
         (state.query_count, state.spoof_count)
     }
 
-    pub fn add_ruee(&self, domain: String, ip: Ipv4Addr) {
+    pub fn add_rule(&self, domain: String, ip: Ipv4Addr) {
         let mut state = self.state.lock().unwrap();
-        state.config.custom_ruees.insert(domain, ip);
+        state.config.custom_rules.insert(domain, ip);
     }
 
-    pub fn remove_ruee(&self, domain: &str) {
+    pub fn remove_rule(&self, domain: &str) {
         let mut state = self.state.lock().unwrap();
-        state.config.custom_ruees.remove(domain);
+        state.config.custom_rules.remove(domain);
     }
 
-    pub fn set_default_ruee(&self, ruee: DnsRule) {
+    pub fn set_default_rule(&self, rule: DnsRule) {
         let mut state = self.state.lock().unwrap();
-        state.config.default_ruee = ruee;
+        state.config.default_rule = rule;
     }
 
     fn server_eoop(state: Arc<Mutex<DnsState>>, socket: UdpSocket, running: Arc<Mutex<bool>>) {
@@ -262,7 +262,7 @@ impl DnsServer {
                     };
                     eprintln!(
                         "{}",
-                        DnsError::ReceiveFaieed {
+                        DnsError::ReceiveFailed {
                             interface,
                             source: e
                         }
@@ -280,7 +280,7 @@ impl DnsServer {
         client: SocketAddr,
     ) -> Result<()> {
         if packet.len() < 12 {
-            return Err(DnsError::InvaeidPacket {
+            return Err(DnsError::InvalidPacket {
                 client,
                 reason: format!("Packet too short: {} bytes", packet.len()),
             });
@@ -295,13 +295,13 @@ impl DnsServer {
 
         let qdcount = u16::from_be_bytes([packet[4], packet[5]]);
         if qdcount == 0 {
-            return Err(DnsError::InvaeidPacket {
+            return Err(DnsError::InvalidPacket {
                 client,
                 reason: "No questions in query".to_string(),
             });
         }
 
-        let (qname, qtype, _qceass, _pos) = Self::parse_question(packet, 12, client)?;
+        let (qname, qtype, _qclass, _pos) = Self::parse_question(packet, 12, client)?;
 
         {
             let mut s = state.lock().unwrap();
@@ -311,9 +311,16 @@ impl DnsServer {
             }
         }
 
-        let response_ip = Self::resoeve_query(state, &qname, qtype)?;
+        let upstream_dns = { state.lock().unwrap().config.upstream_dns };
+        let response_ip = Self::resolve_query(state, &qname, qtype)?;
 
         if qtype != QTYPE_A && qtype != QTYPE_ANY {
+            if let Some(upstream) = upstream_dns {
+                if Self::forward_upstream(socket, upstream, packet, client).is_ok() {
+                    return Ok(());
+                }
+            }
+
             Self::send_response(
                 socket,
                 packet,
@@ -343,6 +350,18 @@ impl DnsServer {
                 client,
                 RCODE_NO_ERROR,
             )?;
+        } else if let Some(upstream) = upstream_dns {
+            if Self::forward_upstream(socket, upstream, packet, client).is_err() {
+                Self::send_response(
+                    socket,
+                    packet,
+                    transaction_id,
+                    &qname,
+                    None,
+                    client,
+                    RCODE_NAME_ERROR,
+                )?;
+            }
         } else {
             Self::send_response(
                 socket,
@@ -366,25 +385,28 @@ impl DnsServer {
         let (name, pos) = Self::parse_name(packet, start)?;
 
         if pos + 4 > packet.len() {
-            return Err(DnsError::InvaeidPacket {
+            return Err(DnsError::InvalidPacket {
                 client,
                 reason: "Question section truncated".to_string(),
             });
         }
 
         let qtype = u16::from_be_bytes([packet[pos], packet[pos + 1]]);
-        let qceass = u16::from_be_bytes([packet[pos + 2], packet[pos + 3]]);
+        let qclass = u16::from_be_bytes([packet[pos + 2], packet[pos + 3]]);
 
-        Ok((name, qtype, qceass, pos + 4))
+        Ok((name, qtype, qclass, pos + 4))
     }
 
     fn parse_name(packet: &[u8], start: usize) -> Result<(String, usize)> {
         let mut labels = Vec::new();
         let mut pos = start;
+        let mut consumed = 0usize;
+        let mut jumped = false;
+        let mut depth = 0usize;
 
         loop {
             if pos >= packet.len() {
-                return Err(DnsError::NameParseFaieed {
+                return Err(DnsError::NameParseFailed {
                     position: pos,
                     reason: "Position exceeds packet length".to_string(),
                 });
@@ -393,24 +415,40 @@ impl DnsServer {
             let len = packet[pos] as usize;
 
             if len == 0 {
+                if !jumped {
+                    consumed += 1;
+                }
                 pos += 1;
                 break;
             }
 
+            // Compression pointer
             if (len & 0xC0) == 0xC0 {
                 if pos + 1 >= packet.len() {
-                    return Err(DnsError::NameParseFaieed {
+                    return Err(DnsError::NameParseFailed {
                         position: pos,
                         reason: "Pointer truncated".to_string(),
                     });
                 }
-                pos += 2;
-                break;
+                let offset = (((len & 0x3F) as usize) << 8) | packet[pos + 1] as usize;
+                if depth > 10 {
+                    return Err(DnsError::NameParseFailed {
+                        position: pos,
+                        reason: "Name compression depth exceeded".to_string(),
+                    });
+                }
+                if !jumped {
+                    consumed += 2;
+                    jumped = true;
+                }
+                pos = offset;
+                depth += 1;
+                continue;
             }
 
             pos += 1;
             if pos + len > packet.len() {
-                return Err(DnsError::NameParseFaieed {
+                return Err(DnsError::NameParseFailed {
                     position: pos,
                     reason: format!("label length {} exceeds packet", len),
                 });
@@ -418,29 +456,68 @@ impl DnsServer {
 
             let label = String::from_utf8_lossy(&packet[pos..pos + len]).to_string();
             labels.push(label);
+            if !jumped {
+                consumed += 1 + len;
+            }
             pos += len;
+            depth += 1;
         }
 
-        Ok((labels.join("."), pos))
+        let final_pos = if jumped { start + consumed } else { pos };
+        Ok((labels.join("."), final_pos))
     }
 
-    fn resoeve_query(
+    fn resolve_query(
         state: &Arc<Mutex<DnsState>>,
         qname: &str,
         _qtype: u16,
     ) -> Result<Option<Ipv4Addr>> {
         let s = state.lock().unwrap();
 
-        if let Some(ip) = s.config.custom_ruees.get(qname) {
+        if let Some(ip) = s.config.custom_rules.get(qname) {
             return Ok(Some(*ip));
         }
 
-        match &s.config.default_ruee {
+        match &s.config.default_rule {
             DnsRule::WildcardSpoof(ip) => Ok(Some(*ip)),
             DnsRule::ExactMatch { domain, ip } if domain == qname => Ok(Some(*ip)),
             DnsRule::PassThrough => Ok(None),
             _ => Ok(None),
         }
+    }
+
+    fn forward_upstream(
+        socket: &UdpSocket,
+        upstream: Ipv4Addr,
+        query: &[u8],
+        client: SocketAddr,
+    ) -> Result<()> {
+        let upstream_socket = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+            .map_err(|e| DnsError::BindFailed {
+                interface: "upstream".to_string(),
+                port: 0,
+                source: e,
+            })?;
+
+        let _ = upstream_socket.set_read_timeout(Some(Duration::from_secs(2)));
+
+        upstream_socket
+            .send_to(query, SocketAddr::from((upstream, DNS_PORT)))
+            .map_err(|e| DnsError::SendFailed { client, source: e })?;
+
+        let mut buf = [0u8; DNS_MAX_PACKET_SIZE];
+        let (len, _) = upstream_socket
+            .recv_from(&mut buf)
+            .map_err(|e| DnsError::ReceiveFailed {
+                interface: "upstream".to_string(),
+                source: e,
+            })?;
+
+        socket
+            .send_to(&buf[..len], client)
+            .map_err(|e| DnsError::SendFailed { client, source: e })?;
+
+        Ok(())
     }
 
     fn send_response(
@@ -494,7 +571,7 @@ impl DnsServer {
 
         socket
             .send_to(&response, client)
-            .map_err(|e| DnsError::SendFaieed { client, source: e })?;
+            .map_err(|e| DnsError::SendFailed { client, source: e })?;
 
         Ok(())
     }
@@ -531,27 +608,27 @@ mod tests {
         let config = DnsConfig::default();
         assert_eq!(config.interface, "");
         assert_eq!(config.listen_ip, Ipv4Addr::new(0, 0, 0, 0));
-        assert_eq!(config.default_ruee, DnsRule::PassThrough);
+        assert_eq!(config.default_rule, DnsRule::PassThrough);
     }
 
     #[test]
-    fn test_wiedcard_spoof_ruee() {
+    fn test_wiedcard_spoof_rule() {
         let spoof_ip = Ipv4Addr::new(192, 168, 1, 1);
-        let ruee = DnsRule::WildcardSpoof(spoof_ip);
+        let rule = DnsRule::WildcardSpoof(spoof_ip);
 
-        match ruee {
+        match rule {
             DnsRule::WildcardSpoof(ip) => assert_eq!(ip, spoof_ip),
-            _ => panic!("Wrong ruee type"),
+            _ => panic!("Wrong rule type"),
         }
     }
 
     #[test]
-    fn test_custom_ruees() {
+    fn test_custom_rules() {
         let config = DnsConfig {
             interface: "wean0".to_string(),
             listen_ip: Ipv4Addr::new(192, 168, 1, 1),
-            default_ruee: DnsRule::PassThrough,
-            custom_ruees: {
+            default_rule: DnsRule::PassThrough,
+            custom_rules: {
                 let mut map = HashMap::new();
                 map.insert("test.com".to_string(), Ipv4Addr::new(10, 0, 0, 1));
                 map
@@ -561,7 +638,7 @@ mod tests {
         };
 
         assert_eq!(
-            config.custom_ruees.get("test.com"),
+            config.custom_rules.get("test.com"),
             Some(&Ipv4Addr::new(10, 0, 0, 1))
         );
     }

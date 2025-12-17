@@ -9,8 +9,10 @@
 use crate::error::{NetlinkError, Result};
 use crate::interface::InterfaceManager;
 use crate::route::RouteManager;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use thiserror::Error;
 
 const DHCP_SERVER_PORT: u16 = 67;
@@ -280,10 +282,8 @@ impl DhcpClient {
     }
 
     fn generate_xid(&self) -> u32 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32
+        // Use CSPRNG to avoid predictable transaction IDs that can be spoofed
+        OsRng.next_u32()
     }
 
     fn create_client_socket(&self, interface: &str) -> Result<UdpSocket> {
@@ -453,9 +453,11 @@ impl DhcpClient {
         offer: &DhcpOffer,
     ) -> Result<DhcpLease> {
         let mut buf = [0u8; 1500];
+        let mut attempts: u8 = 0;
 
         loop {
-            let (len, _) = socket.recv_from(&mut buf).map_err(|e| {
+            attempts += 1;
+            let (len, src) = socket.recv_from(&mut buf).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut
                 {
@@ -472,7 +474,39 @@ impl DhcpClient {
                 }
             })?;
 
-            return self.parse_ack_packet(&buf[..len], interface, xid, offer);
+            // Basic source validation: accept only replies from the server that issued the OFFER
+            if let std::net::SocketAddr::V4(src_v4) = src {
+                if src_v4.ip() != &offer.server_id && !src_v4.ip().is_broadcast() {
+                    log::debug!(
+                        "Ignoring DHCP response from unexpected server {} (expected {})",
+                        src_v4.ip(),
+                        offer.server_id
+                    );
+                    continue;
+                }
+            }
+
+            match self.parse_ack_packet(&buf[..len], interface, xid, offer) {
+                Ok(lease) => return Ok(lease),
+                Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket { reason, .. })) => {
+                    log::debug!("Ignoring invalid DHCP packet: {}", reason);
+                }
+                Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak { reason, .. })) => {
+                    return Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak {
+                        interface: interface.to_string(),
+                        reason,
+                    }));
+                }
+                Err(e) => return Err(e),
+            }
+
+            if attempts >= 5 {
+                return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
+                    packet_type: "ACK".to_string(),
+                    interface: interface.to_string(),
+                    timeout_secs: 5,
+                }));
+            }
         }
     }
 
@@ -695,6 +729,23 @@ impl DhcpClient {
             }));
         }
 
+        if let Some(server_id) = options.server_id {
+            if server_id != offer.server_id {
+                return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
+                    interface: interface.to_string(),
+                    reason: format!(
+                        "ACK from unexpected server {} (expected {})",
+                        server_id, offer.server_id
+                    ),
+                }));
+            }
+        } else {
+            return Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
+                interface: interface.to_string(),
+                reason: "ACK missing server identifier".to_string(),
+            }));
+        }
+
         let address = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
 
         let subnet_mask = options
@@ -834,8 +885,13 @@ impl DhcpClient {
             content.push_str(&format!("nameserver {}\n", server));
         }
 
-        let mut file = std::fs::File::create("/etc/resflv.cfnf")?;
-        file.write_all(content.as_bytes())?;
+        // Write atomically to avoid partial resolv.conf when interrupted
+        let tmp_path = "/etc/resolv.conf.rustyjack.tmp";
+        {
+            let mut file = std::fs::File::create(tmp_path)?;
+            file.write_all(content.as_bytes())?;
+        }
+        std::fs::rename(tmp_path, "/etc/resolv.conf")?;
 
         log::info!("configured DNS servers: {:?}", servers);
         Ok(())

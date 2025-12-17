@@ -39,6 +39,8 @@ use rustyjack_wireless::crack::{
     generate_common_passwords, generate_ssid_passwords, CrackProgress, CrackResult, CrackerConfig,
     WpaCracker,
 };
+#[cfg(target_os = "linux")]
+use rustyjack_netlink::take_last_ap_error;
 
 use crate::{
     config::{BlacklistedDevice, GuiConfig},
@@ -11304,6 +11306,17 @@ Do not remove power/USB",
                     .core
                     .dispatch(Commands::Hotspot(HotspotCommand::Status))?;
                 let data = status.1;
+
+                if let Some(err) = take_last_ap_error() {
+                    self.show_message(
+                        "Hotspot error",
+                        [
+                            "Hotspot encountered an error:",
+                            &shorten_for_display(&err, 90),
+                        ],
+                    )?;
+                }
+
                 let running = data
                     .get("running")
                     .and_then(|v| v.as_bool())

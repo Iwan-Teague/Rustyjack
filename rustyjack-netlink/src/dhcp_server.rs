@@ -191,7 +191,9 @@ impl DhcpServer {
     }
 
     pub fn start(&mut self) -> Result<()> {
-        let bind_addr = SocketAddr::new(self.config.server_ip.into(), DHCP_SERVER_PORT);
+        // Bind to all addresses but pin to the target interface to ensure we only
+        // serve requests arriving on that link.
+        let bind_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), DHCP_SERVER_PORT);
 
         let socket = UdpSocket::bind(bind_addr).map_err(|e| DhcpError::BindFailed {
             interface: self.config.interface.clone(),
@@ -488,9 +490,16 @@ impl DhcpServer {
 
         for ip_int in start..=end {
             let ip = Ipv4Addr::from(ip_int);
-            if !allocated_ips.contains(&ip) {
-                return Ok(ip);
+            if allocated_ips.contains(&ip) {
+                continue;
             }
+            if ip == self.config.server_ip {
+                continue;
+            }
+            if self.config.router == Some(ip) {
+                continue;
+            }
+            return Ok(ip);
         }
 
         Err(DhcpError::PoolExhausted {
@@ -502,6 +511,16 @@ impl DhcpServer {
     fn is_ip_available(&self, requesting_mac: &[u8; 6], ip: Ipv4Addr) -> bool {
         if ip < self.config.range_start || ip > self.config.range_end {
             return false;
+        }
+
+        if ip == self.config.server_ip {
+            return false;
+        }
+
+        if let Some(router) = self.config.router {
+            if ip == router {
+                return false;
+            }
         }
 
         let leases = self.leases.lock().unwrap();

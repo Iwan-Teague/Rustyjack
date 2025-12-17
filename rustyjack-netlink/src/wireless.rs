@@ -12,6 +12,7 @@ use neli::{
 use neli::consts::socket::NlFamily;
 
 const NL80211_GENL_NAME: &str = "nl80211";
+const NLMSG_ERR: u16 = 2; // NLMSG_ERROR
 
 // nl80211 commands
 const NL80211_CMD_GET_WIPHY: u8 = 1;
@@ -253,7 +254,7 @@ impl WirelessManager {
                 NetlinkError::OperationFailed("No response received for set_mode".to_string())
             })?;
 
-        if response.nl_type == NlmsgErr {
+        if response.nl_type == NLMSG_ERR {
             return Err(NetlinkError::OperationFailed(
                 format!("Failed to set interface '{}' to {} mode. Interface must be down. Try: ip link set {} down", 
                     interface, mode.to_string(), interface)
@@ -361,7 +362,7 @@ impl WirelessManager {
                 NetlinkError::OperationFailed("No response received for set_frequency".to_string())
             })?;
 
-        if response.nl_type == NlmsgErr {
+        if response.nl_type == NLMSG_ERR {
             return Err(NetlinkError::OperationFailed(
                 format!("Failed to set frequency {} MHz on interface '{}'. Frequency may not be supported by hardware.", 
                     frequency, interface)
@@ -455,7 +456,7 @@ impl WirelessManager {
                 NetlinkError::OperationFailed("No response received for set_tx_power".to_string())
             })?;
 
-        if response.nl_type == NlmsgErr {
+        if response.nl_type == NLMSG_ERR {
             return Err(NetlinkError::OperationFailed(format!(
                 "Failed to set TX power on interface '{}'. Power level may exceed hardware limits.",
                 interface
@@ -534,7 +535,7 @@ impl WirelessManager {
                 )
             })?;
 
-        if response.nl_type == NlmsgErr {
+        if response.nl_type == NLMSG_ERR {
             return Err(NetlinkError::OperationFailed(
                 format!("Failed to create virtual interface '{}' from '{}'. Interface name may already exist or mode not supported.", 
                     new_name, phy_interface)
@@ -595,7 +596,7 @@ impl WirelessManager {
                 )
             })?;
 
-        if response.nl_type == NlmsgErr {
+        if response.nl_type == NLMSG_ERR {
             return Err(NetlinkError::OperationFailed(
                 format!("Failed to delete interface '{}'. Cannot delete physical interfaces, only virtual ones.", interface)
             ));

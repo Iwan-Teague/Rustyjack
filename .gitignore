@@ -4,3 +4,5 @@
 /rustyjack-core/target
 /rustyjack-ui/target
 /target/
+/target-32/
+/target-64/

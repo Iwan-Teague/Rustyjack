@@ -370,8 +370,9 @@ fi
 
 # Build rustyjack-ui (this also compiles rustyjack-core library as a dependency)
 # Build from workspace root so all crates share the same target directory
-info "Building rustyjack-ui (debug)..."
-(cd "$PROJECT_ROOT" && cargo build -p rustyjack-ui) || fail "Failed to build rustyjack-ui"
+# Enable journald logging in dev builds so AP/WPA logs land in journalctl
+info "Building rustyjack-ui (debug, journald enabled)..."
+(cd "$PROJECT_ROOT" && cargo build -p rustyjack-ui --features journald) || fail "Failed to build rustyjack-ui"
 
 # Verify the binary exists (workspace builds go to root target/debug/)
 if [ ! -f "$PROJECT_ROOT/target/debug/rustyjack-ui" ]; then

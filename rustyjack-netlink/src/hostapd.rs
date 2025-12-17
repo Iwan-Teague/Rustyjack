@@ -1,6 +1,10 @@
-//! Pure Rust Access Point implementation
+//! Pure Rust Access Point (AP) bring-up using nl80211 `START_AP`/`STOP_AP`.
 //!
-//! Replaces `hostapd` with native Rust code using nl80211 and raw sockets.
+//! This is a minimal in-process AP implementation built on nl80211. WPA2-PSK
+//! support is experimental and currently limited to a CCMP-only handshake path
+//! (RSN IE + 4-way); WPA3 is not implemented. The goal is to avoid external
+//! hostapd/wpa binaries while still providing a working AP for captive-portal /
+//! testing flows on constrained devices.
 //!
 //! ## Features
 //! - Create WPA2-PSK or Open access points
@@ -37,14 +41,61 @@
 //! ```
 
 use std::collections::HashMap;
+use std::fs;
+use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use neli::consts::nl::{NlmF, NlmFFlags};
+use neli::genl::Genlmsghdr;
+use neli::nl::{NlPayload, Nlmsghdr};
+use neli::socket::NlSocketHandle;
+use neli::types::GenlBuffer;
+
+use hmac::{Hmac, Mac};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::error::{NetlinkError, Result};
 use crate::wireless::{InterfaceMode, WirelessManager};
+
+use once_cell::sync::Lazy;
+
+// Minimal nl80211 constants needed for START_AP/STOP_AP
+const NL80211_GENL_NAME: &str = "nl80211";
+const NL80211_CMD_START_AP: u8 = 95;
+const NL80211_CMD_STOP_AP: u8 = 96;
+const NL80211_CMD_NEW_KEY: u8 = 26;
+const NL80211_CMD_SET_STATION: u8 = 19;
+const NL80211_CMD_DEL_STATION: u8 = 20;
+const NL80211_ATTR_IFINDEX: u16 = 3;
+const NL80211_ATTR_SSID: u16 = 52;
+const NL80211_ATTR_BEACON_HEAD: u16 = 54;
+const NL80211_ATTR_BEACON_TAIL: u16 = 55;
+const NL80211_ATTR_BEACON_INTERVAL: u16 = 74;
+const NL80211_ATTR_DTIM_PERIOD: u16 = 75;
+const NL80211_ATTR_WIPHY_FREQ: u16 = 38;
+const NL80211_ATTR_KEY_DATA: u16 = 13;
+const NL80211_ATTR_KEY_IDX: u16 = 10;
+const NL80211_ATTR_KEY_CIPHER: u16 = 12;
+const NL80211_ATTR_KEY_TYPE: u16 = 33;
+const NL80211_ATTR_MAC: u16 = 6;
+const NL80211_ATTR_STA_FLAGS2: u16 = 58;
+
+// EAPOL constants
+const ETHERTYPE_EAPOL: u16 = 0x888e;
+const EAPOL_TYPE_KEY: u8 = 3;
+const WPA2_KEY_DESCRIPTOR: u8 = 2; // RSN
+const WPA2_KEY_INFO_KEY_MIC: u16 = 1 << 8;
+const WPA2_KEY_INFO_KEY_ACK: u16 = 1 << 7;
+const WPA2_KEY_INFO_INSTALL: u16 = 1 << 6;
+const WPA2_KEY_INFO_PAIRWISE: u16 = 1 << 3;
+const WPA2_KEY_INFO_SECURE: u16 = 1 << 9;
+const NL80211_KEYTYPE_GROUP: u8 = 0;
+const NL80211_KEYTYPE_PAIRWISE: u8 = 1;
+const NL80211_STA_FLAG_AUTHORIZED: u32 = 1 << 0;
+const CIPHER_SUITE_CCMP: u32 = 0x000f_ac_04;
+type HmacSha1 = Hmac<sha1::Sha1>;
 
 /// Access Point security mode
 #[derive(Debug, Clone)]
@@ -225,9 +276,24 @@ pub struct AccessPoint {
     stats: Arc<Mutex<ApStats>>,
     running: Arc<Mutex<bool>>,
     wireless_mgr: WirelessManager,
-    beacon_task: Option<JoinHandle<()>>,
-    mgmt_task: Option<JoinHandle<()>>,
     start_time: Option<Instant>,
+    eapol_fd: Option<RawFd>,
+    eapol_task: Option<JoinHandle<()>>,
+    pmk: Option<[u8; 32]>,
+    ifindex: Option<u32>,
+}
+
+static LAST_AP_ERROR: Lazy<std::sync::Mutex<Option<String>>> = Lazy::new(|| std::sync::Mutex::new(None));
+
+fn record_ap_error(msg: impl Into<String>) {
+    let mut guard = LAST_AP_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(msg.into());
+}
+
+/// Retrieve and clear the last AP error recorded by the WPA/EAPOL handler.
+pub fn take_last_ap_error() -> Option<String> {
+    let mut guard = LAST_AP_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    guard.take()
 }
 
 impl AccessPoint {
@@ -248,9 +314,11 @@ impl AccessPoint {
             stats: Arc::new(Mutex::new(ApStats::default())),
             running: Arc::new(Mutex::new(false)),
             wireless_mgr,
-            beacon_task: None,
-            mgmt_task: None,
             start_time: None,
+            eapol_fd: None,
+            eapol_task: None,
+            pmk: None,
+            ifindex: None,
         })
     }
 
@@ -269,9 +337,11 @@ impl AccessPoint {
     /// - `PermissionDenied`: Need CAP_NET_ADMIN
     pub async fn start(&mut self) -> Result<()> {
         log::info!(
-            "Starting Access Point: SSID={}, channel={}",
+            "Starting Access Point: SSID={}, channel={}, beacon={} TU, dtim={}",
             self.config.ssid,
-            self.config.channel
+            self.config.channel,
+            self.config.beacon_interval,
+            self.config.dtim_period
         );
 
         // Check if interface supports AP mode
@@ -291,7 +361,7 @@ impl AccessPoint {
             )));
         }
 
-        // Force interface into AP mode via nl80211 (no external iw/hostapd dependencies)
+        // Force interface into AP mode via nl80211
         let iface_info = self
             .wireless_mgr
             .get_interface_info(&self.config.interface)?;
@@ -317,18 +387,68 @@ impl AccessPoint {
                 self.config.channel, self.config.interface, e
             )))?;
 
+        let ifindex = read_ifindex(&self.config.interface)?;
+        let bssid = read_interface_mac(&self.config.interface)?;
+        let (beacon_head, beacon_tail, ssid_bytes) =
+            build_beacon_frames(&self.config, bssid, self.config.channel)?;
+
+        // Issue START_AP
+        send_start_ap(
+            ifindex,
+            self.config.channel,
+            self.config.beacon_interval,
+            self.config.dtim_period,
+            &ssid_bytes,
+            &beacon_head,
+            &beacon_tail,
+        )
+        .map_err(|e| NetlinkError::OperationFailed(format!("START_AP failed: {}", e)))?;
+
         *self.running.lock().await = true;
         self.start_time = Some(Instant::now());
+        self.ifindex = Some(ifindex);
 
-        // Start beacon transmission task
-        self.beacon_task = Some(self.spawn_beacon_task());
-
-        // Start management frame handler
-        self.mgmt_task = Some(self.spawn_mgmt_task());
+        // Start EAPOL listener for WPA2-PSK to capture handshake frames
+        if matches!(self.config.security, ApSecurity::Wpa2Psk { .. }) {
+            // Derive PMK from passphrase/SSID
+            if let ApSecurity::Wpa2Psk { passphrase } = &self.config.security {
+                self.pmk = Some(generate_pmk(passphrase, &self.config.ssid)?);
+            }
+            match open_eapol_socket(ifindex) {
+                Ok(fd) => {
+                    let running = Arc::clone(&self.running);
+                    let stats = Arc::clone(&self.stats);
+                    let iface = self.config.interface.clone();
+                    let pmk = self.pmk;
+                    let bssid = bssid;
+                    self.eapol_task = Some(spawn_eapol_task(
+                        fd,
+                        running,
+                        stats,
+                        iface,
+                        pmk,
+                        bssid,
+                        ifindex,
+                    ));
+                    self.eapol_fd = Some(fd);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to open EAPOL socket on {}: {} (WPA handshake will not proceed)",
+                        self.config.interface,
+                        e
+                    );
+                }
+            }
+        }
 
         log::info!(
-            "Access Point started successfully on {}",
-            self.config.interface
+            "Access Point started successfully on {} ({})",
+            self.config.interface,
+            match self.config.security {
+                ApSecurity::Open => "open",
+                ApSecurity::Wpa2Psk { .. } => "WPA2-PSK (handshake pending)",
+            }
         );
         Ok(())
     }
@@ -339,20 +459,24 @@ impl AccessPoint {
 
         *self.running.lock().await = false;
 
-        // Cancel tasks
-        if let Some(task) = self.beacon_task.take() {
-            task.abort();
+        if let Some(ifindex) = self.ifindex.take() {
+        if let Err(e) = send_stop_ap(ifindex) {
+            log::warn!("STOP_AP failed for ifindex {}: {}", ifindex, e);
+        } else {
+            log::info!("STOP_AP sent for ifindex {}", ifindex);
         }
-        if let Some(task) = self.mgmt_task.take() {
-            task.abort();
+    }
+        if let Some(fd) = self.eapol_fd.take() {
+            unsafe {
+                libc::close(fd);
+            }
+        }
+        if let Some(task) = self.eapol_task.take() {
+            let _ = task.abort();
         }
 
         // Disconnect all clients
         self.disconnect_all_clients().await;
-
-        // Reset interface to managed mode
-        // Note: Interface mode setting would be done via iw command externally if needed
-        // as set_interface_mode is not available in WirelessManager
 
         log::info!("Access Point stopped");
         Ok(())
@@ -376,7 +500,10 @@ impl AccessPoint {
     /// Disconnect a specific client
     pub async fn disconnect_client(&self, mac: &[u8; 6]) -> Result<()> {
         if let Some(_client) = self.clients.write().await.remove(mac) {
-            self.send_deauth(mac, DeauthReason::StaLeaving).await?;
+            {
+                let mut stats = self.stats.lock().await;
+                stats.deauth_sent += 1;
+            }
             log::info!(
                 "Disconnected client {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                 mac[0],
@@ -398,96 +525,611 @@ impl AccessPoint {
         }
     }
 
-    /// Spawn beacon transmission task
-    fn spawn_beacon_task(&self) -> JoinHandle<()> {
-        let config = self.config.clone();
-        let running = Arc::clone(&self.running);
-        let stats = Arc::clone(&self.stats);
-        let interface = self.config.interface.clone();
-
-        tokio::spawn(async move {
-            let interval = Duration::from_millis(config.beacon_interval as u64);
-
-            while *running.lock().await {
-                // In a real implementation, we would send beacon frames via raw socket
-                // For now, we rely on the kernel's AP mode beacon transmission
-                // which is enabled when we set the interface to AP mode
-
-                let mut stats_guard = stats.lock().await;
-                stats_guard.beacons_sent += 1;
-                drop(stats_guard);
-
-                tokio::time::sleep(interval).await;
-            }
-
-            log::debug!("Beacon task stopped for {}", interface);
-        })
-    }
-
-    /// Spawn management frame handler task
-    fn spawn_mgmt_task(&self) -> JoinHandle<()> {
-        let running = Arc::clone(&self.running);
-        let clients = Arc::clone(&self.clients);
-        #[allow(unused_variables)]
-        let stats = Arc::clone(&self.stats);
-        #[allow(unused_variables)]
-        let config = self.config.clone();
-        let interface = self.config.interface.clone();
-
-        tokio::spawn(async move {
-            // In a real implementation, we would:
-            // 1. Open a raw socket on the interface
-            // 2. Set up BPF filter for management frames
-            // 3. Parse authentication/association requests
-            // 4. Handle WPA2 4-way handshake
-            // 5. Send responses
-            //
-            // For now, we rely on the kernel's built-in AP functionality
-            // which handles most of this when the interface is in AP mode
-
-            log::info!("Management frame handler running for {}", interface);
-
-            while *running.lock().await {
-                // Periodically check for inactive clients
-                tokio::time::sleep(Duration::from_secs(30)).await;
-
-                let now = Instant::now();
-                let mut clients_guard = clients.write().await;
-                clients_guard.retain(|mac, client| {
-                    let inactive =
-                        now.duration_since(client.associated_at) < Duration::from_secs(300);
-                    if !inactive {
-                        log::info!(
-                            "Client {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} timed out",
-                            mac[0],
-                            mac[1],
-                            mac[2],
-                            mac[3],
-                            mac[4],
-                            mac[5]
-                        );
-                    }
-                    inactive
-                });
-            }
-
-            log::debug!("Management task stopped for {}", interface);
-        })
-    }
-
-    /// Send deauthentication frame to client
-    async fn send_deauth(&self, _mac: &[u8; 6], _reason: DeauthReason) -> Result<()> {
-        // In a real implementation, we would construct and send a deauth frame
-        // For now, kernel handles this
-        let mut stats = self.stats.lock().await;
-        stats.deauth_sent += 1;
-        Ok(())
-    }
-
     /// Check if AP is running
     pub async fn is_running(&self) -> bool {
         *self.running.lock().await
     }
+}
+
+fn send_start_ap(
+    ifindex: u32,
+    channel: u8,
+    beacon_interval_tu: u16,
+    dtim_period: u8,
+    ssid: &[u8],
+    beacon_head: &[u8],
+    beacon_tail: &[u8],
+) -> Result<()> {
+    let freq = channel_to_frequency(channel).ok_or_else(|| {
+        NetlinkError::InvalidInput(format!("Unsupported channel {}", channel))
+    })?;
+
+    let mut sock =
+        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
+            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
+        )?;
+    let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
+        NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
+    })?;
+
+    let mut attrs = GenlBuffer::new();
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+        })?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_BEACON_INTERVAL, beacon_interval_tu)
+            .map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build beacon interval attr: {}", e))
+            })?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_DTIM_PERIOD, dtim_period).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build DTIM attr: {}", e)),
+        )?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_SSID, ssid).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build SSID attr: {}", e))
+        })?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_BEACON_HEAD, beacon_head).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build beacon head attr: {}", e)),
+        )?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_BEACON_TAIL, beacon_tail).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build beacon tail attr: {}", e)),
+        )?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_FREQ, freq).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build freq attr: {}", e))
+        })?,
+    );
+
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, 1, attrs);
+    let nlhdr = Nlmsghdr::new(
+        None,
+        family_id,
+        NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+        None,
+        None,
+        NlPayload::Payload(genlhdr),
+    );
+
+    sock.send(nlhdr).map_err(|e| {
+        NetlinkError::OperationFailed(format!("Failed to send START_AP: {}", e))
+    })?;
+
+    let resp: Option<Nlmsghdr<u16, Genlmsghdr<u8, u16>>> = sock.recv().map_err(|e| {
+        NetlinkError::OperationFailed(format!("Failed to receive START_AP response: {}", e))
+    })?;
+
+    let resp = resp.ok_or_else(|| {
+        NetlinkError::OperationFailed("No START_AP response received from kernel".to_string())
+    })?;
+
+    if resp.nl_type == neli::consts::nl::Nlmsg::Error.into() {
+        return Err(NetlinkError::OperationFailed(
+            "Kernel rejected START_AP request".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn send_stop_ap(ifindex: u32) -> Result<()> {
+    let mut sock =
+        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
+            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
+        )?;
+    let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
+        NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
+    })?;
+
+    let mut attrs = GenlBuffer::new();
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+        })?,
+    );
+
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, 1, attrs);
+    let nlhdr = Nlmsghdr::new(
+        None,
+        family_id,
+        NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+        None,
+        None,
+        NlPayload::Payload(genlhdr),
+    );
+
+    sock.send(nlhdr).map_err(|e| {
+        NetlinkError::OperationFailed(format!("Failed to send STOP_AP: {}", e))
+    })?;
+
+    Ok(())
+}
+
+fn build_beacon_frames(
+    config: &ApConfig,
+    bssid: [u8; 6],
+    channel: u8,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let mut head = Vec::new();
+    // 802.11 beacon header
+    head.extend_from_slice(&[0x80, 0x00]); // Frame control
+    head.extend_from_slice(&[0x00, 0x00]); // Duration
+    head.extend_from_slice(&[0xff; 6]); // DA broadcast
+    head.extend_from_slice(&bssid); // SA
+    head.extend_from_slice(&bssid); // BSSID
+    head.extend_from_slice(&[0x00, 0x00]); // Seq ctrl
+    head.extend_from_slice(&[0x00; 8]); // Timestamp (kernel fills)
+    head.extend_from_slice(&config.beacon_interval.to_le_bytes()); // Beacon interval
+
+    // Capability: ESS + short preamble + short slot
+    head.extend_from_slice(&0x0421u16.to_le_bytes());
+
+    // SSID IE
+    let ssid_bytes = if config.hidden {
+        vec![0; config.ssid.len()]
+    } else {
+        config.ssid.as_bytes().to_vec()
+    };
+    head.push(0); // SSID ID
+    head.push(ssid_bytes.len() as u8);
+    head.extend_from_slice(&ssid_bytes);
+
+    // Supported rates IE (1,2,5.5,11)
+    head.push(1);
+    head.push(4);
+    head.extend_from_slice(&[0x82, 0x84, 0x8b, 0x96]);
+
+    // DS Parameter Set (channel)
+    head.push(3);
+    head.push(1);
+    head.push(channel);
+
+    let mut tail = Vec::new();
+    if matches!(config.security, ApSecurity::Wpa2Psk { .. }) {
+        let rsn = build_rsn_ie();
+        tail.extend_from_slice(&rsn);
+    }
+
+    Ok((head, tail, ssid_bytes))
+}
+
+fn read_interface_mac(interface: &str) -> Result<[u8; 6]> {
+    let path = format!("/sys/class/net/{}/address", interface);
+    let mac_str = fs::read_to_string(&path).map_err(|e| NetlinkError::MacAddressError {
+        interface: interface.to_string(),
+        reason: format!("Failed to read {}: {}", path, e),
+    })?;
+
+    let parts: Vec<&str> = mac_str.trim().split(':').collect();
+    if parts.len() != 6 {
+        return Err(NetlinkError::MacAddressError {
+            interface: interface.to_string(),
+            reason: format!("Invalid MAC format: {}", mac_str.trim()),
+        });
+    }
+
+    let mut mac = [0u8; 6];
+    for (i, p) in parts.iter().enumerate() {
+        mac[i] = u8::from_str_radix(p, 16).map_err(|e| NetlinkError::MacAddressError {
+            interface: interface.to_string(),
+            reason: format!("Invalid MAC component {}: {}", p, e),
+        })?;
+    }
+    Ok(mac)
+}
+
+fn read_ifindex(interface: &str) -> Result<u32> {
+    let path = format!("/sys/class/net/{}/ifindex", interface);
+    let idx_str = fs::read_to_string(&path).map_err(|e| NetlinkError::InterfaceIndexError {
+        interface: interface.to_string(),
+        reason: format!("Failed to read {}: {}", path, e),
+    })?;
+    idx_str
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| NetlinkError::InterfaceIndexError {
+            interface: interface.to_string(),
+            reason: format!("Failed to parse ifindex: {}", e),
+        })
+}
+
+fn channel_to_frequency(channel: u8) -> Option<u32> {
+    match channel {
+        // 2.4 GHz
+        1 => Some(2412),
+        2 => Some(2417),
+        3 => Some(2422),
+        4 => Some(2427),
+        5 => Some(2432),
+        6 => Some(2437),
+        7 => Some(2442),
+        8 => Some(2447),
+        9 => Some(2452),
+        10 => Some(2457),
+        11 => Some(2462),
+        12 => Some(2467),
+        13 => Some(2472),
+        14 => Some(2484),
+        // 5 GHz subset
+        36 => Some(5180),
+        40 => Some(5200),
+        44 => Some(5220),
+        48 => Some(5240),
+        52 => Some(5260),
+        56 => Some(5280),
+        60 => Some(5300),
+        64 => Some(5320),
+        100 => Some(5500),
+        104 => Some(5520),
+        108 => Some(5540),
+        112 => Some(5560),
+        116 => Some(5580),
+        120 => Some(5600),
+        124 => Some(5620),
+        128 => Some(5640),
+        132 => Some(5660),
+        136 => Some(5680),
+        140 => Some(5700),
+        144 => Some(5720),
+        149 => Some(5745),
+        153 => Some(5765),
+        157 => Some(5785),
+        161 => Some(5805),
+        165 => Some(5825),
+        _ => None,
+    }
+}
+
+fn build_rsn_ie() -> Vec<u8> {
+    // RSN IE for WPA2-PSK with CCMP
+    // Ref: 802.11-2016, Annex I.4
+    let mut ie = Vec::new();
+    ie.push(0x30); // RSN element ID
+    ie.push(0); // length placeholder
+
+    ie.extend_from_slice(&0x0001u16.to_le_bytes()); // RSN Version 1
+
+    // Group Cipher Suite: 00-0f-ac-4 (CCMP)
+    ie.extend_from_slice(&[0x00, 0x0f, 0xac, 0x04]);
+
+    // Pairwise Cipher Suite Count = 1
+    ie.extend_from_slice(&1u16.to_le_bytes());
+    // Pairwise Cipher Suite List: CCMP
+    ie.extend_from_slice(&[0x00, 0x0f, 0xac, 0x04]);
+
+    // AKM Suite Count = 1
+    ie.extend_from_slice(&1u16.to_le_bytes());
+    // AKM Suite List: PSK
+    ie.extend_from_slice(&[0x00, 0x0f, 0xac, 0x02]);
+
+    // RSN Capabilities
+    ie.extend_from_slice(&0u16.to_le_bytes());
+
+    // PMKID Count = 0 (none)
+    ie.extend_from_slice(&0u16.to_le_bytes());
+
+    // Set length
+    let len = ie.len() - 2;
+    ie[1] = len as u8;
+    ie
+}
+
+fn derive_ptk(pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> [u8; 64] {
+    // PRF-512 from WPA spec using HMAC-SHA1
+    let mut ptk = [0u8; 64];
+    let mut data = Vec::new();
+    let (min_mac, max_mac) = if aa <= spa { (aa, spa) } else { (spa, aa) };
+    let (min_nonce, max_nonce) = if anonce <= snonce {
+        (anonce, snonce)
+    } else {
+        (snonce, anonce)
+    };
+    data.extend_from_slice(min_mac);
+    data.extend_from_slice(max_mac);
+    data.extend_from_slice(min_nonce);
+    data.extend_from_slice(max_nonce);
+
+    let label = b"Pairwise key expansion";
+    let mut output = Vec::new();
+    let mut i = 0u8;
+    while output.len() < 64 {
+        let mut hmac = HmacSha1::new_from_slice(pmk).expect("HMAC can take key");
+        hmac.update(label);
+        hmac.update(&[0x00]);
+        hmac.update(&data);
+        hmac.update(&[i]);
+        let hash = hmac.finalize().into_bytes();
+        output.extend_from_slice(&hash);
+        i = i.wrapping_add(1);
+    }
+    ptk.copy_from_slice(&output[..64]);
+    ptk
+}
+
+fn hmac_sha1(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut h = HmacSha1::new_from_slice(key).expect("HMAC can take key");
+    h.update(data);
+    h.finalize().into_bytes().to_vec()
+}
+
+fn build_m3(
+    bssid: &[u8; 6],
+    sta: &[u8; 6],
+    anonce: &[u8; 32],
+    replay_counter: u64,
+    ptk: &[u8],
+    gtk: &[u8],
+) -> Vec<u8> {
+    let mut frame = Vec::new();
+    // Ethernet header
+    frame.extend_from_slice(sta); // DA
+    frame.extend_from_slice(bssid); // SA
+    frame.extend_from_slice(&ETHERTYPE_EAPOL.to_be_bytes());
+
+    // EAPOL header
+    frame.push(2); // version
+    frame.push(EAPOL_TYPE_KEY);
+    frame.extend_from_slice(&0u16.to_be_bytes()); // length placeholder
+
+    // Key descriptor
+    frame.push(WPA2_KEY_DESCRIPTOR);
+    let key_info = WPA2_KEY_INFO_KEY_ACK
+        | WPA2_KEY_INFO_KEY_MIC
+        | WPA2_KEY_INFO_INSTALL
+        | WPA2_KEY_INFO_PAIRWISE
+        | WPA2_KEY_INFO_SECURE;
+    frame.extend_from_slice(&key_info.to_be_bytes());
+    frame.extend_from_slice(&16u16.to_be_bytes()); // key length (CCMP)
+    frame.extend_from_slice(&replay_counter.to_be_bytes());
+    frame.extend_from_slice(anonce);
+    frame.extend_from_slice(&[0u8; 16]); // key IV
+    frame.extend_from_slice(&[0u8; 8]); // key RSC
+    frame.extend_from_slice(&[0u8; 8]); // key ID
+    frame.extend_from_slice(&[0u8; 16]); // key MIC placeholder
+
+    // GTK KDE: type=1, OUI 00:0f:ac:1 (GTK KDE)
+    let mut kde = Vec::new();
+    kde.push(0xdd);
+    kde.push((gtk.len() + 6) as u8);
+    kde.extend_from_slice(&[0x00, 0x0f, 0xac, 0x01]); // OUI + type
+    kde.push(0x00); // KeyID|Tx
+    kde.push(0x00); // Reserved
+    kde.extend_from_slice(gtk);
+
+    // Key data length + data
+    let key_data_len = kde.len() as u16;
+    frame.extend_from_slice(&key_data_len.to_be_bytes());
+    frame.extend_from_slice(&kde);
+
+    // Set EAPOL length
+    let eapol_len = (frame.len() - 14 - 2) as u16;
+    frame[16] = (eapol_len >> 8) as u8;
+    frame[17] = (eapol_len & 0xff) as u8;
+
+    // Compute MIC over everything after Ethernet header
+    let mic = hmac_sha1(&ptk[..16], &frame[14..]);
+    frame[95..111].copy_from_slice(&mic[..16]);
+
+    frame
+}
+
+fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
+    let sock_fd =
+        unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, (0x888e as u16).to_be() as i32) };
+    if sock_fd < 0 {
+        return Err(NetlinkError::OperationFailed(format!(
+            "Failed to open raw EAPOL socket: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    sll.sll_family = libc::AF_PACKET as u16;
+    sll.sll_protocol = (0x888e as u16).to_be();
+    sll.sll_ifindex = ifindex as i32;
+
+    let bind_res = unsafe {
+        libc::bind(
+            sock_fd,
+            &sll as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+        )
+    };
+    if bind_res < 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(sock_fd);
+        }
+        return Err(NetlinkError::OperationFailed(format!(
+            "Failed to bind EAPOL socket: {}",
+            err
+        )));
+    }
+
+    Ok(sock_fd)
+}
+
+fn spawn_eapol_task(
+    fd: RawFd,
+    running: Arc<Mutex<bool>>,
+    stats: Arc<Mutex<ApStats>>,
+    interface: String,
+    pmk: Option<[u8; 32]>,
+    bssid: [u8; 6],
+    ifindex: u32,
+) -> JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        let mut buf = [0u8; 2048];
+        let gtk: [u8; 16] = [0x11; 16];
+        if let Some(_pmk) = pmk {
+            log::info!(
+                "WPA2-PSK EAPOL handler active on {} (pmk set, bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
+                interface,
+                bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]
+            );
+        } else {
+            log::warn!("EAPOL handler on {} has no PMK; WPA handshake will fail", interface);
+        }
+
+        loop {
+            let run = running.blocking_lock();
+            if !*run {
+                break;
+            }
+            drop(run);
+
+            let res = unsafe {
+                libc::recv(
+                    fd,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    0,
+                )
+            };
+            if res < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                break;
+            }
+            let len = res as usize;
+            if len < 14 {
+                continue;
+            }
+            let ethertype = u16::from_be_bytes([buf[12], buf[13]]);
+            if ethertype != ETHERTYPE_EAPOL {
+                continue;
+            }
+            let _eapol_version = buf[14];
+            let eapol_type = buf.get(15).cloned().unwrap_or(0);
+            if eapol_type != EAPOL_TYPE_KEY {
+                continue;
+            }
+
+            let mut s = stats.blocking_lock();
+            s.auth_requests += 1;
+            drop(s);
+
+            if pmk.is_none() || len < 113 {
+                continue;
+            }
+
+            // Extract header fields
+            let key_desc = buf[18];
+            if key_desc != WPA2_KEY_DESCRIPTOR {
+                continue;
+            }
+            let _key_info = u16::from_be_bytes([buf[19], buf[20]]);
+            let key_data_len = u16::from_be_bytes([buf[111], buf[112]]) as usize;
+            let mut snonce = [0u8; 32];
+            snonce.copy_from_slice(&buf[31..63]);
+            let key_mic = &buf[95..111];
+            let replay = u64::from_be_bytes([
+                buf[23], buf[24], buf[25], buf[26], buf[27], buf[28], buf[29], buf[30],
+            ]);
+
+            // Generate ANonce and PTK
+            let anonce = rand::random::<[u8; 32]>();
+            let pmk = pmk.unwrap();
+            let mut sta_mac = [0u8; 6];
+            sta_mac.copy_from_slice(&buf[6..12]);
+            let ptk = derive_ptk(&pmk, &bssid, &sta_mac, &anonce, &snonce);
+
+            // Verify MIC on incoming M2
+            let mut frame = buf[..len].to_vec();
+            for b in frame[95..111].iter_mut() {
+                *b = 0;
+            }
+            let calc_mic = hmac_sha1(&ptk[..16], &frame[..(113 + key_data_len)]);
+            if &calc_mic[..16] != key_mic {
+                let msg = format!("EAPOL MIC validation failed on {}", interface);
+                log::warn!("{}", msg);
+                record_ap_error(msg);
+                if let Err(e) = deauth_station(ifindex, &sta_mac) {
+                    log::warn!(
+                        "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {}",
+                        sta_mac[0],
+                        sta_mac[1],
+                        sta_mac[2],
+                        sta_mac[3],
+                        sta_mac[4],
+                        sta_mac[5],
+                        e
+                    );
+                }
+                continue;
+            }
+
+            // Build M3
+            let replay_counter = replay.saturating_add(1);
+            let m3 = build_m3(&bssid, &sta_mac, &anonce, replay_counter, &ptk, &gtk);
+
+            // Install PTK/GTK and authorize station (best effort)
+            if let Err(e) = install_keys_and_authorize(ifindex, &sta_mac, &ptk[..16], &gtk) {
+                let msg = format!("Key install/authorize failed on {}: {}", interface, e);
+                log::warn!("{}", msg);
+                record_ap_error(msg);
+                if let Err(deauth_err) = deauth_station(ifindex, &sta_mac) {
+                    log::warn!(
+                        "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} after key failure: {}",
+                        sta_mac[0],
+                        sta_mac[1],
+                        sta_mac[2],
+                        sta_mac[3],
+                        sta_mac[4],
+                        sta_mac[5],
+                        deauth_err
+                    );
+                }
+            }
+
+            // Send M3 back to station
+            let send_res = unsafe {
+                libc::send(
+                    fd,
+                    m3.as_ptr() as *const libc::c_void,
+                    m3.len(),
+                    0,
+                )
+            };
+            if send_res < 0 {
+                let msg = format!(
+                    "Failed to send EAPOL M3 on {}: {}",
+                    interface,
+                    std::io::Error::last_os_error()
+                );
+                log::warn!("{}", msg);
+                record_ap_error(msg);
+                if let Err(deauth_err) = deauth_station(ifindex, &sta_mac) {
+                    log::warn!(
+                        "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} after send failure: {}",
+                        sta_mac[0],
+                        sta_mac[1],
+                        sta_mac[2],
+                        sta_mac[3],
+                        sta_mac[4],
+                        sta_mac[5],
+                        deauth_err
+                    );
+                }
+            } else {
+                log::info!("Sent EAPOL M3 to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
+            }
+        }
+        let _ = unsafe { libc::close(fd) };
+        log::info!("EAPOL listener stopped on {}", interface);
+    })
 }
 
 impl Drop for AccessPoint {
@@ -501,21 +1143,203 @@ impl Drop for AccessPoint {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-enum DeauthReason {
-    Unspecified = 1,
-    PrevAuthNotValid = 2,
-    StaLeaving = 3,
-    InactivityDisassoc = 4,
-    ApUnable = 5,
-    Class2FrameFromNonauthSta = 6,
-    Class3FrameFromNonassocSta = 7,
-    StaDisassocLeaving = 8,
-    StaNotAuth = 9,
+fn install_keys_and_authorize(
+    ifindex: u32,
+    sta: &[u8; 6],
+    ptk: &[u8],
+    gtk: &[u8],
+) -> Result<()> {
+    let mut sock =
+        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
+            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
+        )?;
+    let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
+        NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
+    })?;
+
+    // Pairwise key
+    {
+        let mut attrs = GenlBuffer::new();
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &sta[..]).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DATA, ptk).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build key data attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_CIPHER, CIPHER_SUITE_CCMP)
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!("Failed to build cipher attr: {}", e))
+                })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, 0u32).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_TYPE, NL80211_KEYTYPE_PAIRWISE)
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!("Failed to build key type attr: {}", e))
+                })?,
+        );
+
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, 1, attrs);
+        let nlhdr = Nlmsghdr::new(
+            None,
+            family_id,
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+            None,
+            None,
+            NlPayload::Payload(genlhdr),
+        );
+
+        sock.send(nlhdr).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to send NEW_KEY (pairwise): {}", e))
+        })?;
+    }
+
+    // Group key
+    {
+        let mut attrs = GenlBuffer::new();
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DATA, gtk).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build GTK key data attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_CIPHER, CIPHER_SUITE_CCMP)
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!("Failed to build cipher attr: {}", e))
+                })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, 1u32).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build GTK key idx attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_TYPE, NL80211_KEYTYPE_GROUP)
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!("Failed to build key type attr: {}", e))
+                })?,
+        );
+
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, 1, attrs);
+        let nlhdr = Nlmsghdr::new(
+            None,
+            family_id,
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+            None,
+            None,
+            NlPayload::Payload(genlhdr),
+        );
+
+        sock.send(nlhdr).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to send NEW_KEY (group): {}", e))
+        })?;
+    }
+
+    // Authorize station
+    {
+        let mut attrs = GenlBuffer::new();
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &sta[..]).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e))
+            })?,
+        );
+
+        // struct nl80211_sta_flag_update { u32 mask; u32 set; }
+        let mut flag_payload = Vec::new();
+        flag_payload.extend_from_slice(&NL80211_STA_FLAG_AUTHORIZED.to_le_bytes()); // mask
+        flag_payload.extend_from_slice(&NL80211_STA_FLAG_AUTHORIZED.to_le_bytes()); // set
+
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_STA_FLAGS2, flag_payload).map_err(
+                |e| NetlinkError::OperationFailed(format!("Failed to build STA_FLAGS2 attr: {}", e)),
+            )?,
+        );
+
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_SET_STATION, 1, attrs);
+        let nlhdr = Nlmsghdr::new(
+            None,
+            family_id,
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+            None,
+            None,
+            NlPayload::Payload(genlhdr),
+        );
+
+        sock.send(nlhdr).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to send SET_STATION authorize: {}", e))
+        })?;
+    }
+
+    Ok(())
 }
 
-/// Helper to generate WPA2 Pairwise Master Key from passphrase and SSID
+fn deauth_station(ifindex: u32, sta: &[u8; 6]) -> Result<()> {
+    let mut sock =
+        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
+            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
+        )?;
+    let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
+        NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
+    })?;
+
+    let mut attrs = GenlBuffer::new();
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+        })?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &sta[..]).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e))
+        })?,
+    );
+
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_DEL_STATION, 1, attrs);
+    let nlhdr = Nlmsghdr::new(
+        None,
+        family_id,
+        NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+        None,
+        None,
+        NlPayload::Payload(genlhdr),
+    );
+
+    sock.send(nlhdr).map_err(|e| {
+        NetlinkError::OperationFailed(format!(
+            "Failed to send DEL_STATION for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {}",
+            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Helper to generate WPA2 Pairwise Master Key from passphrase and SSID.
+/// Kept for API compatibility and potential future WPA support.
 pub fn generate_pmk(passphrase: &str, ssid: &str) -> Result<[u8; 32]> {
     use pbkdf2::pbkdf2_hmac;
     use sha2::Sha256;

@@ -1,6 +1,6 @@
 # Rustyjack
 
-Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as a root systemd service for on-device use.
+Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as a root systemd service for on-device use. Additional documentation is in `docs/`.
 
 > Authorized testing and education only. Verify permissions before running any operation.
 

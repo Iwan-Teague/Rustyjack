@@ -63,6 +63,7 @@ pub mod iptables;
 pub mod networkmanager;
 #[cfg(target_os = "linux")]
 pub mod process;
+pub mod logging;
 #[cfg(target_os = "linux")]
 pub mod rfkill;
 #[cfg(target_os = "linux")]
@@ -75,6 +76,8 @@ pub mod wpa;
 pub mod error;
 
 pub use error::{NetlinkError, Result};
+#[cfg(target_os = "linux")]
+pub use hostapd::take_last_ap_error;
 
 #[cfg(target_os = "linux")]
 pub use arp::{ArpError, ArpPacket, ArpScanConfig, ArpScanResult};
@@ -88,6 +91,7 @@ pub use dhcp::{DhcpClient, DhcpLease};
 pub use dhcp_server::{DhcpConfig, DhcpError, DhcpLease as DhcpServerLease, DhcpServer};
 #[cfg(target_os = "linux")]
 pub use dns_server::{DnsConfig, DnsError, DnsRule, DnsServer};
+pub use logging::init_journald_logger;
 #[cfg(target_os = "linux")]
 pub use hostapd::{
     generate_pmk, AccessPoint, ApClient, ApConfig, ApSecurity, ApStats, HardwareMode, WpaState,
