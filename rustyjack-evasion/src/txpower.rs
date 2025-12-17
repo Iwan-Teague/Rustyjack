@@ -211,10 +211,13 @@ impl TxPowerManager {
         }
 
         // Try netlink via rustyjack-netlink
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            if let Ok(info) = mgr.get_interface_info(interface) {
-                if let Some(txpower_mbm) = info.txpower_mbm {
-                    return Ok(txpower_mbm / 100);
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                if let Ok(info) = mgr.get_interface_info(interface) {
+                    if let Some(txpower_mbm) = info.txpower_mbm {
+                        return Ok(txpower_mbm / 100);
+                    }
                 }
             }
         }
@@ -250,15 +253,21 @@ impl TxPowerManager {
             });
         }
 
-        let mbm = level.to_mbm();
         let dbm = level.to_dbm();
 
         // Try netlink first
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
-            if mgr.set_tx_power(interface, power_setting).is_ok() {
-                log::debug!("Set TX power on {} to {} dBm using netlink", interface, dbm);
-                return Ok(());
+        #[cfg(target_os = "linux")]
+        {
+            let mbm = level.to_mbm();
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
+                if mgr.set_tx_power(interface, power_setting).is_ok() {
+                    log::debug!(
+                        "Set TX power on {} to {} dBm using netlink",
+                        interface, dbm
+                    );
+                    return Ok(());
+                }
             }
         }
 

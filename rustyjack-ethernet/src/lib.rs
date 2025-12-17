@@ -13,7 +13,7 @@ use anyhow::{anyhow, Context, Result};
 use ipnet::Ipv4Net;
 use socket2::{Domain, Protocol, Socket, Type};
 
-const DEFAULT_ARP_PPS: u32 = 50;
+const _DEFAULT_ARP_PPS: u32 = 50;
 const DEFAULT_BANNER_READ: Duration = Duration::from_millis(750);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const MDNS_MULTICAST: &str = "224.0.0.251:5353";

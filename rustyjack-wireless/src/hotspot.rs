@@ -102,6 +102,14 @@ pub fn random_password() -> String {
         .collect()
 }
 
+fn stop_ap_best_effort(ap: &mut AccessPoint) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let _ = handle.block_on(async { ap.stop().await });
+    } else if let Ok(rt) = tokio::runtime::Runtime::new() {
+        let _ = rt.block_on(async { ap.stop().await });
+    }
+}
+
 /// Start a hotspot using Rust-native AccessPoint + DHCP + DNS servers.
 pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     // Acquire lock to prevent concurrent hotspot start attempts
@@ -491,16 +499,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         "[HOTSPOT] Starting Rust DHCP server on {}...",
         config.ap_interface
     );
-    start_dhcp_server(&config.ap_interface, gateway_ip).map_err(|e| {
-        let _ = tokio::runtime::Handle::try_current()
-            .map(|handle| handle.block_on(async { ap.stop().await }))
-            .or_else(|_| {
-                tokio::runtime::Runtime::new()
-                    .map(|rt| rt.block_on(async { ap.stop().await }))
-                    .map(|_| ())
-            });
-        e
-    })?;
+    start_dhcp_server(&config.ap_interface, gateway_ip)
+        .map_err(|e| {
+            stop_ap_best_effort(&mut ap);
+            e
+        })?;
     eprintln!("[HOTSPOT] DHCP server started successfully");
     log::info!("DHCP server running on {}", config.ap_interface);
 
@@ -509,16 +512,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         "[HOTSPOT] Starting Rust DNS server on {}...",
         config.ap_interface
     );
-    start_dns_server(&config.ap_interface, gateway_ip).map_err(|e| {
-        let _ = tokio::runtime::Handle::try_current()
-            .map(|handle| handle.block_on(async { ap.stop().await }))
-            .or_else(|_| {
-                tokio::runtime::Runtime::new()
-                    .map(|rt| rt.block_on(async { ap.stop().await }))
-                    .map(|_| ())
-            });
-        e
-    })?;
+    start_dns_server(&config.ap_interface, gateway_ip)
+        .map_err(|e| {
+            stop_ap_best_effort(&mut ap);
+            e
+        })?;
     eprintln!("[HOTSPOT] DNS server started successfully");
     log::info!("DNS server running on {}", config.ap_interface);
 

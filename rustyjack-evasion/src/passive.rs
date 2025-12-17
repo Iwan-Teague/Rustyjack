@@ -18,7 +18,9 @@
 //! - Handshake capture (waiting for natural reconnections)
 
 use crate::error::{EvasionError, Result};
-use crate::txpower::{TxPowerLevel, TxPowerManager};
+#[cfg(target_os = "linux")]
+use crate::txpower::TxPowerLevel;
+use crate::txpower::TxPowerManager;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -217,81 +219,92 @@ impl PassiveManager {
     ///
     /// Returns an error if monitor mode cannot be enabled
     pub fn enable(&mut self, interface: &str) -> Result<String> {
-        if !crate::is_wireless(interface) {
-            return Err(EvasionError::NotWireless(interface.into()));
-        }
-
-        let mon_name = format!("{}mon", interface);
-
-        // Delete existing monitor if present
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            let _ = mgr.delete_interface(&mon_name);
-        }
-
-        // Create monitor interface using netlink
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            if mgr
-                .create_interface(
-                    interface,
-                    &mon_name,
-                    rustyjack_netlink::InterfaceMode::Monitor,
-                )
-                .is_ok()
-            {
-                // Bring it up
-                if let Ok(link_mgr) = rustyjack_netlink::InterfaceManager::new() {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let _ = link_mgr.set_link_up(&mon_name).await;
-                    });
-                }
-
-                self.active_monitors.push(mon_name.clone());
-
-                log::info!("Created monitor interface: {}", mon_name);
-                return Ok(mon_name);
-            }
-        }
-
-        // Fall back to airmon-ng if netlink fails
-        let airmon = std::process::Command::new("airmon-ng")
-            .args(["start", interface])
-            .output();
-
-        if let Ok(output) = airmon {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(EvasionError::InterfaceError(format!(
-                    "Failed to create monitor interface: {}",
-                    stderr
-                )));
-            }
-        } else {
-            return Err(EvasionError::InterfaceError(
-                "Failed to create monitor interface with airmon-ng".to_string(),
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            return Err(EvasionError::System(
+                "Passive monitor mode requires Linux wireless support".into(),
             ));
         }
 
-        // Bring up the monitor interface
-        if let Ok(link_mgr) = rustyjack_netlink::InterfaceManager::new() {
-            tokio::runtime::Handle::current().block_on(async {
-                let _ = link_mgr.set_link_up(&mon_name).await;
-            });
+        #[cfg(target_os = "linux")]
+        {
+            if !crate::is_wireless(interface) {
+                return Err(EvasionError::NotWireless(interface.into()));
+            }
+
+            let mon_name = format!("{}mon", interface);
+
+            // Delete existing monitor if present
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                let _ = mgr.delete_interface(&mon_name);
+            }
+
+            // Create monitor interface using netlink
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                if mgr
+                    .create_interface(
+                        interface,
+                        &mon_name,
+                        rustyjack_netlink::InterfaceMode::Monitor,
+                    )
+                    .is_ok()
+                {
+                    // Bring it up
+                    if let Ok(link_mgr) = rustyjack_netlink::InterfaceManager::new() {
+                        tokio::runtime::Handle::current().block_on(async {
+                            let _ = link_mgr.set_link_up(&mon_name).await;
+                        });
+                    }
+
+                    self.active_monitors.push(mon_name.clone());
+
+                    log::info!("Created monitor interface: {}", mon_name);
+                    return Ok(mon_name);
+                }
+            }
+
+            // Fall back to airmon-ng if netlink fails
+            let airmon = std::process::Command::new("airmon-ng")
+                .args(["start", interface])
+                .output();
+
+            if let Ok(output) = airmon {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(EvasionError::InterfaceError(format!(
+                        "Failed to create monitor interface: {}",
+                        stderr
+                    )));
+                }
+            } else {
+                return Err(EvasionError::InterfaceError(
+                    "Failed to create monitor interface with airmon-ng".to_string(),
+                ));
+            }
+
+            // Bring up the monitor interface
+            if let Ok(link_mgr) = rustyjack_netlink::InterfaceManager::new() {
+                tokio::runtime::Handle::current().block_on(async {
+                    let _ = link_mgr.set_link_up(&mon_name).await;
+                });
+            }
+
+            // Set TX power to minimum for passive mode
+            if let Err(e) = self.tx_manager.set_power(&mon_name, TxPowerLevel::Stealth) {
+                log::warn!("Could not set stealth TX power: {}", e);
+                // Not fatal - continue without stealth power
+            }
+
+            self.active_monitors.push(mon_name.clone());
+
+            log::info!(
+                "Enabled passive monitor mode on {} -> {}",
+                interface,
+                mon_name
+            );
+            Ok(mon_name)
         }
-
-        // Set TX power to minimum for passive mode
-        if let Err(e) = self.tx_manager.set_power(&mon_name, TxPowerLevel::Stealth) {
-            log::warn!("Could not set stealth TX power: {}", e);
-            // Not fatal - continue without stealth power
-        }
-
-        self.active_monitors.push(mon_name.clone());
-
-        log::info!(
-            "Enabled passive monitor mode on {} -> {}",
-            interface,
-            mon_name
-        );
-        Ok(mon_name)
     }
 
     /// Disable passive mode and cleanup
@@ -300,21 +313,32 @@ impl PassiveManager {
     ///
     /// * `monitor_interface` - The monitor interface to disable
     pub fn disable(&mut self, monitor_interface: &str) -> Result<()> {
-        // Bring down and delete interface
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            if mgr.delete_interface(monitor_interface).is_err() {
-                // Try airmon-ng stop as fallback
-                let _ = std::process::Command::new("airmon-ng")
-                    .args(["stop", monitor_interface])
-                    .output();
-            }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = monitor_interface;
+            return Err(EvasionError::System(
+                "Passive monitor mode requires Linux wireless support".into(),
+            ));
         }
 
-        // Remove from active list
-        self.active_monitors.retain(|m| m != monitor_interface);
+        #[cfg(target_os = "linux")]
+        {
+            // Bring down and delete interface
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                if mgr.delete_interface(monitor_interface).is_err() {
+                    // Try airmon-ng stop as fallback
+                    let _ = std::process::Command::new("airmon-ng")
+                        .args(["stop", monitor_interface])
+                        .output();
+                }
+            }
 
-        log::info!("Disabled monitor mode on {}", monitor_interface);
-        Ok(())
+            // Remove from active list
+            self.active_monitors.retain(|m| m != monitor_interface);
+
+            log::info!("Disabled monitor mode on {}", monitor_interface);
+            Ok(())
+        }
     }
 
     /// Set channel on monitor interface
@@ -324,20 +348,32 @@ impl PassiveManager {
     /// * `interface` - Monitor interface
     /// * `channel` - WiFi channel (1-14 for 2.4GHz, higher for 5GHz)
     pub fn set_channel(&self, interface: &str, channel: u8) -> Result<()> {
-        let output = std::process::Command::new("iw")
-            .args(["dev", interface, "set", "channel", &channel.to_string()])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to set channel: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(EvasionError::InterfaceError(format!(
-                "Failed to set channel {}: {}",
-                channel, stderr
-            )));
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            let _ = channel;
+            return Err(EvasionError::System(
+                "Passive monitor mode requires Linux wireless support".into(),
+            ));
         }
 
-        Ok(())
+        #[cfg(target_os = "linux")]
+        {
+            let output = std::process::Command::new("iw")
+                .args(["dev", interface, "set", "channel", &channel.to_string()])
+                .output()
+                .map_err(|e| EvasionError::System(format!("Failed to set channel: {}", e)))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(EvasionError::InterfaceError(format!(
+                    "Failed to set channel {}: {}",
+                    channel, stderr
+                )));
+            }
+
+            Ok(())
+        }
     }
 
     /// Start passive capture with configuration

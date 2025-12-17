@@ -306,10 +306,7 @@ impl Rule {
 }
 
 /// Iptables manager for netfilter operations
-pub struct IptablesManager {
-    /// Track if we have root privileges
-    has_privileges: bool,
-}
+pub struct IptablesManager;
 
 impl IptablesManager {
     /// Create a new iptables manager
@@ -326,7 +323,7 @@ impl IptablesManager {
         }
 
         log::debug!("IptablesManager initialized with root privileges");
-        Ok(Self { has_privileges })
+        Ok(Self)
     }
 
     /// Execute an iptables command

@@ -356,8 +356,6 @@ pub fn get_channel(name: &str) -> Result<Option<u8>> {
 
 /// Kill processes that might interfere with monitor mode
 pub fn kill_interfering_processes() -> Result<()> {
-    use std::process::Command;
-
     // Common interfering processes
     let processes = [
         "wpa_supplicant",

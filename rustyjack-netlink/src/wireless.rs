@@ -11,9 +11,6 @@ use neli::{
 // Re-export commonly used types from neli
 use neli::consts::socket::NlFamily;
 
-// Nlmsg type for error checking
-const NlmsgErr: u16 = 2; // NLMSG_ERROR value
-
 const NL80211_GENL_NAME: &str = "nl80211";
 
 // nl80211 commands
@@ -23,8 +20,6 @@ const NL80211_CMD_GET_INTERFACE: u8 = 5;
 const NL80211_CMD_SET_INTERFACE: u8 = 6;
 const NL80211_CMD_NEW_INTERFACE: u8 = 7;
 const NL80211_CMD_DEL_INTERFACE: u8 = 8;
-const NL80211_CMD_GET_STATION: u8 = 17;
-const NL80211_CMD_SET_CHANNEL: u8 = 65;
 
 // nl80211 attributes
 const NL80211_ATTR_WIPHY: u16 = 1;
@@ -37,21 +32,15 @@ const NL80211_ATTR_WIPHY_CHANNEL_TYPE: u16 = 39;
 const NL80211_ATTR_WIPHY_TX_POWER_SETTING: u16 = 58;
 const NL80211_ATTR_WIPHY_TX_POWER_LEVEL: u16 = 59;
 const NL80211_ATTR_SUPPORTED_IFTYPES: u16 = 32;
-const NL80211_ATTR_WIPHY_BANDS: u16 = 22;
 
 // Interface types
 const NL80211_IFTYPE_ADHOC: u32 = 1;
 const NL80211_IFTYPE_STATION: u32 = 2;
 const NL80211_IFTYPE_AP: u32 = 3;
-const NL80211_IFTYPE_AP_VLAN: u32 = 4;
-const NL80211_IFTYPE_WDS: u32 = 5;
 const NL80211_IFTYPE_MONITOR: u32 = 6;
 const NL80211_IFTYPE_MESH_POINT: u32 = 7;
 const NL80211_IFTYPE_P2P_CLIENT: u32 = 8;
 const NL80211_IFTYPE_P2P_GO: u32 = 9;
-const NL80211_IFTYPE_P2P_DEVICE: u32 = 10;
-const NL80211_IFTYPE_OCB: u32 = 11;
-const NL80211_IFTYPE_NAN: u32 = 12;
 
 // TX power settings
 const NL80211_TX_POWER_AUTOMATIC: u32 = 0;

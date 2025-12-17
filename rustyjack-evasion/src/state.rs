@@ -261,59 +261,95 @@ impl StateManager {
     // Helper methods for restoration
 
     fn delete_monitor(&self, monitor: &str) -> Result<()> {
-        // Try netlink first
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            if mgr.delete_interface(monitor).is_ok() {
-                return Ok(());
-            }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = monitor;
+            return Err(EvasionError::System(
+                "Monitor cleanup requires Linux wireless support".into(),
+            ));
         }
 
-        // Fall back to airmon-ng
-        let _ = std::process::Command::new("airmon-ng")
-            .args(["stop", monitor])
-            .output();
+        #[cfg(target_os = "linux")]
+        {
+            // Try netlink first
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                if mgr.delete_interface(monitor).is_ok() {
+                    return Ok(());
+                }
+            }
 
-        Ok(())
+            // Fall back to airmon-ng
+            let _ = std::process::Command::new("airmon-ng")
+                .args(["stop", monitor])
+                .output();
+
+            Ok(())
+        }
     }
 
     fn restore_mac(&self, interface: &str, mac: &str) -> Result<()> {
-        let mgr = rustyjack_netlink::InterfaceManager::new()
-            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            let _ = mac;
+            return Err(EvasionError::System(
+                "MAC restoration requires Linux netlink support".into(),
+            ));
+        }
 
-        tokio::runtime::Handle::current().block_on(async {
-            // Bring down
-            let _ = mgr.set_link_down(interface).await;
+        #[cfg(target_os = "linux")]
+        {
+            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                EvasionError::System(format!("Failed to initialize netlink: {}", e))
+            })?;
 
-            // Set MAC
-            let result = mgr
-                .set_mac_address(interface, mac)
-                .await
-                .map_err(|e| EvasionError::RestoreError(format!("Failed to set MAC: {}", e)));
+            tokio::runtime::Handle::current().block_on(async {
+                // Bring down
+                let _ = mgr.set_link_down(interface).await;
 
-            // Bring up
-            let _ = mgr.set_link_up(interface).await;
+                // Set MAC
+                let result = mgr
+                    .set_mac_address(interface, mac)
+                    .await
+                    .map_err(|e| EvasionError::RestoreError(format!("Failed to set MAC: {}", e)));
 
-            result
-        })
+                // Bring up
+                let _ = mgr.set_link_up(interface).await;
+
+                result
+            })
+        }
     }
 
     fn restore_tx_power(&self, interface: &str, dbm: i32) -> Result<()> {
-        let mbm = dbm * 100;
-
-        // Try netlink first
-        if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-            let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
-            if mgr.set_tx_power(interface, power_setting).is_ok() {
-                return Ok(());
-            }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            let _ = dbm;
+            return Err(EvasionError::System(
+                "TX power restoration requires Linux wireless support".into(),
+            ));
         }
 
-        // Fall back to iwconfig
-        let _ = std::process::Command::new("iwconfig")
-            .args([interface, "txpower", &dbm.to_string()])
-            .output();
+        #[cfg(target_os = "linux")]
+        {
+            let mbm = dbm * 100;
 
-        Ok(())
+            // Try netlink first
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
+                if mgr.set_tx_power(interface, power_setting).is_ok() {
+                    return Ok(());
+                }
+            }
+
+            // Fall back to iwconfig
+            let _ = std::process::Command::new("iwconfig")
+                .args([interface, "txpower", &dbm.to_string()])
+                .output();
+
+            Ok(())
+        }
     }
 }
 

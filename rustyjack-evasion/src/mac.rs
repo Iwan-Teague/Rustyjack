@@ -486,55 +486,92 @@ impl MacManager {
     }
 
     fn interface_down(&self, interface: &str) -> Result<()> {
-        let mgr = rustyjack_netlink::InterfaceManager::new()
-            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            return Err(EvasionError::System(
+                "MAC management requires Linux netlink support".into(),
+            ));
+        }
 
-        tokio::runtime::Handle::current().block_on(async {
-            mgr.set_link_down(interface).await.map_err(|e| {
-                if e.to_string().contains("Operation not permitted")
-                    || e.to_string().contains("Permission denied")
-                {
-                    EvasionError::PermissionDenied("bringing interface down".into())
-                } else {
-                    EvasionError::InterfaceError(format!(
-                        "Failed to bring {} down: {}",
-                        interface, e
-                    ))
-                }
+        #[cfg(target_os = "linux")]
+        {
+            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                EvasionError::System(format!("Failed to initialize netlink: {}", e))
+            })?;
+
+            tokio::runtime::Handle::current().block_on(async {
+                mgr.set_link_down(interface).await.map_err(|e| {
+                    if e.to_string().contains("Operation not permitted")
+                        || e.to_string().contains("Permission denied")
+                    {
+                        EvasionError::PermissionDenied("bringing interface down".into())
+                    } else {
+                        EvasionError::InterfaceError(format!(
+                            "Failed to bring {} down: {}",
+                            interface, e
+                        ))
+                    }
+                })
             })
-        })
+        }
     }
 
     fn interface_up(&self, interface: &str) -> Result<()> {
-        let mgr = rustyjack_netlink::InterfaceManager::new()
-            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            return Err(EvasionError::System(
+                "MAC management requires Linux netlink support".into(),
+            ));
+        }
 
-        tokio::runtime::Handle::current().block_on(async {
-            mgr.set_link_up(interface).await.map_err(|e| {
-                EvasionError::InterfaceError(format!("Failed to bring {} up: {}", interface, e))
+        #[cfg(target_os = "linux")]
+        {
+            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                EvasionError::System(format!("Failed to initialize netlink: {}", e))
+            })?;
+
+            tokio::runtime::Handle::current().block_on(async {
+                mgr.set_link_up(interface).await.map_err(|e| {
+                    EvasionError::InterfaceError(format!("Failed to bring {} up: {}", interface, e))
+                })
             })
-        })
+        }
     }
 
     fn set_mac_raw(&self, interface: &str, mac: &MacAddress) -> Result<()> {
-        let mac_str = mac.to_string();
-        let mgr = rustyjack_netlink::InterfaceManager::new()
-            .map_err(|e| EvasionError::System(format!("Failed to initialize netlink: {}", e)))?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            let _ = mac;
+            return Err(EvasionError::System(
+                "MAC management requires Linux netlink support".into(),
+            ));
+        }
 
-        tokio::runtime::Handle::current().block_on(async {
-            mgr.set_mac_address(interface, &mac_str).await.map_err(|e| {
-                if e.to_string().contains("Operation not permitted")
-                    || e.to_string().contains("Permission denied")
-                {
-                    EvasionError::PermissionDenied("setting MAC address".into())
-                } else {
-                    EvasionError::InterfaceError(format!(
-                        "Failed to set MAC on {}: {}",
-                        interface, e
-                    ))
-                }
+        #[cfg(target_os = "linux")]
+        {
+            let mac_str = mac.to_string();
+            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                EvasionError::System(format!("Failed to initialize netlink: {}", e))
+            })?;
+
+            tokio::runtime::Handle::current().block_on(async {
+                mgr.set_mac_address(interface, &mac_str).await.map_err(|e| {
+                    if e.to_string().contains("Operation not permitted")
+                        || e.to_string().contains("Permission denied")
+                    {
+                        EvasionError::PermissionDenied("setting MAC address".into())
+                    } else {
+                        EvasionError::InterfaceError(format!(
+                            "Failed to set MAC on {}: {}",
+                            interface, e
+                        ))
+                    }
+                })
             })
-        })
+        }
     }
 
     fn restore_state(&self, state: &MacState) -> Result<()> {

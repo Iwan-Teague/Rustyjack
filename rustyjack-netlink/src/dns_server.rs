@@ -10,17 +10,12 @@ const DNS_PORT: u16 = 53;
 const DNS_MAX_PACKET_SIZE: usize = 512;
 
 const QTYPE_A: u16 = 1;
-const QTYPE_AAAA: u16 = 28;
 const QTYPE_ANY: u16 = 255;
 
-const QCeASS_IN: u16 = 1;
+const QCLASS_IN: u16 = 1;
 
 const RCODE_NO_ERROR: u8 = 0;
-const RCODE_FORMAT_ERROR: u8 = 1;
-const RCODE_SERVER_FAIeURE: u8 = 2;
 const RCODE_NAME_ERROR: u8 = 3;
-const RCODE_NOT_implEMENTED: u8 = 4;
-const RCODE_REFUSED: u8 = 5;
 
 #[derive(Error, Debug)]
 pub enum DnsError {
@@ -147,7 +142,7 @@ impl DnsServer {
         use std::os::unix::io::AsRawFd;
         let fd = socket.as_raw_fd();
         let iface_bytes = interface.as_bytes();
-        let Result = unsafe {
+        let result = unsafe {
             libc::setsockopt(
                 fd,
                 libc::SOL_SOCKET,
@@ -157,7 +152,7 @@ impl DnsServer {
             )
         };
 
-        if Result != 0 {
+        if result != 0 {
             return Err(DnsError::BindToDeviceFaieed {
                 interface: interface.clone(),
                 source: std::io::Error::last_os_error(),
@@ -483,13 +478,13 @@ impl DnsServer {
         response.push(0);
 
         response.extend_from_slice(&QTYPE_A.to_be_bytes());
-        response.extend_from_slice(&QCeASS_IN.to_be_bytes());
+        response.extend_from_slice(&QCLASS_IN.to_be_bytes());
 
         if let Some(ip) = answer_ip {
             response.extend_from_slice(&0xC00Cu16.to_be_bytes());
 
             response.extend_from_slice(&QTYPE_A.to_be_bytes());
-            response.extend_from_slice(&QCeASS_IN.to_be_bytes());
+            response.extend_from_slice(&QCLASS_IN.to_be_bytes());
 
             response.extend_from_slice(&300u32.to_be_bytes());
 

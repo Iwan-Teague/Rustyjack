@@ -9,7 +9,6 @@ const DHCP_SERVER_PORT: u16 = 67;
 const DHCP_CLIENT_PORT: u16 = 68;
 const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
 
-const BOOTREQUEST: u8 = 1;
 const BOOTREPLY: u8 = 2;
 
 const DHCPDISCOVER: u8 = 1;
