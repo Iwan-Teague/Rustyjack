@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 use crate::error::{NetlinkError, Result};
+use std::io;
 use neli::{
     consts::nl::{NlmF, NlmFFlags},
     genl::{Genlmsghdr, Nlattr},
@@ -255,10 +256,26 @@ impl WirelessManager {
             })?;
 
         if response.nl_type == NLMSG_ERR {
-            return Err(NetlinkError::OperationFailed(
-                format!("Failed to set interface '{}' to {} mode. Interface must be down. Try: ip link set {} down", 
-                    interface, mode.to_string(), interface)
-            ));
+            if let NlPayload::Err(err) = response.nl_payload {
+                // NLMSG_ERR with error == 0 is an ACK; anything else is a real failure.
+                if err.error == 0 {
+                    return Ok(());
+                }
+                let errno = err.error.abs();
+                let io_err = io::Error::from_raw_os_error(errno);
+                return Err(NetlinkError::OperationFailed(format!(
+                    "Failed to set interface '{}' to {} mode via nl80211: {} (errno {})",
+                    interface,
+                    mode.to_string(),
+                    io_err,
+                    errno
+                )));
+            }
+            return Err(NetlinkError::OperationFailed(format!(
+                "Failed to set interface '{}' to {} mode via nl80211 (unknown error)",
+                interface,
+                mode.to_string()
+            )));
         }
 
         Ok(())
