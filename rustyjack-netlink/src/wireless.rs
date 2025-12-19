@@ -395,10 +395,40 @@ impl WirelessManager {
             })?;
 
         if response.nl_type == NLMSG_ERR {
-            return Err(NetlinkError::OperationFailed(
-                format!("Failed to set frequency {} MHz on interface '{}'. Frequency may not be supported by hardware.", 
-                    frequency, interface)
-            ));
+            match response.nl_payload {
+                NlPayload::Err(err) if err.error == 0 => return Ok(()), // ACK
+                NlPayload::Ack(ack) if ack.error == 0 => return Ok(()), // ACK
+                NlPayload::Err(err) => {
+                    let errno = err.error.abs();
+                    let io_err = io::Error::from_raw_os_error(errno);
+                    return Err(NetlinkError::OperationFailed(format!(
+                        "Failed to set frequency {} MHz on interface '{}': {} (errno {})",
+                        frequency,
+                        interface,
+                        io_err,
+                        errno
+                    )));
+                }
+                NlPayload::Ack(ack) => {
+                    let errno = ack.error.abs();
+                    let io_err = io::Error::from_raw_os_error(errno);
+                    return Err(NetlinkError::OperationFailed(format!(
+                        "Failed to set frequency {} MHz on interface '{}': {} (errno {})",
+                        frequency,
+                        interface,
+                        io_err,
+                        errno
+                    )));
+                }
+                other => {
+                    return Err(NetlinkError::OperationFailed(format!(
+                        "Failed to set frequency {} MHz on interface '{}': unexpected payload {:?}",
+                        frequency,
+                        interface,
+                        other
+                    )));
+                }
+            }
         }
 
         Ok(())

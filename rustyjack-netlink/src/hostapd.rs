@@ -379,13 +379,18 @@ impl AccessPoint {
             );
         }
 
-        // Set channel using nl80211
-        self.wireless_mgr
+        // Set channel using nl80211 (best effort; START_AP also carries frequency)
+        if let Err(e) = self
+            .wireless_mgr
             .set_channel(&self.config.interface, self.config.channel)
-            .map_err(|e| NetlinkError::OperationFailed(format!(
-                "Failed to set channel {} on {} via nl80211: {}. Verify the interface is in AP mode and not blocked by rfkill.",
-                self.config.channel, self.config.interface, e
-            )))?;
+        {
+            log::warn!(
+                "set_channel {} on {} via nl80211 failed (continuing, START_AP will set freq): {}",
+                self.config.channel,
+                self.config.interface,
+                e
+            );
+        }
 
         let ifindex = read_ifindex(&self.config.interface)?;
         let bssid = read_interface_mac(&self.config.interface)?;
