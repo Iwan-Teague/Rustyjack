@@ -283,7 +283,8 @@ pub struct AccessPoint {
     ifindex: Option<u32>,
 }
 
-static LAST_AP_ERROR: Lazy<std::sync::Mutex<Option<String>>> = Lazy::new(|| std::sync::Mutex::new(None));
+static LAST_AP_ERROR: Lazy<std::sync::Mutex<Option<String>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
 
 fn record_ap_error(msg: impl Into<String>) {
     let mut guard = LAST_AP_ERROR.lock().unwrap_or_else(|e| e.into_inner());
@@ -394,20 +395,59 @@ impl AccessPoint {
 
         let ifindex = read_ifindex(&self.config.interface)?;
         let bssid = read_interface_mac(&self.config.interface)?;
-        let (beacon_head, beacon_tail, ssid_bytes) =
-            build_beacon_frames(&self.config, bssid, self.config.channel)?;
-
-        // Issue START_AP
-        send_start_ap(
+        log::info!(
+            "AP context: iface={} ifindex={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} chan={} beacon_int={} dtim={} security={:?}",
+            self.config.interface,
             ifindex,
+            bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
             self.config.channel,
             self.config.beacon_interval,
             self.config.dtim_period,
-            &ssid_bytes,
-            &beacon_head,
-            &beacon_tail,
-        )
-        .map_err(|e| NetlinkError::OperationFailed(format!("START_AP failed: {}", e)))?;
+            self.config.security
+        );
+
+        let (beacon_head, beacon_tail, ssid_bytes) =
+            build_beacon_frames(&self.config, bssid, self.config.channel)?;
+
+        // Issue START_AP with fallbacks on channel if unsupported
+        let fallback_channels: &[u8] = &[self.config.channel, 1, 6, 11, 36];
+        let mut tried = Vec::new();
+        let mut chosen_channel = self.config.channel;
+        let mut last_err: Option<String> = None;
+        for ch in fallback_channels {
+            if tried.contains(ch) {
+                continue;
+            }
+            tried.push(*ch);
+            log::info!("Attempting START_AP on channel {}", ch);
+            match send_start_ap(
+                ifindex,
+                *ch,
+                self.config.beacon_interval,
+                self.config.dtim_period,
+                &ssid_bytes,
+                &beacon_head,
+                &beacon_tail,
+            ) {
+                Ok(_) => {
+                    chosen_channel = *ch;
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    let msg = format!("START_AP failed on channel {}: {}", ch, e);
+                    log::warn!("{}", msg);
+                    last_err = Some(msg);
+                }
+            }
+        }
+
+        if let Some(err) = last_err {
+            return Err(NetlinkError::OperationFailed(err));
+        }
+
+        self.config.channel = chosen_channel;
+        log::info!("START_AP succeeded on channel {}", chosen_channel);
 
         *self.running.lock().await = true;
         self.start_time = Some(Instant::now());
@@ -427,13 +467,7 @@ impl AccessPoint {
                     let pmk = self.pmk;
                     let bssid = bssid;
                     self.eapol_task = Some(spawn_eapol_task(
-                        fd,
-                        running,
-                        stats,
-                        iface,
-                        pmk,
-                        bssid,
-                        ifindex,
+                        fd, running, stats, iface, pmk, bssid, ifindex,
                     ));
                     self.eapol_fd = Some(fd);
                 }
@@ -465,12 +499,12 @@ impl AccessPoint {
         *self.running.lock().await = false;
 
         if let Some(ifindex) = self.ifindex.take() {
-        if let Err(e) = send_stop_ap(ifindex) {
-            log::warn!("STOP_AP failed for ifindex {}: {}", ifindex, e);
-        } else {
-            log::info!("STOP_AP sent for ifindex {}", ifindex);
+            if let Err(e) = send_stop_ap(ifindex) {
+                log::warn!("STOP_AP failed for ifindex {}: {}", ifindex, e);
+            } else {
+                log::info!("STOP_AP sent for ifindex {}", ifindex);
+            }
         }
-    }
         if let Some(fd) = self.eapol_fd.take() {
             unsafe {
                 libc::close(fd);
@@ -545,9 +579,8 @@ fn send_start_ap(
     beacon_head: &[u8],
     beacon_tail: &[u8],
 ) -> Result<()> {
-    let freq = channel_to_frequency(channel).ok_or_else(|| {
-        NetlinkError::InvalidInput(format!("Unsupported channel {}", channel))
-    })?;
+    let freq = channel_to_frequency(channel)
+        .ok_or_else(|| NetlinkError::InvalidInput(format!("Unsupported channel {}", channel)))?;
 
     log::info!(
         "Sending START_AP ifindex={} chan={} freq={} beacon_int={} dtim={} ssid_len={} head_len={} tail_len={}",
@@ -561,10 +594,10 @@ fn send_start_ap(
         beacon_tail.len()
     );
 
-    let mut sock =
-        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
-            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
-        )?;
+    let mut sock = NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[])
+        .map_err(|e| {
+            NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e))
+        })?;
     let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
         NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
     })?;
@@ -613,7 +646,7 @@ fn send_start_ap(
         })?,
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, 1, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, 0, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,
@@ -623,9 +656,8 @@ fn send_start_ap(
         NlPayload::Payload(genlhdr),
     );
 
-    sock.send(nlhdr).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to send START_AP: {}", e))
-    })?;
+    sock.send(nlhdr)
+        .map_err(|e| NetlinkError::OperationFailed(format!("Failed to send START_AP: {}", e)))?;
 
     // Consume replies until ACK or ERR
     let resp: Option<Nlmsghdr<u16, Genlmsghdr<u8, u16>>> = sock.recv().map_err(|e| {
@@ -675,10 +707,10 @@ fn send_start_ap(
 }
 
 fn send_stop_ap(ifindex: u32) -> Result<()> {
-    let mut sock =
-        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
-            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
-        )?;
+    let mut sock = NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[])
+        .map_err(|e| {
+            NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e))
+        })?;
     let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
         NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
     })?;
@@ -690,7 +722,7 @@ fn send_stop_ap(ifindex: u32) -> Result<()> {
         })?,
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, 1, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, 0, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,
@@ -700,9 +732,8 @@ fn send_stop_ap(ifindex: u32) -> Result<()> {
         NlPayload::Payload(genlhdr),
     );
 
-    sock.send(nlhdr).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to send STOP_AP: {}", e))
-    })?;
+    sock.send(nlhdr)
+        .map_err(|e| NetlinkError::OperationFailed(format!("Failed to send STOP_AP: {}", e)))?;
 
     Ok(())
 }
@@ -876,7 +907,13 @@ fn build_rsn_ie() -> Vec<u8> {
     ie
 }
 
-fn derive_ptk(pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> [u8; 64] {
+fn derive_ptk(
+    pmk: &[u8; 32],
+    aa: &[u8; 6],
+    spa: &[u8; 6],
+    anonce: &[u8; 32],
+    snonce: &[u8; 32],
+) -> [u8; 64] {
     // PRF-512 from WPA spec using HMAC-SHA1
     let mut ptk = [0u8; 64];
     let mut data = Vec::new();
@@ -976,8 +1013,13 @@ fn build_m3(
 }
 
 fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
-    let sock_fd =
-        unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, (0x888e as u16).to_be() as i32) };
+    let sock_fd = unsafe {
+        libc::socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW,
+            (0x888e as u16).to_be() as i32,
+        )
+    };
     if sock_fd < 0 {
         return Err(NetlinkError::OperationFailed(format!(
             "Failed to open raw EAPOL socket: {}",
@@ -1030,7 +1072,10 @@ fn spawn_eapol_task(
                 bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]
             );
         } else {
-            log::warn!("EAPOL handler on {} has no PMK; WPA handshake will fail", interface);
+            log::warn!(
+                "EAPOL handler on {} has no PMK; WPA handshake will fail",
+                interface
+            );
         }
 
         loop {
@@ -1040,14 +1085,8 @@ fn spawn_eapol_task(
             }
             drop(run);
 
-            let res = unsafe {
-                libc::recv(
-                    fd,
-                    buf.as_mut_ptr() as *mut libc::c_void,
-                    buf.len(),
-                    0,
-                )
-            };
+            let res =
+                unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
             if res < 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() == std::io::ErrorKind::WouldBlock {
@@ -1147,14 +1186,8 @@ fn spawn_eapol_task(
             }
 
             // Send M3 back to station
-            let send_res = unsafe {
-                libc::send(
-                    fd,
-                    m3.as_ptr() as *const libc::c_void,
-                    m3.len(),
-                    0,
-                )
-            };
+            let send_res =
+                unsafe { libc::send(fd, m3.as_ptr() as *const libc::c_void, m3.len(), 0) };
             if send_res < 0 {
                 let msg = format!(
                     "Failed to send EAPOL M3 on {}: {}",
@@ -1176,8 +1209,15 @@ fn spawn_eapol_task(
                     );
                 }
             } else {
-                log::info!("Sent EAPOL M3 to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
+                log::info!(
+                    "Sent EAPOL M3 to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    buf[6],
+                    buf[7],
+                    buf[8],
+                    buf[9],
+                    buf[10],
+                    buf[11]
+                );
             }
         }
         let _ = unsafe { libc::close(fd) };
@@ -1196,16 +1236,11 @@ impl Drop for AccessPoint {
     }
 }
 
-fn install_keys_and_authorize(
-    ifindex: u32,
-    sta: &[u8; 6],
-    ptk: &[u8],
-    gtk: &[u8],
-) -> Result<()> {
-    let mut sock =
-        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
-            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
-        )?;
+fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8]) -> Result<()> {
+    let mut sock = NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[])
+        .map_err(|e| {
+            NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e))
+        })?;
     let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
         NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
     })?;
@@ -1240,10 +1275,15 @@ fn install_keys_and_authorize(
             })?,
         );
         attrs.push(
-            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_TYPE, NL80211_KEYTYPE_PAIRWISE)
-                .map_err(|e| {
-                    NetlinkError::OperationFailed(format!("Failed to build key type attr: {}", e))
-                })?,
+            neli::genl::Nlattr::new(
+                false,
+                false,
+                NL80211_ATTR_KEY_TYPE,
+                NL80211_KEYTYPE_PAIRWISE,
+            )
+            .map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build key type attr: {}", e))
+            })?,
         );
 
         let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, 1, attrs);
@@ -1328,7 +1368,9 @@ fn install_keys_and_authorize(
 
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_STA_FLAGS2, flag_payload).map_err(
-                |e| NetlinkError::OperationFailed(format!("Failed to build STA_FLAGS2 attr: {}", e)),
+                |e| {
+                    NetlinkError::OperationFailed(format!("Failed to build STA_FLAGS2 attr: {}", e))
+                },
             )?,
         );
 
@@ -1351,10 +1393,10 @@ fn install_keys_and_authorize(
 }
 
 fn deauth_station(ifindex: u32, sta: &[u8; 6]) -> Result<()> {
-    let mut sock =
-        NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[]).map_err(
-            |e| NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e)),
-        )?;
+    let mut sock = NlSocketHandle::connect(neli::consts::socket::NlFamily::Generic, None, &[])
+        .map_err(|e| {
+            NetlinkError::ConnectionFailed(format!("Failed to open nl80211 socket: {}", e))
+        })?;
     let family_id = sock.resolve_genl_family(NL80211_GENL_NAME).map_err(|e| {
         NetlinkError::ConnectionFailed(format!("Failed to resolve nl80211 family: {}", e))
     })?;

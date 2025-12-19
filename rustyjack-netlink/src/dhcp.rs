@@ -488,7 +488,9 @@ impl DhcpClient {
 
             match self.parse_ack_packet(&buf[..len], interface, xid, offer) {
                 Ok(lease) => return Ok(lease),
-                Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket { reason, .. })) => {
+                Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
+                    reason, ..
+                })) => {
                     log::debug!("Ignoring invalid DHCP packet: {}", reason);
                 }
                 Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak { reason, .. })) => {

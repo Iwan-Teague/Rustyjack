@@ -1,6 +1,5 @@
 #[allow(dead_code)]
 use crate::error::{NetlinkError, Result};
-use std::io;
 use neli::{
     consts::nl::{NlmF, NlmFFlags},
     genl::{Genlmsghdr, Nlattr},
@@ -8,6 +7,7 @@ use neli::{
     socket::NlSocketHandle,
     types::GenlBuffer,
 };
+use std::io;
 
 // Re-export commonly used types from neli
 use neli::consts::socket::NlFamily;
@@ -403,10 +403,7 @@ impl WirelessManager {
                     let io_err = io::Error::from_raw_os_error(errno);
                     return Err(NetlinkError::OperationFailed(format!(
                         "Failed to set frequency {} MHz on interface '{}': {} (errno {})",
-                        frequency,
-                        interface,
-                        io_err,
-                        errno
+                        frequency, interface, io_err, errno
                     )));
                 }
                 NlPayload::Ack(ack) => {
@@ -414,18 +411,13 @@ impl WirelessManager {
                     let io_err = io::Error::from_raw_os_error(errno);
                     return Err(NetlinkError::OperationFailed(format!(
                         "Failed to set frequency {} MHz on interface '{}': {} (errno {})",
-                        frequency,
-                        interface,
-                        io_err,
-                        errno
+                        frequency, interface, io_err, errno
                     )));
                 }
                 other => {
                     return Err(NetlinkError::OperationFailed(format!(
                         "Failed to set frequency {} MHz on interface '{}': unexpected payload {:?}",
-                        frequency,
-                        interface,
-                        other
+                        frequency, interface, other
                     )));
                 }
             }

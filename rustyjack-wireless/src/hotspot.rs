@@ -499,11 +499,10 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         "[HOTSPOT] Starting Rust DHCP server on {}...",
         config.ap_interface
     );
-    start_dhcp_server(&config.ap_interface, gateway_ip)
-        .map_err(|e| {
-            stop_ap_best_effort(&mut ap);
-            e
-        })?;
+    start_dhcp_server(&config.ap_interface, gateway_ip).map_err(|e| {
+        stop_ap_best_effort(&mut ap);
+        e
+    })?;
     eprintln!("[HOTSPOT] DHCP server started successfully");
     log::info!("DHCP server running on {}", config.ap_interface);
 
@@ -512,11 +511,10 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         "[HOTSPOT] Starting Rust DNS server on {}...",
         config.ap_interface
     );
-    start_dns_server(&config.ap_interface, gateway_ip)
-        .map_err(|e| {
-            stop_ap_best_effort(&mut ap);
-            e
-        })?;
+    start_dns_server(&config.ap_interface, gateway_ip).map_err(|e| {
+        stop_ap_best_effort(&mut ap);
+        e
+    })?;
     eprintln!("[HOTSPOT] DNS server started successfully");
     log::info!("DNS server running on {}", config.ap_interface);
 

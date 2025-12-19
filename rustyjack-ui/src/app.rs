@@ -35,12 +35,12 @@ use zeroize::Zeroize;
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
 #[cfg(target_os = "linux")]
+use rustyjack_netlink::take_last_ap_error;
+#[cfg(target_os = "linux")]
 use rustyjack_wireless::crack::{
     generate_common_passwords, generate_ssid_passwords, CrackProgress, CrackResult, CrackerConfig,
     WpaCracker,
 };
-#[cfg(target_os = "linux")]
-use rustyjack_netlink::take_last_ap_error;
 
 use crate::{
     config::{BlacklistedDevice, GuiConfig},

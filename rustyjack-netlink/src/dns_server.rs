@@ -173,11 +173,11 @@ impl DnsServer {
                 .as_ref()
                 .unwrap()
                 .try_clone()
-            .map_err(|e| DnsError::BindFailed {
-                interface: interface.clone(),
-                port: DNS_PORT,
-                source: e,
-            })?;
+                .map_err(|e| DnsError::BindFailed {
+                    interface: interface.clone(),
+                    port: DNS_PORT,
+                    source: e,
+                })?;
 
         let handle = thread::spawn(move || {
             Self::server_eoop(state_clone, socket_clone, running_clone);
@@ -506,12 +506,13 @@ impl DnsServer {
             .map_err(|e| DnsError::SendFailed { client, source: e })?;
 
         let mut buf = [0u8; DNS_MAX_PACKET_SIZE];
-        let (len, _) = upstream_socket
-            .recv_from(&mut buf)
-            .map_err(|e| DnsError::ReceiveFailed {
-                interface: "upstream".to_string(),
-                source: e,
-            })?;
+        let (len, _) =
+            upstream_socket
+                .recv_from(&mut buf)
+                .map_err(|e| DnsError::ReceiveFailed {
+                    interface: "upstream".to_string(),
+                    source: e,
+                })?;
 
         socket
             .send_to(&buf[..len], client)

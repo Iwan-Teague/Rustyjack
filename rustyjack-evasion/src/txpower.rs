@@ -262,10 +262,7 @@ impl TxPowerManager {
             if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
                 let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
                 if mgr.set_tx_power(interface, power_setting).is_ok() {
-                    log::debug!(
-                        "Set TX power on {} to {} dBm using netlink",
-                        interface, dbm
-                    );
+                    log::debug!("Set TX power on {} to {} dBm using netlink", interface, dbm);
                     return Ok(());
                 }
             }

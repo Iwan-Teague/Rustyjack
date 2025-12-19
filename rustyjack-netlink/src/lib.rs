@@ -59,11 +59,11 @@ pub mod hostapd;
 pub mod interface;
 #[cfg(target_os = "linux")]
 pub mod iptables;
+pub mod logging;
 #[cfg(target_os = "linux")]
 pub mod networkmanager;
 #[cfg(target_os = "linux")]
 pub mod process;
-pub mod logging;
 #[cfg(target_os = "linux")]
 pub mod rfkill;
 #[cfg(target_os = "linux")]
@@ -91,7 +91,6 @@ pub use dhcp::{DhcpClient, DhcpLease};
 pub use dhcp_server::{DhcpConfig, DhcpError, DhcpLease as DhcpServerLease, DhcpServer};
 #[cfg(target_os = "linux")]
 pub use dns_server::{DnsConfig, DnsError, DnsRule, DnsServer};
-pub use logging::init_journald_logger;
 #[cfg(target_os = "linux")]
 pub use hostapd::{
     generate_pmk, AccessPoint, ApClient, ApConfig, ApSecurity, ApStats, HardwareMode, WpaState,
@@ -100,6 +99,7 @@ pub use hostapd::{
 pub use interface::{AddressInfo, InterfaceInfo, InterfaceManager};
 #[cfg(target_os = "linux")]
 pub use iptables::{Chain, IptablesError, IptablesManager, Protocol, Rule, Table, Target};
+pub use logging::init_journald_logger;
 #[cfg(target_os = "linux")]
 pub use networkmanager::{AccessPoint as NmAccessPoint, NetworkManagerClient, NmDeviceState};
 #[cfg(target_os = "linux")]
