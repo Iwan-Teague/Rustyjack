@@ -121,6 +121,116 @@ EOF
   sudo systemctl restart NetworkManager.service 2>/dev/null || true
 }
 
+# ---- 1: locate active config.txt ----------------------------
+CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
+if [ ! -f "$CFG" ]; then
+  sudo mkdir -p "$(dirname "$CFG")"
+  echo "# Rustyjack config (created by installer)" | sudo tee "$CFG" >/dev/null
+fi
+info "Using config file: $CFG"
+add_dtparam() {
+  local param="$1"
+  if grep -qE "^#?\s*${param%=*}=on" "$CFG"; then
+    sudo sed -Ei "s|^#?\s*${param%=*}=.*|${param%=*}=on|" "$CFG"
+  else
+    echo "$param" | sudo tee -a "$CFG" >/dev/null
+  fi
+}
+
+# ---- 2: install / upgrade required APT packages -------------
+PACKAGES=(
+  # WiFi interface tools
+  # - wireless-tools: legacy WiFi tools (iwconfig, etc.) - needed by some scripts
+  # - wpasupplicant: provides wpa_supplicant daemon and wpa_cli for WPA auth fallback
+  # - network-manager: provides NetworkManager daemon for D-Bus WiFi management
+  wireless-tools wpasupplicant network-manager
+  # networking tools
+  iproute2 isc-dhcp-client iw hostapd dnsmasq rfkill
+  # misc
+  git i2c-tools curl
+)
+
+# Optional firmware bundles (may require non-free-firmware repo on Debian)
+FIRMWARE_PACKAGES=(
+  firmware-linux-nonfree firmware-realtek firmware-atheros firmware-ralink firmware-misc-nonfree
+)
+
+step "Updating APT and installing dependencies..."
+if ! sudo apt-get update -qq; then
+  fail "APT update failed. Ensure no other package manager is running and rerun."
+fi
+
+INSTALL_PACKAGES=("${PACKAGES[@]}")
+available_firmware=()
+missing_firmware=()
+for pkg in "${FIRMWARE_PACKAGES[@]}"; do
+  if apt-cache show "$pkg" >/dev/null 2>&1; then
+    available_firmware+=("$pkg")
+  else
+    missing_firmware+=("$pkg")
+  fi
+done
+if ((${#available_firmware[@]})); then
+  INSTALL_PACKAGES+=("${available_firmware[@]}")
+fi
+if ((${#missing_firmware[@]})); then
+  warn "Skipping unavailable firmware packages: ${missing_firmware[*]}"
+  warn "Enable 'non-free-firmware' in /etc/apt/sources.list on Debian 12+ if needed."
+fi
+
+to_install=()
+install_plan=""
+if install_plan=$(sudo apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}" 2>/dev/null); then
+  to_install=($(echo "$install_plan" | awk '/^Inst/ {print $2}'))
+  if ((${#to_install[@]})); then
+    info "Will install/upgrade: ${to_install[*]}"
+    if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+      if ((${#available_firmware[@]})); then
+        warn "APT install failed; retrying without firmware bundles"
+        INSTALL_PACKAGES=("${PACKAGES[@]}")
+        sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed. Check output above."
+      else
+        fail "APT install failed. Check output above."
+      fi
+    fi
+  else
+    info "All packages already installed and up-to-date."
+  fi
+else
+  warn "APT dry-run failed; attempting full install..."
+  if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+    if ((${#available_firmware[@]})); then
+      warn "APT install failed; retrying without firmware bundles"
+      INSTALL_PACKAGES=("${PACKAGES[@]}")
+      sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed."
+    else
+      fail "APT install failed. Check output above."
+    fi
+  fi
+fi
+
+# ---- 3: enable I2C / SPI & kernel modules -------------------
+step "Enabling I2C and SPI..."
+add_dtparam dtparam=i2c_arm=on
+add_dtparam dtparam=i2c1=on
+add_dtparam dtparam=spi=on
+add_dtparam dtparam=wifi=on
+
+MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
+for m in "${MODULES[@]}"; do
+  grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
+  sudo modprobe "$m" || true
+done
+
+# ensure overlay spi0-2cs
+grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
+
+# Ensure buttons use internal pull-ups
+if ! grep -q "^gpio=6,19,5,26,13,21,20,16=pu" "$CFG" ; then
+  echo 'gpio=6,19,5,26,13,21,20,16=pu' | sudo tee -a "$CFG" >/dev/null
+  info "Pinned button GPIOs to pull-ups in $CFG"
+fi
+
 # Start
 bootstrap_resolvers
 
@@ -156,12 +266,15 @@ fi
 step "Stopping existing service (if any)..."
 sudo systemctl stop rustyjack.service 2>/dev/null || true
 
+step "Removing old binary (if present)..."
+sudo rm -f /usr/local/bin/$BINARY_NAME
+
 step "Installing prebuilt binary to /usr/local/bin/"
 sudo install -Dm755 "$PREBUILT_BIN" /usr/local/bin/$BINARY_NAME || fail "Failed to install binary"
 
 # Create necessary directories
 step "Creating runtime directories"
-sudo mkdir -p "$PROJECT_ROOT/loot"/ {Wireless,Ethernet,reports} 2>/dev/null || true
+sudo mkdir -p "$PROJECT_ROOT/loot"/{Wireless,Ethernet,reports} 2>/dev/null || true
 sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles" 2>/dev/null || true
 sudo chmod 755 "$PROJECT_ROOT/wifi/profiles" 2>/dev/null || true
@@ -238,6 +351,38 @@ if [ -x /usr/local/bin/$BINARY_NAME ]; then
   info "[OK] Prebuilt Rust binary installed: $BINARY_NAME"
 else
   fail "[X] Binary missing or not executable at /usr/local/bin/$BINARY_NAME"
+fi
+
+# Health-check: hardware
+step "Running post install checks..."
+
+if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then
+  info "[OK] SPI device found"
+else
+  warn "[X] SPI device NOT found - reboot may be required"
+fi
+
+if cmd iwconfig; then
+  info "[OK] Wireless tools found (legacy reference only)"
+else
+  warn "[X] wireless-tools missing (optional)"
+fi
+
+if cmd wpa_cli || cmd nmcli; then
+  info "[OK] WiFi control present (wpa_cli/nmcli) for client authentication"
+else
+  warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
+fi
+
+# rustyjack-netlink provides native implementations
+info "[OK] rustyjack-netlink provides native Rust implementations for:"
+info "     ip, rfkill, pgrep/pkill, hostapd, dnsmasq, dhclient,"
+info "     iptables, and ARP operations"
+
+if systemctl is-active --quiet rustyjack.service; then
+  info "[OK] Rustyjack service is running"
+else
+  warn "[X] Rustyjack service is not running"
 fi
 
 info "Prebuilt installation finished. Reboot is recommended."
