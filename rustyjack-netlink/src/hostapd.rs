@@ -661,7 +661,7 @@ fn send_start_ap(
             false,
             false,
             NL80211_ATTR_BEACON_INTERVAL,
-            beacon_interval_tu as u32,
+            beacon_interval_tu,
         )
         .map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build beacon interval attr: {}", e))
@@ -709,7 +709,7 @@ fn send_start_ap(
         attrs.len()
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, 1, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, 0, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,
@@ -798,7 +798,7 @@ fn send_stop_ap(ifindex: u32) -> Result<()> {
         })?,
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, 1, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, 0, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,
