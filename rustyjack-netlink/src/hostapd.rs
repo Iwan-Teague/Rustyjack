@@ -77,6 +77,7 @@ const NL80211_ATTR_BEACON_TAIL: u16 = 55;
 const NL80211_ATTR_BEACON_INTERVAL: u16 = 74;
 const NL80211_ATTR_DTIM_PERIOD: u16 = 75;
 const NL80211_ATTR_WIPHY_FREQ: u16 = 38;
+const NL80211_ATTR_WIPHY_CHANNEL_TYPE: u16 = 39;
 const NL80211_ATTR_KEY_DATA: u16 = 13;
 const NL80211_ATTR_KEY_IDX: u16 = 10;
 const NL80211_ATTR_KEY_CIPHER: u16 = 12;
@@ -661,7 +662,7 @@ fn send_start_ap(
             false,
             false,
             NL80211_ATTR_BEACON_INTERVAL,
-            beacon_interval_tu,
+            beacon_interval_tu as u32,
         )
         .map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build beacon interval attr: {}", e))
@@ -701,6 +702,12 @@ fn send_start_ap(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_FREQ, freq).map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build freq attr: {}", e))
         })?,
+    );
+    // Force HT20 channel type to avoid ERANGE on drivers that require explicit channel type
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_CHANNEL_TYPE, 1u32).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build channel type attr: {}", e)),
+        )?,
     );
 
     log::debug!(
@@ -1498,6 +1505,17 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
     // Pairwise key
     {
+        log::debug!(
+            "Installing PTK for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (len={}) ifindex={}",
+            sta[0],
+            sta[1],
+            sta[2],
+            sta[3],
+            sta[4],
+            sta[5],
+            ptk.len(),
+            ifindex
+        );
         let mut attrs = GenlBuffer::new();
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
@@ -1554,6 +1572,11 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
     // Group key
     {
+        log::debug!(
+            "Installing GTK (idx=1, len={}) on ifindex {}",
+            gtk.len(),
+            ifindex
+        );
         let mut attrs = GenlBuffer::new();
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
@@ -1600,6 +1623,16 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
     // Authorize station
     {
+        log::debug!(
+            "Authorizing station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} on ifindex {}",
+            sta[0],
+            sta[1],
+            sta[2],
+            sta[3],
+            sta[4],
+            sta[5],
+            ifindex
+        );
         let mut attrs = GenlBuffer::new();
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
