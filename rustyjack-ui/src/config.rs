@@ -245,6 +245,12 @@ pub struct SettingsConfig {
     /// Auto-randomize MAC before attacks
     #[serde(default)]
     pub mac_randomization_enabled: bool,
+    /// Use a stable randomized MAC per network
+    #[serde(default)]
+    pub per_network_mac_enabled: bool,
+    /// Stored per-network MACs (interface -> SSID -> MAC)
+    #[serde(default)]
+    pub per_network_macs: HashMap<String, HashMap<String, String>>,
     /// Per-interface original MAC addresses (saved when randomized)
     #[serde(default)]
     pub original_macs: HashMap<String, String>,
@@ -289,6 +295,8 @@ impl Default for SettingsConfig {
             encrypt_wifi_profiles: false,
             encryption_key_path: String::new(),
             mac_randomization_enabled: false,
+            per_network_mac_enabled: false,
+            per_network_macs: HashMap::new(),
             original_macs: HashMap::new(),
             current_macs: HashMap::new(),
             hostname_randomization_enabled: false,

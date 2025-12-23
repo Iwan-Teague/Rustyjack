@@ -833,6 +833,14 @@ impl App {
                     };
                     entry.label = format!("Auto MAC [{}]", state);
                 }
+                MenuAction::TogglePerNetworkMac => {
+                    let state = if self.config.settings.per_network_mac_enabled {
+                        "ON"
+                    } else {
+                        "OFF"
+                    };
+                    entry.label = format!("Per-Network MAC [{}]", state);
+                }
                 MenuAction::ToggleHostnameRandomization => {
                     let state = if self.config.settings.hostname_randomization_enabled {
                         "ON"
@@ -1019,6 +1027,7 @@ impl App {
                 }
             }
             MenuAction::ToggleMacRandomization => self.toggle_mac_randomization()?,
+            MenuAction::TogglePerNetworkMac => self.toggle_per_network_mac()?,
             MenuAction::ToggleHostnameRandomization => self.toggle_hostname_randomization()?,
             MenuAction::RandomizeMacNow => self.randomize_mac_now()?,
             MenuAction::SetVendorMac => self.set_vendor_mac()?,
@@ -2056,6 +2065,7 @@ impl App {
             if self.wifi_encryption_active() && !used_key {
                 return Ok(());
             }
+            self.apply_identity_hardening(Some(ssid));
             // Scan to see if network is present
             let scan = self.fetch_wifi_scan().ok();
             let found = scan.as_ref().and_then(|resp| {
@@ -2150,7 +2160,7 @@ impl App {
             return Ok(());
         }
         let result = (|| {
-            self.apply_identity_hardening();
+            self.apply_identity_hardening(Some(ssid));
             self.show_progress("Wi-Fi", ["Connecting...", ssid, "Please wait"])?;
 
             let interface = if !self.config.settings.active_network_interface.is_empty() {
@@ -7993,6 +8003,49 @@ Do not remove power/USB",
         )
     }
 
+    fn toggle_per_network_mac(&mut self) -> Result<()> {
+        if self
+            .config
+            .settings
+            .operation_mode
+            .eq_ignore_ascii_case("stealth")
+        {
+            return self.show_message(
+                "Stealth Mode",
+                ["Per-network MAC locked while in Stealth mode"],
+            );
+        }
+
+        self.config.settings.per_network_mac_enabled =
+            !self.config.settings.per_network_mac_enabled;
+        let enabled = self.config.settings.per_network_mac_enabled;
+        self.bump_to_custom();
+
+        let config_path = self.root.join("gui_conf.json");
+        if let Err(e) = self.config.save(&config_path) {
+            return self.show_message("Config Error", [format!("Failed to save: {}", e)]);
+        }
+
+        let status = if enabled { "ENABLED" } else { "DISABLED" };
+        self.show_message(
+            "Per-Network MAC",
+            [
+                format!("Per-network MAC: {}", status),
+                "".to_string(),
+                if enabled {
+                    "Reuse the same MAC".to_string()
+                } else {
+                    "MAC will change".to_string()
+                },
+                if enabled {
+                    "for each SSID.".to_string()
+                } else {
+                    "between connections.".to_string()
+                },
+            ],
+        )
+    }
+
     fn toggle_hostname_randomization(&mut self) -> Result<()> {
         if self
             .config
@@ -8197,20 +8250,164 @@ Do not remove power/USB",
         }
     }
 
-    fn apply_identity_hardening(&mut self) {
+    fn apply_identity_hardening(&mut self, ssid: Option<&str>) {
         #[cfg(target_os = "linux")]
         {
-            let settings = self.config.settings.clone();
-            let active_interface = settings.active_network_interface.clone();
-            if settings.hostname_randomization_enabled {
+            let (active_interface, mac_randomization, per_network_mac, hostname_randomization) = {
+                let settings = &self.config.settings;
+                (
+                    settings.active_network_interface.clone(),
+                    settings.mac_randomization_enabled,
+                    settings.per_network_mac_enabled,
+                    settings.hostname_randomization_enabled,
+                )
+            };
+            if hostname_randomization {
                 let _ = self
                     .core
                     .dispatch(Commands::System(SystemCommand::RandomizeHostname));
             }
-            if settings.mac_randomization_enabled && !active_interface.is_empty() {
+            if active_interface.is_empty() {
+                return;
+            }
+
+            let ssid = ssid.unwrap_or("").trim();
+            if per_network_mac && !ssid.is_empty() {
+                let _ = self.apply_per_network_mac(&active_interface, ssid);
+                return;
+            }
+
+            if mac_randomization {
                 let _ = randomize_mac_with_reconnect(&active_interface);
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_per_network_mac(&mut self, interface: &str, ssid: &str) -> Result<()> {
+        use rustyjack_evasion::{MacAddress, MacManager};
+
+        let ssid = ssid.trim();
+        if ssid.is_empty() {
+            return Ok(());
+        }
+
+        let existing_mac = self
+            .config
+            .settings
+            .per_network_macs
+            .get(interface)
+            .and_then(|map| map.get(ssid))
+            .cloned();
+
+        let mut vendor_reused = false;
+        let target_mac = match existing_mac.as_deref() {
+            Some(mac_str) => match MacAddress::parse(mac_str) {
+                Ok(mac) => mac,
+                Err(e) => {
+                    log::warn!(
+                        "[MAC] invalid stored per-network MAC for {} on {}: {} ({})",
+                        ssid,
+                        interface,
+                        mac_str,
+                        e
+                    );
+                    let (mac, reused) = generate_vendor_aware_mac(interface)?;
+                    vendor_reused = reused;
+                    mac
+                }
+            },
+            None => {
+                let (mac, reused) = generate_vendor_aware_mac(interface)?;
+                vendor_reused = reused;
+                mac
+            }
+        };
+
+        let target_mac_str = target_mac.to_string();
+        if let Some(current) = self
+            .read_interface_mac(interface)
+            .and_then(|mac| MacAddress::parse(&mac).ok())
+        {
+            if current == target_mac {
+                let mut updated = false;
+                if self
+                    .config
+                    .settings
+                    .current_macs
+                    .get(interface)
+                    .map(|mac| mac.eq_ignore_ascii_case(&target_mac_str))
+                    .unwrap_or(false)
+                    == false
+                {
+                    self.config
+                        .settings
+                        .current_macs
+                        .insert(interface.to_string(), target_mac_str.clone());
+                    updated = true;
+                }
+
+                let stored_matches = self
+                    .config
+                    .settings
+                    .per_network_macs
+                    .get(interface)
+                    .and_then(|map| map.get(ssid))
+                    .map(|mac| mac.eq_ignore_ascii_case(&target_mac_str))
+                    .unwrap_or(false);
+                if !stored_matches {
+                    self.config
+                        .settings
+                        .per_network_macs
+                        .entry(interface.to_string())
+                        .or_insert_with(HashMap::new)
+                        .insert(ssid.to_string(), target_mac_str.clone());
+                    updated = true;
+                }
+
+                if updated {
+                    let _ = self.config.save(&self.root.join("gui_conf.json"));
+                }
+                return Ok(());
+            }
+        }
+
+        let mut manager = MacManager::new().context("creating MacManager")?;
+        manager.set_auto_restore(false);
+
+        let state = manager
+            .set_mac(interface, &target_mac)
+            .context("setting per-network MAC")?;
+        let reconnect_ok = renew_dhcp_and_reconnect(interface);
+
+        self.config
+            .settings
+            .original_macs
+            .entry(interface.to_string())
+            .or_insert_with(|| state.original_mac.to_string());
+        self.config
+            .settings
+            .current_macs
+            .insert(interface.to_string(), state.current_mac.to_string());
+        self.config
+            .settings
+            .per_network_macs
+            .entry(interface.to_string())
+            .or_insert_with(HashMap::new)
+            .insert(ssid.to_string(), state.current_mac.to_string());
+        let _ = self.config.save(&self.root.join("gui_conf.json"));
+
+        log::info!(
+            "[MAC] per-network MAC set on {} for {}: {} -> {} (vendor_reused={}, reconnect_ok={})",
+            interface,
+            ssid,
+            state.original_mac,
+            state.current_mac,
+            vendor_reused,
+            reconnect_ok
+        );
+
+        Ok(())
     }
 
     /// Toggle passive mode setting

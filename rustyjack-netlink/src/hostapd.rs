@@ -692,7 +692,7 @@ fn send_start_ap(
     beacon_head: &[u8],
     beacon_tail: &[u8],
     wpa_enabled: bool,
-    basic_rates: &[u8],
+    basic_rates: &[u32],
 ) -> Result<()> {
     let attempts = [
         (true, false, "chandef (channel_width + center_freq1)"),
@@ -756,7 +756,7 @@ fn send_start_ap_inner(
     include_channel_type: bool,
     include_channel_width: bool,
     wpa_enabled: bool,
-    basic_rates: &[u8],
+    basic_rates: &[u32],
 ) -> Result<()> {
     let freq = channel_to_frequency(channel)
         .ok_or_else(|| NetlinkError::InvalidInput(format!("Unsupported channel {}", channel)))?;
@@ -814,8 +814,14 @@ fn send_start_ap_inner(
         })?,
     );
     if !basic_rates.is_empty() {
+        let basic_rates_bytes = u32_list_bytes(basic_rates);
         attrs.push(
-            neli::genl::Nlattr::new(false, false, NL80211_ATTR_BSS_BASIC_RATES, basic_rates)
+            neli::genl::Nlattr::new(
+                false,
+                false,
+                NL80211_ATTR_BSS_BASIC_RATES,
+                basic_rates_bytes,
+            )
                 .map_err(|e| {
                     NetlinkError::OperationFailed(format!(
                         "Failed to build basic rates attr: {}",
@@ -1044,7 +1050,7 @@ fn build_beacon_frames(
     config: &ApConfig,
     bssid: [u8; 6],
     channel: u8,
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u32>)> {
     let mut head = Vec::new();
     // 802.11 beacon header
     head.extend_from_slice(&[0x80, 0x00]); // Frame control
@@ -1084,7 +1090,10 @@ fn build_beacon_frames(
             &[0x12, 0x24, 0x48, 0x60, 0x6c][..],
         )
     };
-    let basic_rates: Vec<u8> = supported_rates.iter().map(|rate| rate & 0x7f).collect();
+    let basic_rates: Vec<u32> = supported_rates
+        .iter()
+        .map(|rate| u32::from(rate & 0x7f) * 5)
+        .collect();
 
     // Supported rates IE
     head.push(1);

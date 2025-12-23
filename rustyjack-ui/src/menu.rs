@@ -54,6 +54,8 @@ pub enum MenuAction {
     AttackPipeline(PipelineType),
     /// Toggle MAC randomization on/off
     ToggleMacRandomization,
+    /// Toggle per-network MAC pinning on/off
+    TogglePerNetworkMac,
     /// Randomize MAC address now
     RandomizeMacNow,
     ImportWifiFromUsb,
@@ -404,6 +406,7 @@ fn obfuscation_menu() -> Vec<MenuEntry> {
 
 fn mac_menu() -> Vec<MenuEntry> {
     vec![
+        MenuEntry::new("Per-Network MAC: ???", MenuAction::TogglePerNetworkMac),
         MenuEntry::new("MAC Random: ???", MenuAction::ToggleMacRandomization),
         MenuEntry::new("Randomize Now", MenuAction::RandomizeMacNow),
         MenuEntry::new("Set Vendor MAC", MenuAction::SetVendorMac),

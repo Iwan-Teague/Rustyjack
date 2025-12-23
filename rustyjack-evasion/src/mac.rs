@@ -30,7 +30,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+#[cfg(target_os = "linux")]
+use std::future::Future;
 use std::str::FromStr;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
+#[cfg(target_os = "linux")]
+use std::thread;
 
 use crate::error::{EvasionError, Result};
 use crate::vendor::VendorOui;
@@ -498,14 +504,13 @@ impl MacManager {
 
         #[cfg(target_os = "linux")]
         {
-            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
-                EvasionError::System(format!("Failed to initialize netlink: {}", e))
-            })?;
+            let iface = interface.to_string();
+            self.run_with_runtime(move || async move {
+                let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                    EvasionError::System(format!("Failed to initialize netlink: {}", e))
+                })?;
 
-            let rt = Runtime::new()
-                .map_err(|e| EvasionError::System(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async {
-                mgr.set_link_down(interface).await.map_err(|e| {
+                mgr.set_link_down(&iface).await.map_err(|e| {
                     if e.to_string().contains("Operation not permitted")
                         || e.to_string().contains("Permission denied")
                     {
@@ -513,7 +518,7 @@ impl MacManager {
                     } else {
                         EvasionError::InterfaceError(format!(
                             "Failed to bring {} down: {}",
-                            interface, e
+                            iface, e
                         ))
                     }
                 })
@@ -532,16 +537,15 @@ impl MacManager {
 
         #[cfg(target_os = "linux")]
         {
-            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
-                EvasionError::System(format!("Failed to initialize netlink: {}", e))
-            })?;
+            let iface = interface.to_string();
+            self.run_with_runtime(move || async move {
+                let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                    EvasionError::System(format!("Failed to initialize netlink: {}", e))
+                })?;
 
-            let rt = Runtime::new()
-                .map_err(|e| EvasionError::System(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async {
-                mgr.set_link_up(interface)
-                    .await
-                    .map_err(|e| EvasionError::InterfaceError(format!("Failed to bring {} up: {}", interface, e)))
+                mgr.set_link_up(&iface).await.map_err(|e| {
+                    EvasionError::InterfaceError(format!("Failed to bring {} up: {}", iface, e))
+                })
             })
         }
     }
@@ -559,14 +563,13 @@ impl MacManager {
         #[cfg(target_os = "linux")]
         {
             let mac_str = mac.to_string();
-            let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
-                EvasionError::System(format!("Failed to initialize netlink: {}", e))
-            })?;
+            let iface = interface.to_string();
+            self.run_with_runtime(move || async move {
+                let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                    EvasionError::System(format!("Failed to initialize netlink: {}", e))
+                })?;
 
-            let rt = Runtime::new()
-                .map_err(|e| EvasionError::System(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async {
-                mgr.set_mac_address(interface, &mac_str).await.map_err(|e| {
+                mgr.set_mac_address(&iface, &mac_str).await.map_err(|e| {
                     if e.to_string().contains("Operation not permitted")
                         || e.to_string().contains("Permission denied")
                     {
@@ -574,7 +577,7 @@ impl MacManager {
                     } else {
                         EvasionError::InterfaceError(format!(
                             "Failed to set MAC on {}: {}",
-                            interface, e
+                            iface, e
                         ))
                     }
                 })
@@ -587,6 +590,33 @@ impl MacManager {
         let result = self.set_mac_raw(&state.interface, &state.original_mac);
         let _ = self.interface_up(&state.interface);
         result
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_with_runtime<F, Fut, T>(&self, op: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                let result = Runtime::new()
+                    .map_err(|e| EvasionError::System(format!("Failed to create runtime: {e}")))
+                    .and_then(|rt| rt.block_on(op()));
+                let _ = tx.send(result);
+            });
+            rx.recv().unwrap_or_else(|_| {
+                Err(EvasionError::System(
+                    "MAC runtime thread failed".to_string(),
+                ))
+            })
+        } else {
+            let rt = Runtime::new()
+                .map_err(|e| EvasionError::System(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(op())
+        }
     }
 }
 
