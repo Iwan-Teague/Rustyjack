@@ -10,6 +10,10 @@ use neli::{
     types::GenlBuffer,
 };
 use std::io;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -172,10 +176,12 @@ pub struct WirelessManager {
     socket: NlSocketHandle,
     family_id: u16,
     event_task: Option<std::thread::JoinHandle<()>>,
+    event_stop: Arc<AtomicBool>,
 }
 
 impl Drop for WirelessManager {
     fn drop(&mut self) {
+        self.event_stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.event_task.take() {
             handle.thread().unpark();
             let _ = handle.join();
@@ -183,9 +189,46 @@ impl Drop for WirelessManager {
     }
 }
 
-fn spawn_event_logger(_family_id: u16, mut sock: NlSocketHandle) -> std::thread::JoinHandle<()> {
-    thread::spawn(move || loop {
-        match sock.recv::<u16, Genlmsghdr<u8, u16>>() {
+fn set_recv_timeout(sock: &NlSocketHandle, timeout: Duration) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+
+        let fd = sock.as_raw_fd();
+        let tv = libc::timeval {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_usec: timeout.subsec_micros() as libc::suseconds_t,
+        };
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                &tv as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            )
+        };
+        if rc != 0 {
+            debug!(
+                "[WIFI] failed to set nl80211 recv timeout: {}",
+                io::Error::last_os_error()
+            );
+        }
+    }
+}
+
+fn spawn_event_logger(
+    _family_id: u16,
+    mut sock: NlSocketHandle,
+    stop: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    thread::spawn(move || {
+        set_recv_timeout(&sock, Duration::from_millis(200));
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            match sock.recv::<u16, Genlmsghdr<u8, u16>>() {
             Ok(Some(msg)) => {
                 let nl_type = msg.nl_type;
                 match msg.nl_payload {
@@ -254,10 +297,15 @@ fn spawn_event_logger(_family_id: u16, mut sock: NlSocketHandle) -> std::thread:
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 debug!("[WIFI] nl80211 event recv error: {}", e);
                 thread::sleep(Duration::from_millis(200));
             }
         }
+        }
+        debug!("[WIFI] nl80211 event logger stopped");
     })
 }
 
@@ -291,12 +339,18 @@ impl WirelessManager {
             NetlinkError::ConnectionFailed(format!("Failed to create nl80211 logger socket: {}", e))
         })?;
         let _ = logger_socket.add_mcast_membership(&[family_id as u32]);
-        let event_task = Some(spawn_event_logger(family_id, logger_socket));
+        let event_stop = Arc::new(AtomicBool::new(false));
+        let event_task = Some(spawn_event_logger(
+            family_id,
+            logger_socket,
+            Arc::clone(&event_stop),
+        ));
 
         Ok(Self {
             socket,
             family_id,
             event_task,
+            event_stop,
         })
     }
 
