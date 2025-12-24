@@ -9,7 +9,7 @@ Pure-Rust networking stack replacing common external binaries on Linux. Provides
 - AP: hostapd-equivalent logic in Rust for starting/stopping APs.
 - DHCP: `dhcp.rs` (client) replacing `dhclient`; `dhcp_server.rs` replacing `dnsmasq` DHCP.
 - DNS: `dns_server.rs` replacing `dnsmasq` DNS (wildcard spoof, exact match, passthrough).
-- iptables/netfilter: `iptables.rs` for NAT/forwarding rules.
+- iptables/netfilter: `iptables.rs` for NAT/forwarding rules via nf_tables netlink.
 - NetworkManager D-Bus: `networkmanager.rs` replacing `nmcli` calls.
 - rfkill/process helpers; ARP operations; USB detection helpers.
 
@@ -39,7 +39,7 @@ Pure-Rust networking stack replacing common external binaries on Linux. Provides
 - `dhcp.rs`: DHCP client implementation (DISCOVER/OFFER/REQUEST/ACK flow, interface config, DNS writes). Used to replace `dhclient`.
 - `dhcp_server.rs`: DHCP server implementation (offer/ack handling, lease tracking, running flag, background serve loop). Replaces dnsmasq DHCP.
 - `dns_server.rs`: DNS server implementation with wildcard/exact-match/passthrough, spoofing, and upstream handling. Replaces dnsmasq DNS.
-- `iptables.rs`: iptables rule management (NAT/forwarding chains, rule insert/remove); requires root and iptables binary availability.
+- `iptables.rs`: iptables-style rule management (NAT/forwarding chains, rule insert/remove) via nf_tables netlink; requires root/CAP_NET_ADMIN.
 - `networkmanager.rs`: D-Bus client for NetworkManager (device managed/unmanaged, connect/disconnect/reconnect Wi‑Fi, status queries) replacing `nmcli` subprocess calls.
 - `rfkill.rs`: rfkill state/query/block/unblock helpers via sysfs; replaces `rfkill` binary.
 - `process.rs`: process listing/pgrep/pkill equivalents and helper utilities.

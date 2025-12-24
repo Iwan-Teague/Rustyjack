@@ -65,6 +65,7 @@ use once_cell::sync::Lazy;
 
 // Minimal nl80211 constants needed for START_AP/STOP_AP
 const NL80211_GENL_NAME: &str = "nl80211";
+const NL80211_GENL_VERSION: u8 = 1;
 const NL80211_CMD_START_AP: u8 = 95;
 const NL80211_CMD_STOP_AP: u8 = 96;
 const NL80211_CMD_NEW_KEY: u8 = 26;
@@ -1072,7 +1073,7 @@ fn send_start_ap_inner(
         attrs.len()
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, 0, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, NL80211_GENL_VERSION, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,
@@ -1167,7 +1168,7 @@ fn send_stop_ap(ifindex: u32) -> Result<()> {
         })?,
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, 0, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_STOP_AP, NL80211_GENL_VERSION, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,
@@ -2573,7 +2574,7 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
             })?,
         );
 
-        let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, 1, attrs);
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, NL80211_GENL_VERSION, attrs);
         let nlhdr = Nlmsghdr::new(
             None,
             family_id,
@@ -2624,7 +2625,7 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
                 })?,
         );
 
-        let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, 1, attrs);
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_NEW_KEY, NL80211_GENL_VERSION, attrs);
         let nlhdr = Nlmsghdr::new(
             None,
             family_id,
@@ -2676,7 +2677,7 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
             )?,
         );
 
-        let genlhdr = Genlmsghdr::new(NL80211_CMD_SET_STATION, 1, attrs);
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_SET_STATION, NL80211_GENL_VERSION, attrs);
         let nlhdr = Nlmsghdr::new(
             None,
             family_id,
@@ -2715,7 +2716,7 @@ fn deauth_station(ifindex: u32, sta: &[u8; 6]) -> Result<()> {
         })?,
     );
 
-    let genlhdr = Genlmsghdr::new(NL80211_CMD_DEL_STATION, 1, attrs);
+    let genlhdr = Genlmsghdr::new(NL80211_CMD_DEL_STATION, NL80211_GENL_VERSION, attrs);
     let nlhdr = Nlmsghdr::new(
         None,
         family_id,

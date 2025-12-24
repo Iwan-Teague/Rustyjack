@@ -1,6 +1,6 @@
 # Hotspot Implementation: Pure Rust, No External Binaries
 
-## Answer: YES, it's 100% in-house Rust code! 🎉
+## Answer: YES, it's 100% in-house Rust code.
 
 The hotspot feature uses **pure Rust implementations** and does **NOT** rely on any 3rd party software binaries like `hostapd`, `dnsmasq`, or `dhcpd`.
 
@@ -12,12 +12,12 @@ The hotspot feature uses **pure Rust implementations** and does **NOT** rely on 
 
 | Component | Implementation | Location | External Binary? |
 |-----------|---------------|----------|------------------|
-| **Access Point (AP)** | Pure Rust nl80211 | `rustyjack-netlink/src/hostapd.rs` | ❌ NO |
-| **DHCP Server** | Pure Rust RFC 2131 | `rustyjack-netlink/src/dhcp_server.rs` | ❌ NO |
-| **DNS Server** | Pure Rust RFC 1035 | `rustyjack-netlink/src/dns_server.rs` | ❌ NO |
-| **Interface Config** | Pure Rust netlink | `rustyjack-netlink/src/interface.rs` | ❌ NO |
-| **RF-Kill Control** | Pure Rust | `rustyjack-netlink/src/rfkill.rs` | ❌ NO |
-| **Iptables/NAT** | Pure Rust | `rustyjack-netlink/src/iptables.rs` | ❌ NO |
+| **Access Point (AP)** | Pure Rust nl80211 | `rustyjack-netlink/src/hostapd.rs` | NO |
+| **DHCP Server** | Pure Rust RFC 2131 | `rustyjack-netlink/src/dhcp_server.rs` | NO |
+| **DNS Server** | Pure Rust RFC 1035 | `rustyjack-netlink/src/dns_server.rs` | NO |
+| **Interface Config** | Pure Rust netlink | `rustyjack-netlink/src/interface.rs` | NO |
+| **RF-Kill Control** | Pure Rust | `rustyjack-netlink/src/rfkill.rs` | NO |
+| **Netfilter/NAT** | Pure Rust | `rustyjack-netlink/src/iptables.rs` | NO |
 
 ### Technical Details
 
@@ -73,7 +73,7 @@ The hotspot feature uses **pure Rust implementations** and does **NOT** rely on 
 - Unblock wireless devices
 - No `rfkill` binary required
 
-#### 6. Iptables/NAT (Replaces `iptables`)
+#### 6. Netfilter/NAT (Replaces `iptables`)
 **File**: `rustyjack-netlink/src/iptables.rs`
 
 - Uses **nftables** netlink API
@@ -115,7 +115,7 @@ use rustyjack_netlink::{
     DnsRule,
     DnsServer,     // Pure Rust DNS
     InterfaceMode,
-    IptablesManager, // Pure Rust iptables
+    IptablesManager, // Pure Rust netfilter
 };
 ```
 
@@ -131,10 +131,10 @@ Some **other** Rustyjack features (not the hotspot) still use external binaries:
 
 | Feature | Uses External Binary | Which One? | Why? |
 |---------|---------------------|------------|------|
-| **Hotspot** | ❌ NO | None | ✅ Pure Rust |
-| Evil Twin | ✅ YES | `hostapd`, `dnsmasq` | Legacy implementation |
-| Karma Attack | ✅ YES | `hostapd`, `dnsmasq` | Legacy implementation |
-| Some WiFi queries | ✅ YES | `iw` | Fallback for nl80211 |
+| **Hotspot** | NO | None | Pure Rust |
+| Evil Twin | YES | `hostapd`, `dnsmasq` | Legacy implementation |
+| Karma Attack | YES | `hostapd`, `dnsmasq` | Legacy implementation |
+| Some WiFi queries | YES | `iw` | Fallback for nl80211 |
 
 ### Why the Difference?
 
@@ -151,22 +151,22 @@ The **Evil Twin and Karma** features still use external `hostapd`/`dnsmasq` but 
 
 ## Summary
 
-### Hotspot Feature: 100% Pure Rust ✅
+### Hotspot Feature: 100% Pure Rust
 
 **No external binaries used**:
-- ❌ No `hostapd`
-- ❌ No `dnsmasq`
-- ❌ No `dhcpd`
-- ❌ No `ip` command
-- ❌ No `rfkill` command
-- ❌ No `iptables` command
+- No `hostapd`
+- No `dnsmasq`
+- No `dhcpd`
+- No `ip` command
+- No `rfkill` command
+- No `iptables` command
 
 **Everything is in-house Rust code** that talks directly to the Linux kernel via:
 - nl80211 (wireless)
 - rtnetlink (networking)
 - rfkill device (wireless kill switch)
 - raw sockets (DHCP/DNS)
-- netfilter (iptables/NAT)
+- netfilter (nftables/NAT)
 
 ### Benefits of Pure Rust Implementation
 
@@ -216,4 +216,4 @@ sudo lsof -p $(pgrep rustyjack-ui) | grep -E "UDP|TCP"
 - Replaces `dnsmasq`/`dhcpd` with pure Rust DHCP/DNS servers
 - Uses kernel APIs directly via netlink
 
-This makes Rustyjack's hotspot feature **completely self-contained** and independent of system packages. The fixes we applied today improve this already-robust pure Rust implementation! 🦀
+This makes Rustyjack's hotspot feature **completely self-contained** and independent of system packages. The fixes we applied today improve this already-robust pure Rust implementation.
