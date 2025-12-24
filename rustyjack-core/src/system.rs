@@ -33,9 +33,12 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
-use log::{debug, info};
+use log::debug;
 use regex::Regex;
 use reqwest::blocking::{multipart, Client};
 use serde::{Deserialize, Serialize};
@@ -43,7 +46,7 @@ use serde_json::{json, Map, Value};
 use zeroize::Zeroize;
 
 use rustyjack_netlink::wireless::{InterfaceMode, WirelessManager};
-use rustyjack_netlink::{WpaManager, WpaNetworkConfig};
+use rustyjack_netlink::{StationConfig, StationManager};
 
 use crate::netlink_helpers::{
     netlink_set_interface_down, netlink_set_interface_up, process_kill_pattern, process_running,
@@ -1920,6 +1923,7 @@ pub fn save_wifi_profile(root: &Path, profile: &WifiProfile) -> Result<PathBuf> 
     let dir = wifi_profiles_dir(root);
     fs::create_dir_all(&dir)
         .with_context(|| format!("creating WiFi profiles directory at {}", dir.display()))?;
+    harden_dir_permissions(&dir);
 
     let mut to_save = profile.clone();
     let now = Local::now().to_rfc3339();
@@ -2058,9 +2062,6 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
 }
 
 pub fn write_wifi_profile(path: &Path, profile: &WifiProfile) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let mut json = serde_json::to_string_pretty(profile)?;
     let encrypt_profiles = path
         .extension()
@@ -2074,9 +2075,10 @@ pub fn write_wifi_profile(path: &Path, profile: &WifiProfile) -> Result<()> {
             json.zeroize();
             bail!("WiFi profile encryption active but no key loaded");
         }
-        rustyjack_encryption::encrypt_to_file(path, json.as_bytes())?;
+        let data = rustyjack_encryption::encrypt_bytes(json.as_bytes())?;
+        write_private_file(path, &data)?;
     } else {
-        fs::write(path, json.as_bytes())?;
+        write_private_file(path, json.as_bytes())?;
     }
     json.zeroize();
     Ok(())
@@ -2161,66 +2163,26 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         );
     }
 
-    // Build WPA config and connect
-    let wpa_cfg = WpaNetworkConfig {
+    let station = StationManager::new(interface)
+        .with_context(|| format!("Failed to open supplicant control for {}", interface))?;
+    let station_cfg = StationConfig {
         ssid: ssid.to_string(),
-        psk: password.map(|p| p.to_string()),
-        scan_ssid: true,
-        priority: 0,
-        key_mgmt: "WPA-PSK".to_string(),
+        password: password.map(|p| p.to_string()),
+        force_scan_ssid: true,
+        ..StationConfig::default()
     };
 
-    let wpa = WpaManager::new(interface)
-        .with_context(|| format!("Failed to open wpa_supplicant control for {}", interface))?;
-
-    // Remove any stale networks to avoid conflicts
-    if let Err(e) = wpa.disconnect() {
-        debug!(
-            "[WIFI] Disconnect before connect returned error (may already be disconnected): {}",
-            e
-        );
-    }
-    // Best-effort removal of any existing networks by listing and deleting
-    if let Ok(networks) = wpa.list_networks() {
-        for net in networks {
-            if let Some(id_str) = net.get("id") {
-                if let Ok(id) = id_str.parse::<u32>() {
-                    info!(
-                        "[WIFI] Removing stale network id={} ssid={:?}",
-                        id,
-                        net.get("ssid")
-                    );
-                    let _ = wpa.remove_network(id);
-                }
-            }
-        }
-    }
-
-    let net_id = wpa
-        .connect_network(&wpa_cfg)
-        .with_context(|| format!("Failed to configure WPA network for {}", ssid))?;
-
-    // Wait for WPA completion
-    match wpa.wait_for_connection(Duration::from_secs(20)) {
-        Ok(status) => {
-            log::info!(
-                "[WIFI] WPA connection completed: state={}, bssid={:?}, freq={:?}",
-                status.wpa_state,
-                status.bssid,
-                status.freq
-            );
-        }
-        Err(e) => {
-            let _ = wpa.disconnect();
-            let _ = wpa.remove_network(net_id);
-            bail!(
-                "[WIFI] WPA connection failed for {} on {}: {}",
-                ssid,
-                interface,
-                e
-            );
-        }
-    }
+    let outcome = station
+        .connect(&station_cfg)
+        .with_context(|| format!("Failed to connect to {} via supplicant", ssid))?;
+    log::info!(
+        "[WIFI] Station connection completed: state={:?} bssid={:?} freq={:?} attempts={} scan_ssid={}",
+        outcome.final_state,
+        outcome.selected_bssid,
+        outcome.selected_freq,
+        outcome.attempts,
+        outcome.used_scan_ssid
+    );
 
     log::info!("[WIFI] WPA connection successful, requesting DHCP lease...");
 
@@ -2394,6 +2356,41 @@ pub fn read_wifi_link_info(interface: &str) -> WifiLinkInfo {
 
 fn wifi_profiles_dir(root: &Path) -> PathBuf {
     root.join("wifi").join("profiles")
+}
+
+fn harden_dir_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+}
+
+fn write_private_file(path: &Path, data: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        harden_dir_permissions(parent);
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    use std::io::Write;
+    file.write_all(data)
+        .with_context(|| format!("writing {}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(())
 }
 
 fn sanitize_profile_name(input: &str) -> String {

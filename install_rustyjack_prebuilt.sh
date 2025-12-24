@@ -277,7 +277,7 @@ step "Creating runtime directories"
 sudo mkdir -p "$PROJECT_ROOT/loot"/{Wireless,Ethernet,reports} 2>/dev/null || true
 sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles" 2>/dev/null || true
-sudo chmod 755 "$PROJECT_ROOT/wifi/profiles" 2>/dev/null || true
+sudo chmod 700 "$PROJECT_ROOT/wifi/profiles" 2>/dev/null || true
 
 # Copy helper scripts
 step "Installing helper scripts"
@@ -307,6 +307,7 @@ if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then
   "notes": "Sample WiFi profile - edit with your network details"
 }
 PROFILE
+  sudo chmod 600 "$PROJECT_ROOT/wifi/profiles/sample.json" 2>/dev/null || true
   info "Created sample WiFi profile"
 fi
 
@@ -377,7 +378,7 @@ fi
 # rustyjack-netlink provides native implementations
 info "[OK] rustyjack-netlink provides native Rust implementations for:"
 info "     ip, rfkill, pgrep/pkill, hostapd, dnsmasq, dhclient,"
-info "     iptables, and ARP operations"
+info "     nf_tables, and ARP operations"
 
 if systemctl is-active --quiet rustyjack.service; then
   info "[OK] Rustyjack service is running"

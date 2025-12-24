@@ -174,16 +174,11 @@ All methods return `Result<T, IptablesError>` with context about what failed and
 
 ## Implementation Notes
 
-### Why Not Pure Netlink?
+### nf_tables Backend
 
-While netfilter does have netlink interfaces (`nfnetlink`), the current implementation uses the `iptables` binary as a backend because:
-
-1. **Stability**: The iptables CLI is stable and well-tested
-2. **Compatibility**: Works across kernel versions without complex netlink protocol handling
-3. **Simplicity**: Easier to maintain than raw nfnetlink implementation
-4. **Feature Coverage**: Full access to all iptables features
-
-Future enhancement: Direct nfnetlink implementation for zero binary dependencies.
+Rustyjack now uses a pure Rust nf_tables (nftables) netlink backend for firewall/NAT rules.
+The `iptables` binary is no longer required; rules are assembled in Rust and sent directly
+to the kernel via NETLINK_NETFILTER.
 
 ### Error Recovery
 

@@ -1,7 +1,8 @@
-//! Pure Rust implementation of iptables/netfilter functionality
+//! Pure Rust implementation of iptables-like netfilter functionality
 //!
-//! This module provides a native Rust interface to Linux netfilter (iptables)
-//! using netlink sockets. It eliminates the need for the external `iptables` binary.
+//! This module provides a native Rust interface to Linux netfilter using the
+//! nf_tables netlink API (nftables). It eliminates the need for the external
+//! `iptables` binary while preserving the existing Rustyjack API.
 //!
 //! ## Supported Operations
 //!
@@ -10,6 +11,12 @@
 //! - Mangle rules (TCPMSS)
 //! - Flushing chains
 //! - Rule insertion and deletion
+//!
+//! ## Logging
+//!
+//! Set `RUSTYJACK_NFTABLES_LOG=1` to enable packet logging for high-level
+//! helper rules (masquerade/forward/DNAT/TCPMSS). Logs include a `[NFTABLE]`
+//! prefix and appear in journalctl.
 //!
 //! ## Example
 //!
@@ -32,9 +39,16 @@
 //! ```
 
 #[allow(dead_code)]
+use std::env;
 use std::net::IpAddr;
-use std::process::Command;
+use std::sync::Mutex;
 use thiserror::Error;
+
+use self::nf_tables::NfTablesManager;
+
+#[cfg(target_os = "linux")]
+#[path = "nf_tables.rs"]
+mod nf_tables;
 
 #[derive(Debug, Error)]
 pub enum IptablesError {
@@ -50,6 +64,9 @@ pub enum IptablesError {
     #[error("Invalid port: {0}")]
     InvalidPort(String),
 
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
+
     #[error("Rule not found: {0}")]
     RuleNotFound(String),
 
@@ -58,6 +75,9 @@ pub enum IptablesError {
 
     #[error("Insufficient permissions (requires root/CAP_NET_ADMIN)")]
     PermissionDenied,
+
+    #[error("Netfilter netlink error: {0}")]
+    NetlinkError(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -122,6 +142,7 @@ pub enum Target {
 }
 
 impl Target {
+    #[cfg(test)]
     fn as_str(&self) -> &str {
         match self {
             Target::Accept => "ACCEPT",
@@ -145,6 +166,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
+    #[cfg(test)]
     fn as_str(&self) -> &str {
         match self {
             Protocol::Tcp => "tcp",
@@ -169,6 +191,9 @@ pub struct Rule {
     dst_port: Option<u16>,
     state: Option<String>,
     target: Target,
+    counter: bool,
+    log_prefix: Option<String>,
+    log_level: Option<u32>,
 }
 
 impl Rule {
@@ -185,6 +210,9 @@ impl Rule {
             dst_port: None,
             state: None,
             target,
+            counter: false,
+            log_prefix: None,
+            log_level: None,
         }
     }
 
@@ -228,6 +256,22 @@ impl Rule {
         self
     }
 
+    pub fn counter(mut self) -> Self {
+        self.counter = true;
+        self
+    }
+
+    pub fn log_prefix(mut self, prefix: &str) -> Self {
+        self.log_prefix = Some(prefix.to_string());
+        self
+    }
+
+    pub fn log_level(mut self, level: u32) -> Self {
+        self.log_level = Some(level);
+        self
+    }
+
+    #[cfg(test)]
     fn to_args(&self, action: &str) -> Vec<String> {
         let mut args = vec![
             "-t".to_string(),
@@ -306,7 +350,12 @@ impl Rule {
 }
 
 /// Iptables manager for netfilter operations
-pub struct IptablesManager;
+pub struct IptablesManager {
+    backend: Mutex<NfTablesManager>,
+}
+
+const NFT_LOG_ENV: &str = "RUSTYJACK_NFTABLES_LOG";
+const NFT_LOG_PREFIX: &str = "[NFTABLE]";
 
 impl IptablesManager {
     /// Create a new iptables manager
@@ -322,72 +371,62 @@ impl IptablesManager {
             return Err(IptablesError::PermissionDenied);
         }
 
-        log::debug!("IptablesManager initialized with root privileges");
-        Ok(Self)
-    }
-
-    /// Execute an iptables command
-    fn execute(&self, args: &[String]) -> Result<()> {
-        log::debug!("Executing: iptables {}", args.join(" "));
-
-        let output = Command::new("iptables").args(args).output().map_err(|e| {
-            IptablesError::CommandFailed(format!("Failed to spawn iptables: {}", e))
+        let backend = NfTablesManager::new().map_err(|e| {
+            log::error!("Failed to initialize nf_tables backend: {}", e);
+            e
         })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("Iptables command failed: {}", stderr);
-            return Err(IptablesError::CommandFailed(stderr.to_string()));
-        }
+        log::debug!("IptablesManager initialized with nf_tables backend");
+        Ok(Self {
+            backend: Mutex::new(backend),
+        })
+    }
 
-        log::debug!("Iptables command succeeded");
-        Ok(())
+    fn with_backend<T>(&self, action: impl FnOnce(&mut NfTablesManager) -> Result<T>) -> Result<T> {
+        let mut backend = self.backend.lock().map_err(|_| {
+            IptablesError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "nf_tables backend lock poisoned",
+            ))
+        })?;
+        action(&mut backend)
+    }
+
+    fn logging_enabled() -> bool {
+        env::var(NFT_LOG_ENV)
+            .ok()
+            .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    }
+
+    fn with_visibility(rule: Rule, context: &str) -> Rule {
+        let mut rule = rule.counter();
+        if Self::logging_enabled() {
+            let prefix = format!("{NFT_LOG_PREFIX} {context}");
+            log::info!("{NFT_LOG_PREFIX} packet logging enabled for {}", context);
+            rule = rule.log_prefix(&prefix);
+        }
+        rule
     }
 
     /// Add a rule
     pub fn add_rule(&self, rule: &Rule) -> Result<()> {
-        let args = rule.to_args("-A");
-        self.execute(&args)
+        self.with_backend(|backend| backend.add_rule(rule))
     }
 
     /// Delete a rule
     pub fn delete_rule(&self, rule: &Rule) -> Result<()> {
-        let args = rule.to_args("-D");
-        self.execute(&args).or_else(|e| {
-            if e.to_string().contains("does a matching rule exist") {
-                log::warn!("Rule not found, treating as success");
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
+        self.with_backend(|backend| backend.delete_rule(rule))
     }
 
     /// Flush all rules in a chain
     pub fn flush_chain(&self, table: Table, chain: Chain) -> Result<()> {
-        let args = vec![
-            "-t".to_string(),
-            table.as_str().to_string(),
-            "-F".to_string(),
-            chain.as_str().to_string(),
-        ];
-        self.execute(&args).or_else(|e| {
-            log::warn!("Failed to flush chain {}: {}", chain.as_str(), e);
-            Ok(())
-        })
+        self.with_backend(|backend| backend.flush_chain(table, chain))
     }
 
     /// Flush all rules in a table
     pub fn flush_table(&self, table: Table) -> Result<()> {
-        let args = vec![
-            "-t".to_string(),
-            table.as_str().to_string(),
-            "-F".to_string(),
-        ];
-        self.execute(&args).or_else(|e| {
-            log::warn!("Failed to flush table {}: {}", table.as_str(), e);
-            Ok(())
-        })
+        self.with_backend(|backend| backend.flush_table(table))
     }
 
     /// Add NAT masquerading for an interface
@@ -411,8 +450,11 @@ impl IptablesManager {
     pub fn add_masquerade(&self, interface: &str) -> Result<()> {
         log::info!("Adding MASQUERADE rule for interface {}", interface);
 
-        let rule =
-            Rule::new(Table::Nat, Chain::Postrouting, Target::Masquerade).out_interface(interface);
+        let rule = Self::with_visibility(
+            Rule::new(Table::Nat, Chain::Postrouting, Target::Masquerade)
+                .out_interface(interface),
+            &format!("masquerade out={}", interface),
+        );
 
         self.add_rule(&rule)
     }
@@ -440,9 +482,12 @@ impl IptablesManager {
             out_iface
         );
 
-        let rule = Rule::new(Table::Filter, Chain::Forward, Target::Accept)
-            .in_interface(in_iface)
-            .out_interface(out_iface);
+        let rule = Self::with_visibility(
+            Rule::new(Table::Filter, Chain::Forward, Target::Accept)
+                .in_interface(in_iface)
+                .out_interface(out_iface),
+            &format!("forward accept {}->{}", in_iface, out_iface),
+        );
 
         self.add_rule(&rule)
     }
@@ -472,10 +517,13 @@ impl IptablesManager {
             out_iface
         );
 
-        let rule = Rule::new(Table::Filter, Chain::Forward, Target::Accept)
-            .in_interface(in_iface)
-            .out_interface(out_iface)
-            .connection_state("RELATED,ESTABLISHED");
+        let rule = Self::with_visibility(
+            Rule::new(Table::Filter, Chain::Forward, Target::Accept)
+                .in_interface(in_iface)
+                .out_interface(out_iface)
+                .connection_state("RELATED,ESTABLISHED"),
+            &format!("forward established {}->{}", in_iface, out_iface),
+        );
 
         self.add_rule(&rule)
     }
@@ -536,17 +584,20 @@ impl IptablesManager {
             .parse()
             .map_err(|_| IptablesError::InvalidAddress(to_addr.to_string()))?;
 
-        let rule = Rule::new(
-            Table::Nat,
-            Chain::Prerouting,
-            Target::Dnat {
-                to: addr,
-                port: Some(to_port),
-            },
-        )
-        .in_interface(in_iface)
-        .protocol(Protocol::Tcp)
-        .dst_port(dst_port);
+        let rule = Self::with_visibility(
+            Rule::new(
+                Table::Nat,
+                Chain::Prerouting,
+                Target::Dnat {
+                    to: addr,
+                    port: Some(to_port),
+                },
+            )
+            .in_interface(in_iface)
+            .protocol(Protocol::Tcp)
+            .dst_port(dst_port),
+            &format!("dnat {}:{}->{}:{}", in_iface, dst_port, to_addr, to_port),
+        );
 
         self.add_rule(&rule)
     }
@@ -595,7 +646,10 @@ impl IptablesManager {
     pub fn add_tcp_mss(&self, mss: u16) -> Result<()> {
         log::info!("Adding TCP MSS rule: {} bytes", mss);
 
-        let rule = Rule::new(Table::Mangle, Chain::Output, Target::TcpMss { mss });
+        let rule = Self::with_visibility(
+            Rule::new(Table::Mangle, Chain::Output, Target::TcpMss { mss }),
+            &format!("tcp mss {}", mss),
+        );
         self.add_rule(&rule)
     }
 

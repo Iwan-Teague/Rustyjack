@@ -43,6 +43,31 @@ const NL80211_ATTR_WIPHY_CHANNEL_TYPE: u16 = 39;
 const NL80211_ATTR_WIPHY_TX_POWER_SETTING: u16 = 58;
 const NL80211_ATTR_WIPHY_TX_POWER_LEVEL: u16 = 59;
 const NL80211_ATTR_SUPPORTED_IFTYPES: u16 = 32;
+const NL80211_ATTR_WIPHY_BANDS: u16 = 22;
+
+const NL80211_BAND_ATTR_FREQS: u16 = 1;
+const NL80211_BAND_ATTR_RATES: u16 = 2;
+const NL80211_BAND_ATTR_HT_MCS_SET: u16 = 3;
+const NL80211_BAND_ATTR_HT_CAPA: u16 = 4;
+const NL80211_BAND_ATTR_HT_AMPDU_FACTOR: u16 = 5;
+const NL80211_BAND_ATTR_HT_AMPDU_DENSITY: u16 = 6;
+const NL80211_FREQUENCY_ATTR_FREQ: u16 = 1;
+const NL80211_FREQUENCY_ATTR_DISABLED: u16 = 2;
+const NL80211_FREQUENCY_ATTR_NO_IR: u16 = 3;
+const NL80211_FREQUENCY_ATTR_RADAR: u16 = 4;
+const NL80211_FREQUENCY_ATTR_MAX_TX_POWER: u16 = 6;
+const NL80211_FREQUENCY_ATTR_DFS_STATE: u16 = 7;
+const NL80211_BITRATE_ATTR_RATE: u16 = 1;
+const NLA_TYPE_MASK: u16 = 0x3fff;
+
+#[allow(dead_code)]
+const NL80211_DFS_UNSET: u8 = 0;
+#[allow(dead_code)]
+const NL80211_DFS_USABLE: u8 = 1;
+#[allow(dead_code)]
+const NL80211_DFS_AVAILABLE: u8 = 2;
+#[allow(dead_code)]
+const NL80211_DFS_UNAVAILABLE: u8 = 3;
 
 // Interface types
 const NL80211_IFTYPE_ADHOC: u32 = 1;
@@ -169,6 +194,36 @@ pub struct PhyCapabilities {
     pub supports_ap: bool,
     pub supports_station: bool,
     pub supported_bands: Vec<String>,
+    pub band_info: Vec<BandInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BandInfo {
+    pub name: String,
+    pub frequencies: Vec<FrequencyInfo>,
+    /// Bitrates in 100 kbps units.
+    pub rates: Vec<u32>,
+    pub ht_capab: Option<u16>,
+    pub ht_ampdu_factor: Option<u8>,
+    pub ht_ampdu_density: Option<u8>,
+    pub ht_mcs_set: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FrequencyInfo {
+    pub freq: u32,
+    pub disabled: bool,
+    pub no_ir: bool,
+    pub radar: bool,
+    pub dfs_state: Option<u8>,
+    /// Max TX power in mBm (100 * dBm).
+    pub max_tx_power: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NlAttrSlice<'a> {
+    nla_type: u16,
+    payload: &'a [u8],
 }
 
 /// Wireless netlink manager
@@ -1011,8 +1066,10 @@ impl WirelessManager {
             supports_ap: false,
             supports_station: false,
             supported_bands: Vec::new(),
+            band_info: Vec::new(),
         };
 
+        let mut band_info = Vec::new();
         if let NlPayload::Payload(genlhdr) = &response.nl_payload {
             let attrs = genlhdr.get_attr_handle();
             for attr in attrs.iter() {
@@ -1038,9 +1095,26 @@ impl WirelessManager {
                             }
                         }
                     }
+                    NL80211_ATTR_WIPHY_BANDS => {
+                        for band_attr in Self::parse_nested_attrs(attr.payload().as_ref()) {
+                            if let Some(info) =
+                                Self::parse_band_info(band_attr.nla_type, band_attr.payload)
+                            {
+                                band_info.push(info);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
+        }
+
+        if !band_info.is_empty() {
+            let mut names: Vec<String> = band_info.iter().map(|b| b.name.clone()).collect();
+            names.sort();
+            names.dedup();
+            caps.supported_bands = names;
+            caps.band_info = band_info;
         }
 
         // If the kernel didn't enumerate any interface modes, fall back to the coarse flags.
@@ -1057,6 +1131,181 @@ impl WirelessManager {
         }
 
         Ok(caps)
+    }
+
+    fn parse_nested_attrs<'a>(payload: &'a [u8]) -> Vec<NlAttrSlice<'a>> {
+        let mut attrs = Vec::new();
+        let mut offset = 0;
+        while payload.len().saturating_sub(offset) >= 4 {
+            let header = &payload[offset..offset + 4];
+            let len = u16::from_ne_bytes([header[0], header[1]]) as usize;
+            let nla_type = u16::from_ne_bytes([header[2], header[3]]) & NLA_TYPE_MASK;
+            if len < 4 || offset + len > payload.len() {
+                break;
+            }
+            let data = &payload[offset + 4..offset + len];
+            attrs.push(NlAttrSlice {
+                nla_type,
+                payload: data,
+            });
+            let aligned = (len + 3) & !3;
+            if aligned == 0 {
+                break;
+            }
+            offset = offset.saturating_add(aligned);
+        }
+        attrs
+    }
+
+    fn parse_band_info(band_idx: u16, payload: &[u8]) -> Option<BandInfo> {
+        let band_attrs = Self::parse_nested_attrs(payload);
+        let mut freqs = Vec::new();
+        let mut rates = Vec::new();
+        let mut ht_capab = None;
+        let mut ht_ampdu_factor = None;
+        let mut ht_ampdu_density = None;
+        let mut ht_mcs_set = None;
+        for band_attr in band_attrs {
+            match band_attr.nla_type {
+                NL80211_BAND_ATTR_FREQS => freqs = Self::parse_band_frequencies(band_attr.payload),
+                NL80211_BAND_ATTR_RATES => rates = Self::parse_band_rates(band_attr.payload),
+                NL80211_BAND_ATTR_HT_CAPA => {
+                    if band_attr.payload.len() >= 2 {
+                        ht_capab = Some(u16::from_ne_bytes([
+                            band_attr.payload[0],
+                            band_attr.payload[1],
+                        ]));
+                    }
+                }
+                NL80211_BAND_ATTR_HT_AMPDU_FACTOR => {
+                    ht_ampdu_factor = band_attr.payload.first().copied();
+                }
+                NL80211_BAND_ATTR_HT_AMPDU_DENSITY => {
+                    ht_ampdu_density = band_attr.payload.first().copied();
+                }
+                NL80211_BAND_ATTR_HT_MCS_SET => {
+                    if band_attr.payload.len() >= 16 {
+                        ht_mcs_set = Some(band_attr.payload[..16].to_vec());
+                    }
+                }
+                _ => {}
+            }
+        }
+        freqs.sort_by_key(|f| f.freq);
+        freqs.dedup_by_key(|f| f.freq);
+        rates.sort_unstable();
+        rates.dedup();
+        if freqs.is_empty() && rates.is_empty() {
+            return None;
+        }
+        let name = Self::band_name_from_freqs(&freqs, band_idx);
+        Some(BandInfo {
+            name,
+            frequencies: freqs,
+            rates,
+            ht_capab,
+            ht_ampdu_factor,
+            ht_ampdu_density,
+            ht_mcs_set,
+        })
+    }
+
+    fn parse_band_frequencies(payload: &[u8]) -> Vec<FrequencyInfo> {
+        let mut freqs = Vec::new();
+        let entries = Self::parse_nested_attrs(payload);
+        for entry in entries {
+            let entry_attrs = Self::parse_nested_attrs(entry.payload);
+            let mut freq = None;
+            let mut info = FrequencyInfo {
+                freq: 0,
+                disabled: false,
+                no_ir: false,
+                radar: false,
+                dfs_state: None,
+                max_tx_power: None,
+            };
+            for attr in entry_attrs {
+                match attr.nla_type {
+                    NL80211_FREQUENCY_ATTR_FREQ => {
+                        if attr.payload.len() >= 4 {
+                            freq = Some(u32::from_ne_bytes([
+                                attr.payload[0],
+                                attr.payload[1],
+                                attr.payload[2],
+                                attr.payload[3],
+                            ]));
+                        }
+                    }
+                    NL80211_FREQUENCY_ATTR_DISABLED => {
+                        info.disabled = true;
+                    }
+                    NL80211_FREQUENCY_ATTR_NO_IR => {
+                        info.no_ir = true;
+                    }
+                    NL80211_FREQUENCY_ATTR_RADAR => {
+                        info.radar = true;
+                    }
+                    NL80211_FREQUENCY_ATTR_DFS_STATE => {
+                        if attr.payload.len() >= 4 {
+                            let raw = u32::from_ne_bytes([
+                                attr.payload[0],
+                                attr.payload[1],
+                                attr.payload[2],
+                                attr.payload[3],
+                            ]) as u8;
+                            info.dfs_state = Some(raw);
+                        } else if let Some(val) = attr.payload.first() {
+                            info.dfs_state = Some(*val);
+                        }
+                    }
+                    NL80211_FREQUENCY_ATTR_MAX_TX_POWER => {
+                        if attr.payload.len() >= 4 {
+                            info.max_tx_power = Some(u32::from_ne_bytes([
+                                attr.payload[0],
+                                attr.payload[1],
+                                attr.payload[2],
+                                attr.payload[3],
+                            ]));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(freq) = freq {
+                info.freq = freq;
+                freqs.push(info);
+            }
+        }
+        freqs
+    }
+
+    fn parse_band_rates(payload: &[u8]) -> Vec<u32> {
+        let mut rates = Vec::new();
+        let entries = Self::parse_nested_attrs(payload);
+        for entry in entries {
+            let entry_attrs = Self::parse_nested_attrs(entry.payload);
+            for attr in entry_attrs {
+                if attr.nla_type == NL80211_BITRATE_ATTR_RATE && attr.payload.len() >= 4 {
+                    rates.push(u32::from_ne_bytes([
+                        attr.payload[0],
+                        attr.payload[1],
+                        attr.payload[2],
+                        attr.payload[3],
+                    ]));
+                }
+            }
+        }
+        rates
+    }
+
+    fn band_name_from_freqs(freqs: &[FrequencyInfo], band_idx: u16) -> String {
+        if freqs.iter().any(|f| (2400..=2500).contains(&f.freq)) {
+            "2.4GHz".to_string()
+        } else if freqs.iter().any(|f| (4900..=6000).contains(&f.freq)) {
+            "5GHz".to_string()
+        } else {
+            format!("band{}", band_idx)
+        }
     }
 
     /// Convert channel number to frequency (MHz)

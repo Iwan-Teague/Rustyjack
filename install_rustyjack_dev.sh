@@ -400,7 +400,7 @@ sudo chmod -R 755 "$PROJECT_ROOT/loot"
 
 sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles"
-sudo chmod 755 "$PROJECT_ROOT/wifi/profiles"
+sudo chmod 700 "$PROJECT_ROOT/wifi/profiles"
 
 # Note: rfkill unblock and interface up operations now handled by rustyjack-netlink
 info "Network interface management delegated to rustyjack-netlink crate"
@@ -418,6 +418,7 @@ if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then
   "notes": "Sample WiFi profile - edit with your network details"
 }
 PROFILE
+  sudo chmod 600 "$PROJECT_ROOT/wifi/profiles/sample.json"
   info "Created sample WiFi profile"
 fi
 
@@ -484,7 +485,7 @@ fi
 # rustyjack-netlink replaces most external binaries
 info "[OK] rustyjack-netlink provides native Rust implementations for:"
 info "     ip, rfkill, pgrep/pkill, iw, hostapd, wpa_supplicant,"
-info "     iptables, dhclient, dnsmasq, and ARP operations"
+info "     nf_tables, dhclient, dnsmasq, and ARP operations"
 
 if [ -x /usr/local/bin/rustyjack-ui ]; then
   info "[OK] DEBUG binary installed: rustyjack-ui"

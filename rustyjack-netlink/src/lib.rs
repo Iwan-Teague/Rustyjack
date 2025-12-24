@@ -69,6 +69,8 @@ pub mod rfkill;
 #[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
+pub mod supplicant;
+#[cfg(target_os = "linux")]
 pub mod wireless;
 #[cfg(target_os = "linux")]
 pub mod wpa;
@@ -108,6 +110,8 @@ pub use process::{ProcessError, ProcessInfo, ProcessManager};
 pub use rfkill::{RfkillDevice, RfkillError, RfkillManager, RfkillType};
 #[cfg(target_os = "linux")]
 pub use route::{RouteInfo, RouteManager};
+#[cfg(target_os = "linux")]
+pub use supplicant::{StationConfig, StationManager, StationOutcome, StationState};
 #[cfg(target_os = "linux")]
 pub use wireless::{
     ChannelWidth, InterfaceMode, PhyCapabilities, TxPowerSetting, WirelessInfo, WirelessManager,

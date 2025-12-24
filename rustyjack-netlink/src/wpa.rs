@@ -97,6 +97,10 @@ pub struct WpaNetworkConfig {
     pub key_mgmt: String,
     pub scan_ssid: bool,
     pub priority: i32,
+    pub bssid: Option<String>,
+    pub proto: Option<String>,
+    pub pairwise: Option<String>,
+    pub group: Option<String>,
 }
 
 impl Default for WpaNetworkConfig {
@@ -107,8 +111,24 @@ impl Default for WpaNetworkConfig {
             key_mgmt: "WPA-PSK".to_string(),
             scan_ssid: false,
             priority: 0,
+            bssid: None,
+            proto: None,
+            pairwise: None,
+            group: None,
         }
     }
+}
+
+/// BSS details from wpa_supplicant
+#[derive(Debug, Clone)]
+pub struct BssInfo {
+    pub bssid: Option<String>,
+    pub freq: Option<u32>,
+    pub level: Option<i32>,
+    pub flags: Option<String>,
+    pub ssid: Option<String>,
+    pub ie: Option<Vec<u8>>,
+    pub beacon_ie: Option<Vec<u8>>,
 }
 
 impl WpaManager {
@@ -316,6 +336,56 @@ impl WpaManager {
         Ok(results)
     }
 
+    /// Query detailed BSS info for a given BSSID
+    ///
+    /// # Errors
+    /// Returns error if unable to retrieve or parse BSS details
+    pub fn bss(&self, bssid: &str) -> Result<BssInfo> {
+        if bssid.trim().is_empty() {
+            return Err(NetlinkError::Wpa("BSSID cannot be empty".to_string()));
+        }
+
+        let response = self.send_command(&format!("BSS {}", bssid))?;
+        let mut info = BssInfo {
+            bssid: None,
+            freq: None,
+            level: None,
+            flags: None,
+            ssid: None,
+            ie: None,
+            beacon_ie: None,
+        };
+
+        for line in response.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                match key {
+                    "bssid" => info.bssid = Some(value.to_string()),
+                    "freq" => info.freq = value.parse().ok(),
+                    "level" => info.level = value.parse().ok(),
+                    "flags" => info.flags = Some(value.to_string()),
+                    "ssid" => info.ssid = Some(value.to_string()),
+                    "ie" => {
+                        if let Ok(bytes) = parse_hex_bytes(value) {
+                            if !bytes.is_empty() {
+                                info.ie = Some(bytes);
+                            }
+                        }
+                    }
+                    "beacon_ie" => {
+                        if let Ok(bytes) = parse_hex_bytes(value) {
+                            if !bytes.is_empty() {
+                                info.beacon_ie = Some(bytes);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(info)
+    }
+
     /// Add a new network configuration
     ///
     /// Returns the network ID for the added network
@@ -483,9 +553,21 @@ impl WpaManager {
                         e
                     })?;
             }
+            if !config.key_mgmt.is_empty() {
+                self.set_network(network_id, "key_mgmt", &config.key_mgmt)
+                    .map_err(|e| {
+                        let _ = self.remove_network(network_id);
+                        e
+                    })?;
+            }
         } else {
             // Open network
-            self.set_network(network_id, "key_mgmt", "NONE")
+            let key_mgmt = if config.key_mgmt.is_empty() {
+                "NONE"
+            } else {
+                config.key_mgmt.as_str()
+            };
+            self.set_network(network_id, "key_mgmt", key_mgmt)
                 .map_err(|e| {
                     let _ = self.remove_network(network_id);
                     e
@@ -508,6 +590,35 @@ impl WpaManager {
                     let _ = self.remove_network(network_id);
                     e
                 })?;
+        }
+
+        if let Some(ref bssid) = config.bssid {
+            self.set_network(network_id, "bssid", bssid).map_err(|e| {
+                let _ = self.remove_network(network_id);
+                e
+            })?;
+        }
+
+        if let Some(ref proto) = config.proto {
+            self.set_network(network_id, "proto", proto).map_err(|e| {
+                let _ = self.remove_network(network_id);
+                e
+            })?;
+        }
+
+        if let Some(ref pairwise) = config.pairwise {
+            self.set_network(network_id, "pairwise", pairwise)
+                .map_err(|e| {
+                    let _ = self.remove_network(network_id);
+                    e
+                })?;
+        }
+
+        if let Some(ref group) = config.group {
+            self.set_network(network_id, "group", group).map_err(|e| {
+                let _ = self.remove_network(network_id);
+                e
+            })?;
         }
 
         // Select and enable the network
@@ -600,6 +711,37 @@ impl WpaManager {
 
         Ok(info)
     }
+}
+
+fn parse_hex_bytes(input: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut hi: Option<u8> = None;
+    let mut saw_hex = false;
+
+    for ch in input.chars() {
+        if let Some(val) = ch.to_digit(16) {
+            saw_hex = true;
+            let val = val as u8;
+            if let Some(high) = hi.take() {
+                bytes.push((high << 4) | val);
+            } else {
+                hi = Some(val);
+            }
+        }
+    }
+
+    if !saw_hex {
+        return Ok(Vec::new());
+    }
+
+    if hi.is_some() {
+        return Err(NetlinkError::ParseError {
+            what: "BSS IE hex".to_string(),
+            reason: "odd-length hex string".to_string(),
+        });
+    }
+
+    Ok(bytes)
 }
 
 /// Check if wpa_supplicant is running for an interface

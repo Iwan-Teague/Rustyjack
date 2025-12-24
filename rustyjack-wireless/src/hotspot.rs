@@ -1,4 +1,6 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -187,6 +189,10 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
 
     eprintln!("[HOTSPOT] Creating config directory...");
     fs::create_dir_all(CONF_DIR).map_err(|e| WirelessError::System(format!("mkdir: {e}")))?;
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(CONF_DIR, fs::Permissions::from_mode(0o700));
+    }
 
     // Clean up any existing AP/DHCP/DNS from previous run
     eprintln!("[HOTSPOT] Cleaning up any existing hotspot services...");
@@ -198,7 +204,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             if let Some(mut old_ap) = guard.take() {
                 eprintln!("[HOTSPOT] Stopping previous Access Point instance...");
                 let _ = tokio::runtime::Runtime::new().and_then(|rt| {
-                    rt.block_on(async { old_ap.stop().await });
+                    let _ = rt.block_on(async { old_ap.stop().await });
                     Ok(())
                 });
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -709,9 +715,29 @@ pub fn status_hotspot() -> Option<HotspotState> {
 
 fn persist_state(state: &HotspotState) -> Result<()> {
     fs::create_dir_all(CONF_DIR).map_err(|e| WirelessError::System(format!("mkdir: {e}")))?;
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(CONF_DIR, fs::Permissions::from_mode(0o700));
+    }
     let data = serde_json::to_string_pretty(state)
         .map_err(|e| WirelessError::System(format!("serialize state: {e}")))?;
-    fs::write(STATE_PATH, data).map_err(|e| WirelessError::System(format!("write state: {e}")))?;
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(STATE_PATH)
+        .map_err(|e| WirelessError::System(format!("open state: {e}")))?;
+    use std::io::Write;
+    file.write_all(data.as_bytes())
+        .map_err(|e| WirelessError::System(format!("write state: {e}")))?;
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(STATE_PATH, fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 

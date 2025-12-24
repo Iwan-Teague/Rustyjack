@@ -349,7 +349,7 @@ sudo chmod -R 755 "$PROJECT_ROOT/loot"
 # Create WiFi profiles directory
 sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
 sudo chown root:root "$PROJECT_ROOT/wifi/profiles"
-sudo chmod 755 "$PROJECT_ROOT/wifi/profiles"
+sudo chmod 700 "$PROJECT_ROOT/wifi/profiles"
 
 # Note: rfkill unblock and interface up operations now handled by rustyjack-netlink
 info "Network interface management delegated to rustyjack-netlink crate"
@@ -383,6 +383,7 @@ if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then
   "notes": "Sample WiFi profile - edit with your network details"
 }
 PROFILE
+  sudo chmod 600 "$PROJECT_ROOT/wifi/profiles/sample.json"
   info "Created sample WiFi profile"
 fi
 
@@ -447,7 +448,7 @@ else
   warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
 fi
 
-# 6-b3 rustyjack-netlink replaces: ip, rfkill, pgrep/pkill, iw, hostapd, iptables, dhclient, dnsmasq
+# 6-b3 rustyjack-netlink replaces: ip, rfkill, pgrep/pkill, iw, hostapd, nf_tables, dhclient, dnsmasq
 info "[OK] rustyjack-netlink provides native Rust implementations for:"
 info "     - ip (network interface management via netlink)"
 info "     - rfkill (radio management via /dev/rfkill)"
@@ -455,7 +456,7 @@ info "     - pgrep/pkill (process management via /proc)"
 info "     - iw (nl80211 wireless operations)"
 info "     - hostapd (software AP via nl80211)"
 info "     - wpa_supplicant (WPA/WPA2 client authentication)"
-info "     - iptables (netfilter via nfnetlink)"
+info "     - nf_tables (netfilter via nf_tables netlink)"
 info "     - dhclient (DHCP client)"
 info "     - dnsmasq (DHCP + DNS server)"
 info "     - ARP operations (raw sockets)"

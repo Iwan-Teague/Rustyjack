@@ -59,7 +59,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::error::{NetlinkError, Result};
-use crate::wireless::{InterfaceMode, WirelessManager};
+use crate::wireless::{InterfaceMode, PhyCapabilities, WirelessManager};
 
 use once_cell::sync::Lazy;
 
@@ -74,6 +74,7 @@ const NL80211_ATTR_IFINDEX: u16 = 3;
 const NL80211_ATTR_SSID: u16 = 52;
 const NL80211_ATTR_BEACON_HEAD: u16 = 54;
 const NL80211_ATTR_BEACON_TAIL: u16 = 55;
+const NL80211_ATTR_PROBE_RESP: u16 = 56;
 const NL80211_ATTR_BEACON_INTERVAL: u16 = 74;
 const NL80211_ATTR_DTIM_PERIOD: u16 = 75;
 const NL80211_ATTR_WIPHY_FREQ: u16 = 38;
@@ -86,6 +87,11 @@ const NL80211_ATTR_WPA_VERSIONS: u16 = 48;
 const NL80211_ATTR_CIPHER_SUITE_GROUP: u16 = 15;
 const NL80211_ATTR_CIPHER_SUITES_PAIRWISE: u16 = 16;
 const NL80211_ATTR_AKM_SUITES: u16 = 17;
+const NL80211_ATTR_HIDDEN_SSID: u16 = 103;
+const NL80211_HIDDEN_SSID_NOT_IN_USE: u32 = 0;
+const NL80211_HIDDEN_SSID_ZERO_LEN: u32 = 1;
+#[allow(dead_code)]
+const NL80211_HIDDEN_SSID_ZERO_CONTENTS: u32 = 2;
 const NL80211_ATTR_KEY_DATA: u16 = 13;
 const NL80211_ATTR_KEY_IDX: u16 = 10;
 const NL80211_ATTR_KEY_CIPHER: u16 = 12;
@@ -109,6 +115,7 @@ const CIPHER_SUITE_CCMP: u32 = 0x000f_ac_04;
 const AKM_SUITE_PSK: u32 = 0x000f_ac_02;
 const WPA_VERSION_2: u32 = 2;
 const NL80211_CHAN_WIDTH_20_NOHT: u32 = 0;
+const NL80211_DFS_AVAILABLE: u8 = 2;
 type HmacSha1 = Hmac<sha1::Sha1>;
 
 /// Access Point security mode
@@ -435,22 +442,8 @@ impl AccessPoint {
             self.config.security
         );
 
-        // Build candidate channels (prefer configured, fallback 1/6), validate via set_channel
-        let mut candidate_channels: Vec<u8> = Vec::new();
-        if self.config.channel <= 14 {
-            candidate_channels.push(self.config.channel);
-        } else {
-            log::warn!(
-                "Configured channel {} is >14; will fall back to 2.4 GHz channels",
-                self.config.channel
-            );
-        }
-        // Add common 2.4GHz channels (skip 11 - causes issues on some hardware)
-        for ch in [1u8, 6u8] {
-            if !candidate_channels.contains(&ch) {
-                candidate_channels.push(ch);
-            }
-        }
+        // Build candidate channels using wiphy/regdom constraints
+        let candidate_channels = build_candidate_channels(&self.config, &phy_caps);
 
         // Attempt set_channel for each candidate (best-effort), but do not filter
         let mut attempt_channels = Vec::new();
@@ -497,7 +490,9 @@ impl AccessPoint {
         };
         for ch in attempt_channels.iter() {
             let (beacon_head, beacon_tail, ssid_bytes, basic_rates) =
-                build_beacon_frames(&self.config, bssid, *ch)?;
+                build_beacon_frames(&self.config, bssid, *ch, Some(&phy_caps))?;
+            let probe_resp =
+                build_probe_response_frame(&self.config, bssid, *ch, Some(&phy_caps))?;
             log::debug!(
                 "Beacon built for channel {}: head_len={} tail_len={} ssid_len={} basic_rates={} hidden={}",
                 ch,
@@ -518,14 +513,21 @@ impl AccessPoint {
                 channel_to_frequency(*ch).unwrap_or(0)
             );
             let wpa_enabled = matches!(self.config.security, ApSecurity::Wpa2Psk { .. });
+            let hidden_ssid = if self.config.hidden {
+                NL80211_HIDDEN_SSID_ZERO_LEN
+            } else {
+                NL80211_HIDDEN_SSID_NOT_IN_USE
+            };
             match send_start_ap(
                 ifindex,
                 *ch,
                 self.config.beacon_interval,
                 dtim_period,
-                &ssid_bytes,
+                self.config.ssid.as_bytes(),
                 &beacon_head,
                 &beacon_tail,
+                &probe_resp,
+                hidden_ssid,
                 wpa_enabled,
                 &basic_rates,
             ) {
@@ -691,6 +693,8 @@ fn send_start_ap(
     ssid: &[u8],
     beacon_head: &[u8],
     beacon_tail: &[u8],
+    probe_resp: &[u8],
+    hidden_ssid: u32,
     wpa_enabled: bool,
     basic_rates: &[u32],
 ) -> Result<()> {
@@ -711,6 +715,8 @@ fn send_start_ap(
             ssid,
             beacon_head,
             beacon_tail,
+            probe_resp,
+            hidden_ssid,
             *include_channel_type,
             *include_channel_width,
             wpa_enabled,
@@ -753,6 +759,8 @@ fn send_start_ap_inner(
     ssid: &[u8],
     beacon_head: &[u8],
     beacon_tail: &[u8],
+    probe_resp: &[u8],
+    hidden_ssid: u32,
     include_channel_type: bool,
     include_channel_width: bool,
     wpa_enabled: bool,
@@ -762,7 +770,7 @@ fn send_start_ap_inner(
         .ok_or_else(|| NetlinkError::InvalidInput(format!("Unsupported channel {}", channel)))?;
 
     log::info!(
-        "START_AP params: ifindex={} chan={} freq={} beacon_int={} dtim={} ssid_len={} head_len={} tail_len={} basic_rates_len={} channel_type={} channel_width={} wpa={}",
+        "START_AP params: ifindex={} chan={} freq={} beacon_int={} dtim={} ssid_len={} head_len={} tail_len={} probe_len={} basic_rates_len={} channel_type={} channel_width={} wpa={}",
         ifindex,
         channel,
         freq,
@@ -771,6 +779,7 @@ fn send_start_ap_inner(
         ssid.len(),
         beacon_head.len(),
         beacon_tail.len(),
+        probe_resp.len(),
         basic_rates.len(),
         include_channel_type,
         include_channel_width,
@@ -813,6 +822,18 @@ fn send_start_ap_inner(
             NetlinkError::OperationFailed(format!("Failed to build SSID attr: {}", e))
         })?,
     );
+    if hidden_ssid != NL80211_HIDDEN_SSID_NOT_IN_USE {
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_HIDDEN_SSID, hidden_ssid).map_err(
+                |e| {
+                    NetlinkError::OperationFailed(format!(
+                        "Failed to build hidden SSID attr: {}",
+                        e
+                    ))
+                },
+            )?,
+        );
+    }
     if !basic_rates.is_empty() {
         let basic_rates_bytes = u32_list_bytes(basic_rates);
         attrs.push(
@@ -890,6 +911,18 @@ fn send_start_ap_inner(
         );
     } else {
         log::debug!("START_AP beacon tail empty; skipping NL80211_ATTR_BEACON_TAIL");
+    }
+    if !probe_resp.is_empty() {
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_PROBE_RESP, probe_resp).map_err(
+                |e| {
+                    NetlinkError::OperationFailed(format!(
+                        "Failed to build probe response attr: {}",
+                        e
+                    ))
+                },
+            )?,
+        );
     }
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_FREQ, freq).map_err(|e| {
@@ -1050,7 +1083,13 @@ fn build_beacon_frames(
     config: &ApConfig,
     bssid: [u8; 6],
     channel: u8,
+    phy_caps: Option<&PhyCapabilities>,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u32>)> {
+    let rate_sets = build_rate_sets(config, channel, phy_caps)?;
+    let ht_info = select_ht_info(config, channel, phy_caps);
+    let wmm_enabled = ht_info.is_some();
+    let capab = build_capability_info(config, channel, &rate_sets, wmm_enabled);
+
     let mut head = Vec::new();
     // 802.11 beacon header
     head.extend_from_slice(&[0x80, 0x00]); // Frame control
@@ -1061,17 +1100,11 @@ fn build_beacon_frames(
     head.extend_from_slice(&[0x00, 0x00]); // Seq ctrl
     head.extend_from_slice(&[0x00; 8]); // Timestamp (kernel fills)
     head.extend_from_slice(&config.beacon_interval.to_le_bytes()); // Beacon interval
-
-    // Capability: ESS + short preamble + short slot (+ privacy if WPA2)
-    let mut capab: u16 = 0x0421;
-    if matches!(config.security, ApSecurity::Wpa2Psk { .. }) {
-        capab |= 0x0010;
-    }
     head.extend_from_slice(&capab.to_le_bytes());
 
-    // SSID IE
+    // SSID IE (hidden => zero-length)
     let ssid_bytes = if config.hidden {
-        vec![0; config.ssid.len()]
+        Vec::new()
     } else {
         config.ssid.as_bytes().to_vec()
     };
@@ -1079,26 +1112,15 @@ fn build_beacon_frames(
     head.push(ssid_bytes.len() as u8);
     head.extend_from_slice(&ssid_bytes);
 
-    let (supported_rates, extended_rates) = if channel <= 14 {
-        (
-            &[0x82, 0x84, 0x8b, 0x96][..],
-            &[0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c][..],
-        )
-    } else {
-        (
-            &[0x8c, 0x98, 0xb0][..],
-            &[0x12, 0x24, 0x48, 0x60, 0x6c][..],
-        )
-    };
-    let basic_rates: Vec<u32> = supported_rates
-        .iter()
-        .map(|rate| u32::from(rate & 0x7f) * 5)
-        .collect();
-
     // Supported rates IE
+    if rate_sets.supported.is_empty() {
+        return Err(NetlinkError::InvalidInput(
+            "No supported rates available for beacon".to_string(),
+        ));
+    }
     head.push(1);
-    head.push(supported_rates.len() as u8);
-    head.extend_from_slice(supported_rates);
+    head.push(rate_sets.supported.len() as u8);
+    head.extend_from_slice(&rate_sets.supported);
 
     // DS Parameter Set (channel)
     head.push(3);
@@ -1119,16 +1141,556 @@ fn build_beacon_frames(
     }
 
     // Extended supported rates IE (after TIM)
-    tail.push(50);
-    tail.push(extended_rates.len() as u8);
-    tail.extend_from_slice(extended_rates);
+    if !rate_sets.extended.is_empty() {
+        tail.push(50);
+        tail.push(rate_sets.extended.len() as u8);
+        tail.extend_from_slice(&rate_sets.extended);
+    }
+
+    if let Some(country) = build_country_ie(channel, phy_caps) {
+        tail.extend_from_slice(&country);
+    }
 
     if matches!(config.security, ApSecurity::Wpa2Psk { .. }) {
         let rsn = build_rsn_ie();
         tail.extend_from_slice(&rsn);
     }
 
-    Ok((head, tail, ssid_bytes, basic_rates))
+    if let Some(ht_info) = ht_info {
+        tail.extend_from_slice(&build_ht_cap_ie(&ht_info));
+        tail.extend_from_slice(&build_ht_operation_ie(channel, &ht_info));
+    }
+
+    if wmm_enabled {
+        tail.extend_from_slice(&build_wmm_param_ie());
+    }
+
+    Ok((head, tail, ssid_bytes, rate_sets.basic))
+}
+
+fn build_probe_response_frame(
+    config: &ApConfig,
+    bssid: [u8; 6],
+    channel: u8,
+    phy_caps: Option<&PhyCapabilities>,
+) -> Result<Vec<u8>> {
+    let rate_sets = build_rate_sets(config, channel, phy_caps)?;
+    let ht_info = select_ht_info(config, channel, phy_caps);
+    let wmm_enabled = ht_info.is_some();
+    let capab = build_capability_info(config, channel, &rate_sets, wmm_enabled);
+
+    let ssid_bytes = config.ssid.as_bytes().to_vec();
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&[0x50, 0x00]); // Probe Response
+    frame.extend_from_slice(&[0x00, 0x00]); // Duration
+    frame.extend_from_slice(&[0xff; 6]); // DA broadcast (kernel will fill for directed probes)
+    frame.extend_from_slice(&bssid); // SA
+    frame.extend_from_slice(&bssid); // BSSID
+    frame.extend_from_slice(&[0x00, 0x00]); // Seq ctrl
+    frame.extend_from_slice(&[0x00; 8]); // Timestamp (kernel fills)
+    frame.extend_from_slice(&config.beacon_interval.to_le_bytes()); // Beacon interval
+    frame.extend_from_slice(&capab.to_le_bytes());
+
+    // SSID IE
+    frame.push(0);
+    frame.push(ssid_bytes.len() as u8);
+    frame.extend_from_slice(&ssid_bytes);
+
+    if rate_sets.supported.is_empty() {
+        return Err(NetlinkError::InvalidInput(
+            "No supported rates available for probe response".to_string(),
+        ));
+    }
+    // Supported rates IE
+    frame.push(1);
+    frame.push(rate_sets.supported.len() as u8);
+    frame.extend_from_slice(&rate_sets.supported);
+
+    // DS Parameter Set (channel)
+    frame.push(3);
+    frame.push(1);
+    frame.push(channel);
+
+    if channel <= 14 && config.hw_mode != HardwareMode::A {
+        frame.extend_from_slice(&build_erp_ie());
+    }
+
+    if !rate_sets.extended.is_empty() {
+        frame.push(50);
+        frame.push(rate_sets.extended.len() as u8);
+        frame.extend_from_slice(&rate_sets.extended);
+    }
+
+    if let Some(country) = build_country_ie(channel, phy_caps) {
+        frame.extend_from_slice(&country);
+    }
+
+    if matches!(config.security, ApSecurity::Wpa2Psk { .. }) {
+        frame.extend_from_slice(&build_rsn_ie());
+    }
+
+    if let Some(ht_info) = ht_info {
+        frame.extend_from_slice(&build_ht_cap_ie(&ht_info));
+        frame.extend_from_slice(&build_ht_operation_ie(channel, &ht_info));
+    }
+
+    if wmm_enabled {
+        frame.extend_from_slice(&build_wmm_param_ie());
+    }
+
+    Ok(frame)
+}
+
+#[derive(Debug, Clone)]
+struct RateSets {
+    supported: Vec<u8>,
+    extended: Vec<u8>,
+    basic: Vec<u32>,
+    has_ofdm: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HtInfo {
+    capab: u16,
+    ampdu_factor: u8,
+    ampdu_density: u8,
+    mcs_set: [u8; 16],
+}
+
+fn build_rate_sets(
+    _config: &ApConfig,
+    channel: u8,
+    phy_caps: Option<&PhyCapabilities>,
+) -> Result<RateSets> {
+    let mut used_dynamic_rates = false;
+    let (supported_rates, extended_rates, basic_rates) =
+        if let Some(rates) = rates_from_wiphy(phy_caps, channel) {
+            used_dynamic_rates = true;
+            rates
+        } else {
+            let (supported, extended) = if channel <= 14 {
+                (
+                    vec![0x82, 0x84, 0x8b, 0x96],
+                    vec![0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c],
+                )
+            } else {
+                (vec![0x8c, 0x98, 0xb0], vec![0x12, 0x24, 0x48, 0x60, 0x6c])
+            };
+            let basic = supported
+                .iter()
+                .map(|rate| u32::from(rate & 0x7f) * 5)
+                .collect();
+            (supported, extended, basic)
+        };
+
+    if used_dynamic_rates {
+        log::debug!(
+            "Using wiphy rates for channel {}: supported={} extended={} basic_rates={}",
+            channel,
+            supported_rates.len(),
+            extended_rates.len(),
+            basic_rates.len()
+        );
+    }
+
+    let has_ofdm = rates_have_ofdm(&supported_rates, &extended_rates);
+
+    Ok(RateSets {
+        supported: supported_rates,
+        extended: extended_rates,
+        basic: basic_rates,
+        has_ofdm,
+    })
+}
+
+fn rates_have_ofdm(supported: &[u8], extended: &[u8]) -> bool {
+    supported
+        .iter()
+        .chain(extended.iter())
+        .any(|rate| (rate & 0x7f) as u32 * 5 >= 60)
+}
+
+fn build_capability_info(
+    config: &ApConfig,
+    channel: u8,
+    rate_sets: &RateSets,
+    wmm_enabled: bool,
+) -> u16 {
+    let mut capab: u16 = 0x0001; // ESS
+    if matches!(config.security, ApSecurity::Wpa2Psk { .. }) {
+        capab |= 0x0010;
+    }
+
+    if channel <= 14 {
+        capab |= 0x0020; // Short preamble
+        if rate_sets.has_ofdm {
+            capab |= 0x0400; // Short slot time
+        }
+    } else {
+        capab |= 0x0400; // Short slot time (5GHz)
+    }
+
+    if wmm_enabled {
+        capab |= 0x0200; // QoS
+    }
+
+    capab
+}
+
+fn select_ht_info(
+    config: &ApConfig,
+    channel: u8,
+    phy_caps: Option<&PhyCapabilities>,
+) -> Option<HtInfo> {
+    if config.hw_mode != HardwareMode::N {
+        return None;
+    }
+    let band = band_for_channel(phy_caps?, channel)?;
+    let capab = band.ht_capab?;
+    let mcs = band.ht_mcs_set.as_ref()?;
+    if mcs.len() < 16 {
+        return None;
+    }
+    let mut mcs_set = [0u8; 16];
+    mcs_set.copy_from_slice(&mcs[..16]);
+    Some(HtInfo {
+        capab,
+        ampdu_factor: band.ht_ampdu_factor.unwrap_or(0),
+        ampdu_density: band.ht_ampdu_density.unwrap_or(0),
+        mcs_set,
+    })
+}
+
+fn build_ht_cap_ie(info: &HtInfo) -> Vec<u8> {
+    let mut ie = Vec::with_capacity(28);
+    ie.push(45); // HT Capabilities
+    ie.push(26);
+    ie.extend_from_slice(&info.capab.to_le_bytes());
+    let ampdu_params = (info.ampdu_factor & 0x03) | ((info.ampdu_density & 0x07) << 2);
+    ie.push(ampdu_params);
+    ie.extend_from_slice(&info.mcs_set);
+    ie.extend_from_slice(&0u16.to_le_bytes()); // HT extended capabilities
+    ie.extend_from_slice(&0u32.to_le_bytes()); // TX Beamforming
+    ie.push(0u8); // ASEL capability
+    ie
+}
+
+fn build_ht_operation_ie(channel: u8, info: &HtInfo) -> Vec<u8> {
+    let mut ie = Vec::with_capacity(24);
+    ie.push(61); // HT Operation
+    ie.push(22);
+    ie.push(channel);
+    ie.push(0); // HT operation info (no secondary channel)
+    ie.extend_from_slice(&0u16.to_le_bytes()); // HT operation info 2
+    ie.extend_from_slice(&0u16.to_le_bytes()); // HT operation info 3
+    ie.extend_from_slice(&info.mcs_set);
+    ie
+}
+
+fn build_wmm_param_ie() -> Vec<u8> {
+    let mut ie = Vec::with_capacity(26);
+    ie.push(221); // Vendor specific
+    ie.push(24);
+    ie.extend_from_slice(&[0x00, 0x50, 0xF2, 0x02]); // WMM OUI + type
+    ie.push(0x01); // WMM subtype: Parameter
+    ie.push(0x01); // Version
+    ie.push(0x00); // QoS info (U-APSD disabled)
+    ie.push(0x00); // Reserved
+
+    // AC_BE
+    ie.push(0x03); // ACI=0, AIFSN=3
+    ie.push(0xA4); // ECWmin=4, ECWmax=10
+    ie.extend_from_slice(&0u16.to_le_bytes()); // TXOP
+
+    // AC_BK
+    ie.push(0x27); // ACI=1, AIFSN=7
+    ie.push(0xA4); // ECWmin=4, ECWmax=10
+    ie.extend_from_slice(&0u16.to_le_bytes()); // TXOP
+
+    // AC_VI
+    ie.push(0x42); // ACI=2, AIFSN=2
+    ie.push(0x43); // ECWmin=3, ECWmax=4
+    ie.extend_from_slice(&94u16.to_le_bytes()); // TXOP 94 * 32us
+
+    // AC_VO
+    ie.push(0x62); // ACI=3, AIFSN=2
+    ie.push(0x32); // ECWmin=2, ECWmax=3
+    ie.extend_from_slice(&47u16.to_le_bytes()); // TXOP 47 * 32us
+
+    ie
+}
+
+fn build_country_ie(channel: u8, phy_caps: Option<&PhyCapabilities>) -> Option<Vec<u8>> {
+    let alpha2 = read_regdom_alpha2()?;
+    let band = band_for_channel(phy_caps?, channel)?;
+    let channels = allowed_channels_for_band(band);
+    if channels.is_empty() {
+        return None;
+    }
+    let max_tx = max_tx_power_dbm(band).unwrap_or(20);
+    let triplets = build_country_triplets(&channels, max_tx);
+    if triplets.is_empty() {
+        return None;
+    }
+
+    let mut ie = Vec::new();
+    ie.push(7); // Country
+    ie.push((3 + triplets.len() * 3) as u8);
+    ie.extend_from_slice(&[alpha2[0], alpha2[1], b' ']);
+    for triplet in triplets {
+        ie.extend_from_slice(&triplet);
+    }
+    Some(ie)
+}
+
+fn read_regdom_alpha2() -> Option<[u8; 2]> {
+    let val = fs::read_to_string("/sys/module/cfg80211/parameters/ieee80211_regdom")
+        .ok()?
+        .trim()
+        .to_uppercase();
+    if val.len() != 2 {
+        return None;
+    }
+    if val == "00" || val == "99" {
+        return None;
+    }
+    let bytes = val.as_bytes();
+    Some([bytes[0], bytes[1]])
+}
+
+fn build_country_triplets(channels: &[u8], max_tx_power: u8) -> Vec<[u8; 3]> {
+    let mut chans = channels.to_vec();
+    chans.sort_unstable();
+    chans.dedup();
+    let mut triplets = Vec::new();
+    let mut idx = 0;
+    while idx < chans.len() {
+        let start = chans[idx];
+        let step = if start >= 36 { 4 } else { 1 };
+        let mut count = 1u8;
+        let mut prev = start;
+        idx += 1;
+        while idx < chans.len() && chans[idx] == prev + step {
+            count = count.saturating_add(1);
+            prev = chans[idx];
+            idx += 1;
+        }
+        triplets.push([start, count, max_tx_power]);
+    }
+    triplets
+}
+
+fn max_tx_power_dbm(band: &crate::wireless::BandInfo) -> Option<u8> {
+    let mut values: Vec<u8> = band
+        .frequencies
+        .iter()
+        .filter(|f| frequency_allows_ap(f))
+        .filter_map(|f| f.max_tx_power.map(|mbm| (mbm / 100) as u8))
+        .collect();
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    values.first().copied()
+}
+
+fn band_for_channel<'a>(
+    phy_caps: &'a PhyCapabilities,
+    channel: u8,
+) -> Option<&'a crate::wireless::BandInfo> {
+    let freq = channel_to_frequency(channel)?;
+    phy_caps
+        .band_info
+        .iter()
+        .find(|band| band.frequencies.iter().any(|f| f.freq == freq))
+        .or_else(|| {
+            if channel <= 14 {
+                phy_caps.band_info.iter().find(|band| band.name.contains("2.4"))
+            } else {
+                phy_caps.band_info.iter().find(|band| band.name.contains("5"))
+            }
+        })
+}
+
+fn allowed_channels_for_band(band: &crate::wireless::BandInfo) -> Vec<u8> {
+    let mut channels = Vec::new();
+    for freq in &band.frequencies {
+        if frequency_allows_ap(freq) {
+            if let Some(channel) = frequency_to_channel(freq.freq) {
+                channels.push(channel);
+            }
+        }
+    }
+    channels.sort_unstable();
+    channels.dedup();
+    channels
+}
+
+fn frequency_allows_ap(freq: &crate::wireless::FrequencyInfo) -> bool {
+    if freq.disabled || freq.no_ir {
+        return false;
+    }
+    if freq.radar {
+        return false;
+    }
+    if let Some(state) = freq.dfs_state {
+        if state != NL80211_DFS_AVAILABLE {
+            return false;
+        }
+    }
+    true
+}
+
+fn build_candidate_channels(config: &ApConfig, phy_caps: &PhyCapabilities) -> Vec<u8> {
+    let preferred_band = band_for_channel(phy_caps, config.channel);
+    let mut allowed = if let Some(band) = preferred_band {
+        allowed_channels_for_band(band)
+    } else {
+        allowed_channels_from_phy(phy_caps)
+    };
+
+    if allowed.is_empty() {
+        let mut fallback = Vec::new();
+        if config.channel > 0 {
+            fallback.push(config.channel);
+        }
+        for ch in [1u8, 6u8, 11u8] {
+            if !fallback.contains(&ch) {
+                fallback.push(ch);
+            }
+        }
+        return fallback;
+    }
+
+    allowed.sort_unstable();
+    allowed.dedup();
+
+    let mut candidates = Vec::new();
+    if allowed.contains(&config.channel) {
+        candidates.push(config.channel);
+    }
+
+    let prefer_2g = config.channel <= 14;
+    let preferred = if prefer_2g {
+        vec![1u8, 6u8, 11u8]
+    } else {
+        vec![36u8, 40u8, 44u8, 48u8, 149u8, 153u8, 157u8, 161u8]
+    };
+    for ch in preferred {
+        if allowed.contains(&ch) && !candidates.contains(&ch) {
+            candidates.push(ch);
+        }
+    }
+
+    if candidates.is_empty() {
+        for ch in allowed.iter().take(3) {
+            candidates.push(*ch);
+        }
+    } else {
+        for ch in allowed {
+            if !candidates.contains(&ch) {
+                candidates.push(ch);
+            }
+        }
+    }
+
+    candidates
+}
+
+fn allowed_channels_from_phy(phy_caps: &PhyCapabilities) -> Vec<u8> {
+    let mut channels = Vec::new();
+    for band in &phy_caps.band_info {
+        channels.extend(allowed_channels_for_band(band));
+    }
+    channels.sort_unstable();
+    channels.dedup();
+    channels
+}
+
+fn rates_from_wiphy(
+    phy_caps: Option<&PhyCapabilities>,
+    channel: u8,
+) -> Option<(Vec<u8>, Vec<u8>, Vec<u32>)> {
+    let phy_caps = phy_caps?;
+    let freq = channel_to_frequency(channel)?;
+    let band = phy_caps
+        .band_info
+        .iter()
+        .find(|band| band.frequencies.iter().any(|f| f.freq == freq))
+        .or_else(|| {
+            if channel <= 14 {
+                phy_caps.band_info.iter().find(|band| band.name.contains("2.4"))
+            } else {
+                phy_caps.band_info.iter().find(|band| band.name.contains("5"))
+            }
+        })?;
+    if band.rates.is_empty() {
+        return None;
+    }
+    build_rates_from_list(&band.rates, channel)
+}
+
+fn build_rates_from_list(
+    rates_100kbps: &[u32],
+    channel: u8,
+) -> Option<(Vec<u8>, Vec<u8>, Vec<u32>)> {
+    let mut rates: Vec<u32> = rates_100kbps.iter().copied().filter(|r| *r > 0).collect();
+    rates.sort_unstable();
+    rates.dedup();
+    if rates.is_empty() {
+        return None;
+    }
+    let basic_rates = select_basic_rates(&rates, channel);
+    let (supported_rates, extended_rates) = encode_rates_ie(&rates, &basic_rates);
+    if supported_rates.is_empty() {
+        return None;
+    }
+    Some((supported_rates, extended_rates, basic_rates))
+}
+
+fn select_basic_rates(rates_100kbps: &[u32], channel: u8) -> Vec<u32> {
+    let mandatory: &[u32] = if channel <= 14 {
+        &[10, 20, 55, 110]
+    } else {
+        &[60, 120, 240]
+    };
+    let mut basic: Vec<u32> = mandatory
+        .iter()
+        .copied()
+        .filter(|rate| rates_100kbps.contains(rate))
+        .collect();
+
+    if basic.is_empty() {
+        basic.extend(rates_100kbps.iter().take(4).copied());
+    }
+
+    basic.sort_unstable();
+    basic.dedup();
+    basic
+}
+
+fn encode_rates_ie(rates_100kbps: &[u32], basic_rates_100kbps: &[u32]) -> (Vec<u8>, Vec<u8>) {
+    let mut encoded = Vec::new();
+    for rate in rates_100kbps {
+        if rate % 5 != 0 {
+            continue;
+        }
+        let rate_500 = (rate / 5) as u8;
+        if rate_500 == 0 {
+            continue;
+        }
+        let mut val = rate_500;
+        if basic_rates_100kbps.contains(rate) {
+            val |= 0x80;
+        }
+        encoded.push(val);
+    }
+    encoded.sort_by_key(|rate| rate & 0x7f);
+    encoded.dedup_by(|a, b| (*a & 0x7f) == (*b & 0x7f));
+
+    let supported: Vec<u8> = encoded.iter().take(8).copied().collect();
+    let extended: Vec<u8> = encoded.iter().skip(8).copied().collect();
+    (supported, extended)
 }
 
 fn read_interface_mac(interface: &str) -> Result<[u8; 6]> {
@@ -1214,6 +1776,51 @@ fn channel_to_frequency(channel: u8) -> Option<u32> {
         157 => Some(5785),
         161 => Some(5805),
         165 => Some(5825),
+        _ => None,
+    }
+}
+
+fn frequency_to_channel(freq: u32) -> Option<u8> {
+    match freq {
+        2412 => Some(1),
+        2417 => Some(2),
+        2422 => Some(3),
+        2427 => Some(4),
+        2432 => Some(5),
+        2437 => Some(6),
+        2442 => Some(7),
+        2447 => Some(8),
+        2452 => Some(9),
+        2457 => Some(10),
+        2462 => Some(11),
+        2467 => Some(12),
+        2472 => Some(13),
+        2484 => Some(14),
+        5180 => Some(36),
+        5200 => Some(40),
+        5220 => Some(44),
+        5240 => Some(48),
+        5260 => Some(52),
+        5280 => Some(56),
+        5300 => Some(60),
+        5320 => Some(64),
+        5500 => Some(100),
+        5520 => Some(104),
+        5540 => Some(108),
+        5560 => Some(112),
+        5580 => Some(116),
+        5600 => Some(120),
+        5620 => Some(124),
+        5640 => Some(128),
+        5660 => Some(132),
+        5680 => Some(136),
+        5700 => Some(140),
+        5720 => Some(144),
+        5745 => Some(149),
+        5765 => Some(153),
+        5785 => Some(157),
+        5805 => Some(161),
+        5825 => Some(165),
         _ => None,
     }
 }
