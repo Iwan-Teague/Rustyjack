@@ -1,16 +1,19 @@
 use std::{
     fs,
     path::Path,
+    process::Command,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
-use rustyjack_core::cli::{HotspotCommand, StatusCommand, WifiCommand};
+use rustyjack_core::cli::{
+    HotspotCommand, StatusCommand, WifiCommand, WifiRouteCommand, WifiRouteEnsureArgs,
+};
 use rustyjack_core::{apply_interface_isolation, Commands};
 use serde_json::Value;
 
@@ -25,6 +28,9 @@ pub struct StatsSampler {
     data: Arc<Mutex<StatusOverlay>>,
     stop: Arc<AtomicBool>,
 }
+
+const DHCP_RETRY_SECS: u64 = 15;
+static LAST_DHCP_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
 impl StatsSampler {
     pub fn spawn(core: CoreBridge) -> Self {
@@ -119,7 +125,8 @@ fn extract_status_text(data: &Value) -> Option<String> {
 
 fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
     let cfg = GuiConfig::load(root)?;
-    let mut allow_list = vec![cfg.settings.active_network_interface.trim().to_string()];
+    let active_iface = cfg.settings.active_network_interface.trim().to_string();
+    let mut allow_list = vec![active_iface.clone()];
 
     if let Ok((_, hs_data)) = core.dispatch(Commands::Hotspot(HotspotCommand::Status)) {
         let running = hs_data
@@ -149,7 +156,76 @@ fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
     }
 
     apply_interface_isolation(&allow_list)?;
+    maybe_ensure_wired_dhcp(core, &active_iface)?;
     Ok(())
+}
+
+fn maybe_ensure_wired_dhcp(core: &CoreBridge, interface: &str) -> Result<()> {
+    if interface.is_empty() {
+        return Ok(());
+    }
+    if interface_is_wireless(interface) {
+        return Ok(());
+    }
+    if !interface_has_carrier(interface) {
+        return Ok(());
+    }
+    if interface_has_ipv4(interface) {
+        return Ok(());
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let last = LAST_DHCP_ATTEMPT.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < DHCP_RETRY_SECS {
+        return Ok(());
+    }
+    LAST_DHCP_ATTEMPT.store(now, Ordering::Relaxed);
+
+    let args = WifiRouteEnsureArgs {
+        interface: interface.to_string(),
+    };
+    if let Err(err) = core.dispatch(Commands::Wifi(WifiCommand::Route(
+        WifiRouteCommand::Ensure(args),
+    ))) {
+        eprintln!("[route] auto ensure failed for {}: {}", interface, err);
+    }
+    Ok(())
+}
+
+fn interface_is_wireless(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    let path = format!("/sys/class/net/{}/wireless", interface);
+    Path::new(&path).exists()
+}
+
+fn interface_has_carrier(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    let path = format!("/sys/class/net/{}/carrier", interface);
+    fs::read_to_string(&path)
+        .map(|val| val.trim() == "1")
+        .unwrap_or(false)
+}
+
+fn interface_has_ipv4(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    let output = Command::new("ip")
+        .args(["-4", "addr", "show", "dev", interface])
+        .output();
+    let output = match output {
+        Ok(out) if out.status.success() => out,
+        _ => return false,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().any(|line| line.trim_start().starts_with("inet "))
 }
 
 fn read_temp() -> Result<f32> {
