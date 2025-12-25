@@ -38,6 +38,8 @@ use crate::cli::{
     WifiReconServiceScanArgs, WifiRouteCommand, WifiRouteEnsureArgs, WifiRouteMetricArgs,
     WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
 };
+#[cfg(target_os = "linux")]
+use crate::netlink_helpers::netlink_set_interface_up;
 use crate::system::{
     append_payload_log, backup_repository, backup_routing_state, build_loot_path,
     build_manual_embed, build_mitm_pcap_path, compose_status_text, connect_wifi_network,
@@ -1793,6 +1795,54 @@ fn handle_wifi_route_status(_root: &Path) -> Result<HandlerResult> {
     Ok(("Routing status collected".to_string(), data))
 }
 
+fn interface_has_carrier(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    let path = format!("/sys/class/net/{}/carrier", interface);
+    fs::read_to_string(&path)
+        .map(|val| val.trim() == "1")
+        .unwrap_or(false)
+}
+
+fn try_dhcp_acquire(interface: &str) -> Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        let result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await })
+            }
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow!("Failed to create tokio runtime: {}", e))?;
+                rt.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await })
+            }
+        };
+
+        match result {
+            Ok(lease) => {
+                log::info!(
+                    "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
+                    interface,
+                    lease.address,
+                    lease.prefix_len,
+                    lease.gateway
+                );
+                Ok(true)
+            }
+            Err(e) => {
+                log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, e);
+                Ok(false)
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        Ok(false)
+    }
+}
+
 fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<HandlerResult> {
     use crate::system::enforce_single_interface;
 
@@ -1824,9 +1874,34 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         }
     }
 
-    let iface = iface.ok_or_else(|| anyhow!("interface {} not found", interface))?;
+    let _iface = iface.ok_or_else(|| anyhow!("interface {} not found", interface))?;
 
     enforce_single_interface(&target_interface)?;
+    let mut summaries = list_interface_summaries()?;
+    let mut iface_summary = summaries
+        .iter()
+        .find(|s| s.name == target_interface)
+        .cloned()
+        .ok_or_else(|| anyhow!("interface {} not found", target_interface))?;
+
+    if iface_summary.kind == "wired"
+        && interface_has_carrier(&target_interface)
+        && iface_summary.ip.is_none()
+    {
+        #[cfg(target_os = "linux")]
+        let _ = netlink_set_interface_up(&target_interface);
+        if try_dhcp_acquire(&target_interface)? {
+            summaries = list_interface_summaries()?;
+            if let Some(updated) = summaries
+                .iter()
+                .find(|s| s.name == target_interface)
+                .cloned()
+            {
+                iface_summary = updated;
+            }
+        }
+    }
+
     let gateway = interface_gateway(&target_interface)?;
     let mut route_set = false;
     let mut gateway_ip = None;
@@ -1852,7 +1927,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
 
     let data = json!({
         "interface": target_interface,
-        "ip": iface.ip,
+        "ip": iface_summary.ip,
         "gateway": gateway_ip,
         "route_set": route_set,
         "ping_success": ping_success,

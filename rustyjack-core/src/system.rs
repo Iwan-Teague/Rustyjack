@@ -1026,6 +1026,7 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
 
     let allowed_set: HashSet<String> = allowed
         .iter()
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
@@ -1035,6 +1036,7 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
     }
 
     let entries = fs::read_dir("/sys/class/net").context("reading /sys/class/net")?;
+    let mut interfaces = Vec::new();
     let mut errors = Vec::new();
 
     for entry in entries {
@@ -1043,8 +1045,20 @@ pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
         if iface == "lo" {
             continue;
         }
-        let is_allowed = allowed_set.contains(&iface);
         let is_wireless = is_wireless_interface(&iface);
+        interfaces.push((iface, is_wireless));
+    }
+
+    if !interfaces.iter().any(|(iface, _)| allowed_set.contains(iface)) {
+        let allowed_list = allowed_set.iter().cloned().collect::<Vec<_>>().join(", ");
+        bail!(
+            "Cannot enforce isolation: none of the allowed interfaces exist ({})",
+            allowed_list
+        );
+    }
+
+    for (iface, is_wireless) in interfaces {
+        let is_allowed = allowed_set.contains(&iface);
 
         if is_allowed {
             // For wireless: unblock rfkill BEFORE bringing interface up
