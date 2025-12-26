@@ -1471,6 +1471,14 @@ pub fn set_interface_metric(interface: &str, metric: u32) -> Result<()> {
 
 pub fn select_wifi_interface(preferred: Option<String>) -> Result<String> {
     if let Some(name) = preferred {
+        let summaries = list_interface_summaries()?;
+        let summary = summaries
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| anyhow!("interface {} not found", name))?;
+        if summary.kind != "wireless" {
+            bail!("interface {} is not wireless", name);
+        }
         return Ok(name);
     }
     let summaries = list_interface_summaries()?;

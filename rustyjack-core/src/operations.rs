@@ -3077,6 +3077,22 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
 
     log::info!("[CORE] WiFi connection successful ssid={ssid} iface={interface}");
 
+    let (route_msg, route_data) =
+        handle_wifi_route_ensure(root, WifiRouteEnsureArgs { interface: interface.clone() })?;
+    log::info!("[CORE] Route ensure after WiFi connect: {}", route_msg);
+    if let Some(false) = route_data.get("route_set").and_then(|v| v.as_bool()) {
+        log::warn!(
+            "[CORE] No gateway detected after WiFi connect on {}",
+            interface
+        );
+    }
+    if let Some(false) = route_data.get("ping_success").and_then(|v| v.as_bool()) {
+        log::warn!(
+            "[CORE] Ping test failed after WiFi connect on {}",
+            interface
+        );
+    }
+
     let mut remembered = false;
     if let Some(mut stored_profile) = stored {
         stored_profile.profile.last_used = Some(Local::now().to_rfc3339());

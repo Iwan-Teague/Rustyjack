@@ -4,7 +4,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -31,6 +31,13 @@ pub struct StatsSampler {
 
 const DHCP_RETRY_SECS: u64 = 15;
 static LAST_DHCP_ATTEMPT: AtomicU64 = AtomicU64::new(0);
+static LAST_ISOLATION_STATE: OnceLock<Mutex<IsolationState>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct IsolationState {
+    mode: String,
+    allow_list: Vec<String>,
+}
 
 impl StatsSampler {
     pub fn spawn(core: CoreBridge) -> Self {
@@ -149,10 +156,12 @@ fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
             allow_list.sort();
             allow_list.dedup();
             if allow_list.is_empty() {
+                log_isolation_state("hotspot", &allow_list);
                 return Ok(());
             }
 
             apply_interface_isolation(&allow_list)?;
+            log_isolation_state("hotspot", &allow_list);
             if let Some(up) = hs_data
                 .get("upstream_interface")
                 .and_then(|v| v.as_str())
@@ -175,6 +184,7 @@ fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
             "[isolation] active interface {} not found; skipping enforcement",
             active_iface
         );
+        log_isolation_state("skipped", &[]);
         return Ok(());
     }
 
@@ -184,10 +194,12 @@ fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
     allow_list.retain(|s| interface_exists(s));
 
     if allow_list.is_empty() {
+        log_isolation_state("single", &allow_list);
         return Ok(());
     }
 
     apply_interface_isolation(&allow_list)?;
+    log_isolation_state("single", &allow_list);
     if let Some(primary) = allow_list.first() {
         maybe_ensure_wired_dhcp(core, primary)?;
     }
@@ -260,6 +272,24 @@ fn interface_has_ipv4(interface: &str) -> bool {
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout.lines().any(|line| line.trim_start().starts_with("inet "))
+}
+
+fn log_isolation_state(mode: &str, allow_list: &[String]) {
+    let state = LAST_ISOLATION_STATE.get_or_init(|| {
+        Mutex::new(IsolationState {
+            mode: String::new(),
+            allow_list: Vec::new(),
+        })
+    });
+    let mut guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.mode != mode || guard.allow_list != allow_list {
+        log::info!("[ISOLATION] mode={} allow={:?}", mode, allow_list);
+        guard.mode = mode.to_string();
+        guard.allow_list = allow_list.to_vec();
+    }
 }
 
 fn interface_exists(name: &str) -> bool {
