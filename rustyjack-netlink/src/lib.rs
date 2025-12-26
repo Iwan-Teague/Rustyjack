@@ -168,6 +168,17 @@ pub async fn add_default_route(gateway: IpAddr, interface: &str) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+pub async fn add_default_route_with_metric(
+    gateway: IpAddr,
+    interface: &str,
+    metric: Option<u32>,
+) -> Result<()> {
+    let mgr = RouteManager::new()?;
+    mgr.add_default_route_with_metric(gateway, interface, metric)
+        .await
+}
+
+#[cfg(target_os = "linux")]
 pub async fn delete_default_route() -> Result<()> {
     let mgr = RouteManager::new()?;
     mgr.delete_default_route().await

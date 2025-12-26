@@ -324,22 +324,10 @@ impl WirelessCapabilities {
 }
 
 #[cfg(target_os = "linux")]
-fn interface_wiphy(interface: &str) -> Option<String> {
-    let output = std::process::Command::new("iw")
-        .args(["dev", interface, "info"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("wiphy ") {
-            return Some(rest.trim().to_string());
-        }
-    }
-    None
+fn interface_wiphy(interface: &str) -> Option<u32> {
+    let mut mgr = rustyjack_netlink::WirelessManager::new().ok()?;
+    let info = mgr.get_interface_info(interface).ok()?;
+    Some(info.wiphy)
 }
 
 /// Check system wireless capabilities for a given interface
@@ -349,23 +337,15 @@ pub fn check_capabilities(interface: &str) -> WirelessCapabilities {
     let interface_exists = std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists();
     let interface_is_wireless = is_wireless_interface(interface);
 
-    // Check monitor mode support via iw for the specific phy of this interface
+    // Check monitor mode support via nl80211
     let mut supports_monitor = false;
     if interface_exists && interface_is_wireless {
-        if let Some(phy) = interface_wiphy(interface) {
-            supports_monitor = std::process::Command::new("iw")
-                .args(["phy", &format!("phy{}", phy), "info"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains("monitor"))
-                .unwrap_or(false);
-        }
-        // Fallback: scan iw list if phy lookup failed
-        if !supports_monitor {
-            supports_monitor = std::process::Command::new("iw")
-                .arg("list")
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains("monitor"))
-                .unwrap_or(false);
+        if let Some(_phy) = interface_wiphy(interface) {
+            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                if let Ok(caps) = mgr.get_phy_capabilities(interface) {
+                    supports_monitor = caps.supports_monitor;
+                }
+            }
         }
     }
 

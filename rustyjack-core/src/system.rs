@@ -49,6 +49,8 @@ use rustyjack_netlink::wireless::{InterfaceMode, WirelessManager};
 use rustyjack_netlink::{StationConfig, StationManager};
 
 use crate::netlink_helpers::{
+    netlink_add_default_route, netlink_delete_default_route, netlink_get_interface_index,
+    netlink_get_ipv4_addresses, netlink_list_interfaces, netlink_list_routes,
     netlink_set_interface_down, netlink_set_interface_up, process_kill_pattern, process_running,
     rfkill_block, rfkill_find_index, rfkill_unblock,
 };
@@ -192,17 +194,15 @@ pub fn detect_interface(override_name: Option<String>) -> Result<InterfaceInfo> 
         None => discover_default_interface().context("could not detect a default interface")?,
     };
 
-    let output = Command::new("ip")
-        .args(["-4", "addr", "show", "dev", &name])
-        .output()
+    let addrs = netlink_get_ipv4_addresses(&name)
         .with_context(|| format!("collecting IPv4 data for {name}"))?;
-    if !output.status.success() {
-        bail!("ip command failed for interface {name}");
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let (addr, prefix) = parse_inet_line(&stdout)
-        .with_context(|| format!("unable to parse IPv4 details for {name}"))?;
+    let (addr, prefix) = addrs
+        .into_iter()
+        .find_map(|addr| match addr.address {
+            std::net::IpAddr::V4(v4) => Some((v4, addr.prefix_len)),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("no IPv4 address found for {name}"))?;
 
     Ok(InterfaceInfo {
         name,
@@ -257,14 +257,8 @@ pub fn detect_ethernet_interface(override_name: Option<String>) -> Result<Interf
 }
 
 pub fn discover_default_interface() -> Result<String> {
-    let output = Command::new("ip")
-        .args(["-4", "route", "show", "default"])
-        .output()
-        .context("executing ip route")?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(name) = parse_default_route(&stdout) {
+    if let Ok(Some(route)) = read_default_route() {
+        if let Some(name) = route.interface {
             return Ok(name);
         }
     }
@@ -280,35 +274,6 @@ pub fn discover_default_interface() -> Result<String> {
     }
 
     Err(anyhow!("no usable network interface found"))
-}
-
-fn parse_default_route(route_output: &str) -> Option<String> {
-    for line in route_output.lines() {
-        let mut words = line.split_whitespace().peekable();
-        while let Some(word) = words.next() {
-            if word == "dev" {
-                return words.next().map(|s| s.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn parse_inet_line(output: &str) -> Option<(Ipv4Addr, u8)> {
-    for line in output.lines() {
-        let line = line.trim();
-        if line.starts_with("inet ") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(addr_part) = parts.get(1) {
-                if let Some((addr, prefix)) = addr_part.split_once('/') {
-                    let addr = addr.parse().ok()?;
-                    let prefix = prefix.parse().ok()?;
-                    return Some((addr, prefix));
-                }
-            }
-        }
-    }
-    None
 }
 
 pub fn strip_nmap_header(path: &Path) -> Result<()> {
@@ -549,31 +514,12 @@ pub fn compose_status_text(
 }
 
 pub fn default_gateway_ip() -> Result<Ipv4Addr> {
-    let output = Command::new("ip")
-        .args(["route", "show", "default"])
-        .output()
-        .context("executing ip route for gateway info")?;
-    if !output.status.success() {
-        bail!("ip route command failed when retrieving gateway");
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_gateway(&stdout).ok_or_else(|| anyhow!("unable to parse default gateway"))
-}
-
-fn parse_gateway(route_output: &str) -> Option<Ipv4Addr> {
-    for line in route_output.lines() {
-        let mut words = line.split_whitespace();
-        while let Some(word) = words.next() {
-            if word == "via" {
-                if let Some(value) = words.next() {
-                    if let Ok(ip) = value.parse() {
-                        return Some(ip);
-                    }
-                }
-            }
+    if let Some(route) = read_default_route()? {
+        if let Some(gw) = route.gateway {
+            return Ok(gw);
         }
     }
-    None
+    Err(anyhow!("unable to parse default gateway"))
 }
 
 pub fn scan_local_hosts(interface: &str) -> Result<Vec<HostInfo>> {
@@ -867,106 +813,98 @@ pub fn list_interface_summaries() -> Result<Vec<InterfaceSummary>> {
 }
 
 fn interface_ipv4(interface: &str) -> Option<String> {
-    let output = Command::new("ip")
-        .args(["-4", "addr", "show", "dev", interface])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.starts_with("inet ") {
-            if let Some(addr) = line.split_whitespace().nth(1) {
-                return Some(addr.split('/').next().unwrap_or(addr).to_string());
+    #[cfg(target_os = "linux")]
+    {
+        let addrs = netlink_get_ipv4_addresses(interface).ok()?;
+        for addr in addrs {
+            if let std::net::IpAddr::V4(v4) = addr.address {
+                return Some(v4.to_string());
             }
         }
+        None
     }
-    None
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        None
+    }
 }
 
 pub fn read_default_route() -> Result<Option<DefaultRouteInfo>> {
-    let output = Command::new("ip")
-        .args(["route", "show", "default"])
-        .output()
-        .context("reading default route")?;
-    if !output.status.success() {
-        return Ok(None);
+    let routes = netlink_list_routes().context("reading default route")?;
+    let interfaces = netlink_list_interfaces().unwrap_or_default();
+    let mut iface_map = std::collections::HashMap::new();
+    for iface in interfaces {
+        iface_map.insert(iface.index, iface.name);
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.lines().next().unwrap_or("").trim();
-    if line.is_empty() {
-        return Ok(None);
-    }
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    let mut route = DefaultRouteInfo {
-        interface: None,
-        gateway: None,
-        metric: None,
-    };
-    let mut i = 0;
-    while i < parts.len() {
-        match parts[i] {
-            "dev" if i + 1 < parts.len() => {
-                route.interface = Some(parts[i + 1].to_string());
-                i += 1;
-            }
-            "via" if i + 1 < parts.len() => {
-                if let Ok(ip) = parts[i + 1].parse() {
-                    route.gateway = Some(ip);
-                }
-                i += 1;
-            }
-            "metric" if i + 1 < parts.len() => {
-                if let Ok(value) = parts[i + 1].parse() {
-                    route.metric = Some(value);
-                }
-                i += 1;
-            }
-            _ => {}
+
+    let route = routes.into_iter().find(|route| {
+        if route.prefix_len != 0 {
+            return false;
         }
-        i += 1;
+        match route.destination {
+            None => true,
+            Some(std::net::IpAddr::V4(v4)) => v4.octets() == [0, 0, 0, 0],
+            _ => false,
+        }
+    });
+
+    if let Some(route) = route {
+        Ok(Some(DefaultRouteInfo {
+            interface: route.interface_index.and_then(|idx| iface_map.get(&idx).cloned()),
+            gateway: route.gateway.and_then(|gw| match gw {
+                std::net::IpAddr::V4(v4) => Some(v4),
+                _ => None,
+            }),
+            metric: route.metric,
+        }))
+    } else {
+        Ok(None)
     }
-    Ok(Some(route))
 }
 
 pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
-    let output = Command::new("ip")
-        .args(["route", "show", "dev", interface])
-        .output()
-        .with_context(|| format!("querying route for {interface}"))?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(ip) = parse_gateway_from_route(&stdout) {
-            return Ok(Some(ip));
-        }
-    }
-    let output = Command::new("ip")
-        .args(["route", "show", "default", "dev", interface])
-        .output()
-        .with_context(|| format!("querying default route for {interface}"))?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(ip) = parse_gateway_from_route(&stdout) {
-            return Ok(Some(ip));
-        }
-    }
-    Ok(None)
-}
+    let ifindex = match netlink_get_interface_index(interface) {
+        Ok(idx) => idx,
+        Err(_) => return Ok(None),
+    };
+    let routes = netlink_list_routes().with_context(|| format!("querying routes for {interface}"))?;
 
-fn parse_gateway_from_route(output: &str) -> Option<Ipv4Addr> {
-    for line in output.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        for i in 0..parts.len() {
-            if parts[i] == "via" && i + 1 < parts.len() {
-                if let Ok(ip) = parts[i + 1].parse() {
-                    return Some(ip);
-                }
-            }
+    let is_default = |route: &rustyjack_netlink::RouteInfo| {
+        if route.prefix_len != 0 {
+            return false;
+        }
+        match route.destination {
+            None => true,
+            Some(std::net::IpAddr::V4(v4)) => v4.octets() == [0, 0, 0, 0],
+            _ => false,
+        }
+    };
+
+    let find_gateway = |route: &rustyjack_netlink::RouteInfo| -> Option<Ipv4Addr> {
+        route.gateway.and_then(|gw| match gw {
+            std::net::IpAddr::V4(v4) => Some(v4),
+            _ => None,
+        })
+    };
+
+    if let Some(route) = routes.iter().find(|r| r.interface_index == Some(ifindex) && is_default(r))
+    {
+        if let Some(gateway) = find_gateway(route) {
+            return Ok(Some(gateway));
         }
     }
-    None
+
+    if let Some(route) = routes
+        .iter()
+        .find(|r| r.interface_index == Some(ifindex) && r.gateway.is_some())
+    {
+        if let Some(gateway) = find_gateway(route) {
+            return Ok(Some(gateway));
+        }
+    }
+
+    Ok(None)
 }
 
 pub fn rfkill_index_for_interface(interface: &str) -> Option<String> {
@@ -1315,18 +1253,11 @@ pub fn restart_system_service(service: &str) -> Result<()> {
 }
 
 pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
-    let _ = Command::new("ip")
-        .args(["link", "set", "br0", "down"])
-        .status();
+    let _ = netlink_set_interface_down("br0");
     let _ = Command::new("brctl").args(["delbr", "br0"]).status();
     for iface in [interface_a, interface_b] {
-        Command::new("ip")
-            .args(["link", "set", iface, "down"])
-            .status()
-            .with_context(|| format!("bringing {iface} down"))?
-            .success()
-            .then_some(())
-            .ok_or_else(|| anyhow!("failed to bring down {iface}"))?;
+        netlink_set_interface_down(iface)
+            .with_context(|| format!("bringing {iface} down"))?;
     }
     Command::new("brctl")
         .args(["addbr", "br0"])
@@ -1342,29 +1273,20 @@ pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
             .with_context(|| format!("adding {iface} to br0"))?
             .success()
             .then_some(())
-            .ok_or_else(|| anyhow!("brctl addif failed for {iface}"))?;
+        .ok_or_else(|| anyhow!("brctl addif failed for {iface}"))?;
     }
     for iface in [interface_a, interface_b, "br0"] {
-        Command::new("ip")
-            .args(["link", "set", iface, "up"])
-            .status()
-            .with_context(|| format!("bringing {iface} up"))?
-            .success()
-            .then_some(())
-            .ok_or_else(|| anyhow!("failed to bring up {iface}"))?;
+        netlink_set_interface_up(iface)
+            .with_context(|| format!("bringing {iface} up"))?;
     }
     Ok(())
 }
 
 pub fn stop_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
-    let _ = Command::new("ip")
-        .args(["link", "set", "br0", "down"])
-        .status();
+    let _ = netlink_set_interface_down("br0");
     let _ = Command::new("brctl").args(["delbr", "br0"]).status();
     for iface in [interface_a, interface_b] {
-        let _ = Command::new("ip")
-            .args(["link", "set", iface, "down"])
-            .status();
+        let _ = netlink_set_interface_down(iface);
     }
     Ok(())
 }
@@ -1374,27 +1296,44 @@ pub fn backup_routing_state(root: &Path) -> Result<PathBuf> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let routes = Command::new("ip")
-        .args(["route", "show"])
-        .output()
-        .context("backing up route table")?;
     let default_route = read_default_route().unwrap_or(None);
-    let mut interfaces = Map::new();
-    for iface in ["eth0", "wlan0", "wlan1", "wlan2"] {
-        if let Ok(output) = Command::new("ip").args(["addr", "show", iface]).output() {
-            if output.status.success() {
-                interfaces.insert(
-                    iface.to_string(),
-                    Value::String(String::from_utf8_lossy(&output.stdout).to_string()),
-                );
-            }
-        }
+    let routes = netlink_list_routes().unwrap_or_default();
+    let interfaces = netlink_list_interfaces().unwrap_or_default();
+    let mut iface_map = std::collections::HashMap::new();
+    for iface in &interfaces {
+        iface_map.insert(iface.index, iface.name.clone());
+    }
+
+    let route_list: Vec<Value> = routes
+        .into_iter()
+        .map(|route| {
+            let iface_name = route
+                .interface_index
+                .and_then(|idx| iface_map.get(&idx).cloned());
+            json!({
+                "destination": route.destination.map(|d| d.to_string()),
+                "prefix_len": route.prefix_len,
+                "gateway": route.gateway.map(|g| g.to_string()),
+                "interface": iface_name,
+                "metric": route.metric,
+            })
+        })
+        .collect();
+
+    let mut interface_map = Map::new();
+    for iface in interfaces {
+        let addrs: Vec<String> = iface
+            .addresses
+            .into_iter()
+            .map(|addr| format!("{}/{}", addr.address, addr.prefix_len))
+            .collect();
+        interface_map.insert(iface.name, json!(addrs));
     }
     let json_value = json!({
         "timestamp": Local::now().to_rfc3339(),
         "default_route": default_route,
-        "all_routes": String::from_utf8_lossy(&routes.stdout),
-        "interfaces": interfaces,
+        "routes": route_list,
+        "interfaces": interface_map,
     });
     fs::write(&path, serde_json::to_string_pretty(&json_value)?)?;
     Ok(path)
@@ -1418,50 +1357,18 @@ pub fn restore_routing_state(root: &Path) -> Result<()> {
     let gateway = route
         .gateway
         .ok_or_else(|| anyhow!("backup missing gateway"))?;
-    let _ = Command::new("ip")
-        .args(["route", "del", "default"])
-        .status();
-    let mut cmd = Command::new("ip");
-    cmd.args([
-        "route",
-        "add",
-        "default",
-        "via",
-        &gateway.to_string(),
-        "dev",
-        &interface,
-    ]);
-    if let Some(metric) = route.metric {
-        cmd.args(["metric", &metric.to_string()]);
-    }
-    cmd.status()
-        .with_context(|| format!("restoring default route via {interface}"))?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("failed to restore default route"))?;
+    let _ = netlink_delete_default_route();
+    netlink_add_default_route(gateway.into(), &interface, route.metric)
+        .with_context(|| format!("restoring default route via {interface}"))?;
     Ok(())
 }
 
 pub fn set_interface_metric(interface: &str, metric: u32) -> Result<()> {
     let gateway =
         interface_gateway(interface)?.ok_or_else(|| anyhow!("No gateway found for {interface}"))?;
-    Command::new("ip")
-        .args([
-            "route",
-            "replace",
-            "default",
-            "via",
-            &gateway.to_string(),
-            "dev",
-            interface,
-            "metric",
-            &metric.to_string(),
-        ])
-        .status()
-        .with_context(|| format!("setting metric for {interface}"))?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("Failed to set metric"))
+    let _ = netlink_delete_default_route();
+    netlink_add_default_route(gateway.into(), interface, Some(metric))
+        .with_context(|| format!("setting metric for {interface}"))
 }
 
 pub fn select_wifi_interface(preferred: Option<String>) -> Result<String> {
@@ -1490,213 +1397,124 @@ pub fn select_wifi_interface(preferred: Option<String>) -> Result<String> {
 }
 
 pub fn scan_wifi_networks(interface: &str) -> Result<Vec<WifiNetwork>> {
-    // Check permissions first
     check_network_permissions()?;
 
-    // Check if wireless-tools is installed
-    let iwlist_check = Command::new("which").arg("iwlist").output();
-
-    if iwlist_check.is_err() || !iwlist_check.unwrap().status.success() {
-        log::error!("iwlist not found - wireless-tools may not be installed");
-        bail!("WiFi scanning requires wireless-tools package. Install with: apt-get install wireless-tools");
+    if interface.trim().is_empty() {
+        bail!("interface cannot be empty");
     }
 
-    // Unblock rfkill if present
     if let Ok(Some(idx)) = rfkill_find_index(interface) {
         if let Err(e) = rfkill_unblock(idx) {
             log::warn!("Failed to unblock rfkill for {interface}: {e}");
         }
     }
 
-    // Ensure interface is up before scanning
-    let up_output = Command::new("ip")
-        .args(["link", "set", interface, "up"])
-        .output()
-        .with_context(|| format!("bringing interface {interface} up before scan"))?;
+    let _ = netlink_set_interface_up(interface);
+    std::thread::sleep(std::time::Duration::from_millis(750));
 
-    if !up_output.status.success() {
-        let stderr = String::from_utf8_lossy(&up_output.stderr);
-        log::warn!("Could not bring interface up: {stderr}");
-    }
-
-    // Give interface time to initialize
-    std::thread::sleep(std::time::Duration::from_millis(1000));
-
-    // Verify interface is wireless
-    let wireless_check = Command::new("iwconfig").arg(interface).output();
-
-    if let Ok(check) = wireless_check {
-        let output_str = String::from_utf8_lossy(&check.stdout);
-        if output_str.contains("no wireless extensions") {
-            log::error!("Interface {interface} does not support wireless extensions");
-            bail!("Interface {interface} is not a wireless interface");
-        }
-    }
-
-    log::info!("Starting WiFi scan on {interface}...");
-
-    let output = Command::new("iwlist")
-        .arg(interface)
-        .arg("scan")
-        .output()
-        .with_context(|| format!("scanning Wi-Fi networks on {interface}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        log::error!("WiFi scan failed on {interface}");
-        log::error!("stderr: {stderr}");
-        log::error!("stdout: {stdout}");
-
-        // Try alternative iw command if iwlist fails
-        log::info!("Attempting fallback scan with 'iw scan'...");
-        let iw_output = Command::new("iw").args(["dev", interface, "scan"]).output();
-
-        if let Ok(iw_out) = iw_output {
-            if iw_out.status.success() {
-                return parse_iw_scan(&String::from_utf8_lossy(&iw_out.stdout));
-            }
-        }
-
-        bail!(
-            "WiFi scan failed on {interface}. Check if interface supports scanning and wireless-tools is installed: {stderr}"
+    if let Err(e) = rustyjack_netlink::start_wpa_supplicant(interface, None) {
+        log::warn!(
+            "[WIFI] wpa_supplicant not started for {}: {}",
+            interface,
+            e
         );
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let wpa = rustyjack_netlink::WpaManager::new(interface)
+        .with_context(|| format!("opening wpa_supplicant control for {}", interface))?;
+    wpa.scan()
+        .with_context(|| format!("triggering scan on {}", interface))?;
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(10);
+    let mut results = Vec::new();
+    while start.elapsed() < timeout {
+        if let Ok(scan_results) = wpa.scan_results() {
+            if !scan_results.is_empty() {
+                results = scan_results;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    if results.is_empty() {
+        bail!("WiFi scan returned no results for {interface}");
+    }
+
     let mut networks = Vec::new();
-    let mut current: Option<WifiNetwork> = None;
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.starts_with("Cell ") && line.contains("Address:") {
-            if let Some(net) = current.take() {
-                networks.push(net);
-            }
-            let mut network = WifiNetwork {
-                ssid: None,
-                bssid: None,
-                quality: None,
-                signal_dbm: None,
-                channel: None,
-                encrypted: true,
-            };
-            if let Some(addr) = line.split("Address:").nth(1) {
-                network.bssid = Some(addr.trim().to_string());
-            }
-            current = Some(network);
+    for entry in results {
+        let ssid = entry.get("ssid").cloned().unwrap_or_default();
+        if ssid.is_empty() {
             continue;
         }
-        if let Some(net) = current.as_mut() {
-            if let Some(idx) = line.find("ESSID:") {
-                let essid = line[idx + 6..].trim().trim_matches('"');
-                if !essid.is_empty() && essid != "\\x00" {
-                    net.ssid = Some(essid.to_string());
-                }
-            } else if line.contains("Quality=") {
-                if let Some(value) = line.split("Quality=").nth(1) {
-                    net.quality = value.split_whitespace().next().map(|s| s.to_string());
-                }
-                if let Some(pos) = line.find("Signal level=") {
-                    let value = &line[pos + "Signal level=".len()..];
-                    if let Some(level) = value.split_whitespace().next() {
-                        let cleaned = level.trim_end_matches("dBm");
-                        if let Ok(dbm) = cleaned.parse() {
-                            net.signal_dbm = Some(dbm);
-                        }
-                    }
-                }
-            } else if line.starts_with("Channel ") || line.starts_with("Channel:") {
-                let channel = line
-                    .split(|c| c == ' ' || c == ':')
-                    .filter_map(|part| part.parse::<u8>().ok())
-                    .next();
-                if let Some(ch) = channel {
-                    net.channel = Some(ch);
-                }
-            } else if line.contains("Encryption key:") {
-                net.encrypted = !line.contains(":off");
-            }
-        }
+        let bssid = entry.get("bssid").cloned();
+        let frequency = entry
+            .get("frequency")
+            .and_then(|v| v.parse::<u32>().ok());
+        let signal_dbm = entry.get("signal").and_then(|v| v.parse::<i32>().ok());
+        let flags = entry.get("flags").cloned().unwrap_or_default();
+        let encrypted = flags.contains("WPA") || flags.contains("RSN") || flags.contains("WEP");
+        let channel = frequency.and_then(freq_to_channel);
+
+        networks.push(WifiNetwork {
+            ssid: Some(ssid),
+            bssid,
+            quality: None,
+            signal_dbm,
+            channel,
+            encrypted,
+        });
     }
-    if let Some(net) = current {
-        networks.push(net);
-    }
-    networks.retain(|n| n.ssid.is_some());
+
     Ok(networks)
 }
 
-/// Parse iw scan output as a fallback
-fn parse_iw_scan(output: &str) -> Result<Vec<WifiNetwork>> {
-    let mut networks = Vec::new();
-    let mut current: Option<WifiNetwork> = None;
-
-    for line in output.lines() {
-        let line = line.trim();
-
-        if line.starts_with("BSS ") {
-            // Save previous network
-            if let Some(net) = current.take() {
-                networks.push(net);
-            }
-
-            // Start new network
-            let mut network = WifiNetwork {
-                ssid: None,
-                bssid: None,
-                quality: None,
-                signal_dbm: None,
-                channel: None,
-                encrypted: true,
-            };
-
-            // Extract BSSID from "BSS aa:bb:cc:dd:ee:ff(on wlan0)"
-            if let Some(bssid_part) = line.split_whitespace().nth(1) {
-                let bssid = bssid_part.split('(').next().unwrap_or(bssid_part);
-                network.bssid = Some(bssid.to_string());
-            }
-
-            current = Some(network);
-            continue;
-        }
-
-        if let Some(net) = current.as_mut() {
-            if line.starts_with("SSID: ") {
-                let ssid = line[6..].trim();
-                if !ssid.is_empty() {
-                    net.ssid = Some(ssid.to_string());
-                }
-            } else if line.starts_with("signal: ") {
-                if let Some(signal_part) = line.split_whitespace().nth(1) {
-                    let dbm_str = signal_part.trim_end_matches(" dBm");
-                    if let Ok(dbm) = dbm_str.parse::<i32>() {
-                        net.signal_dbm = Some(dbm);
-                    }
-                }
-            } else if line.starts_with("freq: ") {
-                // Convert frequency to channel
-                if let Some(freq_str) = line.split_whitespace().nth(1) {
-                    if let Ok(freq) = freq_str.parse::<u32>() {
-                        // Simple 2.4GHz channel calculation
-                        if freq >= 2412 && freq <= 2484 {
-                            let channel = ((freq - 2407) / 5) as u8;
-                            net.channel = Some(channel);
-                        }
-                    }
-                }
-            } else if line.contains("WPA") || line.contains("RSN") || line.contains("WEP") {
-                net.encrypted = true;
-            }
-        }
+fn freq_to_channel(freq: u32) -> Option<u8> {
+    match freq {
+        2412 => Some(1),
+        2417 => Some(2),
+        2422 => Some(3),
+        2427 => Some(4),
+        2432 => Some(5),
+        2437 => Some(6),
+        2442 => Some(7),
+        2447 => Some(8),
+        2452 => Some(9),
+        2457 => Some(10),
+        2462 => Some(11),
+        2467 => Some(12),
+        2472 => Some(13),
+        2484 => Some(14),
+        5180 => Some(36),
+        5200 => Some(40),
+        5220 => Some(44),
+        5240 => Some(48),
+        5260 => Some(52),
+        5280 => Some(56),
+        5300 => Some(60),
+        5320 => Some(64),
+        5500 => Some(100),
+        5520 => Some(104),
+        5540 => Some(108),
+        5560 => Some(112),
+        5580 => Some(116),
+        5600 => Some(120),
+        5620 => Some(124),
+        5640 => Some(128),
+        5660 => Some(132),
+        5680 => Some(136),
+        5700 => Some(140),
+        5720 => Some(144),
+        5745 => Some(149),
+        5765 => Some(153),
+        5785 => Some(157),
+        5805 => Some(161),
+        5825 => Some(165),
+        _ => None,
     }
-
-    // Save last network
-    if let Some(net) = current {
-        networks.push(net);
-    }
-
-    networks.retain(|n| n.ssid.is_some());
-    Ok(networks)
 }
+
 
 pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
     let mut profiles = Vec::new();
@@ -2386,37 +2204,20 @@ fn auto_detect_wifi_interface() -> Result<Option<String>> {
 
 pub fn read_wifi_link_info(interface: &str) -> WifiLinkInfo {
     let mut info = WifiLinkInfo::default();
-    let output = Command::new("iw").args(["dev", interface, "link"]).output();
-    let output = match output {
-        Ok(out) => out,
-        Err(_) => return info,
+    let status = match rustyjack_netlink::WpaManager::new(interface) {
+        Ok(wpa) => wpa.status().ok(),
+        Err(_) => None,
     };
-    if !output.status.success() {
-        return info;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.trim().starts_with("Not connected") {
-        return info;
-    }
-    info.connected = true;
-    for line in stdout.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("SSID:") {
-            let ssid = rest.trim();
-            if !ssid.is_empty() {
-                info.ssid = Some(ssid.to_string());
-            }
-        } else if let Some(rest) = line.strip_prefix("signal:") {
-            let value = rest.trim().split_whitespace().next();
-            if let Some(v) = value {
-                if let Ok(dbm) = v.parse() {
-                    info.signal_dbm = Some(dbm);
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("tx bitrate:") {
-            info.tx_bitrate = Some(rest.trim().to_string());
-        }
-    }
+    let status = match status {
+        Some(status) => status,
+        None => return info,
+    };
+
+    info.connected = matches!(
+        status.wpa_state,
+        rustyjack_netlink::WpaSupplicantState::Completed
+    );
+    info.ssid = status.ssid;
     info
 }
 

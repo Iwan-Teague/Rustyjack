@@ -59,6 +59,21 @@ impl RouteManager {
     /// # }
     /// ```
     pub async fn add_default_route(&self, gateway: IpAddr, interface: &str) -> Result<()> {
+        self.add_default_route_with_metric(gateway, interface, None)
+            .await
+    }
+
+    /// Add a default route with optional metric (priority).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if route cannot be added.
+    pub async fn add_default_route_with_metric(
+        &self,
+        gateway: IpAddr,
+        interface: &str,
+        metric: Option<u32>,
+    ) -> Result<()> {
         if interface.is_empty() {
             return Err(NetlinkError::InvalidArgument {
                 parameter: "interface name".to_string(),
@@ -70,13 +85,13 @@ impl RouteManager {
 
         match gateway {
             IpAddr::V4(gw) => {
-                self.handle
-                    .route()
-                    .add()
-                    .v4()
-                    .gateway(gw)
-                    .output_interface(index)
-                    .execute()
+                let mut req = self.handle.route().add().v4().gateway(gw).output_interface(index);
+                if let Some(metric) = metric {
+                    req.message_mut()
+                        .attributes
+                        .push(RouteAttribute::Priority(metric));
+                }
+                req.execute()
                     .await
                     .map_err(|e| NetlinkError::AddRouteError {
                         destination: "default".to_string(),
@@ -86,13 +101,13 @@ impl RouteManager {
                     })?;
             }
             IpAddr::V6(gw) => {
-                self.handle
-                    .route()
-                    .add()
-                    .v6()
-                    .gateway(gw)
-                    .output_interface(index)
-                    .execute()
+                let mut req = self.handle.route().add().v6().gateway(gw).output_interface(index);
+                if let Some(metric) = metric {
+                    req.message_mut()
+                        .attributes
+                        .push(RouteAttribute::Priority(metric));
+                }
+                req.execute()
                     .await
                     .map_err(|e| NetlinkError::AddRouteError {
                         destination: "default".to_string(),
@@ -103,7 +118,12 @@ impl RouteManager {
             }
         }
 
-        log::info!("Added default route via {} on {}", gateway, interface);
+        log::info!(
+            "Added default route via {} on {} (metric={:?})",
+            gateway,
+            interface,
+            metric
+        );
         Ok(())
     }
 
@@ -213,6 +233,7 @@ impl RouteManager {
             let mut destination = None;
             let mut gateway = None;
             let mut oif = None;
+            let mut metric = None;
             let prefix_len = route.header.destination_prefix_length;
 
             for nla in route.attributes {
@@ -226,6 +247,9 @@ impl RouteManager {
                     RouteAttribute::Oif(idx) => {
                         oif = Some(idx);
                     }
+                    RouteAttribute::Priority(value) => {
+                        metric = Some(value);
+                    }
                     _ => {}
                 }
             }
@@ -236,6 +260,7 @@ impl RouteManager {
                     prefix_len,
                     gateway,
                     interface_index: oif,
+                    metric,
                 });
             }
         }
@@ -298,4 +323,6 @@ pub struct RouteInfo {
     pub gateway: Option<IpAddr>,
     /// Output interface index, if specified
     pub interface_index: Option<u32>,
+    /// Route metric / priority
+    pub metric: Option<u32>,
 }

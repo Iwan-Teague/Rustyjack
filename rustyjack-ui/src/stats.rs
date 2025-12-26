@@ -270,15 +270,34 @@ fn interface_has_ipv4(interface: &str) -> bool {
     if interface.is_empty() {
         return false;
     }
-    let output = Command::new("ip")
-        .args(["-4", "addr", "show", "dev", interface])
-        .output();
-    let output = match output {
-        Ok(out) if out.status.success() => out,
-        _ => return false,
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().any(|line| line.trim_start().starts_with("inet "))
+    #[cfg(target_os = "linux")]
+    {
+        use tokio::runtime::Handle;
+
+        let fetch = |handle: &Handle| {
+            handle.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()?;
+                mgr.get_ipv4_addresses(interface).await
+            })
+        };
+
+        let addrs = match Handle::try_current() {
+            Ok(handle) => fetch(&handle).ok(),
+            Err(_) => tokio::runtime::Runtime::new()
+                .ok()
+                .and_then(|rt| fetch(rt.handle()).ok()),
+        };
+
+        addrs
+            .unwrap_or_default()
+            .iter()
+            .any(|addr| matches!(addr.address, std::net::IpAddr::V4(_)))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        false
+    }
 }
 
 fn log_isolation_state(mode: &str, allow_list: &[String]) {

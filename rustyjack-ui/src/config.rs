@@ -251,6 +251,12 @@ pub struct SettingsConfig {
     /// Use a stable randomized MAC per network
     #[serde(default)]
     pub per_network_mac_enabled: bool,
+    /// SSIDs or interfaces that should never be randomized
+    #[serde(default)]
+    pub mac_randomization_exceptions: Vec<String>,
+    /// Lifetime in seconds for stable MAC rotation (0 = no rotation)
+    #[serde(default)]
+    pub mac_randomization_lifetime_secs: Option<u64>,
     /// Stored per-network MACs (interface -> SSID -> MAC)
     #[serde(default)]
     pub per_network_macs: HashMap<String, HashMap<String, String>>,
@@ -299,6 +305,8 @@ impl Default for SettingsConfig {
             encryption_key_path: String::new(),
             mac_randomization_enabled: false,
             per_network_mac_enabled: false,
+            mac_randomization_exceptions: Vec::new(),
+            mac_randomization_lifetime_secs: None,
             per_network_macs: HashMap::new(),
             original_macs: HashMap::new(),
             current_macs: HashMap::new(),

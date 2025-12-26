@@ -359,20 +359,10 @@ impl PassiveManager {
 
         #[cfg(target_os = "linux")]
         {
-            let output = std::process::Command::new("iw")
-                .args(["dev", interface, "set", "channel", &channel.to_string()])
-                .output()
-                .map_err(|e| EvasionError::System(format!("Failed to set channel: {}", e)))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(EvasionError::InterfaceError(format!(
-                    "Failed to set channel {}: {}",
-                    channel, stderr
-                )));
-            }
-
-            Ok(())
+            let mut mgr = rustyjack_netlink::WirelessManager::new()
+                .map_err(|e| EvasionError::System(format!("Failed to open nl80211: {}", e)))?;
+            mgr.set_channel(interface, channel)
+                .map_err(|e| EvasionError::InterfaceError(format!("{}", e)))
         }
     }
 

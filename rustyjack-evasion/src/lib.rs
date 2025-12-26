@@ -34,8 +34,8 @@
 //!
 //! ## Platform Support
 //!
-//! This library is designed for Linux systems with standard network tools
-//! (`ip`, `iw`, `iwconfig`). Root privileges are required for most operations.
+//! This library is designed for Linux systems with nl80211/netlink available.
+//! Root privileges are required for most operations.
 //!
 //! ## Security Considerations
 //!
@@ -54,6 +54,7 @@
 pub mod config;
 pub mod error;
 pub mod mac;
+pub mod mac_policy;
 pub mod passive;
 pub mod state;
 pub mod txpower;
@@ -63,6 +64,9 @@ pub mod vendor;
 pub use config::{EvasionConfig, EvasionSettings};
 pub use error::{EvasionError, Result};
 pub use mac::{MacAddress, MacGenerationStrategy, MacManager, MacState};
+pub use mac_policy::{
+    MacMode, MacPolicyConfig, MacPolicyEngine, MacStage, StableScope, VendorPolicy,
+};
 pub use passive::{PassiveConfig, PassiveManager, PassiveResult};
 pub use state::{InterfaceState, StateManager};
 pub use txpower::{TxPowerLevel, TxPowerManager};

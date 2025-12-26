@@ -141,10 +141,9 @@ PACKAGES=(
   # network / offensive tools (nmap, tcpdump, etc. still useful for advanced operations)
   nmap ncat tcpdump dsniff ettercap-text-only php
   # WiFi interface tools
-  # - wireless-tools: legacy WiFi tools (iwconfig, etc.) - needed by some scripts
   # - wpasupplicant: provides wpa_supplicant daemon and wpa_cli for WPA auth fallback
   # - network-manager: provides NetworkManager daemon for D-Bus WiFi management (nmcli not used - we use D-Bus directly)
-  wireless-tools wpasupplicant network-manager
+  wpasupplicant network-manager
   # misc
   git i2c-tools curl
 )
@@ -468,31 +467,21 @@ else
   warn "[X] SPI device NOT found - a reboot may be required"
 fi
 
-# 6-b Wireless tools check
-if cmd iwconfig; then
-  info "[OK] Wireless tools found (iwconfig - legacy reference only)"
-else
-  warn "[X] wireless-tools missing (optional - used for legacy reference only)"
-fi
-
-# 6-b2 WiFi client mode dependencies
+# 6-b WiFi client mode dependencies
 if cmd wpa_cli || cmd nmcli; then
   info "[OK] WiFi control present (wpa_cli/nmcli) for client authentication"
 else
   warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
 fi
 
-# 6-b3 rustyjack-netlink replaces: ip, rfkill, pgrep/pkill, iw, hostapd, nf_tables, dhclient, dnsmasq
-info "[OK] rustyjack-netlink provides native Rust implementations for:"
-info "     - ip (network interface management via netlink)"
+# 6-b3 Rustyjack replaces core networking binaries with Rust implementations
+info "[OK] Rustyjack provides native Rust implementations for:"
+info "     - netlink interface control (replaces ip/iw/wireless-tools)"
 info "     - rfkill (radio management via /dev/rfkill)"
-info "     - pgrep/pkill (process management via /proc)"
-info "     - iw (nl80211 wireless operations)"
+info "     - process management (pgrep/pkill via /proc)"
 info "     - hostapd (software AP via nl80211)"
-info "     - wpa_supplicant (WPA/WPA2 client authentication)"
 info "     - nf_tables (netfilter via nf_tables netlink)"
-info "     - dhclient (DHCP client)"
-info "     - dnsmasq (DHCP + DNS server)"
+info "     - DHCP + DNS services (replaces dhclient/dnsmasq)"
 info "     - ARP operations (raw sockets)"
 
 # 6-c USB WiFi dongle detection

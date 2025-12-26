@@ -10,7 +10,7 @@ Passive probe request capture with channel hopping. Uses `rustyjack-wireless::pr
 
 ## Dependencies
 - Monitor mode + capture via `rustyjack-wireless` (radiotap parsing, channel hopping).
-- `rustyjack-netlink` for interface/channel control; optional `iw` fallback.
+- `rustyjack-netlink` for interface/channel control.
 - Root privileges required.
 
 ## Notes

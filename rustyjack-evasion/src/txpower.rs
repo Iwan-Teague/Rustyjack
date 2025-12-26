@@ -18,7 +18,7 @@
 //! - TX power is hardware and driver dependent
 //! - Some adapters may not support all power levels
 //! - Regulatory limits apply in most countries
-//! - Uses `iw` (preferred) or `iwconfig` (fallback)
+//! - Uses nl80211 via `rustyjack-netlink`
 
 use crate::error::{EvasionError, Result};
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,7 @@ impl TxPowerLevel {
         (10f64.powf(dbm / 10.0)) as u32
     }
 
-    /// Convert to mBm (milli-dBm) for iw command
+    /// Convert to mBm (milli-dBm) for nl80211
     #[must_use]
     pub const fn to_mbm(self) -> i32 {
         self.to_dbm() * 100
@@ -180,36 +180,6 @@ impl TxPowerManager {
     ///
     /// Current power in dBm, or default (20) if unreadable
     pub fn get_power(&self, interface: &str) -> Result<i32> {
-        // Try iwconfig first as it's more reliable for reading
-        let output = std::process::Command::new("iwconfig")
-            .arg(interface)
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run iwconfig: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Parse "Tx-Power=XX dBm" or "Tx-Power:XX dBm"
-        for line in stdout.lines() {
-            if let Some(pos) = line.find("Tx-Power") {
-                // Skip to the number
-                let after = &line[pos + 8..];
-                let number_start = after.find(|c: char| c.is_ascii_digit() || c == '-');
-
-                if let Some(start) = number_start {
-                    let rest = &after[start..];
-                    let number_end = rest.find(|c: char| !c.is_ascii_digit() && c != '-');
-                    let number_str = match number_end {
-                        Some(end) => &rest[..end],
-                        None => rest,
-                    };
-
-                    if let Ok(power) = number_str.parse::<i32>() {
-                        return Ok(power);
-                    }
-                }
-            }
-        }
-
         // Try netlink via rustyjack-netlink
         #[cfg(target_os = "linux")]
         {
@@ -255,44 +225,23 @@ impl TxPowerManager {
 
         let dbm = level.to_dbm();
 
-        // Try netlink first
+        // Use netlink
         #[cfg(target_os = "linux")]
         {
             let mbm = level.to_mbm();
             if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
                 let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
-                if mgr.set_tx_power(interface, power_setting).is_ok() {
-                    log::debug!("Set TX power on {} to {} dBm using netlink", interface, dbm);
-                    return Ok(());
-                }
+                mgr.set_tx_power(interface, power_setting)
+                    .map_err(|e| EvasionError::TxPowerError(format!("{}", e)))?;
+                log::debug!("Set TX power on {} to {} dBm using netlink", interface, dbm);
+                return Ok(());
             }
         }
 
-        // Fall back to iwconfig
-        let iwconfig_result = std::process::Command::new("iwconfig")
-            .args([interface, "txpower", &format!("{}", dbm)])
-            .output()
-            .map_err(|e| EvasionError::System(format!("Failed to run iwconfig: {}", e)))?;
-
-        if !iwconfig_result.status.success() {
-            let stderr = String::from_utf8_lossy(&iwconfig_result.stderr);
-
-            if stderr.contains("Operation not permitted") {
-                return Err(EvasionError::PermissionDenied("setting TX power".into()));
-            }
-
-            return Err(EvasionError::TxPowerError(format!(
-                "Failed to set TX power on {}: {}",
-                interface, stderr
-            )));
-        }
-
-        log::debug!(
-            "Set TX power on {} to {} dBm using iwconfig",
-            interface,
-            dbm
-        );
-        Ok(())
+        Err(EvasionError::TxPowerError(format!(
+            "Failed to set TX power on {}: netlink unavailable",
+            interface
+        )))
     }
 
     /// Set stealth power (minimum)

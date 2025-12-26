@@ -11,7 +11,6 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 /// Count the number of lines in a file
@@ -25,14 +24,26 @@ pub fn count_lines(path: &Path) -> std::io::Result<usize> {
 pub fn interface_has_ip(interface: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        let output = Command::new("ip")
-            .args(["-4", "addr", "show", "dev", interface])
-            .output();
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            return stdout.contains("inet ");
-        }
-        false
+        use tokio::runtime::Handle;
+
+        let fetch = |handle: &Handle| {
+            handle.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()?;
+                mgr.get_ipv4_addresses(interface).await
+            })
+        };
+
+        let addrs = match Handle::try_current() {
+            Ok(handle) => fetch(&handle).ok(),
+            Err(_) => tokio::runtime::Runtime::new()
+                .ok()
+                .and_then(|rt| fetch(rt.handle()).ok()),
+        };
+
+        addrs
+            .unwrap_or_default()
+            .iter()
+            .any(|addr| matches!(addr.address, std::net::IpAddr::V4(_)))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -325,54 +336,44 @@ pub fn restore_original_mac(interface: &str, original_mac: &str) -> bool {
         return false;
     }
 
-    let _ = Command::new("ip")
-        .args(["link", "set", interface, "down"])
-        .output();
+    #[cfg(target_os = "linux")]
+    {
+        use rustyjack_evasion::{MacAddress, MacManager};
+        let mut manager = match MacManager::new() {
+            Ok(mgr) => mgr,
+            Err(_) => return false,
+        };
+        manager.set_auto_restore(false);
+        let mac = match MacAddress::parse(original_mac) {
+            Ok(mac) => mac,
+            Err(_) => return false,
+        };
+        manager.set_mac(interface, &mac).is_ok()
+    }
 
-    let result = Command::new("ip")
-        .args(["link", "set", interface, "address", original_mac])
-        .output();
-
-    let _ = Command::new("ip")
-        .args(["link", "set", interface, "up"])
-        .output();
-
-    result.map(|o| o.status.success()).unwrap_or(false)
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        let _ = original_mac;
+        false
+    }
 }
 
 #[cfg(target_os = "linux")]
 pub fn interface_wiphy(interface: &str) -> Option<String> {
-    let output = Command::new("iw")
-        .args(["dev", interface, "info"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("wiphy ") {
-            return Some(rest.trim().to_string());
-        }
-    }
-    None
+    let mut mgr = rustyjack_netlink::WirelessManager::new().ok()?;
+    let info = mgr.get_interface_info(interface).ok()?;
+    Some(info.wiphy.to_string())
 }
 
 #[cfg(target_os = "linux")]
 pub fn check_monitor_mode_support(interface: &str) -> bool {
-    if let Some(phy) = interface_wiphy(interface) {
-        return Command::new("iw")
-            .args(["phy", &format!("phy{}", phy), "info"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains("monitor"))
-            .unwrap_or(false);
-    }
-    // Fallback
-    Command::new("iw")
-        .arg("list")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("monitor"))
+    let mut mgr = match rustyjack_netlink::WirelessManager::new() {
+        Ok(mgr) => mgr,
+        Err(_) => return false,
+    };
+    mgr.get_phy_capabilities(interface)
+        .map(|caps| caps.supports_monitor)
         .unwrap_or(false)
 }
 

@@ -4,9 +4,8 @@
 //! via the nl80211 netlink interface.
 
 use std::fs;
-use std::process::Command;
-
 use crate::error::{Result, WirelessError};
+use crate::netlink_helpers::{netlink_set_interface_down, netlink_set_interface_up};
 use crate::process_helpers::pkill_pattern_force;
 use rustyjack_netlink::{InterfaceMode, WirelessManager};
 
@@ -232,64 +231,20 @@ pub fn get_interface_state(name: &str) -> Result<InterfaceState> {
 
 /// Set interface up or down using ioctl
 pub fn set_interface_state(name: &str, up: bool) -> Result<()> {
-    let state = if up { "up" } else { "down" };
-    let status = Command::new("ip")
-        .args(["link", "set", name, state])
-        .status()
-        .map_err(|e| WirelessError::Interface(format!("Failed to run ip command: {}", e)))?;
-
-    if !status.success() {
-        return Err(WirelessError::Interface(format!(
-            "Failed to set interface {} {}",
-            name, state
-        )));
+    if up {
+        netlink_set_interface_up(name)?;
+    } else {
+        netlink_set_interface_down(name)?;
     }
-
     Ok(())
 }
 
-/// Set interface type using iw command
-/// This is a fallback when netlink doesn't work
+/// Set interface type using the Rustyjack netlink backend
 pub fn set_interface_type_iw(name: &str, mode: Nl80211IfType) -> Result<()> {
-    use std::process::Command;
-
-    let mode_str = match mode {
-        Nl80211IfType::Monitor => "monitor",
-        Nl80211IfType::Managed => "managed",
-        Nl80211IfType::Adhoc => "ibss",
-        Nl80211IfType::Ap => "ap",
-        Nl80211IfType::MeshPoint => "mesh",
-        _ => {
-            return Err(WirelessError::Unsupported(format!(
-                "Interface type {:?} not supported via iw",
-                mode
-            )))
-        }
-    };
-
-    // First bring interface down
-    set_interface_state(name, false)?;
-
-    // Set the type
-    let status = Command::new("iw")
-        .args(["dev", name, "set", "type", mode_str])
-        .status()
-        .map_err(|e| WirelessError::Interface(format!("Failed to run iw command: {}", e)))?;
-
-    if !status.success() {
-        return Err(WirelessError::MonitorMode(format!(
-            "Failed to set {} to {} mode",
-            name, mode_str
-        )));
-    }
-
-    // Bring interface back up
-    set_interface_state(name, true)?;
-
-    Ok(())
+    set_interface_type_netlink(name, mode)
 }
 
-/// Set interface type using the Rustyjack netlink backend (preferred over `iw`)
+/// Set interface type using the Rustyjack netlink backend
 pub fn set_interface_type_netlink(name: &str, mode: Nl80211IfType) -> Result<()> {
     let netlink_mode = match mode {
         Nl80211IfType::Monitor => InterfaceMode::Monitor,
@@ -398,8 +353,6 @@ pub fn get_mac_address(name: &str) -> Result<[u8; 6]> {
 
 /// Set MAC address
 pub fn set_mac_address(name: &str, mac: &[u8; 6]) -> Result<()> {
-    use std::process::Command;
-
     let mac_str = format!(
         "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
@@ -407,38 +360,45 @@ pub fn set_mac_address(name: &str, mac: &[u8; 6]) -> Result<()> {
 
     // Interface must be down to change MAC
     set_interface_state(name, false)?;
+    let result = tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| WirelessError::Interface(format!("Failed to open netlink: {}", e)))?;
+                mgr.set_mac_address(name, &mac_str)
+                    .await
+                    .map_err(|e| WirelessError::Interface(format!("Failed to set MAC: {}", e)))
+            })
+        })
+        .unwrap_or_else(|_| {
+            tokio::runtime::Runtime::new()
+                .map_err(|e| WirelessError::Interface(format!("Failed to create runtime: {}", e)))?
+                .block_on(async {
+                    let mgr = rustyjack_netlink::InterfaceManager::new()
+                        .map_err(|e| WirelessError::Interface(format!("Failed to open netlink: {}", e)))?;
+                    mgr.set_mac_address(name, &mac_str)
+                        .await
+                        .map_err(|e| WirelessError::Interface(format!("Failed to set MAC: {}", e)))
+                })
+        });
 
-    let status = Command::new("ip")
-        .args(["link", "set", name, "address", &mac_str])
-        .status()
-        .map_err(|e| WirelessError::Interface(format!("Failed to set MAC: {}", e)))?;
-
-    set_interface_state(name, true)?;
-
-    if !status.success() {
-        return Err(WirelessError::Interface(format!(
-            "Failed to set MAC address to {}",
-            mac_str
-        )));
+    let up_result = set_interface_state(name, true);
+    match result {
+        Ok(()) => up_result,
+        Err(err) => {
+            let _ = up_result;
+            Err(err)
+        }
     }
-
-    Ok(())
 }
 
 /// Check if interface supports monitor mode
 pub fn supports_monitor_mode(_name: &str) -> Result<bool> {
-    // Query iw for phy capabilities
-    // Note: _name is reserved for future per-interface checks
-    let output = Command::new("iw")
-        .args(["phy"])
-        .output()
-        .map_err(|e| WirelessError::Interface(format!("Failed to run iw phy: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Find the phy for this interface and check supported modes
-    // This is a simplified check
-    Ok(stdout.contains("monitor"))
+    let mut mgr = WirelessManager::new()
+        .map_err(|e| WirelessError::Interface(format!("Failed to open nl80211: {}", e)))?;
+    mgr.get_phy_capabilities(_name)
+        .map(|caps| caps.supports_monitor)
+        .map_err(|e| WirelessError::Interface(format!("Failed to query phy: {}", e)))
 }
 
 /// Check if interface supports packet injection

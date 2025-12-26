@@ -295,7 +295,7 @@ impl InterfaceCapabilities {
         let monitor_mode = nl80211::supports_monitor_mode(name).unwrap_or(false);
         let injection = nl80211::supports_injection(name).unwrap_or(false);
 
-        // Default channels - actual detection would require iw phy parsing
+        // Default channels - actual detection would require nl80211 phy parsing
         let channels_2g = (1..=14).collect();
         let channels_5g = vec![
             36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,

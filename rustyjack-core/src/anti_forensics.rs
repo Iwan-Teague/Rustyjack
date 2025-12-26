@@ -506,10 +506,58 @@ pub fn sanitize_file_metadata(path: &Path) -> Result<()> {
 pub fn clear_arp_cache() -> Result<()> {
     info!("Clearing ARP cache");
 
-    Command::new("ip")
-        .args(["-s", "neigh", "flush", "all"])
-        .status()
-        .context("clearing ARP cache")?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::io;
+        use std::mem;
+
+        fn delete_arp_entry(ip: std::net::Ipv4Addr) -> io::Result<()> {
+            let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            let mut req: libc::arpreq = unsafe { mem::zeroed() };
+            let mut addr: libc::sockaddr_in = unsafe { mem::zeroed() };
+            addr.sin_family = libc::AF_INET as u16;
+            addr.sin_addr.s_addr = u32::from_be_bytes(ip.octets());
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    &addr as *const _ as *const u8,
+                    &mut req.arp_pa as *mut _ as *mut u8,
+                    mem::size_of::<libc::sockaddr_in>(),
+                );
+            }
+
+            let res = unsafe { libc::ioctl(fd, libc::SIOCDARP, &req) };
+            let err = io::Error::last_os_error();
+            unsafe {
+                libc::close(fd);
+            }
+
+            if res < 0 {
+                return Err(err);
+            }
+            Ok(())
+        }
+
+        if let Ok(contents) = std::fs::read_to_string("/proc/net/arp") {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 {
+                    continue;
+                }
+                let mut parts = line.split_whitespace();
+                if let Some(ip_str) = parts.next() {
+                    if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
+                        if let Err(err) = delete_arp_entry(ip) {
+                            log::debug!("Failed to delete ARP entry {}: {}", ip, err);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -518,11 +566,10 @@ pub fn clear_arp_cache() -> Result<()> {
 pub fn clear_routing_artifacts() -> Result<()> {
     info!("Clearing routing artifacts");
 
-    // Clear temporary routes
-    Command::new("ip")
-        .args(["route", "flush", "cache"])
-        .status()
-        .ok();
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::fs::write("/proc/sys/net/ipv4/route/flush", "1");
+    }
 
     Ok(())
 }

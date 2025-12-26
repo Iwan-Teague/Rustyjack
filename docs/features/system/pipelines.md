@@ -20,7 +20,7 @@ Prebuilt sequences that chain wireless/ethernet actions. Orchestrated by `rustyj
 ## Dependencies
 - Wireless: `rustyjack-wireless` (nl80211, injection, capture), `rustyjack-netlink` (iface control, DHCP/DNS), `rustyjack-core` orchestration, optional `rustyjack-encryption` for loot, external adapters for monitor/injection.
 - Ethernet: `rustyjack-ethernet` for discovery/port scan/inventory, tcpdump/arp spoof/DNS spoof via core, iptables/NAT via `rustyjack-netlink`.
-- External fallbacks: `airmon-ng`, `iwconfig`, `tcpdump`, `ettercap`, PHP server, depending on pipeline steps.
+- External fallbacks: `airmon-ng`, `tcpdump`, `ettercap`, PHP server, depending on pipeline steps.
 
 ## Notes
 - Each step returns explicit outcomes; timeouts prevent “empty success” behavior.

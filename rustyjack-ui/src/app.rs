@@ -7648,10 +7648,12 @@ Do not remove power/USB",
                 // Step 2: Minimum TX power
                 #[cfg(target_os = "linux")]
                 {
-                    use std::process::Command;
-                    let _ = Command::new("iw")
-                        .args(["dev", interface, "set", "txpower", "fixed", "100"]) // 1 dBm
-                        .output();
+                    if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
+                        let _ = mgr.set_tx_power(
+                            interface,
+                            rustyjack_netlink::TxPowerSetting::Fixed(100),
+                        );
+                    }
                 }
                 thread::sleep(Duration::from_secs(1));
                 return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
@@ -8787,56 +8789,40 @@ Do not remove power/USB",
             };
 
         self.show_progress("Restore MAC", [&format!("Restoring: {}", original_mac)])?;
+        let restored = restore_original_mac(&active_interface, &original_mac);
 
-        // Bring interface down
-        let _ = Command::new("ip")
-            .args(["link", "set", &active_interface, "down"])
-            .output();
+        if restored {
+            let reconnect_ok = renew_dhcp_and_reconnect(&active_interface);
 
-        // Set original MAC
-        let result = Command::new("ip")
-            .args(["link", "set", &active_interface, "address", &original_mac])
-            .output();
+            self.config.settings.current_macs.remove(&active_interface);
+            self.config.settings.original_macs.remove(&active_interface);
+            let config_path = self.root.join("gui_conf.json");
+            let _ = self.config.save(&config_path);
 
-        // Bring interface back up
-        let _ = Command::new("ip")
-            .args(["link", "set", &active_interface, "up"])
-            .output();
+            let interface_line = format!("Interface: {}", active_interface);
+            let mac_line = format!("MAC: {}", original_mac);
+            let mut lines = vec![&interface_line, "", &mac_line, ""];
 
-        match result {
-            Ok(output) if output.status.success() => {
-                let reconnect_ok = renew_dhcp_and_reconnect(&active_interface);
-
-                self.config.settings.current_macs.remove(&active_interface);
-                self.config.settings.original_macs.remove(&active_interface);
-                let config_path = self.root.join("gui_conf.json");
-                let _ = self.config.save(&config_path);
-
-                let interface_line = format!("Interface: {}", active_interface);
-                let mac_line = format!("MAC: {}", original_mac);
-                let mut lines = vec![&interface_line, "", &mac_line, ""];
-
-                if reconnect_ok {
-                    lines.push("Original MAC restored.");
-                } else {
-                    lines.push("MAC restored.");
-                    lines.push("Warning: reconnect may");
-                    lines.push("have failed. Check DHCP.");
-                }
-
-                self.show_message("MAC Restored", lines)
+            if reconnect_ok {
+                lines.push("Original MAC restored.");
+            } else {
+                lines.push("MAC restored.");
+                lines.push("Warning: reconnect may");
+                lines.push("have failed. Check DHCP.");
             }
-            Ok(_) => self.show_message(
-                "Restore Error",
-                [
-                    "Failed to restore MAC",
-                    "",
-                    "Try rebooting to reset",
-                    "the interface.",
-                ],
-            ),
-            Err(_) => self.show_message("Restore Error", ["Failed to execute", "restore command."]),
+
+            return self.show_message("MAC Restored", lines);
         }
+
+        self.show_message(
+            "Restore Error",
+            [
+                "Failed to restore MAC",
+                "",
+                "Check permissions/driver",
+                "or reboot to reset.",
+            ],
+        )
     }
 
     /// Set TX power level
@@ -8867,26 +8853,17 @@ Do not remove power/USB",
         self.bump_to_custom();
         self.show_progress("TX Power", [&format!("Setting to: {}", label)])?;
 
-        // Try iw first (uses mBm)
-        let result = Command::new("iw")
-            .args([
-                "dev",
-                &active_interface,
-                "set",
-                "txpower",
-                "fixed",
-                &format!("{}00", dbm),
-            ])
-            .output();
-
-        let success = if let Ok(out) = result {
-            out.status.success()
-        } else {
-            // Try iwconfig as fallback
-            let result2 = Command::new("iwconfig")
-                .args([&active_interface, "txpower", &format!("{}", dbm)])
-                .output();
-            result2.map(|o| o.status.success()).unwrap_or(false)
+        let success = match rustyjack_netlink::WirelessManager::new() {
+            Ok(mut mgr) => mgr
+                .set_tx_power(
+                    &active_interface,
+                    rustyjack_netlink::TxPowerSetting::Fixed((dbm as u32) * 100),
+                )
+                .is_ok(),
+            Err(e) => {
+                log::warn!("Failed to open nl80211 socket: {}", e);
+                false
+            }
         };
 
         if success {
@@ -11944,21 +11921,23 @@ Do not remove power/USB",
 
         // Query ARP table to find currently connected devices
         // ARP entries for devices on our AP subnet (10.20.30.x)
-        if let Ok(output) = Command::new("ip")
-            .args(&["neigh", "show", "dev", ap_iface])
-            .output()
-        {
-            let arp_output = String::from_utf8_lossy(&output.stdout);
-            for line in arp_output.lines() {
-                // Parse lines like: "10.20.30.15 lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+        if let Ok(contents) = fs::read_to_string("/proc/net/arp") {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 {
+                    continue;
+                }
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 5 && parts[1] == "lladdr" {
-                    let mac = parts[2].to_lowercase();
-                    let state = parts.get(3).unwrap_or(&"");
-                    // Only consider REACHABLE or STALE as "connected"
-                    if state == &"REACHABLE" || state == &"STALE" || state == &"DELAY" {
-                        active_macs.insert(mac);
-                    }
+                if parts.len() < 6 {
+                    continue;
+                }
+                let iface = parts[5];
+                if iface != ap_iface {
+                    continue;
+                }
+                let flags = parts[2];
+                let mac = parts[3].to_lowercase();
+                if flags != "0x0" && mac != "00:00:00:00:00:00" {
+                    active_macs.insert(mac);
                 }
             }
         }

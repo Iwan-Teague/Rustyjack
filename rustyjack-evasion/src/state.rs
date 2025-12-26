@@ -335,20 +335,12 @@ impl StateManager {
         {
             let mbm = dbm * 100;
 
-            // Try netlink first
-            if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-                let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
-                if mgr.set_tx_power(interface, power_setting).is_ok() {
-                    return Ok(());
-                }
-            }
-
-            // Fall back to iwconfig
-            let _ = std::process::Command::new("iwconfig")
-                .args([interface, "txpower", &dbm.to_string()])
-                .output();
-
-            Ok(())
+            let mut mgr = rustyjack_netlink::WirelessManager::new().map_err(|e| {
+                EvasionError::System(format!("Failed to open nl80211: {}", e))
+            })?;
+            let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
+            mgr.set_tx_power(interface, power_setting)
+                .map_err(|e| EvasionError::RestoreError(format!("Failed to restore TX power: {}", e)))
         }
     }
 }

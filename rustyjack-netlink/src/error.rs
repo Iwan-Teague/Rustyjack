@@ -7,7 +7,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum NetlinkError {
     // Interface errors
-    #[error("Interface '{name}' not found. Verify interface exists with 'ip link show'.")]
+    #[error("Interface '{name}' not found. Verify interface exists under /sys/class/net.")]
     InterfaceNotFound { name: String },
 
     #[error("Failed to get interface index for '{interface}': {reason}")]

@@ -86,27 +86,125 @@ pub fn discover_gateway(interface: &str) -> Result<GatewayInfo> {
     })
 }
 
-fn get_default_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
-    let output = Command::new("ip")
-        .args(["route", "show", "dev", interface])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run ip route: {}", e)))?;
+fn netlink_routes() -> Result<Vec<rustyjack_netlink::RouteInfo>> {
+    use tokio::runtime::Handle;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.contains("default via") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(idx) = parts.iter().position(|&p| p == "via") {
-                if let Some(ip_str) = parts.get(idx + 1) {
-                    if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
-                        return Ok(Some(ip));
-                    }
-                }
-            }
-        }
+    let fetch = |handle: &Handle| {
+        handle.block_on(async {
+            rustyjack_netlink::list_routes()
+                .await
+                .map_err(|e| WirelessError::System(format!("Failed to list routes: {}", e)))
+        })
+    };
+
+    match Handle::try_current() {
+        Ok(handle) => fetch(&handle),
+        Err(_) => tokio::runtime::Runtime::new()
+            .map_err(|e| WirelessError::System(format!("Failed to create runtime: {}", e)))?
+            .block_on(async {
+                rustyjack_netlink::list_routes()
+                    .await
+                    .map_err(|e| WirelessError::System(format!("Failed to list routes: {}", e)))
+            }),
     }
+}
 
-    Ok(None)
+fn netlink_ifindex(interface: &str) -> Result<u32> {
+    use tokio::runtime::Handle;
+
+    let fetch = |handle: &Handle| {
+        handle.block_on(async {
+            let mgr = rustyjack_netlink::InterfaceManager::new()
+                .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
+            mgr.get_interface_index(interface)
+                .await
+                .map_err(|e| {
+                    WirelessError::System(format!("Failed to get ifindex for {}: {}", interface, e))
+                })
+        })
+    };
+
+    match Handle::try_current() {
+        Ok(handle) => fetch(&handle),
+        Err(_) => tokio::runtime::Runtime::new()
+            .map_err(|e| WirelessError::System(format!("Failed to create runtime: {}", e)))?
+            .block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
+                mgr.get_interface_index(interface)
+                    .await
+                    .map_err(|e| {
+                        WirelessError::System(format!(
+                            "Failed to get ifindex for {}: {}",
+                            interface, e
+                        ))
+                    })
+            }),
+    }
+}
+
+fn netlink_ipv4_addrs(interface: &str) -> Result<Vec<rustyjack_netlink::AddressInfo>> {
+    use tokio::runtime::Handle;
+
+    let fetch = |handle: &Handle| {
+        handle.block_on(async {
+            let mgr = rustyjack_netlink::InterfaceManager::new()
+                .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
+            mgr.get_ipv4_addresses(interface)
+                .await
+                .map_err(|e| {
+                    WirelessError::System(format!(
+                        "Failed to read IPv4 addresses for {}: {}",
+                        interface, e
+                    ))
+                })
+        })
+    };
+
+    match Handle::try_current() {
+        Ok(handle) => fetch(&handle),
+        Err(_) => tokio::runtime::Runtime::new()
+            .map_err(|e| WirelessError::System(format!("Failed to create runtime: {}", e)))?
+            .block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
+                mgr.get_ipv4_addresses(interface)
+                    .await
+                    .map_err(|e| {
+                        WirelessError::System(format!(
+                            "Failed to read IPv4 addresses for {}: {}",
+                            interface, e
+                        ))
+                    })
+            }),
+    }
+}
+
+fn get_default_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
+    let ifindex = netlink_ifindex(interface)?;
+    let routes = netlink_routes()?;
+
+    let is_default = |route: &rustyjack_netlink::RouteInfo| {
+        if route.prefix_len != 0 {
+            return false;
+        }
+        match route.destination {
+            None => true,
+            Some(IpAddr::V4(v4)) => v4.octets() == [0, 0, 0, 0],
+            _ => false,
+        }
+    };
+
+    let gw = routes
+        .iter()
+        .find(|route| route.interface_index == Some(ifindex) && is_default(route))
+        .and_then(|route| route.gateway)
+        .and_then(|gw| match gw {
+            IpAddr::V4(v4) => Some(v4),
+            _ => None,
+        });
+
+    Ok(gw)
 }
 
 fn get_dns_servers() -> Result<Vec<IpAddr>> {
@@ -159,15 +257,14 @@ pub fn arp_scan(interface: &str) -> Result<Vec<ArpDevice>> {
     let subnet = get_interface_subnet(interface)?;
     let mut devices = Vec::new();
 
-    let output = Command::new("ip")
-        .args(["neigh", "show", "dev", interface])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run ip neigh: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if let Some(device) = parse_arp_line(line) {
-            devices.push(device);
+    if let Ok(contents) = std::fs::read_to_string("/proc/net/arp") {
+        for (idx, line) in contents.lines().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            if let Some(device) = parse_arp_line(line, Some(interface)) {
+                devices.push(device);
+            }
         }
     }
 
@@ -175,15 +272,14 @@ pub fn arp_scan(interface: &str) -> Result<Vec<ArpDevice>> {
         perform_active_arp_scan(&subnet, interface)?;
         std::thread::sleep(Duration::from_millis(500));
 
-        let output = Command::new("ip")
-            .args(["neigh", "show", "dev", interface])
-            .output()
-            .map_err(|e| WirelessError::System(format!("Failed to run ip neigh: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if let Some(device) = parse_arp_line(line) {
-                devices.push(device);
+        if let Ok(contents) = std::fs::read_to_string("/proc/net/arp") {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 {
+                    continue;
+                }
+                if let Some(device) = parse_arp_line(line, Some(interface)) {
+                    devices.push(device);
+                }
             }
         }
     }
@@ -192,46 +288,42 @@ pub fn arp_scan(interface: &str) -> Result<Vec<ArpDevice>> {
 }
 
 fn get_interface_subnet(interface: &str) -> Result<String> {
-    let output = Command::new("ip")
-        .args(["-o", "-4", "addr", "show", "dev", interface])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to get interface subnet: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.contains("inet ") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(idx) = parts.iter().position(|&p| p == "inet") {
-                if let Some(cidr) = parts.get(idx + 1) {
-                    return Ok(cidr.to_string());
-                }
-            }
+    let addrs = netlink_ipv4_addrs(interface)?;
+    for addr in addrs {
+        if let IpAddr::V4(v4) = addr.address {
+            return Ok(format!("{}/{}", v4, addr.prefix_len));
         }
     }
-
-    Err(WirelessError::System("No subnet found".to_string()))
+    Err(WirelessError::System(format!(
+        "No IPv4 subnet found on {}",
+        interface
+    )))
 }
 
-fn parse_arp_line(line: &str) -> Option<ArpDevice> {
+fn parse_arp_line(line: &str, interface: Option<&str>) -> Option<ArpDevice> {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() >= 5 {
-        let ip = parts[0].parse::<Ipv4Addr>().ok()?;
-        let mac = parts
-            .iter()
-            .find(|p| p.contains(':') && p.len() == 17)?
-            .to_string();
-
-        let vendor = lookup_mac_vendor(&mac);
-
-        Some(ArpDevice {
-            ip,
-            mac,
-            hostname: resolve_hostname(ip),
-            vendor,
-        })
-    } else {
-        None
+    if parts.len() < 6 {
+        return None;
     }
+    if let Some(expected) = interface {
+        if parts[5] != expected {
+            return None;
+        }
+    }
+    let ip = parts[0].parse::<Ipv4Addr>().ok()?;
+    let mac = parts[3].to_string();
+    if mac == "00:00:00:00:00:00" {
+        return None;
+    }
+
+    let vendor = lookup_mac_vendor(&mac);
+
+    Some(ArpDevice {
+        ip,
+        mac,
+        hostname: resolve_hostname(ip),
+        vendor,
+    })
 }
 
 fn perform_active_arp_scan(subnet: &str, interface: &str) -> Result<()> {

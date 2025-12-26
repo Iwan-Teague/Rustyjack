@@ -140,12 +140,11 @@ add_dtparam() {
 # ---- 2: install / upgrade required APT packages -------------
 PACKAGES=(
   # WiFi interface tools
-  # - wireless-tools: legacy WiFi tools (iwconfig, etc.) - needed by some scripts
   # - wpasupplicant: provides wpa_supplicant daemon and wpa_cli for WPA auth fallback
   # - network-manager: provides NetworkManager daemon for D-Bus WiFi management
-  wireless-tools wpasupplicant network-manager
+  wpasupplicant network-manager
   # networking tools
-  iproute2 isc-dhcp-client iw hostapd dnsmasq rfkill
+  isc-dhcp-client hostapd dnsmasq rfkill
   # misc
   git i2c-tools curl
 )
@@ -397,22 +396,21 @@ else
   warn "[X] SPI device NOT found - reboot may be required"
 fi
 
-if cmd iwconfig; then
-  info "[OK] Wireless tools found (legacy reference only)"
-else
-  warn "[X] wireless-tools missing (optional)"
-fi
-
 if cmd wpa_cli || cmd nmcli; then
   info "[OK] WiFi control present (wpa_cli/nmcli) for client authentication"
 else
   warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
 fi
 
-# rustyjack-netlink provides native implementations
-info "[OK] rustyjack-netlink provides native Rust implementations for:"
-info "     ip, rfkill, pgrep/pkill, hostapd, dnsmasq, dhclient,"
-info "     nf_tables, and ARP operations"
+# Rustyjack replaces core networking binaries with Rust implementations
+info "[OK] Rustyjack provides native Rust implementations for:"
+info "     netlink interface control (replaces ip/iw/wireless-tools)"
+info "     rfkill (radio management via /dev/rfkill)"
+info "     process management (pgrep/pkill via /proc)"
+info "     hostapd (software AP via nl80211)"
+info "     nf_tables (netfilter via nf_tables netlink)"
+info "     DHCP + DNS services (replaces dhclient/dnsmasq)"
+info "     ARP operations (raw sockets)"
 
 if systemctl is-active --quiet rustyjack.service; then
   info "[OK] Rustyjack service is running"

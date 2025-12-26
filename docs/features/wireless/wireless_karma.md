@@ -10,7 +10,7 @@ Responds to probe requests to impersonate open networks. Implemented in `rustyja
 
 ## Dependencies
 - Monitor/injection via `rustyjack-wireless` (nl80211 + raw frames).
-- Interface control via `rustyjack-netlink`; fallbacks to `airmon-ng`/`iw` if needed.
+- Interface control via `rustyjack-netlink`; fallback to `airmon-ng` if needed.
 - Root/CAP_NET_ADMIN/RAW required; external adapter recommended.
 
 ## Notes

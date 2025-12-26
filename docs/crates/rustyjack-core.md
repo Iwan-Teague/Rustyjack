@@ -24,7 +24,7 @@ Coordinator crate for system operations, pipelines, CLI/autopilot commands, and 
 ## Expectations
 - Root privileges and Linux kernel facilities (netlink, D-Bus, raw sockets).
 - Depends on `rustyjack-netlink`, `rustyjack-wireless`, `rustyjack-ethernet`, `rustyjack-evasion`, `rustyjack-encryption`.
-- Some fallbacks still shell out (`iwconfig`, `airmon-ng`, etc.) when netlink paths are unavailable; mirror new binary deps in installers if added.
+- Some fallbacks still shell out (`airmon-ng`, etc.) when netlink paths are unavailable; mirror new binary deps in installers if added.
 
 ## Contributor notes
 - Keep errors context-rich (interface/BSSID/command) and avoid panics.
@@ -42,7 +42,7 @@ Coordinator crate for system operations, pipelines, CLI/autopilot commands, and 
 - `dhcp_helpers.rs`: create/start/stop/fetch leases for Rust DHCP server (`DhcpServer`); Linux-gated with non-Linux bailouts.
 - `dns_helpers.rs`: create/start/stop DNS server (`DnsServer`) helpers; Linux-gated.
 - `arp_helpers.rs`: thin ARP scan/get_mac/is_alive/spoof wrappers using `rustyjack-netlink::ArpScanner/ArpSpoofer`; bail on non-Linux.
-- `evasion.rs`: utility/legacy evasion helpers (MAC randomization/set via `ip link`, TTL/fragmentation/timing toggles, fingerprint spoofing). Uses netlink helpers to flap interfaces and shells out to `ip` for MAC changes.
+- `evasion.rs`: utility/legacy evasion helpers (MAC randomization/set, TTL/fragmentation/timing toggles, fingerprint spoofing). Uses netlink helpers for MAC changes and interface flaps.
 - `wireless_native.rs`: bridges to native `rustyjack-wireless` attacks; provides result structs and wrappers for deauth, PMKID, probe sniff, karma, evil twin, passive capture, capture bundling; guarded by `target_os = "linux"`.
 - `anti_forensics.rs`: secure delete (shred/manual), recursive directory wipes, purge logs/loot, anti-forensics config (`AntiForensicsConfig`), options for ram-only mode, swap/LED disable, hostname randomization.
 - `physical_access.rs`: wired “physical access” attack flow to extract Wi‑Fi creds from routers: gateway discovery, router fingerprint, DHCP/mDNS/UPnP leaks, web UI default creds, WPS/config backup attempts, known vuln checks; produces `PhysicalAccessReport` and saves it.

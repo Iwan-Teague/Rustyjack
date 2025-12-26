@@ -19,7 +19,7 @@ Native wireless operations (nl80211) for monitor/injection, attacks, hotspot sup
 - `hotspot.rs`: Rust AP startup + DHCP/DNS integration via `rustyjack-netlink`, interface cleanup, rfkill handling.
 
 ## Dependencies/expectations
-- Linux + nl80211; some fallbacks to external tools (`iw`, `airmon-ng`) when netlink operations fail.
+- Linux + nl80211; some fallbacks to external tools (`airmon-ng`) when netlink operations fail.
 - Uses `rustyjack-netlink` for DHCP/DNS servers and some capability checks.
 
 ## Notes for contributors

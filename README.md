@@ -128,7 +128,7 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 
 - **MAC controls**: Auto MAC toggle, Randomize Now (vendor-aware: reuses interface OUI when possible, sets locally administered bit, renews DHCP and signals `wpa_cli`/`nmcli`), Set Vendor MAC (pick from `rustyjack-evasion` vendor table), Restore MAC (uses saved original or hardware address).
 - **Hostname**: Auto toggle + Randomize Now (via `SystemCommand::RandomizeHostname`).
-- **TX Power**: Stealth 1 dBm, Low 5 dBm, Medium 12 dBm, High 18 dBm, Maximum (via `iw`/`iwconfig`).
+- **TX Power**: Stealth 1 dBm, Low 5 dBm, Medium 12 dBm, High 18 dBm, Maximum (via `rustyjack-netlink`).
 - **Passive mode toggle**: Stores preference (used for mode presets); Passive Recon action is informational.
 
 ### Ethernet Recon (active interface must be wired and have link)

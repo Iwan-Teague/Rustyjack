@@ -1,10 +1,10 @@
 use std::{fs, path::Path, process::Command, thread, time::Duration};
 
-use crate::netlink_helpers::{netlink_set_interface_down, netlink_set_interface_up};
 use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, info, warn};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use rustyjack_evasion::{MacAddress, MacManager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvasionConfig {
@@ -31,92 +31,33 @@ impl Default for EvasionConfig {
 
 /// Generate a random MAC address with a valid vendor prefix
 pub fn generate_random_mac(preserve_vendor: bool, current_mac: Option<&str>) -> Result<String> {
-    let mut rng = rand::thread_rng();
-
     if preserve_vendor {
-        // Keep first 3 octets (OUI), randomize last 3
         if let Some(mac) = current_mac {
-            let parts: Vec<&str> = mac.split(':').collect();
-            if parts.len() == 6 {
-                let parsed = parts
-                    .iter()
-                    .map(|p| u8::from_str_radix(p, 16))
-                    .collect::<std::result::Result<Vec<_>, _>>();
-                if let Ok(bytes) = parsed {
-                    if bytes.len() == 6 {
-                        let first = (bytes[0] | 0x02) & 0xFE;
-                        return Ok(format!(
-                            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                            first,
-                            bytes[1],
-                            bytes[2],
-                            rng.gen::<u8>(),
-                            rng.gen::<u8>(),
-                            rng.gen::<u8>()
-                        ));
-                    }
-                }
+            if let Ok(parsed) = MacAddress::parse(mac) {
+                let randomized = MacAddress::random_with_oui(parsed.oui())?;
+                return Ok(randomized.to_string());
             }
         }
     }
 
-    // Generate completely random MAC
-    // Set locally administered bit and clear multicast bit (bit 0)
-    let first = (rng.gen::<u8>() | 0x02) & 0xFE;
-
-    Ok(format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        first,
-        rng.gen::<u8>(),
-        rng.gen::<u8>(),
-        rng.gen::<u8>(),
-        rng.gen::<u8>(),
-        rng.gen::<u8>()
-    ))
+    Ok(MacAddress::random()?.to_string())
 }
 
 /// Set MAC address for an interface
 pub fn set_mac_address(interface: &str, mac: &str) -> Result<()> {
-    // Bring interface down
-    netlink_set_interface_down(interface).context("bringing interface down")?;
-
-    // Set new MAC (still requires ip command - netlink MAC setting pending)
-    let status = Command::new("ip")
-        .args(["link", "set", interface, "address", mac])
-        .status()
-        .context("setting MAC address")?;
-    if !status.success() {
-        let _ = netlink_set_interface_up(interface);
-        bail!("Failed to set MAC on {}: {}", interface, status);
-    }
-
-    // Bring interface back up
-    netlink_set_interface_up(interface).context("bringing interface up")?;
-
+    let mut manager = MacManager::new().context("creating MacManager")?;
+    manager.set_auto_restore(false);
+    let mac = MacAddress::parse(mac)?;
+    manager.set_mac(interface, &mac)?;
     info!("MAC address changed to {} on {}", mac, interface);
     Ok(())
 }
 
 /// Get current MAC address of an interface
 pub fn get_mac_address(interface: &str) -> Result<String> {
-    let output = Command::new("ip")
-        .args(["link", "show", interface])
-        .output()
-        .context("reading MAC address")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse MAC from output like: "link/ether aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff"
-    for line in stdout.lines() {
-        if line.contains("link/ether") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                return Ok(parts[1].to_string());
-            }
-        }
-    }
-
-    Err(anyhow!("Could not parse MAC address from ip output"))
+    let manager = MacManager::new().context("creating MacManager")?;
+    let mac = manager.get_mac(interface)?;
+    Ok(mac.to_string())
 }
 
 /// Spoof OS fingerprint by modifying network stack parameters

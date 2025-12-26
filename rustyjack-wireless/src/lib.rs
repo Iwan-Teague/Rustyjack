@@ -2,8 +2,8 @@
 //!
 //! Native Rust wireless security toolkit for Raspberry Pi.
 //! Provides monitor mode management, packet injection, deauthentication attacks,
-//! and handshake capture. Requires Linux userspace tools (`ip`, `iw`, `hostapd`,
-//! `dnsmasq`, `tcpdump`) and root privileges for raw sockets.
+//! and handshake capture. Requires Linux userspace tools (`hostapd`, `dnsmasq`,
+//! `tcpdump`) and root privileges for raw sockets.
 //!
 //! ## Features
 //!

@@ -15,6 +15,10 @@ use rustyjack_ethernet::{
     build_device_inventory, discover_hosts, discover_hosts_arp, quick_port_scan, DeviceInfo,
     LanDiscoveryResult,
 };
+use rustyjack_evasion::{
+    MacAddress, MacManager, MacMode, MacPolicyConfig, MacPolicyEngine, MacStage, StableScope,
+    VendorPolicy,
+};
 use rustyjack_wireless::{
     arp_scan, calculate_bandwidth, discover_gateway, discover_mdns_devices, get_traffic_stats,
     parse_dns_query, scan_network_services, start_dns_capture, start_hotspot, status_hotspot,
@@ -1731,11 +1735,9 @@ fn handle_wifi_switch(root: &Path, args: WifiSwitchArgs) -> Result<HandlerResult
 }
 
 fn ensure_route_health_check() -> Result<()> {
-    // ip binary availability
-    let ip_check = Command::new("ip").arg("-V").output();
-    match ip_check {
-        Ok(out) if out.status.success() => {}
-        _ => bail!("ip command missing or not working (install iproute2)"),
+    // netlink availability
+    if crate::netlink_helpers::netlink_list_interfaces().is_err() {
+        bail!("netlink interface query failed (check kernel support and privileges)");
     }
 
     // root permissions
@@ -1925,9 +1927,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         gateway_ip = Some(gateway);
     } else {
         // Remove any existing default route so traffic cannot leak to other interfaces
-        let _ = Command::new("ip")
-            .args(["route", "del", "default"])
-            .status();
+        let _ = crate::netlink_helpers::netlink_delete_default_route();
     }
 
     write_interface_preference(root, "system_preferred", &target_interface)?;
@@ -2198,6 +2198,7 @@ fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
     let interface = select_wifi_interface(Some(interface.trim().to_string()))?;
 
     enforce_single_interface(&interface)?;
+    try_apply_mac_policy(root, MacStage::PreAssoc, &interface, None);
 
     let networks = match scan_wifi_networks(&interface) {
         Ok(nets) => {
@@ -2217,6 +2218,139 @@ fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
         "isolation_enforced": true,
     });
     Ok(("Wi-Fi scan completed".to_string(), data))
+}
+
+fn try_apply_mac_policy(root: &Path, stage: MacStage, interface: &str, ssid: Option<&str>) {
+    let config = load_mac_policy_config(root);
+    if config.assoc_mode == MacMode::Off && config.preassoc_mode == MacMode::Off {
+        return;
+    }
+
+    if stage == MacStage::Assoc {
+        if let Some(ssid) = ssid {
+            if let Some(mac) = per_network_mac_override(root, interface, ssid) {
+                if let Ok(parsed) = MacAddress::parse(&mac) {
+                    if let Ok(mut manager) = MacManager::new() {
+                        manager.set_auto_restore(false);
+                        if let Ok(current) = manager.get_mac(interface) {
+                            if current != parsed {
+                                if manager.set_mac(interface, &parsed).is_ok() {
+                                    log::info!(
+                                        "[MAC_POLICY] override {} {} -> {} (per-network)",
+                                        interface,
+                                        current,
+                                        parsed
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    match MacPolicyEngine::new(root, config) {
+        Ok(mut engine) => {
+            if let Err(e) = engine.apply(stage, interface, ssid) {
+                log::warn!(
+                    "[MAC_POLICY] apply failed on {} (stage={:?}): {}",
+                    interface,
+                    stage,
+                    e
+                );
+            }
+        }
+        Err(e) => {
+            log::warn!("[MAC_POLICY] initialization failed: {}", e);
+        }
+    }
+}
+
+fn load_mac_policy_config(root: &Path) -> MacPolicyConfig {
+    let policy_path = root.join("wifi").join("mac_policy.json");
+    if policy_path.exists() {
+        match MacPolicyConfig::load(&policy_path) {
+            Ok(cfg) => return cfg,
+            Err(e) => log::warn!(
+                "[MAC_POLICY] Failed to load {}: {}. Falling back to gui_conf.json",
+                policy_path.display(),
+                e
+            ),
+        }
+    }
+
+    let gui_path = root.join("gui_conf.json");
+    let mut cfg = MacPolicyConfig::default();
+
+    let raw = match fs::read_to_string(&gui_path) {
+        Ok(data) => data,
+        Err(_) => return cfg,
+    };
+    let json: Value = match serde_json::from_str(&raw) {
+        Ok(val) => val,
+        Err(_) => return cfg,
+    };
+    let settings = match json.get("settings") {
+        Some(val) => val,
+        None => return cfg,
+    };
+
+    let mac_random = settings
+        .get("mac_randomization_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let per_network = settings
+        .get("per_network_mac_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if per_network {
+        cfg.assoc_mode = MacMode::Stable;
+        cfg.preassoc_mode = MacMode::Random;
+        cfg.stable_scope = StableScope::Ssid;
+        cfg.vendor_policy = VendorPolicy::PreserveCurrent;
+    } else if mac_random {
+        cfg.assoc_mode = MacMode::Random;
+        cfg.preassoc_mode = MacMode::Random;
+        cfg.vendor_policy = VendorPolicy::PreserveCurrent;
+    }
+
+    if let Some(exceptions) = settings
+        .get("mac_randomization_exceptions")
+        .and_then(|v| v.as_array())
+    {
+        cfg.exceptions = exceptions
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+    }
+
+    if let Some(lifetime) = settings
+        .get("mac_randomization_lifetime_secs")
+        .and_then(|v| v.as_u64())
+    {
+        cfg.lifetime_secs = Some(lifetime);
+    }
+
+    cfg
+}
+
+fn per_network_mac_override(root: &Path, interface: &str, ssid: &str) -> Option<String> {
+    if interface.trim().is_empty() || ssid.trim().is_empty() {
+        return None;
+    }
+    let gui_path = root.join("gui_conf.json");
+    let raw = fs::read_to_string(&gui_path).ok()?;
+    let json: Value = serde_json::from_str(&raw).ok()?;
+    let settings = json.get("settings")?;
+    let per_network = settings.get("per_network_macs")?.as_object()?;
+    let iface_map = per_network.get(interface)?.as_object()?;
+    iface_map
+        .get(ssid)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult> {
@@ -3082,6 +3216,8 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
         .or_else(|| stored.as_ref().and_then(|p| p.profile.password.clone()));
 
     log::info!("[CORE] Connecting to SSID: {ssid} on interface: {interface}");
+
+    try_apply_mac_policy(root, MacStage::Assoc, &interface, Some(&ssid));
 
     if let Err(e) = connect_wifi_network(&interface, &ssid, password.as_deref()) {
         log::error!("[CORE] Failed to connect to {ssid}: {e}");

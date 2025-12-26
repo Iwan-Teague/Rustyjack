@@ -97,23 +97,9 @@ pub fn physical_access_attack(interface: &str, root: &Path) -> Result<PhysicalAc
 
 /// Get gateway IP from routing table
 fn get_gateway_ip(interface: &str) -> Result<String> {
-    let output = Command::new("ip")
-        .args(["route", "show", "dev", interface])
-        .output()
-        .context("getting gateway IP")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    for line in stdout.lines() {
-        if line.contains("default via") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(ip) = parts.get(2) {
-                return Ok(ip.to_string());
-            }
-        }
-    }
-
-    Err(anyhow!("Could not find gateway IP"))
+    let gw = crate::system::interface_gateway(interface)?
+        .ok_or_else(|| anyhow!("Could not find gateway IP"))?;
+    Ok(gw.to_string())
 }
 
 /// Fingerprint router model and firmware

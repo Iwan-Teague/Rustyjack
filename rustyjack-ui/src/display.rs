@@ -1474,23 +1474,24 @@ impl Display {
             DashboardView::NetworkInterfaces => {
                 #[cfg(target_os = "linux")]
                 {
-                    use std::process::Command;
-                    if let Ok(output) = Command::new("ip")
-                        .args(["-o", "-4", "addr", "show"])
-                        .output()
-                    {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        for line in stdout.lines() {
-                            let parts: Vec<&str> = line.split_whitespace().collect();
-                            if parts.len() >= 4 {
-                                let iface = parts[1];
-                                if let Some(ip_part) = parts
-                                    .iter()
-                                    .position(|&p| p == "inet")
-                                    .and_then(|i| parts.get(i + 1))
-                                {
-                                    let ip = ip_part.split('/').next().unwrap_or(ip_part);
-                                    println!("{}: {}", iface, ip);
+                    use tokio::runtime::Handle;
+                    let fetch = |handle: &Handle| {
+                        handle.block_on(async {
+                            let mgr = rustyjack_netlink::InterfaceManager::new()?;
+                            mgr.list_interfaces().await
+                        })
+                    };
+                    let interfaces = match Handle::try_current() {
+                        Ok(handle) => fetch(&handle).ok(),
+                        Err(_) => tokio::runtime::Runtime::new()
+                            .ok()
+                            .and_then(|rt| fetch(rt.handle()).ok()),
+                    };
+                    if let Some(interfaces) = interfaces {
+                        for iface in interfaces {
+                            for addr in iface.addresses {
+                                if let std::net::IpAddr::V4(v4) = addr.address {
+                                    println!("{}: {}", iface.name, v4);
                                 }
                             }
                         }

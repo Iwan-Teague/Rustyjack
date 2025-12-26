@@ -110,444 +110,170 @@ pub struct InterfaceInfo {
     pub txpower_dbm: Option<i32>,
 }
 
-/// Get scan results by parsing iw dev scan output
+/// Get scan results via wpa_supplicant scan results
 pub fn get_scan_results(interface: &str) -> Result<Vec<ScanResult>> {
-    use std::process::Command;
-
-    let output = Command::new("iw")
-        .args(["dev", interface, "scan"])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run iw scan: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(WirelessError::System(format!("iw scan failed: {}", stderr)));
+    if let Err(e) = rustyjack_netlink::start_wpa_supplicant(interface, None) {
+        log::warn!("Failed to start wpa_supplicant for {}: {}", interface, e);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_scan_output(&stdout)
-}
+    let wpa = rustyjack_netlink::WpaManager::new(interface)
+        .map_err(|e| WirelessError::System(format!("Failed to open wpa control: {}", e)))?;
+    wpa.scan()
+        .map_err(|e| WirelessError::System(format!("Failed to trigger scan: {}", e)))?;
 
-fn parse_scan_output(output: &str) -> Result<Vec<ScanResult>> {
     let mut results = Vec::new();
-    let mut current: Option<ScanResult> = None;
+    for entry in wpa
+        .scan_results()
+        .map_err(|e| WirelessError::System(format!("Failed to read scan results: {}", e)))?
+    {
+        let bssid = entry.get("bssid").cloned().unwrap_or_default();
+        let ssid = entry.get("ssid").cloned().unwrap_or_default();
+        let frequency = entry
+            .get("frequency")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        let channel = ScanResult::freq_to_channel(frequency);
+        let signal_dbm = entry
+            .get("signal")
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.0);
 
-    for line in output.lines() {
-        let line = line.trim();
-
-        if line.starts_with("BSS ") {
-            // Save previous entry
-            if let Some(entry) = current.take() {
-                results.push(entry);
-            }
-
-            // Parse BSSID from "BSS aa:bb:cc:dd:ee:ff"
-            if let Some(bssid_part) = line.strip_prefix("BSS ") {
-                let bssid = bssid_part
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-
-                current = Some(ScanResult {
-                    bssid,
-                    ssid: String::new(),
-                    frequency: 0,
-                    channel: None,
-                    signal_mbm: 0,
-                    signal_dbm: 0.0,
-                    seen_ms_ago: 0,
-                    beacon_interval: 0,
-                    capability: 0,
-                    tsf: 0,
-                });
-            }
-        } else if let Some(ref mut entry) = current {
-            if line.starts_with("SSID: ") {
-                entry.ssid = line.strip_prefix("SSID: ").unwrap_or("").to_string();
-            } else if line.starts_with("freq: ") {
-                if let Some(freq_str) = line.strip_prefix("freq: ") {
-                    if let Ok(freq) = freq_str.parse::<u32>() {
-                        entry.frequency = freq;
-                        entry.channel = ScanResult::freq_to_channel(freq);
-                    }
-                }
-            } else if line.starts_with("signal: ") {
-                if let Some(sig_str) = line.strip_prefix("signal: ") {
-                    if let Some(dbm_str) = sig_str.split_whitespace().next() {
-                        if let Ok(dbm) = dbm_str.parse::<f32>() {
-                            entry.signal_dbm = dbm;
-                            entry.signal_mbm = (dbm * 100.0) as i32;
-                        }
-                    }
-                }
-            } else if line.starts_with("last seen: ") {
-                if let Some(seen_str) = line.strip_prefix("last seen: ") {
-                    if let Some(ms_str) = seen_str.split_whitespace().next() {
-                        if let Ok(ms) = ms_str.parse::<u32>() {
-                            entry.seen_ms_ago = ms;
-                        }
-                    }
-                }
-            } else if line.starts_with("beacon interval: ") {
-                if let Some(int_str) = line.strip_prefix("beacon interval: ") {
-                    if let Some(val_str) = int_str.split_whitespace().next() {
-                        if let Ok(val) = val_str.parse::<u16>() {
-                            entry.beacon_interval = val;
-                        }
-                    }
-                }
-            } else if line.starts_with("TSF: ") {
-                if let Some(tsf_str) = line.strip_prefix("TSF: ") {
-                    if let Some(val_str) = tsf_str.split_whitespace().next() {
-                        if let Ok(val) = val_str.parse::<u64>() {
-                            entry.tsf = val;
-                        }
-                    }
-                }
-            } else if line.starts_with("capability: ") {
-                if let Some(cap_str) = line.strip_prefix("capability: ") {
-                    // Parse hex like "capability: 0x1234"
-                    if let Some(hex_str) = cap_str.split_whitespace().next() {
-                        if let Some(hex_val) = hex_str.strip_prefix("0x") {
-                            if let Ok(val) = u16::from_str_radix(hex_val, 16) {
-                                entry.capability = val;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Save last entry
-    if let Some(entry) = current {
-        results.push(entry);
+        results.push(ScanResult {
+            bssid,
+            ssid,
+            frequency,
+            channel,
+            signal_mbm: (signal_dbm * 100.0) as i32,
+            signal_dbm,
+            seen_ms_ago: 0,
+            beacon_interval: 0,
+            capability: 0,
+            tsf: 0,
+        });
     }
 
     Ok(results)
 }
 
+
+
 /// Get link status for a connected interface
 pub fn get_link_status(interface: &str) -> Result<LinkStatus> {
-    use std::process::Command;
-
-    let output = Command::new("iw")
-        .args(["dev", interface, "link"])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run iw link: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // If not connected, output starts with "Not connected"
-    if stdout.starts_with("Not connected") {
-        return Ok(LinkStatus {
-            connected: false,
-            ssid: None,
-            bssid: None,
-            frequency: None,
-            channel: None,
-            signal_dbm: None,
-            tx_bitrate_mbps: None,
-            rx_bitrate_mbps: None,
-        });
-    }
-
-    let mut status = LinkStatus {
-        connected: true,
-        ssid: None,
-        bssid: None,
-        frequency: None,
-        channel: None,
+    let wpa = rustyjack_netlink::WpaManager::new(interface)
+        .map_err(|e| WirelessError::System(format!("Failed to open wpa control: {}", e)))?;
+    let status = wpa
+        .status()
+        .map_err(|e| WirelessError::System(format!("Failed to read wpa status: {}", e)))?;
+    let connected = matches!(
+        status.wpa_state,
+        rustyjack_netlink::WpaSupplicantState::Completed
+    );
+    let frequency = status.freq;
+    Ok(LinkStatus {
+        connected,
+        ssid: status.ssid,
+        bssid: status.bssid,
+        frequency,
+        channel: frequency.and_then(ScanResult::freq_to_channel),
         signal_dbm: None,
         tx_bitrate_mbps: None,
         rx_bitrate_mbps: None,
-    };
-
-    for line in stdout.lines() {
-        let line = line.trim();
-
-        if line.starts_with("Connected to ") {
-            // "Connected to aa:bb:cc:dd:ee:ff"
-            status.bssid = line
-                .strip_prefix("Connected to ")
-                .and_then(|s| s.split_whitespace().next())
-                .map(|s| s.to_string());
-        } else if line.starts_with("SSID: ") {
-            status.ssid = line.strip_prefix("SSID: ").map(|s| s.to_string());
-        } else if line.starts_with("freq: ") {
-            if let Some(freq_str) = line.strip_prefix("freq: ") {
-                if let Ok(freq) = freq_str.parse::<u32>() {
-                    status.frequency = Some(freq);
-                    status.channel = ScanResult::freq_to_channel(freq);
-                }
-            }
-        } else if line.starts_with("signal: ") {
-            if let Some(sig_str) = line.strip_prefix("signal: ") {
-                if let Some(dbm_str) = sig_str.split_whitespace().next() {
-                    if let Ok(dbm) = dbm_str.parse::<i32>() {
-                        status.signal_dbm = Some(dbm);
-                    }
-                }
-            }
-        } else if line.starts_with("tx bitrate: ") {
-            if let Some(rate_str) = line.strip_prefix("tx bitrate: ") {
-                if let Some(mbps_str) = rate_str.split_whitespace().next() {
-                    if let Ok(mbps) = mbps_str.parse::<f32>() {
-                        status.tx_bitrate_mbps = Some(mbps);
-                    }
-                }
-            }
-        } else if line.starts_with("rx bitrate: ") {
-            if let Some(rate_str) = line.strip_prefix("rx bitrate: ") {
-                if let Some(mbps_str) = rate_str.split_whitespace().next() {
-                    if let Ok(mbps) = mbps_str.parse::<f32>() {
-                        status.rx_bitrate_mbps = Some(mbps);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(status)
+    })
 }
 
 /// Get station info for AP mode
 pub fn get_station_info(interface: &str) -> Result<Vec<StationInfo>> {
-    use std::process::Command;
-
-    let output = Command::new("iw")
-        .args(["dev", interface, "station", "dump"])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run iw station dump: {}", e)))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_station_dump(&stdout)
-}
-
-fn parse_station_dump(output: &str) -> Result<Vec<StationInfo>> {
     let mut stations = Vec::new();
-    let mut current: Option<StationInfo> = None;
-
-    for line in output.lines() {
-        let line = line.trim();
-
-        if line.starts_with("Station ") {
-            // Save previous entry
-            if let Some(entry) = current.take() {
-                stations.push(entry);
+    if let Ok(contents) = std::fs::read_to_string("/proc/net/arp") {
+        for (idx, line) in contents.lines().enumerate() {
+            if idx == 0 {
+                continue;
             }
-
-            // Parse MAC from "Station aa:bb:cc:dd:ee:ff"
-            if let Some(mac_part) = line.strip_prefix("Station ") {
-                let mac = mac_part.split_whitespace().next().unwrap_or("").to_string();
-
-                current = Some(StationInfo {
-                    mac,
-                    inactive_time_ms: 0,
-                    rx_bytes: 0,
-                    tx_bytes: 0,
-                    rx_packets: 0,
-                    tx_packets: 0,
-                    signal_dbm: 0,
-                    signal_avg_dbm: 0,
-                    tx_bitrate_mbps: None,
-                    rx_bitrate_mbps: None,
-                    connected_time_sec: 0,
-                });
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 6 {
+                continue;
             }
-        } else if let Some(ref mut station) = current {
-            if line.starts_with("inactive time:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Some(ms_str) = val.trim().split_whitespace().next() {
-                        if let Ok(ms) = ms_str.parse::<u32>() {
-                            station.inactive_time_ms = ms;
-                        }
-                    }
-                }
-            } else if line.starts_with("rx bytes:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Ok(bytes) = val.trim().parse::<u64>() {
-                        station.rx_bytes = bytes;
-                    }
-                }
-            } else if line.starts_with("tx bytes:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Ok(bytes) = val.trim().parse::<u64>() {
-                        station.tx_bytes = bytes;
-                    }
-                }
-            } else if line.starts_with("rx packets:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Ok(packets) = val.trim().parse::<u32>() {
-                        station.rx_packets = packets;
-                    }
-                }
-            } else if line.starts_with("tx packets:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Ok(packets) = val.trim().parse::<u32>() {
-                        station.tx_packets = packets;
-                    }
-                }
-            } else if line.starts_with("signal:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Some(dbm_str) = val.trim().split_whitespace().next() {
-                        if let Ok(dbm) = dbm_str.parse::<i8>() {
-                            station.signal_dbm = dbm;
-                        }
-                    }
-                }
-            } else if line.starts_with("signal avg:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Some(dbm_str) = val.trim().split_whitespace().next() {
-                        if let Ok(dbm) = dbm_str.parse::<i8>() {
-                            station.signal_avg_dbm = dbm;
-                        }
-                    }
-                }
-            } else if line.starts_with("tx bitrate:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Some(mbps_str) = val.trim().split_whitespace().next() {
-                        if let Ok(mbps) = mbps_str.parse::<f32>() {
-                            station.tx_bitrate_mbps = Some(mbps);
-                        }
-                    }
-                }
-            } else if line.starts_with("rx bitrate:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Some(mbps_str) = val.trim().split_whitespace().next() {
-                        if let Ok(mbps) = mbps_str.parse::<f32>() {
-                            station.rx_bitrate_mbps = Some(mbps);
-                        }
-                    }
-                }
-            } else if line.starts_with("connected time:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if let Some(sec_str) = val.trim().split_whitespace().next() {
-                        if let Ok(sec) = sec_str.parse::<u32>() {
-                            station.connected_time_sec = sec;
-                        }
-                    }
-                }
+            if parts[5] != interface {
+                continue;
             }
+            let mac = parts[3];
+            if mac == "00:00:00:00:00:00" {
+                continue;
+            }
+            stations.push(StationInfo {
+                mac: mac.to_string(),
+                inactive_time_ms: 0,
+                rx_bytes: 0,
+                tx_bytes: 0,
+                rx_packets: 0,
+                tx_packets: 0,
+                signal_dbm: 0,
+                signal_avg_dbm: 0,
+                tx_bitrate_mbps: None,
+                rx_bitrate_mbps: None,
+                connected_time_sec: 0,
+            });
         }
-    }
-
-    // Save last entry
-    if let Some(station) = current {
-        stations.push(station);
     }
 
     Ok(stations)
 }
 
+
 /// Get interface information
 pub fn get_interface_info(interface: &str) -> Result<InterfaceInfo> {
-    use std::process::Command;
+    let mut mgr = rustyjack_netlink::WirelessManager::new()
+        .map_err(|e| WirelessError::System(format!("Failed to open nl80211: {}", e)))?;
+    let info = mgr.get_interface_info(interface).map_err(|e| {
+        WirelessError::System(format!("Failed to get interface info for {}: {}", interface, e))
+    })?;
 
-    let output = Command::new("iw")
-        .args(["dev", interface, "info"])
-        .output()
-        .map_err(|e| WirelessError::System(format!("Failed to run iw dev info: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(WirelessError::System(format!(
-            "iw dev info failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_interface_info(interface, &stdout)
-}
-
-fn parse_interface_info(interface: &str, output: &str) -> Result<InterfaceInfo> {
-    let mut info = InterfaceInfo {
-        name: interface.to_string(),
-        ifindex: 0,
-        wdev: 0,
-        addr: None,
-        ssid: None,
-        iftype: 0,
-        wiphy: 0,
-        frequency: None,
-        channel: None,
-        channel_width: None,
-        txpower_dbm: None,
+    let addr = {
+        use tokio::runtime::Handle;
+        let fetch = |handle: &Handle| {
+            handle.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
+                mgr.get_mac_address(interface)
+                    .await
+                    .map_err(|e| WirelessError::System(format!("Failed to read MAC: {}", e)))
+            })
+        };
+        match Handle::try_current() {
+            Ok(handle) => fetch(&handle).ok(),
+            Err(_) => tokio::runtime::Runtime::new()
+                .ok()
+                .and_then(|rt| fetch(rt.handle()).ok()),
+        }
     };
 
-    for line in output.lines() {
-        let line = line.trim();
+    let ssid = rustyjack_netlink::WpaManager::new(interface)
+        .ok()
+        .and_then(|wpa| wpa.status().ok())
+        .and_then(|status| status.ssid);
 
-        if line.starts_with("ifindex ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                if let Ok(idx) = val.parse::<u32>() {
-                    info.ifindex = idx;
-                }
-            }
-        } else if line.starts_with("wdev ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                // Remove "0x" prefix
-                let val = val.strip_prefix("0x").unwrap_or(val);
-                if let Ok(wdev) = u64::from_str_radix(val, 16) {
-                    info.wdev = wdev;
-                }
-            }
-        } else if line.starts_with("addr ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                info.addr = Some(val.to_string());
-            }
-        } else if line.starts_with("ssid ") {
-            info.ssid = line.strip_prefix("ssid ").map(|s| s.to_string());
-        } else if line.starts_with("type ") {
-            // Map type string to number (simplified)
-            let type_str = line.strip_prefix("type ").unwrap_or("");
-            info.iftype = match type_str {
-                "managed" => 2,
-                "AP" => 3,
-                "monitor" => 6,
-                _ => 0,
-            };
-        } else if line.starts_with("wiphy ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                if let Ok(phy) = val.parse::<u32>() {
-                    info.wiphy = phy;
-                }
-            }
-        } else if line.starts_with("channel ") {
-            // "channel 6 (2437 MHz), width: 20 MHz, center1: 2437 MHz"
-            if let Some(ch_str) = line.split_whitespace().nth(1) {
-                if let Ok(ch) = ch_str.parse::<u8>() {
-                    info.channel = Some(ch);
-                }
-            }
-            // Extract frequency from parentheses
-            if let Some(freq_part) = line.split('(').nth(1) {
-                if let Some(freq_str) = freq_part.split_whitespace().next() {
-                    if let Ok(freq) = freq_str.parse::<u32>() {
-                        info.frequency = Some(freq);
-                    }
-                }
-            }
-            // Extract width
-            if line.contains("width:") {
-                if let Some(width_part) = line.split("width:").nth(1) {
-                    if let Some(width_str) = width_part.split(',').next() {
-                        info.channel_width = Some(width_str.trim().to_string());
-                    }
-                }
-            }
-        } else if line.starts_with("txpower ") {
-            if let Some(val) = line.split_whitespace().nth(1) {
-                // Remove ".00" if present
-                let val = val.split('.').next().unwrap_or(val);
-                if let Ok(power) = val.parse::<i32>() {
-                    info.txpower_dbm = Some(power);
-                }
-            }
-        }
-    }
+    let iftype = match info.mode {
+        Some(rustyjack_netlink::InterfaceMode::Adhoc) => 1,
+        Some(rustyjack_netlink::InterfaceMode::Station) => 2,
+        Some(rustyjack_netlink::InterfaceMode::AccessPoint) => 3,
+        Some(rustyjack_netlink::InterfaceMode::Monitor) => 6,
+        Some(rustyjack_netlink::InterfaceMode::MeshPoint) => 7,
+        Some(rustyjack_netlink::InterfaceMode::P2PClient) => 8,
+        Some(rustyjack_netlink::InterfaceMode::P2PGo) => 9,
+        _ => 0,
+    };
 
-    Ok(info)
+    Ok(InterfaceInfo {
+        name: info.interface,
+        ifindex: info.ifindex,
+        wdev: 0,
+        addr,
+        ssid,
+        iftype,
+        wiphy: info.wiphy,
+        frequency: info.frequency,
+        channel: info.channel,
+        channel_width: None,
+        txpower_dbm: info.txpower_mbm.map(|v| (v / 100) as i32),
+    })
 }

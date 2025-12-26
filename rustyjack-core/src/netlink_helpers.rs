@@ -117,6 +117,141 @@ pub fn netlink_list_interfaces() -> Result<Vec<rustyjack_netlink::InterfaceInfo>
 }
 
 #[cfg(target_os = "linux")]
+pub fn netlink_get_ipv4_addresses(
+    interface: &str,
+) -> Result<Vec<rustyjack_netlink::AddressInfo>> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
+                mgr.get_ipv4_addresses(interface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to get IPv4 addresses for {}: {}",
+                            interface,
+                            e
+                        )
+                    })
+            })
+        })
+        .unwrap_or_else(|_| {
+            tokio::runtime::Runtime::new()?.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
+                mgr.get_ipv4_addresses(interface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to get IPv4 addresses for {}: {}",
+                            interface,
+                            e
+                        )
+                    })
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_get_interface_index(interface: &str) -> Result<u32> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
+                mgr.get_interface_index(interface)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to get interface index for {}: {}", interface, e))
+            })
+        })
+        .unwrap_or_else(|_| {
+            tokio::runtime::Runtime::new()?.block_on(async {
+                let mgr = rustyjack_netlink::InterfaceManager::new()
+                    .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
+                mgr.get_interface_index(interface)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to get interface index for {}: {}", interface, e))
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_list_routes() -> Result<Vec<rustyjack_netlink::RouteInfo>> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::list_routes()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to list routes: {}", e))
+            })
+        })
+        .unwrap_or_else(|_| {
+            tokio::runtime::Runtime::new()?.block_on(async {
+                rustyjack_netlink::list_routes()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to list routes: {}", e))
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_delete_default_route() -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::delete_default_route()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to delete default route: {}", e))
+            })
+        })
+        .unwrap_or_else(|_| {
+            tokio::runtime::Runtime::new()?.block_on(async {
+                rustyjack_netlink::delete_default_route()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to delete default route: {}", e))
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_add_default_route(
+    gateway: IpAddr,
+    interface: &str,
+    metric: Option<u32>,
+) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::add_default_route_with_metric(gateway, interface, metric)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to add default route via {} on {}: {}",
+                            gateway,
+                            interface,
+                            e
+                        )
+                    })
+            })
+        })
+        .unwrap_or_else(|_| {
+            tokio::runtime::Runtime::new()?.block_on(async {
+                rustyjack_netlink::add_default_route_with_metric(gateway, interface, metric)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to add default route via {} on {}: {}",
+                            gateway,
+                            interface,
+                            e
+                        )
+                    })
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
 pub fn netlink_dhcp_release(interface: &str) -> Result<()> {
     tokio::runtime::Handle::try_current()
         .map(|handle| {
@@ -235,6 +370,35 @@ pub fn netlink_set_interface_down(_interface: &str) -> Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn netlink_flush_addresses(_interface: &str) -> Result<()> {
+    anyhow::bail!("netlink operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_get_ipv4_addresses(_interface: &str) -> Result<Vec<rustyjack_netlink::AddressInfo>> {
+    anyhow::bail!("netlink operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_get_interface_index(_interface: &str) -> Result<u32> {
+    anyhow::bail!("netlink operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_list_routes() -> Result<Vec<rustyjack_netlink::RouteInfo>> {
+    anyhow::bail!("netlink operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_delete_default_route() -> Result<()> {
+    anyhow::bail!("netlink operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_add_default_route(
+    _gateway: IpAddr,
+    _interface: &str,
+    _metric: Option<u32>,
+) -> Result<()> {
     anyhow::bail!("netlink operations only supported on Linux")
 }
 

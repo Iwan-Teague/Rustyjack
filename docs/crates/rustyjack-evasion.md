@@ -5,7 +5,7 @@ Evasion utilities: MAC randomization, TX power control, passive/monitor helpers,
 ## Responsibilities
 - Vendor-aware MAC generation (locally administered, unicast) using CSPRNG; can preserve OUI from the current iface.
 - Save/restore original MAC; optional auto-restore on drop.
-- TX power management via netlink (`rustyjack-netlink`) with `iwconfig` fallback.
+- TX power management via netlink (`rustyjack-netlink`).
 - Passive/monitor mode helpers and state tracking.
 
 ## Modules
@@ -17,7 +17,7 @@ Evasion utilities: MAC randomization, TX power control, passive/monitor helpers,
 - `config`, `error`: toggles and error types.
 
 ## Dependencies/expectations
-- Linux netlink for most operations; guarded fallbacks for host builds. Some paths still shell out (`iwconfig`, `airmon-ng`) if netlink is unavailable.
+- Linux netlink for most operations; guarded fallbacks for host builds. Some paths still shell out (`airmon-ng`) if netlink is unavailable.
 - Designed to compile on non-Linux with Linux-only sections behind `cfg(target_os = "linux")`.
 
 ## Notes for contributors
@@ -30,7 +30,7 @@ Evasion utilities: MAC randomization, TX power control, passive/monitor helpers,
 - `config.rs`: toggles/configuration structs for evasion behavior (auto-restore, rotation intervals).
 - `error.rs`: error enum used across MAC/txpower/passive/state operations.
 - `mac.rs`: `MacManager` with state map, auto-restore option, validation of interface names, vendor-aware/random MAC generation, set/restore functions. Uses netlink (Linux) to bring interfaces down/up and set MAC; guarded fallbacks on non-Linux return errors. Ensures locally administered/unicast bits.
-- `txpower.rs`: TX power read/set helpers; maps between dBm/mbm and stores original levels for restore. Uses `rustyjack-netlink::WirelessManager` with `iwconfig` fallback; Linux-gated.
-- `passive.rs`: monitor-mode enable/disable with TX power adjustments, channel setting, and fallbacks (`airmon-ng`/`iw`) when netlink fails. Tracks active monitor interfaces to clean up; guarded on non-Linux with explicit errors.
+- `txpower.rs`: TX power read/set helpers; maps between dBm/mbm and stores original levels for restore. Uses `rustyjack-netlink::WirelessManager`; Linux-gated.
+- `passive.rs`: monitor-mode enable/disable with TX power adjustments, channel setting, and `airmon-ng` fallback when netlink fails. Tracks active monitor interfaces to clean up; guarded on non-Linux with explicit errors.
 - `state.rs`: `StateManager` for combined interface state (MAC, monitor IFs, tx power). Includes monitor deletion (`rustyjack-netlink` or `airmon-ng` fallback), MAC restore via netlink, tx power restore, auto-restore on drop when enabled; Linux-gated implementations with non-Linux bailouts.
 - `vendor.rs`: vendor/OUI table and helpers for vendor-aware MAC generation.

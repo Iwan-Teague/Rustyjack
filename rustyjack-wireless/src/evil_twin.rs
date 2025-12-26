@@ -418,15 +418,28 @@ impl EvilTwin {
 
     /// Get number of connected clients
     fn get_connected_clients(&self) -> Result<u32> {
-        // Check hostapd control interface or parse iw output
-        let output = Command::new("iw")
-            .args(["dev", &self.config.ap_interface, "station", "dump"])
-            .output()
-            .map_err(|e| WirelessError::System(format!("iw station dump failed: {}", e)))?;
+        let mut seen = std::collections::HashSet::new();
+        if let Ok(contents) = fs::read_to_string("/proc/net/arp") {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() < 6 {
+                    continue;
+                }
+                if parts[5] != self.config.ap_interface {
+                    continue;
+                }
+                let mac = parts[3];
+                if mac == "00:00:00:00:00:00" {
+                    continue;
+                }
+                seen.insert(mac.to_string());
+            }
+        }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let count = stdout.matches("Station").count() as u32;
-        Ok(count)
+        Ok(seen.len() as u32)
     }
 
     /// Get our AP's MAC address
