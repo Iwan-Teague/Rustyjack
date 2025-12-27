@@ -17,7 +17,7 @@ use chrono::Local;
 use rustyjack_core::cli::{
     HotspotCommand, StatusCommand, WifiCommand, WifiRouteCommand, WifiRouteEnsureArgs,
 };
-use rustyjack_core::{apply_interface_isolation, Commands};
+use rustyjack_core::{apply_interface_isolation, ensure_route_no_isolation, Commands};
 use serde_json::Value;
 
 use crate::{
@@ -175,7 +175,7 @@ fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
             {
-                maybe_ensure_wired_dhcp(core, up)?;
+                maybe_ensure_wired_dhcp(core, up, true)?;
             }
             return Ok(());
         }
@@ -214,12 +214,16 @@ fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
     apply_interface_isolation(&allow_list)?;
     log_isolation_state(root, "single", &allow_list);
     if let Some(primary) = allow_list.first() {
-        maybe_ensure_wired_dhcp(core, primary)?;
+        maybe_ensure_wired_dhcp(core, primary, false)?;
     }
     Ok(())
 }
 
-fn maybe_ensure_wired_dhcp(core: &CoreBridge, interface: &str) -> Result<()> {
+fn maybe_ensure_wired_dhcp(
+    core: &CoreBridge,
+    interface: &str,
+    hotspot_mode: bool,
+) -> Result<()> {
     if interface.is_empty() {
         return Ok(());
     }
@@ -247,7 +251,19 @@ fn maybe_ensure_wired_dhcp(core: &CoreBridge, interface: &str) -> Result<()> {
     }
     LAST_DHCP_ATTEMPT.store(now, Ordering::Relaxed);
 
-    log::info!("[ROUTE] Attempting DHCP ensure on {}", interface);
+    log::info!(
+        "[ROUTE] Attempting DHCP ensure on {} (hotspot_mode={})",
+        interface,
+        hotspot_mode
+    );
+
+    if hotspot_mode {
+        if let Err(err) = ensure_route_no_isolation(interface) {
+            eprintln!("[route] hotspot DHCP ensure failed for {}: {}", interface, err);
+        }
+        return Ok(());
+    }
+
     let args = WifiRouteEnsureArgs {
         interface: interface.to_string(),
     };

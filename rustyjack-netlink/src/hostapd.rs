@@ -472,10 +472,19 @@ impl AccessPoint {
         }
 
         if attempt_channels.is_empty() {
-            let msg = format!(
-                "No valid channels available for interface {} (check regdom/driver)",
-                self.config.interface
-            );
+            let regdom = read_regdom_alpha2()
+                .map(|code| String::from_utf8_lossy(&code).to_string());
+            let msg = if let Some(code) = regdom {
+                format!(
+                    "No valid channels available for interface {} (regdom={} check regdom/driver)",
+                    self.config.interface, code
+                )
+            } else {
+                format!(
+                    "No valid channels available for interface {} (check regdom/driver)",
+                    self.config.interface
+                )
+            };
             log::error!("{}", msg);
             record_ap_error(&msg);
             return Err(NetlinkError::OperationFailed(msg));
@@ -490,17 +499,14 @@ impl AccessPoint {
             self.config.dtim_period
         };
         for ch in attempt_channels.iter() {
-            let (beacon_head, beacon_tail, ssid_bytes, basic_rates) =
-                build_beacon_frames(&self.config, bssid, *ch, Some(&phy_caps))?;
-            let probe_resp =
-                build_probe_response_frame(&self.config, bssid, *ch, Some(&phy_caps))?;
+            let frames = build_ap_frame_bundle(&self.config, bssid, *ch, Some(&phy_caps))?;
             log::debug!(
                 "Beacon built for channel {}: head_len={} tail_len={} ssid_len={} basic_rates={} hidden={}",
                 ch,
-                beacon_head.len(),
-                beacon_tail.len(),
-                ssid_bytes.len(),
-                basic_rates.len(),
+                frames.beacon_head.len(),
+                frames.beacon_tail.len(),
+                frames.ssid_bytes.len(),
+                frames.basic_rates.len(),
                 self.config.hidden
             );
             log::info!(
@@ -525,12 +531,12 @@ impl AccessPoint {
                 self.config.beacon_interval,
                 dtim_period,
                 self.config.ssid.as_bytes(),
-                &beacon_head,
-                &beacon_tail,
-                &probe_resp,
+                &frames.beacon_head,
+                &frames.beacon_tail,
+                &frames.probe_resp,
                 hidden_ssid,
                 wpa_enabled,
-                &basic_rates,
+                &frames.basic_rates,
             ) {
                 Ok(_) => {
                     chosen_channel = *ch;
@@ -896,11 +902,21 @@ fn send_start_ap_inner(
     })?;
 
     let mut attrs = GenlBuffer::new();
+    let mut attr_log: Vec<String> = Vec::new();
+    let mut log_attr = |name: &str, len: usize, detail: Option<String>| {
+        let entry = if let Some(detail) = detail {
+            format!("{}(len={} {})", name, len, detail)
+        } else {
+            format!("{}(len={})", name, len)
+        };
+        attr_log.push(entry);
+    };
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
         })?,
     );
+    log_attr("IFINDEX", 4, Some(format!("ifindex={}", ifindex)));
     attrs.push(
         neli::genl::Nlattr::new(
             false,
@@ -912,16 +928,27 @@ fn send_start_ap_inner(
             NetlinkError::OperationFailed(format!("Failed to build beacon interval attr: {}", e))
         })?,
     );
+    log_attr(
+        "BEACON_INTERVAL",
+        4,
+        Some(format!("beacon_interval={}", beacon_interval_tu)),
+    );
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_DTIM_PERIOD, dtim_period as u32)
             .map_err(|e| {
                 NetlinkError::OperationFailed(format!("Failed to build DTIM attr: {}", e))
             })?,
     );
+    log_attr("DTIM_PERIOD", 4, Some(format!("dtim={}", dtim_period)));
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_SSID, ssid).map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build SSID attr: {}", e))
         })?,
+    );
+    log_attr(
+        "SSID",
+        ssid.len(),
+        Some(format!("ssid={}", String::from_utf8_lossy(ssid))),
     );
     if hidden_ssid != NL80211_HIDDEN_SSID_NOT_IN_USE {
         attrs.push(
@@ -934,9 +961,15 @@ fn send_start_ap_inner(
                 },
             )?,
         );
+        log_attr(
+            "HIDDEN_SSID",
+            4,
+            Some(format!("hidden={}", hidden_ssid)),
+        );
     }
     if include_basic_rates && !basic_rates.is_empty() {
         let basic_rates_bytes = u32_list_bytes(basic_rates);
+        let basic_rates_len = basic_rates_bytes.len();
         attrs.push(
             neli::genl::Nlattr::new(
                 false,
@@ -951,6 +984,11 @@ fn send_start_ap_inner(
                     ))
                 })?,
         );
+        log_attr(
+            "BSS_BASIC_RATES",
+            basic_rates_len,
+            Some(format!("rates={:?}", basic_rates)),
+        );
     }
     if wpa_enabled {
         attrs.push(
@@ -958,12 +996,14 @@ fn send_start_ap_inner(
                 |e| NetlinkError::OperationFailed(format!("Failed to build privacy attr: {}", e)),
             )?,
         );
+        log_attr("PRIVACY", 0, None);
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_WPA_VERSIONS, WPA_VERSION_2)
                 .map_err(|e| {
                     NetlinkError::OperationFailed(format!("Failed to build WPA versions attr: {}", e))
                 })?,
         );
+        log_attr("WPA_VERSIONS", 4, Some("WPA2".to_string()));
         attrs.push(
             neli::genl::Nlattr::new(
                 false,
@@ -975,7 +1015,9 @@ fn send_start_ap_inner(
                 NetlinkError::OperationFailed(format!("Failed to build group cipher attr: {}", e))
             })?,
         );
+        log_attr("CIPHER_GROUP", 4, Some("CCMP".to_string()));
         let pairwise = u32_list_bytes(&[CIPHER_SUITE_CCMP]);
+        let pairwise_len = pairwise.len();
         attrs.push(
             neli::genl::Nlattr::new(
                 false,
@@ -987,18 +1029,21 @@ fn send_start_ap_inner(
                 NetlinkError::OperationFailed(format!("Failed to build pairwise cipher attr: {}", e))
             })?,
         );
+        log_attr("CIPHER_PAIRWISE", pairwise_len, Some("CCMP".to_string()));
         let akm = u32_list_bytes(&[AKM_SUITE_PSK]);
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_AKM_SUITES, akm).map_err(
                 |e| NetlinkError::OperationFailed(format!("Failed to build AKM suites attr: {}", e)),
             )?,
         );
+        log_attr("AKM_SUITES", 4, Some("PSK".to_string()));
     }
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_BEACON_HEAD, beacon_head).map_err(
             |e| NetlinkError::OperationFailed(format!("Failed to build beacon head attr: {}", e)),
         )?,
     );
+    log_attr("BEACON_HEAD", beacon_head.len(), None);
     if include_beacon_tail && !beacon_tail.is_empty() {
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_BEACON_TAIL, beacon_tail).map_err(
@@ -1010,6 +1055,7 @@ fn send_start_ap_inner(
                 },
             )?,
         );
+        log_attr("BEACON_TAIL", beacon_tail.len(), None);
     } else {
         if !include_beacon_tail {
             log::debug!("START_AP beacon tail omitted by attempt");
@@ -1028,12 +1074,14 @@ fn send_start_ap_inner(
                 },
             )?,
         );
+        log_attr("PROBE_RESP", probe_resp.len(), None);
     }
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_FREQ, freq).map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build freq attr: {}", e))
         })?,
     );
+    log_attr("WIPHY_FREQ", 4, Some(format!("freq={}", freq)));
     if include_channel_type {
         // Try NO_HT (0) first for better compatibility with older/limited drivers.
         // HT20 (1) can cause ERANGE on some hardware.
@@ -1047,6 +1095,7 @@ fn send_start_ap_inner(
                 },
             )?,
         );
+        log_attr("CHANNEL_TYPE", 4, Some("NO_HT".to_string()));
     }
     if include_channel_width {
         attrs.push(
@@ -1060,11 +1109,13 @@ fn send_start_ap_inner(
                 NetlinkError::OperationFailed(format!("Failed to build channel width attr: {}", e))
             })?,
         );
+        log_attr("CHANNEL_WIDTH", 4, Some("20_NOHT".to_string()));
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_CENTER_FREQ1, freq).map_err(
                 |e| NetlinkError::OperationFailed(format!("Failed to build center freq1 attr: {}", e)),
             )?,
         );
+        log_attr("CENTER_FREQ1", 4, Some(format!("freq={}", freq)));
     }
 
     log::debug!(
@@ -1072,6 +1123,9 @@ fn send_start_ap_inner(
         ifindex,
         attrs.len()
     );
+    if !attr_log.is_empty() {
+        log::debug!("START_AP attrs: {}", attr_log.join(", "));
+    }
 
     let genlhdr = Genlmsghdr::new(NL80211_CMD_START_AP, NL80211_GENL_VERSION, attrs);
     let nlhdr = Nlmsghdr::new(
@@ -1114,6 +1168,9 @@ fn send_start_ap_inner(
                     io_err,
                     err
                 );
+                if !attr_log.is_empty() {
+                    log::error!("START_AP attrs: {}", attr_log.join(", "));
+                }
                 let hint = if errno == 34 {
                     // ERANGE - common with incompatible channel/bandwidth settings
                     " (ERANGE: channel/bandwidth not supported by driver - try different channel or NO_HT mode)"
@@ -1134,6 +1191,9 @@ fn send_start_ap_inner(
                     io_err,
                     ack
                 );
+                if !attr_log.is_empty() {
+                    log::error!("START_AP attrs: {}", attr_log.join(", "));
+                }
                 return Err(NetlinkError::OperationFailed(format!(
                     "Kernel rejected START_AP (ack err): {} (errno {})",
                     io_err, errno
@@ -1141,6 +1201,9 @@ fn send_start_ap_inner(
             }
             other => {
                 log::error!("START_AP rejected: unexpected payload {:?}", other);
+                if !attr_log.is_empty() {
+                    log::error!("START_AP attrs: {}", attr_log.join(", "));
+                }
                 return Err(NetlinkError::OperationFailed(format!(
                     "Kernel rejected START_AP (unexpected payload {:?})",
                     other
@@ -1184,16 +1247,79 @@ fn send_stop_ap(ifindex: u32) -> Result<()> {
     Ok(())
 }
 
-fn build_beacon_frames(
+#[derive(Debug, Clone)]
+struct ApFrameBundle {
+    beacon_head: Vec<u8>,
+    beacon_tail: Vec<u8>,
+    probe_resp: Vec<u8>,
+    ssid_bytes: Vec<u8>,
+    basic_rates: Vec<u32>,
+}
+
+fn build_ap_frame_bundle(
     config: &ApConfig,
     bssid: [u8; 6],
     channel: u8,
     phy_caps: Option<&PhyCapabilities>,
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u32>)> {
+) -> Result<ApFrameBundle> {
     let rate_sets = build_rate_sets(config, channel, phy_caps)?;
     let ht_info = select_ht_info(config, channel, phy_caps);
     let wmm_enabled = ht_info.is_some();
     let capab = build_capability_info(config, channel, &rate_sets, wmm_enabled);
+
+    log::debug!(
+        "AP rates channel {}: supported={:?} extended={:?} basic={:?}",
+        channel,
+        rate_sets.supported,
+        rate_sets.extended,
+        rate_sets.basic
+    );
+    log::debug!(
+        "AP frame caps channel {}: capab=0x{:04x} wmm={} ht={}",
+        channel,
+        capab,
+        wmm_enabled,
+        ht_info.is_some()
+    );
+
+    let (beacon_head, beacon_tail, ssid_bytes) = build_beacon_frames(
+        config,
+        bssid,
+        channel,
+        &rate_sets,
+        capab,
+        ht_info.as_ref(),
+        phy_caps,
+    )?;
+    let probe_resp = build_probe_response_frame(
+        config,
+        bssid,
+        channel,
+        &rate_sets,
+        capab,
+        ht_info.as_ref(),
+        phy_caps,
+    )?;
+
+    Ok(ApFrameBundle {
+        beacon_head,
+        beacon_tail,
+        probe_resp,
+        ssid_bytes,
+        basic_rates: rate_sets.basic.clone(),
+    })
+}
+
+fn build_beacon_frames(
+    config: &ApConfig,
+    bssid: [u8; 6],
+    channel: u8,
+    rate_sets: &RateSets,
+    capab: u16,
+    ht_info: Option<&HtInfo>,
+    phy_caps: Option<&PhyCapabilities>,
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let wmm_enabled = ht_info.is_some();
 
     let mut head = Vec::new();
     // 802.11 beacon header
@@ -1270,19 +1396,19 @@ fn build_beacon_frames(
         tail.extend_from_slice(&build_wmm_param_ie());
     }
 
-    Ok((head, tail, ssid_bytes, rate_sets.basic))
+    Ok((head, tail, ssid_bytes))
 }
 
 fn build_probe_response_frame(
     config: &ApConfig,
     bssid: [u8; 6],
     channel: u8,
+    rate_sets: &RateSets,
+    capab: u16,
+    ht_info: Option<&HtInfo>,
     phy_caps: Option<&PhyCapabilities>,
 ) -> Result<Vec<u8>> {
-    let rate_sets = build_rate_sets(config, channel, phy_caps)?;
-    let ht_info = select_ht_info(config, channel, phy_caps);
     let wmm_enabled = ht_info.is_some();
-    let capab = build_capability_info(config, channel, &rate_sets, wmm_enabled);
 
     let ssid_bytes = config.ssid.as_bytes().to_vec();
     let mut frame = Vec::new();
@@ -1655,16 +1781,7 @@ fn build_candidate_channels(config: &ApConfig, phy_caps: &PhyCapabilities) -> Ve
     };
 
     if allowed.is_empty() {
-        let mut fallback = Vec::new();
-        if config.channel > 0 {
-            fallback.push(config.channel);
-        }
-        for ch in [1u8, 6u8, 11u8] {
-            if !fallback.contains(&ch) {
-                fallback.push(ch);
-            }
-        }
-        return fallback;
+        return Vec::new();
     }
 
     allowed.sort_unstable();
@@ -1745,7 +1862,12 @@ fn build_rates_from_list(
     if rates.is_empty() {
         return None;
     }
-    let basic_rates = select_basic_rates(&rates, channel);
+    let mut basic_rates = select_basic_rates(&rates, channel);
+    basic_rates.retain(|rate| rate % 5 == 0);
+    basic_rates.retain(|rate| rates.contains(rate));
+    if basic_rates.is_empty() {
+        basic_rates.extend(rates.iter().copied().filter(|r| r % 5 == 0).take(4));
+    }
     let (supported_rates, extended_rates) = encode_rates_ie(&rates, &basic_rates);
     if supported_rates.is_empty() {
         return None;

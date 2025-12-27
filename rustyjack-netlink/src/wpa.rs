@@ -5,18 +5,39 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::error::{NetlinkError, Result};
 use log::info;
+use rand::{distributions::Alphanumeric, Rng};
 
 /// WPA supplicant manager
 pub struct WpaManager {
     interface: String,
     control_path: PathBuf,
+}
+
+struct LocalSocketCleanup {
+    path: PathBuf,
+}
+
+impl Drop for LocalSocketCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn build_local_socket_path(interface: &str) -> PathBuf {
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect();
+    let iface: String = interface.chars().take(16).collect();
+    let filename = format!("rustyjack_wpa_{}_{}", iface, suffix);
+    std::env::temp_dir().join(filename)
 }
 
 /// WPA supplicant status
@@ -190,38 +211,82 @@ impl WpaManager {
             )));
         }
 
-        let mut stream = UnixStream::connect(&self.control_path).map_err(|e| {
+        let local_path = build_local_socket_path(&self.interface);
+        if local_path.exists() {
+            let _ = fs::remove_file(&local_path);
+        }
+
+        let socket = UnixDatagram::bind(&local_path).map_err(|e| {
+            NetlinkError::Wpa(format!(
+                "Failed to bind local control socket at {:?}: {}",
+                local_path, e
+            ))
+        })?;
+        let _cleanup = LocalSocketCleanup {
+            path: local_path.clone(),
+        };
+
+        socket.connect(&self.control_path).map_err(|e| {
             NetlinkError::Wpa(format!(
                 "Failed to connect to wpa_supplicant control socket at {:?}: {}",
                 self.control_path, e
             ))
         })?;
 
-        stream
+        socket
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| NetlinkError::Wpa(format!("Failed to set socket timeout: {}", e)))?;
 
-        stream.write_all(command.as_bytes()).map_err(|e| {
+        socket
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| NetlinkError::Wpa(format!("Failed to set socket timeout: {}", e)))?;
+
+        let sent = socket.send(command.as_bytes()).map_err(|e| {
             NetlinkError::Wpa(format!("Failed to send command to wpa_supplicant: {}", e))
         })?;
 
-        let mut response = String::new();
-        stream.read_to_string(&mut response).map_err(|e| {
-            NetlinkError::Wpa(format!(
-                "Failed to read response from wpa_supplicant: {}",
-                e
-            ))
-        })?;
-
-        // Check for error responses
-        if response.starts_with("FAIL") {
+        if sent != command.as_bytes().len() {
             return Err(NetlinkError::Wpa(format!(
-                "WPA command '{}' failed: {}",
-                command, response
+                "Short write to wpa_supplicant (sent {} of {} bytes)",
+                sent,
+                command.as_bytes().len()
             )));
         }
 
-        Ok(response.trim().to_string())
+        let mut buf = vec![0u8; 65535];
+        for _ in 0..5 {
+            let n = socket.recv(&mut buf).map_err(|e| {
+                NetlinkError::Wpa(format!(
+                    "Failed to read response from wpa_supplicant: {}",
+                    e
+                ))
+            })?;
+
+            if n == 0 {
+                continue;
+            }
+
+            let response = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+            if response.starts_with('<') {
+                // Ignore unsolicited event messages.
+                continue;
+            }
+
+            // Check for error responses
+            if response.starts_with("FAIL") {
+                return Err(NetlinkError::Wpa(format!(
+                    "WPA command '{}' failed: {}",
+                    command, response
+                )));
+            }
+
+            return Ok(response);
+        }
+
+        Err(NetlinkError::Wpa(format!(
+            "No valid response from wpa_supplicant for command '{}'",
+            command
+        )))
     }
 
     /// Get current status from wpa_supplicant

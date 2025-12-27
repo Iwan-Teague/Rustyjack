@@ -953,6 +953,67 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
     Ok(None)
 }
 
+pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
+    if interface.trim().is_empty() {
+        bail!("interface cannot be empty");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = netlink_set_interface_up(interface);
+    }
+
+    let mut gateway = interface_gateway(interface)?;
+    if gateway.is_none() {
+        gateway = dhcp_acquire_gateway(interface)?;
+    }
+
+    if let Some(gateway) = gateway {
+        set_default_route(interface, gateway)?;
+        let _ = rewrite_dns_servers(interface, gateway);
+        return Ok(Some(gateway));
+    }
+
+    Ok(None)
+}
+
+fn dhcp_acquire_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
+    #[cfg(target_os = "linux")]
+    {
+        let result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle
+                .block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await }),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow!("Failed to create tokio runtime: {}", e))?;
+                rt.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await })
+            }
+        };
+
+        match result {
+            Ok(lease) => {
+                log::info!(
+                    "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
+                    interface,
+                    lease.address,
+                    lease.prefix_len,
+                    lease.gateway
+                );
+                Ok(lease.gateway)
+            }
+            Err(e) => {
+                log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, e);
+                Ok(None)
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        Ok(None)
+    }
+}
+
 pub fn rfkill_index_for_interface(interface: &str) -> Option<String> {
     let phy = Path::new("/sys/class/net").join(interface).join("phy80211");
     if !phy.exists() {
