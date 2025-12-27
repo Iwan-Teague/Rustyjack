@@ -3488,7 +3488,19 @@ Do not remove power/USB",
         let filename = format!("rustyjack_logs_{ts}.txt");
         let dest = dest_dir.join(&filename);
 
-        fs::write(&dest, contents.as_bytes())?;
+        {
+            let mut file = File::create(&dest)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            if let Ok(dir) = File::open(&dest_dir) {
+                let _ = dir.sync_all();
+            }
+        }
+        log::info!(
+            "[LOG EXPORT] Wrote {} bytes to {}",
+            contents.len(),
+            dest.display()
+        );
 
         self.display.draw_progress_dialog(
             "Export Logs",
