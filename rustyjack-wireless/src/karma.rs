@@ -21,7 +21,6 @@ use chrono::Local;
 use log::warn;
 use rustyjack_netlink::{
     AccessPoint, ApConfig, ApSecurity, DhcpConfig, DhcpServer, DnsConfig, DnsRule, DnsServer,
-    HardwareMode,
 };
 
 use crate::capture::{CaptureFilter, PacketCapture};
@@ -30,7 +29,7 @@ use crate::frames::{FrameSubtype, FrameType};
 use crate::interface::WirelessInterface;
 use crate::netlink_helpers::{
     netlink_add_address, netlink_flush_addresses, netlink_set_interface_down,
-    netlink_set_interface_up,
+    netlink_set_interface_up, select_hw_mode,
 };
 use crate::probe::ProbeSniffer;
 
@@ -752,7 +751,7 @@ where
         beacon_interval: 100,
         max_clients: 0,
         dtim_period: 2,
-        hw_mode: HardwareMode::G,
+        hw_mode: select_hw_mode(ap_interface, channel),
     };
 
     let mut ap = start_access_point(ap_config)?;

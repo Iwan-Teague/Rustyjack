@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 use rustyjack_netlink::{
     AccessPoint, ApConfig, ApSecurity, DhcpConfig, DhcpServer, DnsConfig, DnsRule, DnsServer,
-    HardwareMode, IptablesManager, Table,
+    IptablesManager, Table,
 };
 
 use crate::deauth::{DeauthAttacker, DeauthConfig};
@@ -40,7 +40,7 @@ use crate::handshake::HandshakeCapture;
 use crate::interface::WirelessInterface;
 use crate::netlink_helpers::{
     netlink_add_address, netlink_flush_addresses, netlink_set_interface_down,
-    netlink_set_interface_up,
+    netlink_set_interface_up, select_hw_mode,
 };
 
 /// Evil Twin configuration
@@ -340,7 +340,7 @@ impl EvilTwin {
             beacon_interval: 100,
             max_clients: 0,
             dtim_period: 2,
-            hw_mode: HardwareMode::G,
+            hw_mode: select_hw_mode(&self.config.ap_interface, channel),
         };
 
         let mut ap = AccessPoint::new(ap_config).map_err(|e| {

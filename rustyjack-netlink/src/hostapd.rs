@@ -116,6 +116,9 @@ const CIPHER_SUITE_CCMP: u32 = 0x000f_ac_04;
 const AKM_SUITE_PSK: u32 = 0x000f_ac_02;
 const WPA_VERSION_2: u32 = 2;
 const NL80211_CHAN_WIDTH_20_NOHT: u32 = 0;
+const NL80211_CHAN_WIDTH_20: u32 = 1;
+const NL80211_CHAN_NO_HT: u32 = 0;
+const NL80211_CHAN_HT20: u32 = 1;
 const NL80211_DFS_AVAILABLE: u8 = 2;
 type HmacSha1 = Hmac<sha1::Sha1>;
 
@@ -510,9 +513,10 @@ impl AccessPoint {
                 self.config.hidden
             );
             log::info!(
-                "Attempting START_AP on validated channel {} (freq {:?}, width=NoHT)",
+                "Attempting START_AP on validated channel {} (freq {:?}, width={})",
                 ch,
-                channel_to_frequency(*ch)
+                channel_to_frequency(*ch),
+                if frames.ht_enabled { "HT20" } else { "NOHT" }
             );
             eprintln!(
                 "[HOSTAPD] Trying START_AP on channel {} ({}MHz)",
@@ -537,6 +541,7 @@ impl AccessPoint {
                 hidden_ssid,
                 wpa_enabled,
                 &frames.basic_rates,
+                frames.ht_enabled,
             ) {
                 Ok(_) => {
                     chosen_channel = *ch;
@@ -560,8 +565,13 @@ impl AccessPoint {
 
         self.config.channel = chosen_channel;
         log::info!(
-            "START_AP succeeded on channel {} (width=NoHT)",
-            chosen_channel
+            "START_AP succeeded on channel {} (width={})",
+            chosen_channel,
+            if self.config.hw_mode == HardwareMode::N {
+                "HT20"
+            } else {
+                "NOHT"
+            }
         );
 
         *self.running.lock().await = true;
@@ -704,6 +714,7 @@ fn send_start_ap(
     hidden_ssid: u32,
     wpa_enabled: bool,
     basic_rates: &[u32],
+    ht_enabled: bool,
 ) -> Result<()> {
     struct StartApAttempt {
         include_channel_type: bool,
@@ -712,7 +723,7 @@ fn send_start_ap(
     }
 
     let channel_attempts = [
-        (true, false, "chandef (channel_width + center_freq1)"),
+        (true, false, "chandef (channel_width)"),
         (false, true, "legacy channel_type"),
     ];
 
@@ -745,6 +756,7 @@ fn send_start_ap(
             true,
             wpa_enabled,
             basic_rates,
+            ht_enabled,
         ) {
             Ok(()) => return Ok(()),
             Err(err) => {
@@ -792,6 +804,7 @@ fn send_start_ap_inner(
     include_beacon_tail: bool,
     wpa_enabled: bool,
     basic_rates: &[u32],
+    ht_enabled: bool,
 ) -> Result<()> {
     let freq = channel_to_frequency(channel)
         .ok_or_else(|| NetlinkError::InvalidInput(format!("Unsupported channel {}", channel)))?;
@@ -1012,40 +1025,56 @@ fn send_start_ap_inner(
         })?,
     );
     log_attr("WIPHY_FREQ", 4, Some(format!("freq={}", freq)));
+    let channel_width = if ht_enabled {
+        NL80211_CHAN_WIDTH_20
+    } else {
+        NL80211_CHAN_WIDTH_20_NOHT
+    };
     if include_channel_type {
-        // Try NO_HT (0) first for better compatibility with older/limited drivers.
-        // HT20 (1) can cause ERANGE on some hardware.
+        let chan_type = if ht_enabled { NL80211_CHAN_HT20 } else { NL80211_CHAN_NO_HT };
         attrs.push(
-            neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_CHANNEL_TYPE, 0u32).map_err(
-                |e| {
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_CHANNEL_TYPE, chan_type)
+                .map_err(|e| {
                     NetlinkError::OperationFailed(format!(
                         "Failed to build channel type attr: {}",
                         e
                     ))
-                },
-            )?,
+                })?,
         );
-        log_attr("CHANNEL_TYPE", 4, Some("NO_HT".to_string()));
+        log_attr(
+            "CHANNEL_TYPE",
+            4,
+            Some(if ht_enabled { "HT20" } else { "NO_HT" }.to_string()),
+        );
     }
     if include_channel_width {
         attrs.push(
-            neli::genl::Nlattr::new(
-                false,
-                false,
-                NL80211_ATTR_CHANNEL_WIDTH,
-                NL80211_CHAN_WIDTH_20_NOHT,
-            )
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build channel width attr: {}", e))
-            })?,
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_CHANNEL_WIDTH, channel_width)
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!(
+                        "Failed to build channel width attr: {}",
+                        e
+                    ))
+                })?,
         );
-        log_attr("CHANNEL_WIDTH", 4, Some("20_NOHT".to_string()));
-        attrs.push(
-            neli::genl::Nlattr::new(false, false, NL80211_ATTR_CENTER_FREQ1, freq).map_err(
-                |e| NetlinkError::OperationFailed(format!("Failed to build center freq1 attr: {}", e)),
-            )?,
+        log_attr(
+            "CHANNEL_WIDTH",
+            4,
+            Some(if ht_enabled { "20" } else { "20_NOHT" }.to_string()),
         );
-        log_attr("CENTER_FREQ1", 4, Some(format!("freq={}", freq)));
+        if channel_width != NL80211_CHAN_WIDTH_20_NOHT {
+            attrs.push(
+                neli::genl::Nlattr::new(false, false, NL80211_ATTR_CENTER_FREQ1, freq).map_err(
+                    |e| {
+                        NetlinkError::OperationFailed(format!(
+                            "Failed to build center freq1 attr: {}",
+                            e
+                        ))
+                    },
+                )?,
+            );
+            log_attr("CENTER_FREQ1", 4, Some(format!("freq={}", freq)));
+        }
     }
 
     log::debug!(
@@ -1059,18 +1088,51 @@ fn send_start_ap_inner(
 
     let log_failure_details = || {
         if !attr_log.is_empty() {
-            log::error!("START_AP attrs: {}", attr_log.join(", "));
+            let attrs = attr_log.join(", ");
+            log::error!("START_AP attrs: {}", attrs);
+            eprintln!("[HOSTAPD] START_AP attrs: {}", attrs);
         }
         log_ie_summary("BEACON_HEAD", beacon_head, 36);
+        let head_ies = parse_ie_list(beacon_head, 36);
+        if head_ies.is_empty() {
+            eprintln!(
+                "[HOSTAPD] START_AP BEACON_HEAD IEs: none (len={})",
+                beacon_head.len()
+            );
+        } else {
+            eprintln!(
+                "[HOSTAPD] START_AP BEACON_HEAD IEs (len={}): {}",
+                beacon_head.len(),
+                format_ie_list(&head_ies)
+            );
+        }
         if !beacon_tail.is_empty() {
             log_ie_summary("BEACON_TAIL", beacon_tail, 0);
+            let tail_ies = parse_ie_list(beacon_tail, 0);
+            if !tail_ies.is_empty() {
+                eprintln!(
+                    "[HOSTAPD] START_AP BEACON_TAIL IEs (len={}): {}",
+                    beacon_tail.len(),
+                    format_ie_list(&tail_ies)
+                );
+            }
         } else {
             log::error!("START_AP BEACON_TAIL len=0");
+            eprintln!("[HOSTAPD] START_AP BEACON_TAIL len=0");
         }
         if !probe_resp.is_empty() {
             log_ie_summary("PROBE_RESP", probe_resp, 36);
+            let probe_ies = parse_ie_list(probe_resp, 36);
+            if !probe_ies.is_empty() {
+                eprintln!(
+                    "[HOSTAPD] START_AP PROBE_RESP IEs (len={}): {}",
+                    probe_resp.len(),
+                    format_ie_list(&probe_ies)
+                );
+            }
         } else {
             log::error!("START_AP PROBE_RESP len=0");
+            eprintln!("[HOSTAPD] START_AP PROBE_RESP len=0");
         }
     };
 
@@ -1199,6 +1261,7 @@ struct ApFrameBundle {
     probe_resp: Vec<u8>,
     ssid_bytes: Vec<u8>,
     basic_rates: Vec<u32>,
+    ht_enabled: bool,
 }
 
 fn build_ap_frame_bundle(
@@ -1209,6 +1272,7 @@ fn build_ap_frame_bundle(
 ) -> Result<ApFrameBundle> {
     let rate_sets = build_rate_sets(config, channel, phy_caps)?;
     let ht_info = select_ht_info(config, channel, phy_caps);
+    let ht_enabled = ht_info.is_some();
     let wmm_enabled = ht_info.is_some();
     let capab = build_capability_info(config, channel, &rate_sets, wmm_enabled);
 
@@ -1252,6 +1316,7 @@ fn build_ap_frame_bundle(
         probe_resp,
         ssid_bytes,
         basic_rates: rate_sets.basic.clone(),
+        ht_enabled,
     })
 }
 

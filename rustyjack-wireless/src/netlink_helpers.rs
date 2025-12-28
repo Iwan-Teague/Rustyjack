@@ -1,5 +1,6 @@
 use crate::error::{Result, WirelessError};
-use log::info;
+use log::{debug, info};
+use rustyjack_netlink::{HardwareMode, WirelessManager};
 
 pub fn netlink_set_interface_up(interface: &str) -> Result<()> {
     info!("netlink: set interface {} up", interface);
@@ -117,4 +118,53 @@ pub fn netlink_add_address(interface: &str, addr: std::net::IpAddr, prefix_len: 
                         })
                 })
         })
+}
+
+pub fn select_hw_mode(interface: &str, channel: u8) -> HardwareMode {
+    let default_mode = if channel > 14 {
+        HardwareMode::A
+    } else {
+        HardwareMode::G
+    };
+
+    let mut mgr = match WirelessManager::new() {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            debug!(
+                "Failed to read wireless capabilities for {}: {}",
+                interface, err
+            );
+            return default_mode;
+        }
+    };
+
+    let caps = match mgr.get_phy_capabilities(interface) {
+        Ok(caps) => caps,
+        Err(err) => {
+            debug!("Failed to read phy capabilities for {}: {}", interface, err);
+            return default_mode;
+        }
+    };
+
+    let freq = WirelessManager::channel_to_frequency(channel);
+    let supports_ht = caps.band_info.iter().any(|band| {
+        let band_match = freq
+            .map(|f| band.frequencies.iter().any(|info| info.freq == f))
+            .unwrap_or(false)
+            || (channel <= 14 && band.name.contains("2.4"))
+            || (channel > 14 && band.name.contains("5"));
+        band_match
+            && band.ht_capab.is_some()
+            && band
+                .ht_mcs_set
+                .as_ref()
+                .map(|mcs| mcs.len() >= 16)
+                .unwrap_or(false)
+    });
+
+    if supports_ht {
+        HardwareMode::N
+    } else {
+        default_mode
+    }
 }

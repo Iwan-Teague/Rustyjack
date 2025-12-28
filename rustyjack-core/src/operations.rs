@@ -27,6 +27,8 @@ use rustyjack_wireless::{
 };
 use serde_json::{json, Value};
 use walkdir::WalkDir;
+#[cfg(target_os = "linux")]
+use rustyjack_netlink::{WpaManager, WpaSupplicantState};
 
 use crate::cli::{
     BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
@@ -2573,6 +2575,50 @@ fn try_dhcp_acquire(interface: &str) -> Result<Option<Ipv4Addr>> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn wpa_ready_for_dhcp(interface: &str) -> bool {
+    let mgr = match WpaManager::new(interface) {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            log::debug!(
+                "[ROUTE] WPA status unavailable for {} (no control socket?): {}",
+                interface,
+                err
+            );
+            return false;
+        }
+    };
+
+    let status = match mgr.status() {
+        Ok(status) => status,
+        Err(err) => {
+            log::debug!("[ROUTE] WPA status read failed for {}: {}", interface, err);
+            return false;
+        }
+    };
+
+    log::info!(
+        "[ROUTE] WPA status iface={} state={:?} ssid={:?} ip={:?}",
+        interface,
+        status.wpa_state,
+        status.ssid,
+        status.ip_address
+    );
+
+    matches!(
+        status.wpa_state,
+        WpaSupplicantState::Completed
+            | WpaSupplicantState::Associated
+            | WpaSupplicantState::FourWayHandshake
+            | WpaSupplicantState::GroupHandshake
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wpa_ready_for_dhcp(_interface: &str) -> bool {
+    false
+}
+
 fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<HandlerResult> {
     use crate::system::enforce_single_interface;
 
@@ -2615,16 +2661,28 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         .ok_or_else(|| anyhow!("interface {} not found", target_interface))?;
 
     let mut dhcp_gateway = None;
-    if iface_summary.kind == "wired" && iface_summary.ip.is_none() {
-        #[cfg(target_os = "linux")]
-        let _ = netlink_set_interface_up(&target_interface);
-        if !interface_has_carrier(&target_interface) {
-            log::warn!(
-                "[ROUTE] No carrier detected on {}; attempting DHCP anyway",
-                target_interface
-            );
+    if iface_summary.ip.is_none() {
+        if iface_summary.kind == "wired" {
+            #[cfg(target_os = "linux")]
+            let _ = netlink_set_interface_up(&target_interface);
+            if !interface_has_carrier(&target_interface) {
+                log::warn!(
+                    "[ROUTE] No carrier detected on {}; attempting DHCP anyway",
+                    target_interface
+                );
+            }
+            dhcp_gateway = try_dhcp_acquire(&target_interface)?;
+        } else if iface_summary.kind == "wireless" {
+            if wpa_ready_for_dhcp(&target_interface) {
+                dhcp_gateway = try_dhcp_acquire(&target_interface)?;
+            } else {
+                log::info!(
+                    "[ROUTE] Skipping DHCP on {} (wireless not associated yet)",
+                    target_interface
+                );
+            }
         }
-        dhcp_gateway = try_dhcp_acquire(&target_interface)?;
+
         if dhcp_gateway.is_some() {
             summaries = list_interface_summaries()?;
             if let Some(updated) = summaries

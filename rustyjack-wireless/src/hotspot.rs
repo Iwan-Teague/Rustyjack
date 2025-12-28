@@ -16,7 +16,7 @@ use rustyjack_netlink::{
 use crate::error::{Result, WirelessError};
 use crate::netlink_helpers::{
     netlink_add_address, netlink_flush_addresses, netlink_set_interface_down,
-    netlink_set_interface_up,
+    netlink_set_interface_up, select_hw_mode,
 };
 use crate::nl80211::{set_interface_type_netlink, Nl80211IfType};
 use crate::process_helpers::pkill_pattern;
@@ -468,6 +468,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         }
     };
 
+    let hw_mode = select_hw_mode(&config.ap_interface, config.channel);
+    log::info!(
+        "Hotspot hardware mode selected: iface={} channel={} hw_mode={:?}",
+        config.ap_interface,
+        config.channel,
+        hw_mode
+    );
+
     let ap_config = ApConfig {
         interface: config.ap_interface.clone(),
         ssid: config.ssid.clone(),
@@ -477,7 +485,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         beacon_interval: 100,
         max_clients: 0,
         dtim_period: 2,
-        hw_mode: rustyjack_netlink::HardwareMode::G,
+        hw_mode,
     };
 
     // Double-check rfkill is still unblocked right before starting AP

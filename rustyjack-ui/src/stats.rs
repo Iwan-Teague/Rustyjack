@@ -21,6 +21,8 @@ use rustyjack_core::{
     apply_interface_isolation, ensure_route_no_isolation, interface_gateway, Commands,
 };
 use serde_json::Value;
+#[cfg(target_os = "linux")]
+use rustyjack_netlink::{WpaManager, WpaSupplicantState};
 
 use crate::{
     config::GuiConfig,
@@ -230,12 +232,20 @@ fn maybe_ensure_wired_dhcp(
     if interface.is_empty() {
         return Ok(());
     }
-    if interface_is_wireless(interface) {
-        log_watchdog_event(root, &format!("dhcp: skip {} (wireless)", interface));
-        log::debug!("[ROUTE] Skip DHCP ensure on wireless interface {}", interface);
-        return Ok(());
-    }
-    if !interface_has_carrier(interface) {
+    let is_wireless = interface_is_wireless(interface);
+    if is_wireless {
+        if !wireless_ready_for_dhcp(interface) {
+            log_watchdog_event(
+                root,
+                &format!("dhcp: skip {} (wireless not associated)", interface),
+            );
+            log::debug!(
+                "[ROUTE] Skip DHCP ensure on {} (wireless not associated)",
+                interface
+            );
+            return Ok(());
+        }
+    } else if !interface_has_carrier(interface) {
         log_watchdog_event(root, &format!("dhcp: skip {} (no carrier)", interface));
         log::debug!("[ROUTE] Skip DHCP ensure on {} (no carrier)", interface);
         return Ok(());
@@ -343,6 +353,50 @@ fn interface_is_wireless(interface: &str) -> bool {
     }
     let path = format!("/sys/class/net/{}/wireless", interface);
     Path::new(&path).exists()
+}
+
+#[cfg(target_os = "linux")]
+fn wireless_ready_for_dhcp(interface: &str) -> bool {
+    let mgr = match WpaManager::new(interface) {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            log::debug!(
+                "[ROUTE] WPA status unavailable for {} (no control socket?): {}",
+                interface,
+                err
+            );
+            return false;
+        }
+    };
+
+    let status = match mgr.status() {
+        Ok(status) => status,
+        Err(err) => {
+            log::debug!("[ROUTE] WPA status read failed for {}: {}", interface, err);
+            return false;
+        }
+    };
+
+    log::info!(
+        "[ROUTE] WPA status iface={} state={:?} ssid={:?} ip={:?}",
+        interface,
+        status.wpa_state,
+        status.ssid,
+        status.ip_address
+    );
+
+    matches!(
+        status.wpa_state,
+        WpaSupplicantState::Completed
+            | WpaSupplicantState::Associated
+            | WpaSupplicantState::FourWayHandshake
+            | WpaSupplicantState::GroupHandshake
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wireless_ready_for_dhcp(_interface: &str) -> bool {
+    false
 }
 
 fn interface_has_carrier(interface: &str) -> bool {

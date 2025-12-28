@@ -18,6 +18,7 @@ use thiserror::Error;
 const DHCP_SERVER_PORT: u16 = 67;
 const DHCP_CLIENT_PORT: u16 = 68;
 const DHCP_MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+const DHCP_FLAG_BROADCAST: u16 = 0x8000;
 
 const BOOTREQUEST: u8 = 1;
 const BOOTREPLY: u8 = 2;
@@ -38,6 +39,7 @@ const OPTION_LEASE_TIME: u8 = 51;
 const OPTION_MESSAGE_TYPE: u8 = 53;
 const OPTION_SERVER_ID: u8 = 54;
 const OPTION_PARAMETER_REQUEST: u8 = 55;
+const OPTION_CLIENT_ID: u8 = 61;
 const OPTION_END: u8 = 255;
 
 /// Errors specific to DHCP client operations.
@@ -340,7 +342,7 @@ impl DhcpClient {
         hostname: Option<&str>,
     ) -> Result<DhcpOffer> {
         for attempt in 1..=3 {
-            log::debug!(
+            log::info!(
                 "Sending DHCP DISCOVER on {} (attempt {})",
                 interface,
                 attempt
@@ -360,17 +362,18 @@ impl DhcpClient {
 
             match self.wait_for_offer(socket, interface, xid) {
                 Ok(offer) => {
-                    log::debug!(
-                        "Received DHCP offer frfm {} on {}",
+                    log::info!(
+                        "Received DHCP offer from {} on {} (offered_ip={})",
                         offer.server_id,
-                        interface
+                        interface,
+                        offer.offered_ip
                     );
                     return Ok(offer);
                 }
                 Err(e) => {
                     if attempt < 3 {
-                        log::debug!(
-                            "DHCP offer Timeout on {} (attempt {}), retrying...",
+                        log::warn!(
+                            "DHCP offer timeout on {} (attempt {}), retrying...",
                             interface,
                             attempt
                         );
@@ -424,7 +427,7 @@ impl DhcpClient {
         offer: &DhcpOffer,
         hostname: Option<&str>,
     ) -> Result<DhcpLease> {
-        log::debug!(
+        log::info!(
             "Sending DHCP REQUEST for {} on {}",
             offer.offered_ip,
             interface
@@ -487,7 +490,16 @@ impl DhcpClient {
             }
 
             match self.parse_ack_packet(&buf[..len], interface, xid, offer) {
-                Ok(lease) => return Ok(lease),
+                Ok(lease) => {
+                    log::info!(
+                        "Received DHCP ACK on {}: {}/{}, gateway={:?}",
+                        interface,
+                        lease.address,
+                        lease.prefix_len,
+                        lease.gateway
+                    );
+                    return Ok(lease);
+                }
                 Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                     reason, ..
                 })) => {
@@ -521,6 +533,7 @@ impl DhcpClient {
         packet[3] = 0;
 
         packet[4..8].copy_from_slice(&xid.to_be_bytes());
+        packet[10..12].copy_from_slice(&DHCP_FLAG_BROADCAST.to_be_bytes());
 
         packet[28..34].copy_from_slice(mac);
 
@@ -532,6 +545,13 @@ impl DhcpClient {
         packet[offset + 1] = 1;
         packet[offset + 2] = DHCPDISCOVER;
         offset += 3;
+
+        // Client identifier (hardware type + MAC)
+        packet[offset] = OPTION_CLIENT_ID;
+        packet[offset + 1] = 7;
+        packet[offset + 2] = 0x01; // Ethernet
+        packet[offset + 3..offset + 9].copy_from_slice(mac);
+        offset += 9;
 
         if let Some(name) = hostname {
             let name_bytes = name.as_bytes();
@@ -573,6 +593,7 @@ impl DhcpClient {
         packet[3] = 0;
 
         packet[4..8].copy_from_slice(&xid.to_be_bytes());
+        packet[10..12].copy_from_slice(&DHCP_FLAG_BROADCAST.to_be_bytes());
 
         packet[28..34].copy_from_slice(mac);
 
@@ -584,6 +605,13 @@ impl DhcpClient {
         packet[offset + 1] = 1;
         packet[offset + 2] = DHCPREQUEST;
         offset += 3;
+
+        // Client identifier (hardware type + MAC)
+        packet[offset] = OPTION_CLIENT_ID;
+        packet[offset + 1] = 7;
+        packet[offset + 2] = 0x01; // Ethernet
+        packet[offset + 3..offset + 9].copy_from_slice(mac);
+        offset += 9;
 
         packet[offset] = OPTION_REQUESTED_IP;
         packet[offset + 1] = 4;
@@ -844,6 +872,10 @@ impl DhcpClient {
 
     async fn configurefinterface(&self, interface: &str, lease: &DhcpLease) -> Result<()> {
         log::debug!("Cfnfiguring interface {} with lease", interface);
+
+        if let Err(err) = self.interface_mgr.flush_addresses(interface).await {
+            log::warn!("Failed to flush addresses on {}: {}", interface, err);
+        }
 
         self.interface_mgr
             .add_address(interface, IpAddr::V4(lease.address), lease.prefix_len)
