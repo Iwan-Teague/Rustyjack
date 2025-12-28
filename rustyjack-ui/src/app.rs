@@ -26,7 +26,7 @@ use rustyjack_core::cli::{
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
     WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs, WifiStatusArgs,
 };
-use rustyjack_core::{apply_interface_isolation, ensure_default_wifi_profiles, InterfaceSummary};
+use rustyjack_core::{ensure_default_wifi_profiles, InterfaceSummary};
 use rustyjack_encryption::{clear_encryption_key, set_encryption_key};
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
@@ -308,35 +308,7 @@ impl App {
         )));
 
         match result {
-            Ok((msg, _)) => {
-                // Keep only the active interface alive (plus hotspot if running)
-                let mut allow_list = vec![interface.to_string()];
-                if let Ok((_, hs_data)) = self
-                    .core
-                    .dispatch(Commands::Hotspot(HotspotCommand::Status))
-                {
-                    let running = hs_data
-                        .get("running")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    if running {
-                        if let Some(ap) = hs_data.get("ap_interface").and_then(|v| v.as_str()) {
-                            if !ap.is_empty() {
-                                allow_list.push(ap.to_string());
-                            }
-                        }
-                        if let Some(up) = hs_data.get("upstream_interface").and_then(|v| v.as_str())
-                        {
-                            if !up.is_empty() {
-                                allow_list.push(up.to_string());
-                            }
-                        }
-                    }
-                }
-                allow_list.retain(|s| !s.is_empty());
-                self.apply_interface_isolation(&allow_list)?;
-                Ok(Some(msg))
-            }
+            Ok((msg, _)) => Ok(Some(msg)),
             Err(e) => {
                 let err = e.to_string();
                 let mut lines = vec![format!("Route failed for {}", interface)];
@@ -348,10 +320,6 @@ impl App {
                 Ok(None)
             }
         }
-    }
-
-    fn apply_interface_isolation(&mut self, allowed: &[String]) -> Result<()> {
-        apply_interface_isolation(allowed)
     }
 
     fn status_overlay(&self) -> StatusOverlay {
@@ -4741,15 +4709,6 @@ Do not remove power/USB",
                                             [format!("Failed to save: {}", e)],
                                         )?;
                                     } else {
-                                        // Apply isolation (rfkill unblock + disable other interfaces)
-                                        if let Err(e) = self
-                                            .apply_interface_isolation(&[interface_name.clone()])
-                                        {
-                                            lines.push(format!("Isolation failed: {}", e));
-                                        } else {
-                                            lines.push("Other interfaces disabled".to_string());
-                                        }
-
                                         // Try to ensure route (will succeed if already connected)
                                         if let Some(route_msg) =
                                             self.ensure_route_for_interface(&interface_name)?

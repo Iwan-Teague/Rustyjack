@@ -1,0 +1,424 @@
+Rustyjack Networking: Comprehensive Audit & Fix Plan (Single‑Path Implementation)
+(Workspace review based on the ZIP provided. Updated 2025-12-28.)
+
+This version is intentionally opinionated:
+- No “options”, no “either/or”.
+- Rustyjack owns networking end‑to‑end on a dedicated Raspberry Pi Zero 2 W.
+- install_rustyjack_dev.sh is responsible for enforcing that environment on a fresh Pi image.
+
+=====================================================================
+0) Policy decisions (non‑negotiable design contract)
+=====================================================================
+
+P0.1 Single networking owner
+- Rustyjack is the only component allowed to configure:
+  - DHCP leases (IPv4)
+  - interface addresses
+  - default routes
+  - /etc/resolv.conf
+- Any system services that would also do those jobs are removed or disabled by the installer.
+
+P0.2 NetworkManager is removed
+- NetworkManager is purged as part of install_rustyjack_dev.sh on a fresh Raspberry Pi OS Lite image.
+
+P0.3 Rustyjack owns /etc/resolv.conf
+- systemd-resolved is disabled/masked.
+- /etc/resolv.conf is a normal file (not a symlink).
+- Rustyjack writes resolv.conf atomically (temp file + rename).
+
+P0.4 Deterministic uplink selection without interface-down “isolation”
+- Both eth0 and wlan0 may remain up.
+- Only ONE interface is allowed to own the system default route at a time.
+- Priority is deterministic:
+  1) Ethernet (eth0) if carrier=1 and it has a valid DHCP lease + gateway.
+  2) Otherwise Wi‑Fi (wlan0) if associated (wpa_state=COMPLETED) and it has a valid DHCP lease + gateway.
+
+P0.5 DHCP transport is raw‑first for initial acquisition
+- Rustyjack uses packet socket (AF_PACKET) DHCP for DISCOVER/REQUEST by default.
+- The goal is maximum compatibility and to avoid UDP/port‑68 ownership conflicts.
+
+P0.6 Default route writes use netlink “replace” semantics
+- Adding a default route must be idempotent.
+- Rustyjack will always “replace” the default route for the chosen uplink.
+
+P0.7 Gateway-loss behavior is strict
+- If gateway cannot be validated after a bounded recovery sequence:
+  - default route is removed for that interface
+  - network state becomes OFFLINE (explicitly)
+  - repeated churn is avoided via bounded backoff
+
+=====================================================================
+1) How “getting internet” works (the required chain)
+=====================================================================
+
+1. Link is up
+- Ethernet: carrier present.
+- Wi‑Fi: association completed (wpa_state = COMPLETED).
+
+2. DHCP succeeds
+- DISCOVER → OFFER → REQUEST → ACK
+- Apply:
+  - IPv4 address + prefix
+  - default gateway
+  - DNS servers (or fallback if none provided)
+
+3. Routing is correct
+- Exactly one usable default route exists (owned by the active uplink).
+
+4. DNS is correct
+- /etc/resolv.conf contains the DNS servers for the active uplink (or fallback DNS).
+
+=====================================================================
+2) What Rustyjack does today (high-level code map)
+=====================================================================
+
+A) Wi‑Fi connection flow
+- File: rustyjack-core/src/system.rs
+- Function: connect_wifi_network(interface, ssid, password)
+- Uses wpa_supplicant control + DHCP acquisition.
+
+B) Route ensure/watchdog
+- File: rustyjack-core/src/operations.rs
+- Function: handle_wifi_route_ensure(...)
+- Ensures address/gateway/route, and may coordinate interface behavior.
+
+C) DHCP client
+- File: rustyjack-netlink/src/dhcp.rs
+- Implements DHCP and applies leases via netlink.
+
+D) Routes
+- File: rustyjack-netlink/src/route.rs
+- Adds/deletes routes via netlink.
+
+=====================================================================
+3) Remaining issues (as of the workspace) and the REQUIRED fixes
+=====================================================================
+
+Issue 1: Ownership conflicts / “two managers” instability
+--------------------------------------------------------
+Required fix:
+- Remove NetworkManager completely (installer).
+- Disable/mask any other DHCP/resolver owner services (installer).
+- Ensure Rustyjack starts early and has required capabilities (systemd unit).
+
+Implementation is defined in Section 4 (Installer) and Section 5 (systemd unit).
+
+Issue 2: Default route add can fail (EEXIST) and cause false DHCP failures
+-------------------------------------------------------------------------
+Required fix:
+- Implement netlink route REPLACE semantics for the default route.
+- Default route writes must be idempotent and must not fail due to existing state.
+
+Implementation is defined in Section 6 (Route replace).
+
+Issue 3: DNS conflicts (/etc/resolv.conf rewrite wars)
+------------------------------------------------------
+Required fix:
+- systemd-resolved is disabled/masked.
+- /etc/resolv.conf is converted to a normal file if it is a symlink.
+- Rustyjack becomes the only writer and writes atomically.
+
+Implementation is defined in Section 7 (Resolver ownership).
+
+Issue 4: Concurrency hazards (watchdog vs connect vs route changes)
+-------------------------------------------------------------------
+Required fix:
+- Introduce a per-interface “network pipeline” lock (mutex) inside Rustyjack so that:
+  - only one DHCP acquisition/apply sequence can run per interface at a time
+  - route changes and resolv.conf writes are serialized behind the uplink selection decision
+
+Implementation is defined in Section 8 (Concurrency model).
+
+Issue 5: Ethernet DHCP attempts when unplugged create churn
+----------------------------------------------------------
+Required fix:
+- Ethernet DHCP is carrier-gated.
+- Rustyjack subscribes to netlink RTMGRP_LINK events and triggers DHCP only on link-up.
+
+Implementation is defined in Section 9 (Link gating + events).
+
+=====================================================================
+4) install_rustyjack_dev.sh must enforce the whole environment (fresh Pi image)
+=====================================================================
+
+This is the ONLY supported method of addressing NetworkManager and system ownership.
+No manual cleanup steps are required after running the installer.
+
+4.1 Preflight (fresh-image safe)
+- Must run as root.
+- Must set: DEBIAN_FRONTEND=noninteractive
+- Must log /etc/os-release values for traceability:
+  - PRETTY_NAME
+  - VERSION_CODENAME
+
+4.2 Ensure required packages exist BEFORE removing networking components
+- wpa_supplicant must be installed (Rustyjack uses it).
+- Also install whatever is required for your build/install flow (git, etc.) as needed.
+
+4.3 Remove NetworkManager completely (deterministic and idempotent)
+- Stop/disable services (harmless if absent):
+    systemctl stop NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+    systemctl disable NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+
+- Purge packages:
+    apt-get update
+    apt-get -y purge network-manager || true
+    apt-get -y autoremove --purge || true
+
+- Hard verify:
+    if dpkg -s network-manager >/dev/null 2>&1; then
+        echo "ERROR: network-manager still installed after purge" >&2
+        exit 1
+    fi
+
+- Belt-and-suspenders:
+    systemctl mask NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+
+4.4 Disable/mask other conflicting network owners
+- dhcpcd (older images):
+    systemctl stop dhcpcd.service 2>/dev/null || true
+    systemctl disable dhcpcd.service 2>/dev/null || true
+    systemctl mask dhcpcd.service 2>/dev/null || true
+
+- systemd-resolved (resolver ownership):
+    systemctl stop systemd-resolved.service 2>/dev/null || true
+    systemctl disable systemd-resolved.service 2>/dev/null || true
+    systemctl mask systemd-resolved.service 2>/dev/null || true
+
+4.5 Convert /etc/resolv.conf to a normal file owned by Rustyjack
+- If /etc/resolv.conf is a symlink:
+  - remove it
+  - create a normal file at /etc/resolv.conf
+  - (optional initial content) set a conservative fallback like:
+      nameserver 1.1.1.1
+      nameserver 9.9.9.9
+  - set permissions root:root, mode 0644
+
+Rustyjack will rewrite it later based on DHCP.
+
+4.6 Install and enable Rustyjack
+- The installed rustyjack.service must NOT wait for network-online.target.
+- It must start after local-fs.target and network.target.
+
+4.7 Post-install validation (installer must succeed or fail fast)
+The installer must validate using Rustyjack itself (single source of truth):
+- Rustyjack must provide:
+    rustyjack status network --json
+  returning at least:
+    - per interface: link state, readiness, IPv4 addr, gateway
+    - active uplink decision (eth0 or wlan0)
+    - default-route owner interface
+    - DNS servers currently written to /etc/resolv.conf
+    - last DHCP outcome (raw DHCP path) and lease age
+
+Validation rule:
+- Within a bounded time window (e.g., 60s from service start), Rustyjack must report:
+  - active uplink chosen
+  - IPv4 address present on that uplink
+  - gateway present
+  - default route owned by that uplink
+  - resolv.conf written and consistent
+
+If validation fails, installer prints:
+- the JSON from rustyjack status network --json
+- last N lines of Rustyjack logs (journalctl -u rustyjack.service -n N)
+
+=====================================================================
+5) Systemd unit hardening (capabilities + ordering)
+=====================================================================
+
+Rustyjack needs Linux capabilities to:
+- configure addresses/routes (CAP_NET_ADMIN)
+- send/receive raw DHCP packets (CAP_NET_RAW)
+
+The service unit must include:
+- After=local-fs.target network.target
+- Wants=network.target
+- AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+- CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+- NoNewPrivileges=true
+
+Also recommended:
+- Restart=on-failure
+- RestartSec=2
+
+Note:
+- Do NOT depend on network-online.target. Rustyjack is the component that makes “online” true.
+
+=====================================================================
+6) Netlink default route REPLACE semantics (required)
+=====================================================================
+
+Goal:
+- Setting the default route is idempotent and never fails due to existing default route state.
+
+Required implementation behavior:
+- When Rustyjack chooses an active uplink (see Section 10), it performs:
+  - netlink route “replace” of the default route (dst = 0.0.0.0/0) with:
+      - oif = chosen interface index
+      - gateway = chosen gateway
+      - metric = configured priority (eth < wlan, e.g., eth metric 100, wlan metric 200)
+  - If there are other default routes, they must be removed or replaced so that exactly one default route is effective.
+
+Implementation notes (Linux netlink):
+- Use RTM_NEWROUTE with NLM_F_REPLACE | NLM_F_CREATE flags for the default route.
+- Include RTA_GATEWAY and RTA_OIF.
+- For safety, purge any existing default routes that:
+  - point to a different gateway, OR
+  - are on a different interface
+  before applying the single chosen default route.
+
+Rustyjack-netlink updates:
+- Add RouteManager::replace_default_route(gateway, interface, metric)
+- Ensure any call path that sets default route uses replace_default_route, not add_default_route.
+
+=====================================================================
+7) Resolver ownership: Rustyjack owns /etc/resolv.conf (required)
+=====================================================================
+
+7.1 Preconditions enforced by installer
+- systemd-resolved masked
+- /etc/resolv.conf is a normal file
+
+7.2 Runtime ownership rules
+- Only Rustyjack writes /etc/resolv.conf.
+- Write is atomic:
+  - write to /etc/.resolv.conf.tmp
+  - fsync file
+  - rename to /etc/resolv.conf
+  - (optional) fsync directory /etc
+
+7.3 Content rules
+- When DHCP provides DNS servers:
+  - write them in order to resolv.conf
+- When DHCP does NOT provide DNS servers:
+  - write fallback DNS servers (hard-coded) and log:
+    “DHCP provided no DNS; using fallback”
+
+7.4 Consistency rules
+- resolv.conf must always correspond to the ACTIVE uplink (Section 10).
+- When uplink changes, resolv.conf is rewritten immediately after default route replace.
+
+=====================================================================
+8) Concurrency model (required)
+=====================================================================
+
+Goal:
+- Prevent races between:
+  - Wi‑Fi connect flow
+  - watchdog/route ensure
+  - DHCP renew/acquire
+  - route replacement
+  - resolv.conf writes
+
+Required approach:
+- Introduce per-interface locks (mutex) for the DHCP/acquire/apply pipeline.
+- Introduce a global “uplink decision” lock so that:
+  - only one uplink selection + route replace + resolv.conf rewrite can happen at a time
+
+Practical rules:
+- DHCP acquire for interface X holds interface-X lock until:
+  - lease acquired (or definitively failed)
+  - address applied (or failed)
+- Uplink selection holds global uplink lock while:
+  - it verifies candidate readiness
+  - selects uplink
+  - replaces default route
+  - rewrites resolv.conf
+- Watchdog must not run a second DHCP acquire on an interface that is currently locked.
+
+=====================================================================
+9) Link gating + events (required)
+=====================================================================
+
+Ethernet (eth0)
+- DHCP MUST NOT start unless carrier == 1.
+- Rustyjack listens to netlink link events:
+  - On link-up:
+    - trigger DHCP acquire for eth0
+  - On link-down:
+    - mark eth0 as not eligible
+    - trigger uplink reselection (wlan0 may take over)
+
+Wi‑Fi (wlan0)
+- DHCP MUST NOT start unless:
+  - wpa_state == COMPLETED (association finished)
+- Rustyjack should trigger DHCP on:
+  - successful Wi‑Fi association event (or detected transition to COMPLETED)
+  - and apply bounded backoff on repeated failures.
+
+Backoff policy (both interfaces):
+- Exponential backoff with cap (e.g., 1s, 2s, 4s… up to 60s).
+- Add jitter to avoid sync storms after reboot loops.
+
+=====================================================================
+10) Deterministic uplink selection (required)
+=====================================================================
+
+Eligibility checks
+- eth0 eligible if:
+  - carrier == 1
+  - has IPv4 lease applied
+  - gateway present (from DHCP)
+- wlan0 eligible if:
+  - wpa_state == COMPLETED
+  - has IPv4 lease applied
+  - gateway present
+
+Selection rule (hard):
+- If eth0 eligible → select eth0
+- Else if wlan0 eligible → select wlan0
+- Else → OFFLINE (no default route)
+
+Activation procedure (must be serialized by uplink lock):
+1) Identify eligible uplinks
+2) Select per rule above
+3) Replace default route to chosen uplink (Section 6)
+4) Rewrite resolv.conf for chosen uplink (Section 7)
+5) Record state transition (for logs and status JSON)
+
+=====================================================================
+11) Gateway loss behavior (required)
+=====================================================================
+
+If the currently active uplink loses gateway validity:
+- Run bounded recovery:
+  - attempt DHCP renew/rebind/acquire using backoff policy
+  - maximum attempts: 3
+  - maximum wall time: ~60 seconds (bounded)
+- If still no gateway:
+  - remove default route
+  - mark OFFLINE
+  - keep interface up and continue monitoring for recovery events (link-up, wifi re-assoc)
+
+No stale default routes are kept indefinitely.
+
+=====================================================================
+12) Test plan (what “fixed” looks like)
+=====================================================================
+
+On a fresh Pi OS Lite image (the standard deployment):
+1) Ethernet-only boot:
+- cable plugged in at boot
+- within bounded time: eth0 eligible, eth0 selected, default route via eth0, resolv.conf reflects DHCP DNS
+
+2) Wi‑Fi-only boot:
+- wlan0 associates
+- within bounded time: wlan0 eligible, wlan0 selected, default route via wlan0, resolv.conf reflects DHCP DNS (or fallback)
+
+3) Transition:
+- unplug Ethernet while online on eth0:
+  - bounded recovery; eth0 becomes ineligible; wlan0 becomes selected if eligible
+- plug Ethernet back in:
+  - eth0 becomes eligible and takes priority, with route replace + resolv.conf rewrite
+
+4) Gateway loss:
+- simulate gateway removal (router down):
+  - bounded recovery attempts, then OFFLINE with no default route
+  - recovery when gateway returns
+
+Installer success criterion:
+- install_rustyjack_dev.sh ends with validation passing from `rustyjack status network --json`.
+
+=====================================================================
+End of report (single-path implementation).

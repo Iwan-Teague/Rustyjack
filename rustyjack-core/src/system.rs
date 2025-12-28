@@ -49,7 +49,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 use ipnet::Ipv4Net;
 use log::{debug, info, warn};
-use rustyjack_netlink::{ArpSpoofConfig, ArpSpoofer, DnsConfig, DnsRule, DnsServer, IptablesManager};
+use rustyjack_netlink::{
+    ArpSpoofConfig, ArpSpoofer, DhcpLease, DhcpTransport, DnsConfig, DnsRule, DnsServer,
+    IptablesManager,
+};
+use rustyjack_wireless::status_hotspot;
 use reqwest::blocking::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -64,6 +68,152 @@ use crate::netlink_helpers::{
     netlink_set_interface_down, netlink_set_interface_up, process_kill_pattern, process_running,
     rfkill_block, rfkill_find_index, rfkill_unblock,
 };
+
+const FALLBACK_DNS: [Ipv4Addr; 2] = [Ipv4Addr::new(1, 1, 1, 1), Ipv4Addr::new(9, 9, 9, 9)];
+const ETH_METRIC: u32 = 100;
+const WLAN_METRIC: u32 = 200;
+
+#[derive(Debug, Clone)]
+pub struct LeaseRecord {
+    pub address: Ipv4Addr,
+    pub prefix_len: u8,
+    pub gateway: Option<Ipv4Addr>,
+    pub dns_servers: Vec<Ipv4Addr>,
+    pub acquired_at: SystemTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct DhcpOutcome {
+    pub success: bool,
+    pub transport: Option<String>,
+    pub error: Option<String>,
+    pub address: Option<Ipv4Addr>,
+    pub gateway: Option<Ipv4Addr>,
+    pub recorded_at: SystemTime,
+}
+
+#[derive(Debug)]
+pub enum DhcpAttemptResult {
+    Lease(DhcpLease),
+    Busy,
+    Failed(String),
+}
+
+static LEASE_CACHE: OnceLock<Mutex<HashMap<String, LeaseRecord>>> = OnceLock::new();
+static DHCP_OUTCOME_CACHE: OnceLock<Mutex<HashMap<String, DhcpOutcome>>> = OnceLock::new();
+static INTERFACE_LOCKS: OnceLock<Mutex<HashMap<String, &'static Mutex<()>>>> = OnceLock::new();
+static UPLINK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static ACTIVE_UPLINK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn interface_lock(interface: &str) -> &'static Mutex<()> {
+    let locks = INTERFACE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(lock) = guard.get(interface) {
+        return *lock;
+    }
+    let lock = Box::leak(Box::new(Mutex::new(())));
+    guard.insert(interface.to_string(), lock);
+    lock
+}
+
+fn lock_interface(interface: &str) -> std::sync::MutexGuard<'static, ()> {
+    interface_lock(interface)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn try_lock_interface(interface: &str) -> Option<std::sync::MutexGuard<'static, ()>> {
+    interface_lock(interface).try_lock().ok()
+}
+
+fn lock_uplink() -> std::sync::MutexGuard<'static, ()> {
+    let lock = UPLINK_LOCK.get_or_init(|| Mutex::new(()));
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn record_lease(interface: &str, lease: &DhcpLease) {
+    let cache = LEASE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.insert(
+        interface.to_string(),
+        LeaseRecord {
+            address: lease.address,
+            prefix_len: lease.prefix_len,
+            gateway: lease.gateway,
+            dns_servers: lease.dns_servers.clone(),
+            acquired_at: SystemTime::now(),
+        },
+    );
+}
+
+fn record_dhcp_outcome(
+    interface: &str,
+    success: bool,
+    transport: Option<String>,
+    lease: Option<&DhcpLease>,
+    error: Option<String>,
+) {
+    let cache = DHCP_OUTCOME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (address, gateway) = lease
+        .map(|lease| (Some(lease.address), lease.gateway))
+        .unwrap_or((None, None));
+    guard.insert(
+        interface.to_string(),
+        DhcpOutcome {
+            success,
+            transport,
+            error,
+            address,
+            gateway,
+            recorded_at: SystemTime::now(),
+        },
+    );
+}
+
+pub fn lease_record(interface: &str) -> Option<LeaseRecord> {
+    let cache = LEASE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.get(interface).cloned()
+}
+
+pub fn clear_lease_record(interface: &str) {
+    let cache = LEASE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.remove(interface);
+}
+
+pub fn cached_gateway(interface: &str) -> Option<Ipv4Addr> {
+    lease_record(interface).and_then(|lease| lease.gateway)
+}
+
+pub fn cached_dns(interface: &str) -> Vec<Ipv4Addr> {
+    lease_record(interface)
+        .map(|lease| lease.dns_servers)
+        .unwrap_or_default()
+}
+
+pub fn last_dhcp_outcome(interface: &str) -> Option<DhcpOutcome> {
+    let cache = DHCP_OUTCOME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.get(interface).cloned()
+}
+
+fn set_active_uplink(interface: Option<String>) {
+    let lock = ACTIVE_UPLINK.get_or_init(|| Mutex::new(None));
+    let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = interface;
+}
+
+pub fn active_uplink() -> Option<String> {
+    let lock = ACTIVE_UPLINK.get_or_init(|| Mutex::new(None));
+    let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.clone()
+}
+
+fn fallback_dns() -> Vec<Ipv4Addr> {
+    FALLBACK_DNS.to_vec()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InterfaceInfo {
@@ -1330,6 +1480,304 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
     Ok(None)
 }
 
+fn dhcp_transport_label(transport: DhcpTransport) -> String {
+    match transport {
+        DhcpTransport::Raw => "raw".to_string(),
+        DhcpTransport::Udp => "udp".to_string(),
+    }
+}
+
+fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAttemptResult> {
+    #[cfg(target_os = "linux")]
+    {
+        let report_result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(async {
+                rustyjack_netlink::dhcp_acquire_report(interface, hostname).await
+            }),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow!("Failed to create tokio runtime: {}", e))?;
+                rt.block_on(async {
+                    rustyjack_netlink::dhcp_acquire_report(interface, hostname).await
+                })
+            }
+        };
+
+        match report_result {
+            Ok(report) => {
+                let transport = Some(dhcp_transport_label(report.transport));
+                if let Some(lease) = report.lease {
+                    record_lease(interface, &lease);
+                    record_dhcp_outcome(interface, true, transport, Some(&lease), None);
+                    log::info!(
+                        "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
+                        interface,
+                        lease.address,
+                        lease.prefix_len,
+                        lease.gateway
+                    );
+                    Ok(DhcpAttemptResult::Lease(lease))
+                } else {
+                    let error = report
+                        .error
+                        .unwrap_or_else(|| "DHCP failed without error detail".to_string());
+                    record_dhcp_outcome(interface, false, transport, None, Some(error.clone()));
+                    log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, error);
+                    Ok(DhcpAttemptResult::Failed(error))
+                }
+            }
+            Err(err) => {
+                record_dhcp_outcome(
+                    interface,
+                    false,
+                    None,
+                    None,
+                    Some(err.to_string()),
+                );
+                log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, err);
+                Ok(DhcpAttemptResult::Failed(err.to_string()))
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        let _ = hostname;
+        Ok(DhcpAttemptResult::Failed(
+            "DHCP acquire is only supported on Linux".to_string(),
+        ))
+    }
+}
+
+pub fn acquire_dhcp_lease(interface: &str) -> Result<DhcpAttemptResult> {
+    let _guard = lock_interface(interface);
+    dhcp_acquire_report(interface, None)
+}
+
+pub fn try_acquire_dhcp_lease(interface: &str) -> Result<DhcpAttemptResult> {
+    let _guard = match try_lock_interface(interface) {
+        Some(guard) => guard,
+        None => {
+            log::debug!("[ROUTE] DHCP acquire skipped on {} (lock busy)", interface);
+            return Ok(DhcpAttemptResult::Busy);
+        }
+    };
+    dhcp_acquire_report(interface, None)
+}
+
+fn interface_exists(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    Path::new("/sys/class/net").join(interface).exists()
+}
+
+fn fallback_preferred_interface() -> Option<String> {
+    for name in ["wlan0", "wlan1", "eth0"] {
+        if interface_exists(name) {
+            return Some(name.to_string());
+        }
+    }
+
+    let entries = fs::read_dir("/sys/class/net").ok()?;
+    for entry in entries.flatten() {
+        let iface = entry.file_name().to_string_lossy().to_string();
+        if iface != "lo" {
+            return Some(iface);
+        }
+    }
+    None
+}
+
+pub fn preferred_interface() -> Result<String> {
+    let root = resolve_root(None)?;
+    let current = read_interface_preference(&root, "system_preferred")?;
+    let preferred = match current.as_deref() {
+        Some(name) if interface_exists(name) => name.to_string(),
+        _ => fallback_preferred_interface()
+            .ok_or_else(|| anyhow!("No network interfaces available"))?,
+    };
+
+    if current.as_deref() != Some(preferred.as_str()) {
+        let _ = write_interface_preference(&root, "system_preferred", &preferred);
+    }
+
+    Ok(preferred)
+}
+
+pub fn route_interface() -> Result<String> {
+    let preferred = preferred_interface()?;
+    let (route_iface, _allowed) = isolation_plan(&preferred);
+    Ok(route_iface)
+}
+
+fn isolation_plan(preferred: &str) -> (String, Vec<String>) {
+    if let Some(state) = status_hotspot() {
+        let upstream = state.upstream_interface;
+        let ap = state.ap_interface;
+        let mut allowed = Vec::new();
+        if !ap.is_empty() {
+            allowed.push(ap.clone());
+        }
+        if !upstream.is_empty() {
+            allowed.push(upstream.clone());
+        }
+        if allowed.is_empty() {
+            return (preferred.to_string(), vec![preferred.to_string()]);
+        }
+        allowed.sort();
+        allowed.dedup();
+        let route_interface = if !upstream.is_empty() && interface_exists(&upstream) {
+            upstream
+        } else if !ap.is_empty() {
+            ap.clone()
+        } else {
+            preferred.to_string()
+        };
+        return (route_interface, allowed);
+    }
+
+    (preferred.to_string(), vec![preferred.to_string()])
+}
+
+fn interface_has_carrier(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    let carrier_path = format!("/sys/class/net/{}/carrier", interface);
+    match fs::read_to_string(&carrier_path) {
+        Ok(val) => val.trim() == "1",
+        Err(_) => false,
+    }
+}
+
+fn interface_has_ipv4(interface: &str) -> bool {
+    if interface.is_empty() {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let addrs = netlink_get_ipv4_addresses(interface).unwrap_or_default();
+        addrs
+            .iter()
+            .any(|addr| matches!(addr.address, std::net::IpAddr::V4(_)))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = interface;
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wifi_ready(interface: &str) -> bool {
+    use rustyjack_netlink::WpaManager;
+
+    let mgr = match WpaManager::new(interface) {
+        Ok(mgr) => mgr,
+        Err(err) => {
+            log::debug!(
+                "[ROUTE] WPA status unavailable for {} (no control socket?): {}",
+                interface,
+                err
+            );
+            return false;
+        }
+    };
+
+    let status = match mgr.status() {
+        Ok(status) => status,
+        Err(err) => {
+            log::debug!("[ROUTE] WPA status read failed for {}: {}", interface, err);
+            return false;
+        }
+    };
+
+    matches!(
+        status.wpa_state,
+        rustyjack_netlink::WpaSupplicantState::Completed
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wifi_ready(_interface: &str) -> bool {
+    false
+}
+
+fn candidate_gateway(interface: &str) -> Option<Ipv4Addr> {
+    cached_gateway(interface).or_else(|| interface_gateway(interface).ok().flatten())
+}
+
+struct UplinkCandidate {
+    interface: String,
+    gateway: Ipv4Addr,
+    dns_servers: Vec<Ipv4Addr>,
+    metric: u32,
+}
+
+fn evaluate_uplink(interface: &str, kind: &str, metric: u32) -> Option<UplinkCandidate> {
+    if !interface_exists(interface) {
+        return None;
+    }
+
+    let link_ready = match kind {
+        "wired" => interface_has_carrier(interface),
+        "wireless" => wifi_ready(interface),
+        _ => false,
+    };
+
+    if !link_ready || !interface_has_ipv4(interface) {
+        return None;
+    }
+
+    let gateway = candidate_gateway(interface)?;
+    let dns_servers = cached_dns(interface);
+
+    Some(UplinkCandidate {
+        interface: interface.to_string(),
+        gateway,
+        dns_servers,
+        metric,
+    })
+}
+
+pub fn select_active_uplink() -> Result<Option<String>> {
+    let _guard = lock_uplink();
+
+    let preferred = preferred_interface()?;
+    let (route_iface, allowed) = isolation_plan(&preferred);
+    apply_interface_isolation(&allowed)?;
+    let kind = if is_wireless_interface(&route_iface) {
+        "wireless"
+    } else {
+        "wired"
+    };
+    let metric = if kind == "wireless" {
+        WLAN_METRIC
+    } else {
+        ETH_METRIC
+    };
+    let selected = evaluate_uplink(&route_iface, kind, metric);
+
+    match selected {
+        Some(candidate) => {
+            set_default_route_with_metric(
+                &candidate.interface,
+                candidate.gateway,
+                Some(candidate.metric),
+            )?;
+            let _ = rewrite_dns_servers(&candidate.interface, &candidate.dns_servers);
+            set_active_uplink(Some(candidate.interface.clone()));
+            Ok(Some(candidate.interface))
+        }
+        None => {
+            let _ = netlink_delete_default_route();
+            set_active_uplink(None);
+            Ok(None)
+        }
+    }
+}
+
 pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
     if interface.trim().is_empty() {
         bail!("interface cannot be empty");
@@ -1367,7 +1815,7 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
         );
     }
 
-    let mut gateway = interface_gateway(interface)?;
+    let mut gateway = candidate_gateway(interface);
     if gateway.is_none() {
         log::info!(
             "[ROUTE] No gateway detected for {}; attempting DHCP acquire",
@@ -1377,50 +1825,20 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
     }
 
     if let Some(gateway) = gateway {
-        log::info!("[ROUTE] Setting default route via {} on {}", gateway, interface);
-        set_default_route(interface, gateway)?;
-        let _ = rewrite_dns_servers(interface, gateway);
+        let _ = select_active_uplink();
         return Ok(Some(gateway));
     }
 
     log::warn!("[ROUTE] No gateway found for {} after DHCP", interface);
+    let _ = select_active_uplink();
     Ok(None)
 }
 
 fn dhcp_acquire_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
-    #[cfg(target_os = "linux")]
-    {
-        let result = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle
-                .block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await }),
-            Err(_) => {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow!("Failed to create tokio runtime: {}", e))?;
-                rt.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await })
-            }
-        };
-
-        match result {
-            Ok(lease) => {
-                log::info!(
-                    "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
-                    interface,
-                    lease.address,
-                    lease.prefix_len,
-                    lease.gateway
-                );
-                Ok(lease.gateway)
-            }
-            Err(e) => {
-                log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, e);
-                Ok(None)
-            }
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = interface;
-        Ok(None)
+    match acquire_dhcp_lease(interface)? {
+        DhcpAttemptResult::Lease(lease) => Ok(lease.gateway),
+        DhcpAttemptResult::Busy => Ok(None),
+        DhcpAttemptResult::Failed(_) => Ok(None),
     }
 }
 
@@ -1567,6 +1985,14 @@ pub fn enforce_single_interface(interface: &str) -> Result<()> {
 }
 
 pub fn set_default_route(interface: &str, gateway: Ipv4Addr) -> Result<()> {
+    set_default_route_with_metric(interface, gateway, None)
+}
+
+pub fn set_default_route_with_metric(
+    interface: &str,
+    gateway: Ipv4Addr,
+    metric: Option<u32>,
+) -> Result<()> {
     use std::net::IpAddr;
 
     #[cfg(target_os = "linux")]
@@ -1577,16 +2003,14 @@ pub fn set_default_route(interface: &str, gateway: Ipv4Addr) -> Result<()> {
         tokio::runtime::Handle::try_current()
             .map(|handle| {
                 handle.block_on(async {
-                    let _ = rustyjack_netlink::delete_default_route().await;
-                    rustyjack_netlink::add_default_route(gw, &iface)
+                    rustyjack_netlink::replace_default_route(gw, &iface, metric)
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to set default route: {}", e))
                 })
             })
             .unwrap_or_else(|_| {
                 tokio::runtime::Runtime::new()?.block_on(async {
-                    let _ = rustyjack_netlink::delete_default_route().await;
-                    rustyjack_netlink::add_default_route(gw, &iface)
+                    rustyjack_netlink::replace_default_route(gw, &iface, metric)
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to set default route: {}", e))
                 })
@@ -1597,14 +2021,31 @@ pub fn set_default_route(interface: &str, gateway: Ipv4Addr) -> Result<()> {
     bail!("Route management only supported on Linux")
 }
 
-pub fn rewrite_dns_servers(interface: &str, gateway: Ipv4Addr) -> Result<()> {
-    let content = format!(
-        "# Managed by rustyjack-core for {interface}\n\
-nameserver {gateway}\n\
-nameserver 8.8.8.8\n\
-nameserver 8.8.4.4\n"
-    );
-    fs::write("/etc/resolv.conf", content).context("writing /etc/resolv.conf")?;
+pub fn rewrite_dns_servers(interface: &str, dns_servers: &[Ipv4Addr]) -> Result<()> {
+    let servers = if dns_servers.is_empty() {
+        log::warn!(
+            "[DNS] DHCP provided no DNS for {}; using fallback servers",
+            interface
+        );
+        fallback_dns()
+    } else {
+        dns_servers.to_vec()
+    };
+
+    let mut content = format!("# Managed by rustyjack-core for {interface}\n");
+    for server in servers {
+        content.push_str(&format!("nameserver {}\n", server));
+    }
+
+    let tmp_path = "/etc/.resolv.conf.rustyjack.tmp";
+    let mut file = fs::File::create(tmp_path).context("creating resolv.conf temp file")?;
+    file.write_all(content.as_bytes())
+        .context("writing resolv.conf temp file")?;
+    file.sync_all().ok();
+    fs::rename(tmp_path, "/etc/resolv.conf").context("renaming resolv.conf")?;
+    if let Ok(dir) = fs::File::open("/etc") {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
@@ -2719,15 +3160,10 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     log::info!("[WIFI] WPA connection successful, requesting DHCP lease...");
 
     // Request DHCP lease with retry
-    let rt = tokio::runtime::Runtime::new()
-        .with_context(|| "Failed to create tokio runtime for DHCP acquire")?;
     let mut dhcp_success = false;
     for attempt in 1..=3 {
-        let dhcp_result =
-            rt.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await });
-
-        match dhcp_result {
-            Ok(lease) => {
+        match acquire_dhcp_lease(interface)? {
+            DhcpAttemptResult::Lease(lease) => {
                 dhcp_success = true;
                 log::info!(
                     "DHCP lease acquired on attempt {}: {}/{}, gateway: {:?}",
@@ -2738,8 +3174,11 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
                 );
                 break;
             }
-            Err(e) => {
-                log::warn!("DHCP attempt {} failed: {}", attempt, e);
+            DhcpAttemptResult::Failed(err) => {
+                log::warn!("DHCP attempt {} failed: {}", attempt, err);
+            }
+            DhcpAttemptResult::Busy => {
+                log::debug!("DHCP attempt {} skipped (lock busy)", attempt);
             }
         }
 
@@ -2748,7 +3187,9 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         }
     }
 
-    if !dhcp_success {
+    if dhcp_success {
+        let _ = select_active_uplink();
+    } else {
         log::warn!("DHCP lease acquisition failed after 3 attempts, but connection may still work");
     }
 

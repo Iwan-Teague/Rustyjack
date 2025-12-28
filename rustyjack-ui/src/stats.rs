@@ -3,7 +3,6 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::Path,
-    process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
@@ -14,18 +13,20 @@ use std::{
 
 use anyhow::Result;
 use chrono::Local;
-use rustyjack_core::cli::{
-    HotspotCommand, StatusCommand, WifiCommand, WifiRouteCommand, WifiRouteEnsureArgs,
+use rustyjack_core::cli::{StatusCommand, WifiCommand};
+use rustyjack_core::system::{
+    cached_gateway, clear_lease_record, interface_gateway, is_wireless_interface,
+    route_interface, select_active_uplink, try_acquire_dhcp_lease, DhcpAttemptResult,
 };
-use rustyjack_core::{
-    apply_interface_isolation, ensure_route_no_isolation, interface_gateway, Commands,
-};
+use rustyjack_core::Commands;
+use rand::Rng;
 use serde_json::Value;
+#[cfg(target_os = "linux")]
+use libc;
 #[cfg(target_os = "linux")]
 use rustyjack_netlink::{WpaManager, WpaSupplicantState};
 
 use crate::{
-    config::GuiConfig,
     core::CoreBridge,
     display::StatusOverlay,
     types::WifiListResponse,
@@ -36,14 +37,24 @@ pub struct StatsSampler {
     stop: Arc<AtomicBool>,
 }
 
-const DHCP_RETRY_SECS: u64 = 15;
-static LAST_DHCP_ATTEMPT: AtomicU64 = AtomicU64::new(0);
-static LAST_ISOLATION_STATE: OnceLock<Mutex<IsolationState>> = OnceLock::new();
+const MAX_DHCP_FAILURES: u32 = 3;
+const MAX_BACKOFF_SECS: u64 = 60;
+static LINK_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+static LINK_MONITOR_STARTED: OnceLock<()> = OnceLock::new();
+static NETWORK_WATCH_STATE: OnceLock<Mutex<NetworkWatchState>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
-struct IsolationState {
-    mode: String,
-    allow_list: Vec<String>,
+struct BackoffState {
+    failures: u32,
+    next_attempt: u64,
+    blocked: bool,
+}
+
+#[derive(Debug, Default)]
+struct NetworkWatchState {
+    backoff: std::collections::HashMap<String, BackoffState>,
+    last_ready: std::collections::HashMap<String, bool>,
+    last_uplink: Option<String>,
 }
 
 impl StatsSampler {
@@ -116,9 +127,8 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
         }
     }
 
-    // Enforce interface isolation continuously based on active/hotspot state
-    if let Err(err) = enforce_isolation_watchdog(core, root) {
-        eprintln!("[isolation] watchdog error: {err:?}");
+    if let Err(err) = network_watchdog(root) {
+        eprintln!("[network] watchdog error: {err:?}");
     }
 
     if let Ok(mut guard) = shared.lock() {
@@ -137,222 +147,218 @@ fn extract_status_text(data: &Value) -> Option<String> {
     }
 }
 
-fn enforce_isolation_watchdog(core: &CoreBridge, root: &Path) -> Result<()> {
-    let cfg = GuiConfig::load(root)?;
-    let active_iface = cfg.settings.active_network_interface.trim().to_string();
-
-    let mut allow_list = Vec::new();
-
-    if let Ok((_, hs_data)) = core.dispatch(Commands::Hotspot(HotspotCommand::Status)) {
-        let running = hs_data
-            .get("running")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if running {
-            if let Some(ap) = hs_data.get("ap_interface").and_then(|v| v.as_str()) {
-                if !ap.is_empty() && interface_exists(ap) {
-                    allow_list.push(ap.to_string());
-                }
+fn start_link_monitor() {
+    LINK_MONITOR_STARTED.get_or_init(|| {
+        thread::spawn(|| {
+            if let Err(err) = link_monitor_loop() {
+                eprintln!("[network] link monitor error: {err}");
             }
-            if let Some(up) = hs_data.get("upstream_interface").and_then(|v| v.as_str()) {
-                if !up.is_empty() && interface_exists(up) {
-                    allow_list.push(up.to_string());
-                }
-            }
+        });
+    });
+}
 
-            allow_list.sort();
-            allow_list.dedup();
-            if allow_list.is_empty() {
-                log_watchdog_event(
-                    root,
-                    "hotspot running but no valid interfaces in allow list",
-                );
-                log_isolation_state(root, "hotspot", &allow_list);
-                return Ok(());
-            }
+#[cfg(target_os = "linux")]
+fn link_monitor_loop() -> std::io::Result<()> {
+    use std::mem;
 
-            log_watchdog_mismatches(root, &allow_list);
-            apply_interface_isolation(&allow_list)?;
-            log_isolation_state(root, "hotspot", &allow_list);
-            if let Some(up) = hs_data
-                .get("upstream_interface")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-            {
-                maybe_ensure_wired_dhcp(core, root, up, true)?;
-            }
-            return Ok(());
+    let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_ROUTE) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut addr: libc::sockaddr_nl = unsafe { mem::zeroed() };
+    addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+    addr.nl_pid = 0;
+    addr.nl_groups = libc::RTMGRP_LINK as u32;
+    let bind_result = unsafe {
+        libc::bind(
+            fd,
+            &addr as *const _ as *const libc::sockaddr,
+            mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+        )
+    };
+    if bind_result < 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(fd);
         }
+        return Err(err);
     }
 
-    if active_iface.is_empty() || active_iface.eq_ignore_ascii_case("auto") {
-        if let Some(fallback) = select_default_interface() {
-            allow_list.push(fallback);
+    let mut buf = [0u8; 4096];
+    loop {
+        let len = unsafe {
+            libc::recv(
+                fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                0,
+            )
+        };
+        if len < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(err);
         }
-    } else if interface_exists(&active_iface) {
-        allow_list.push(active_iface.clone());
-    } else {
-        log_watchdog_event(
-            root,
-            &format!("active interface {} not found; skipping isolation", active_iface),
-        );
-        eprintln!(
-            "[isolation] active interface {} not found; skipping enforcement",
-            active_iface
-        );
-        log_isolation_state(root, "skipped", &[]);
-        return Ok(());
+        LINK_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed);
     }
+}
 
-    allow_list.retain(|s| !s.is_empty());
-    allow_list.sort();
-    allow_list.dedup();
-    allow_list.retain(|s| interface_exists(s));
-
-    if allow_list.is_empty() {
-        log_isolation_state(root, "single", &allow_list);
-        return Ok(());
-    }
-
-    log_watchdog_mismatches(root, &allow_list);
-    apply_interface_isolation(&allow_list)?;
-    log_isolation_state(root, "single", &allow_list);
-    if let Some(primary) = allow_list.first() {
-        maybe_ensure_wired_dhcp(core, root, primary, false)?;
-    }
+#[cfg(not(target_os = "linux"))]
+fn link_monitor_loop() -> std::io::Result<()> {
     Ok(())
 }
 
-fn maybe_ensure_wired_dhcp(
-    core: &CoreBridge,
-    root: &Path,
-    interface: &str,
-    hotspot_mode: bool,
-) -> Result<()> {
-    if interface.is_empty() {
-        return Ok(());
-    }
-    let is_wireless = interface_is_wireless(interface);
-    if is_wireless {
-        if !wireless_ready_for_dhcp(interface) {
-            log_watchdog_event(
-                root,
-                &format!("dhcp: skip {} (wireless not associated)", interface),
-            );
-            log::debug!(
-                "[ROUTE] Skip DHCP ensure on {} (wireless not associated)",
-                interface
-            );
-            return Ok(());
+impl BackoffState {
+    fn new() -> Self {
+        Self {
+            failures: 0,
+            next_attempt: 0,
+            blocked: false,
         }
-    } else if !interface_has_carrier(interface) {
-        log_watchdog_event(root, &format!("dhcp: skip {} (no carrier)", interface));
-        log::debug!("[ROUTE] Skip DHCP ensure on {} (no carrier)", interface);
-        return Ok(());
     }
 
-    let has_ipv4 = interface_has_ipv4(interface);
-    let gateway = match interface_gateway(interface) {
-        Ok(gw) => gw,
-        Err(err) => {
-            log_watchdog_event(
-                root,
-                &format!("dhcp: gateway check failed for {}: {}", interface, err),
-            );
-            None
-        }
-    };
-
-    if has_ipv4 && gateway.is_some() {
-        log_watchdog_event(root, &format!("dhcp: skip {} (ipv4+gateway)", interface));
-        log::debug!(
-            "[ROUTE] Skip DHCP ensure on {} (IPv4+gateway present)",
-            interface
-        );
-        return Ok(());
+    fn reset(&mut self, now: u64) {
+        self.failures = 0;
+        self.next_attempt = now;
+        self.blocked = false;
     }
+
+    fn can_attempt(&self, now: u64) -> bool {
+        !self.blocked && now >= self.next_attempt
+    }
+
+    fn record_failure(&mut self, now: u64) {
+        self.failures = self.failures.saturating_add(1);
+        let shift = self.failures.saturating_sub(1).min(6);
+        let base = (1u64.checked_shl(shift).unwrap_or(1)).min(MAX_BACKOFF_SECS);
+        let jitter = rand::thread_rng().gen_range(0..=base / 4);
+        self.next_attempt = now + base + jitter;
+        if self.failures >= MAX_DHCP_FAILURES {
+            self.blocked = true;
+        }
+    }
+}
+
+fn network_watchdog(root: &Path) -> Result<()> {
+    start_link_monitor();
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let last = LAST_DHCP_ATTEMPT.load(Ordering::Relaxed);
-    if now.saturating_sub(last) < DHCP_RETRY_SECS {
-        log::debug!("[ROUTE] DHCP ensure throttled for {}", interface);
-        return Ok(());
-    }
-    LAST_DHCP_ATTEMPT.store(now, Ordering::Relaxed);
+    let link_events = LINK_EVENT_COUNTER.swap(0, Ordering::Relaxed) > 0;
 
-    let reason = if !has_ipv4 { "no_ipv4" } else { "no_gateway" };
-    log_watchdog_event(
-        root,
-        &format!(
-            "dhcp: attempt {} reason={} hotspot={}",
-            interface, reason, hotspot_mode
-        ),
-    );
-    log::info!(
-        "[ROUTE] Attempting DHCP ensure on {} (hotspot_mode={})",
-        interface,
-        hotspot_mode
-    );
-
-    if hotspot_mode {
-        match ensure_route_no_isolation(interface) {
-            Ok(gateway) => {
-                log_watchdog_event(
-                    root,
-                    &format!("dhcp: hotspot ensure {} gateway={:?}", interface, gateway),
-                );
-            }
-            Err(err) => {
-                log_watchdog_event(
-                    root,
-                    &format!("dhcp: hotspot ensure failed for {}: {}", interface, err),
-                );
-                eprintln!("[route] hotspot DHCP ensure failed for {}: {}", interface, err);
-            }
-        }
-        return Ok(());
-    }
-
-    let args = WifiRouteEnsureArgs {
-        interface: interface.to_string(),
+    let state = NETWORK_WATCH_STATE.get_or_init(|| Mutex::new(NetworkWatchState::default()));
+    let mut guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     };
-    match core.dispatch(Commands::Wifi(WifiCommand::Route(WifiRouteCommand::Ensure(
-        args,
-    )))) {
-        Ok((msg, data)) => {
-            let route_set = data.get("route_set").and_then(|v| v.as_bool()).unwrap_or(false);
-            let gw = data
-                .get("gateway")
-                .and_then(|v| v.as_str())
-                .unwrap_or("none");
-            log_watchdog_event(
-                root,
-                &format!(
-                    "dhcp: ensure {} route_set={} gateway={} msg={}",
-                    interface, route_set, gw, msg
-                ),
-            );
-        }
+
+    let route_iface = match route_interface() {
+        Ok(name) => name,
         Err(err) => {
-            log_watchdog_event(
-                root,
-                &format!("dhcp: ensure failed for {}: {}", interface, err),
-            );
-            eprintln!("[route] auto ensure failed for {}: {}", interface, err);
+            log_watchdog_event(root, &format!("route: no preferred interface ({err})"));
+            return Ok(());
         }
+    };
+    let kind = if is_wireless_interface(&route_iface) {
+        "wireless"
+    } else {
+        "wired"
+    };
+    let interfaces = vec![(route_iface, kind)];
+    for (iface, kind) in interfaces {
+        if !interface_exists(&iface) {
+            continue;
+        }
+
+        let link_ready = match kind {
+            "wired" => interface_has_carrier(&iface),
+            "wireless" => wireless_ready_for_dhcp(&iface),
+            _ => false,
+        };
+
+        let was_ready = guard.last_ready.get(&iface).copied().unwrap_or(false);
+        if link_ready != was_ready {
+            guard.last_ready.insert(iface.clone(), link_ready);
+            if link_ready {
+                let backoff = guard
+                    .backoff
+                    .entry(iface.clone())
+                    .or_insert_with(BackoffState::new);
+                backoff.reset(now);
+                log_watchdog_event(root, &format!("link: {} ready=true", iface));
+            } else {
+                clear_lease_record(&iface);
+                log_watchdog_event(root, &format!("link: {} ready=false", iface));
+            }
+        }
+
+        let gateway = cached_gateway(&iface).or_else(|| interface_gateway(&iface).ok().flatten());
+        let has_ipv4 = interface_has_ipv4(&iface);
+        let needs_dhcp = !has_ipv4 || gateway.is_none();
+        let force_attempt = link_ready && (!was_ready || link_events);
+
+        if link_ready && needs_dhcp {
+            let backoff = guard
+                .backoff
+                .entry(iface.clone())
+                .or_insert_with(BackoffState::new);
+            if backoff.blocked {
+                continue;
+            }
+            if force_attempt || backoff.can_attempt(now) {
+                let reason = if !has_ipv4 { "no_ipv4" } else { "no_gateway" };
+                log_watchdog_event(root, &format!("dhcp: attempt {} reason={}", iface, reason));
+                match try_acquire_dhcp_lease(&iface)? {
+                    DhcpAttemptResult::Lease(lease) => {
+                        backoff.reset(now);
+                        log_watchdog_event(
+                            root,
+                            &format!("dhcp: success {} gateway={:?}", iface, lease.gateway),
+                        );
+                    }
+                    DhcpAttemptResult::Failed(err) => {
+                        backoff.record_failure(now);
+                        log_watchdog_event(
+                            root,
+                            &format!("dhcp: failed {} error={}", iface, err),
+                        );
+                        if backoff.blocked {
+                            clear_lease_record(&iface);
+                            log_watchdog_event(
+                                root,
+                                &format!("dhcp: giving up {} (clearing lease)", iface),
+                            );
+                        }
+                    }
+                    DhcpAttemptResult::Busy => {
+                        log_watchdog_event(root, &format!("dhcp: busy {}", iface));
+                    }
+                }
+            }
+        } else if link_ready && !needs_dhcp {
+            if let Some(backoff) = guard.backoff.get_mut(&iface) {
+                backoff.reset(now);
+            }
+        }
+    }
+
+    let selected = select_active_uplink()?;
+    if guard.last_uplink != selected {
+        log_watchdog_event(
+            root,
+            &format!("uplink: {:?} -> {:?}", guard.last_uplink, selected),
+        );
+        guard.last_uplink = selected.clone();
     }
     Ok(())
-}
-
-fn interface_is_wireless(interface: &str) -> bool {
-    if interface.is_empty() {
-        return false;
-    }
-    let path = format!("/sys/class/net/{}/wireless", interface);
-    Path::new(&path).exists()
 }
 
 #[cfg(target_os = "linux")]
@@ -385,13 +391,7 @@ fn wireless_ready_for_dhcp(interface: &str) -> bool {
         status.ip_address
     );
 
-    matches!(
-        status.wpa_state,
-        WpaSupplicantState::Completed
-            | WpaSupplicantState::Associated
-            | WpaSupplicantState::FourWayHandshake
-            | WpaSupplicantState::GroupHandshake
-    )
+    matches!(status.wpa_state, WpaSupplicantState::Completed)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -404,15 +404,9 @@ fn interface_has_carrier(interface: &str) -> bool {
         return false;
     }
     let carrier_path = format!("/sys/class/net/{}/carrier", interface);
-    let oper_path = format!("/sys/class/net/{}/operstate", interface);
-    let oper_state = fs::read_to_string(&oper_path)
-        .unwrap_or_else(|_| "unknown".to_string())
-        .trim()
-        .to_string();
-    let oper_ready = matches!(oper_state.as_str(), "up" | "unknown");
     match fs::read_to_string(&carrier_path) {
-        Ok(val) => val.trim() == "1" || oper_ready,
-        Err(_) => oper_ready,
+        Ok(val) => val.trim() == "1",
+        Err(_) => false,
     }
 }
 
@@ -450,66 +444,6 @@ fn interface_has_ipv4(interface: &str) -> bool {
     }
 }
 
-fn log_isolation_state(root: &Path, mode: &str, allow_list: &[String]) {
-    let state = LAST_ISOLATION_STATE.get_or_init(|| {
-        Mutex::new(IsolationState {
-            mode: String::new(),
-            allow_list: Vec::new(),
-        })
-    });
-    let mut guard = match state.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if guard.mode != mode || guard.allow_list != allow_list {
-        let message = format!("mode={} allow={:?}", mode, allow_list);
-        log_watchdog_event(root, &message);
-        guard.mode = mode.to_string();
-        guard.allow_list = allow_list.to_vec();
-    }
-}
-
-fn log_watchdog_mismatches(root: &Path, allow_list: &[String]) {
-    let mut allowed_set = std::collections::HashSet::new();
-    for iface in allow_list {
-        allowed_set.insert(iface.as_str());
-    }
-
-    let entries = match fs::read_dir("/sys/class/net") {
-        Ok(entries) => entries,
-        Err(err) => {
-            log_watchdog_event(root, &format!("failed to read /sys/class/net: {}", err));
-            return;
-        }
-    };
-
-    for entry in entries.flatten() {
-        let iface = entry.file_name().to_string_lossy().to_string();
-        if iface == "lo" {
-            continue;
-        }
-        let oper_path = format!("/sys/class/net/{}/operstate", iface);
-        let state = fs::read_to_string(&oper_path)
-            .unwrap_or_else(|_| "unknown".to_string())
-            .trim()
-            .to_string();
-        let is_allowed = allowed_set.contains(iface.as_str());
-
-        if is_allowed && matches!(state.as_str(), "down" | "lowerlayerdown") {
-            log_watchdog_event(
-                root,
-                &format!("bring up {} (state={})", iface, state),
-            );
-        }
-        if !is_allowed && matches!(state.as_str(), "up" | "unknown") {
-            log_watchdog_event(
-                root,
-                &format!("bring down {} (state={})", iface, state),
-            );
-        }
-    }
-}
-
 fn log_watchdog_event(root: &Path, message: &str) {
     log::info!("[WATCHDOG] {}", message);
     let log_dir = root.join("loot").join("logs");
@@ -528,23 +462,6 @@ fn interface_exists(name: &str) -> bool {
         return false;
     }
     Path::new("/sys/class/net").join(name).exists()
-}
-
-fn select_default_interface() -> Option<String> {
-    if interface_exists("eth0") {
-        return Some("eth0".to_string());
-    }
-    if interface_exists("wlan0") {
-        return Some("wlan0".to_string());
-    }
-    let entries = fs::read_dir("/sys/class/net").ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name != "lo" {
-            return Some(name);
-        }
-    }
-    None
 }
 
 fn read_temp() -> Result<f32> {

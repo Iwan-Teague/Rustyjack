@@ -8,10 +8,13 @@
 #[allow(dead_code)]
 use crate::error::{NetlinkError, Result};
 use crate::interface::InterfaceManager;
-use crate::route::RouteManager;
 use rand::rngs::OsRng;
 use rand::RngCore;
+use std::fs;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+#[cfg(target_os = "linux")]
+use std::os::unix::io::RawFd;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -133,7 +136,19 @@ pub enum DhcpClientError {
 /// ```
 pub struct DhcpClient {
     interface_mgr: InterfaceManager,
-    route_mgr: RouteManager,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DhcpTransport {
+    Raw,
+    Udp,
+}
+
+#[derive(Debug, Clone)]
+pub struct DhcpAcquireReport {
+    pub transport: DhcpTransport,
+    pub lease: Option<DhcpLease>,
+    pub error: Option<String>,
 }
 
 impl DhcpClient {
@@ -145,7 +160,6 @@ impl DhcpClient {
     pub fn new() -> Result<Self> {
         Ok(Self {
             interface_mgr: InterfaceManager::new()?,
-            route_mgr: RouteManager::new()?,
         })
     }
 
@@ -205,18 +219,10 @@ impl DhcpClient {
     pub async fn acquire(&self, interface: &str, hostname: Option<&str>) -> Result<DhcpLease> {
         log::info!("Acquiring DHCP lease for interface {}", interface);
 
-        let mac = self.get_mac_address(interface).await?;
-
-        let xid = self.generate_xid();
-
-        let socket = self.create_client_socket(interface)?;
-
-        let offer = self.discover_and_wait_for_offer(&socket, interface, &mac, xid, hostname)?;
-
-        let lease =
-            self.request_and_wait_for_ack(&socket, interface, &mac, xid, &offer, hostname)?;
-
-        self.configurefinterface(interface, &lease).await?;
+        let (lease, _transport) = self
+            .acquire_with_transport(interface, hostname)
+            .await
+            .map_err(|(_transport, err)| err)?;
 
         log::info!(
             "Successfully acquired DHCP lease for {}: {}/{}, gateway: {:?}, DNS: {:?}",
@@ -228,6 +234,25 @@ impl DhcpClient {
         );
 
         Ok(lease)
+    }
+
+    pub async fn acquire_report(
+        &self,
+        interface: &str,
+        hostname: Option<&str>,
+    ) -> DhcpAcquireReport {
+        match self.acquire_with_transport(interface, hostname).await {
+            Ok((lease, transport)) => DhcpAcquireReport {
+                transport,
+                lease: Some(lease),
+                error: None,
+            },
+            Err((transport, err)) => DhcpAcquireReport {
+                transport,
+                lease: None,
+                error: Some(err.to_string()),
+            },
+        }
     }
 
     /// Renew DHCP lease by releasing and re-acquiring.
@@ -288,19 +313,121 @@ impl DhcpClient {
         OsRng.next_u32()
     }
 
-    fn create_client_socket(&self, interface: &str) -> Result<UdpSocket> {
-        let socket = UdpSocket::bind(("0.0.0.0", DHCP_CLIENT_PORT)).map_err(|e| {
-            NetlinkError::DhcpClient(DhcpClientError::BindFailed {
-                interface: interface.to_string(),
-                source: e,
-            })
-        })?;
+    async fn acquire_with_transport(
+        &self,
+        interface: &str,
+        hostname: Option<&str>,
+    ) -> std::result::Result<(DhcpLease, DhcpTransport), (DhcpTransport, NetlinkError)> {
+        let mac = self
+            .get_mac_address(interface)
+            .await
+            .map_err(|e| (DhcpTransport::Raw, e))?;
 
+        let xid = self.generate_xid();
+
+        match self.discover_and_wait_for_offer_raw(interface, &mac, xid, hostname) {
+            Ok(offer) => {
+                let lease = self
+                    .request_and_wait_for_ack_raw(interface, &mac, xid, &offer, hostname)
+                    .map_err(|e| (DhcpTransport::Raw, e))?;
+                self.configurefinterface(interface, &lease)
+                    .await
+                    .map_err(|e| (DhcpTransport::Raw, e))?;
+                return Ok((lease, DhcpTransport::Raw));
+            }
+            Err(err) => {
+                log::warn!(
+                    "Raw DHCP attempt failed on {}: {}. Falling back to UDP",
+                    interface,
+                    err
+                );
+            }
+        }
+
+        let socket = self
+            .create_client_socket(interface)
+            .map_err(|e| (DhcpTransport::Udp, e))?;
+
+        let offer = self
+            .discover_and_wait_for_offer(&socket, interface, &mac, xid, hostname)
+            .map_err(|e| (DhcpTransport::Udp, e))?;
+        let lease = self
+            .request_and_wait_for_ack(&socket, interface, &mac, xid, &offer, hostname)
+            .map_err(|e| (DhcpTransport::Udp, e))?;
+
+        self.configurefinterface(interface, &lease)
+            .await
+            .map_err(|e| (DhcpTransport::Udp, e))?;
+
+        Ok((lease, DhcpTransport::Udp))
+    }
+
+    fn create_client_socket(&self, interface: &str) -> Result<UdpSocket> {
         #[cfg(target_os = "linux")]
         {
-            use std::os::unix::io::AsRawFd;
-            let fd = socket.as_raw_fd();
+            use std::mem;
+            use std::os::unix::io::FromRawFd;
 
+            let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, libc::IPPROTO_UDP) };
+            if fd < 0 {
+                return Err(NetlinkError::DhcpClient(DhcpClientError::BindFailed {
+                    interface: interface.to_string(),
+                    source: std::io::Error::last_os_error(),
+                }));
+            }
+
+            let one: libc::c_int = 1;
+            unsafe {
+                let _ = libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_REUSEADDR,
+                    &one as *const _ as *const libc::c_void,
+                    mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+                let _ = libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_REUSEPORT,
+                    &one as *const _ as *const libc::c_void,
+                    mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+                let _ = libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_BROADCAST,
+                    &one as *const _ as *const libc::c_void,
+                    mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+            }
+
+            let addr = libc::sockaddr_in {
+                sin_family: libc::AF_INET as libc::sa_family_t,
+                sin_port: DHCP_CLIENT_PORT.to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: libc::INADDR_ANY,
+                },
+                sin_zero: [0; 8],
+            };
+            let bind_result = unsafe {
+                libc::bind(
+                    fd,
+                    &addr as *const _ as *const libc::sockaddr,
+                    mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                )
+            };
+            if bind_result < 0 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fd);
+                }
+                return Err(NetlinkError::DhcpClient(DhcpClientError::BindFailed {
+                    interface: interface.to_string(),
+                    source: err,
+                }));
+            }
+
+            let socket = unsafe { UdpSocket::from_raw_fd(fd) };
             let iface_bytes = interface.as_bytes();
             let result = unsafe {
                 libc::setsockopt(
@@ -311,7 +438,6 @@ impl DhcpClient {
                     iface_bytes.len() as libc::socklen_t,
                 )
             };
-
             if result < 0 {
                 return Err(NetlinkError::DhcpClient(
                     DhcpClientError::BindToDeviceFailed {
@@ -320,17 +446,123 @@ impl DhcpClient {
                     },
                 ));
             }
+
+            socket
+                .set_broadcast(true)
+                .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
+
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
+
+            Ok(socket)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface;
+            Err(NetlinkError::OperationFailed(
+                "DHCP client sockets only supported on Linux".to_string(),
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn discover_and_wait_for_offer_raw(
+        &self,
+        interface: &str,
+        mac: &[u8; 6],
+        xid: u32,
+        hostname: Option<&str>,
+    ) -> Result<DhcpOffer> {
+        let (fd, ifindex) = open_raw_socket(interface)?;
+
+        for attempt in 1..=3 {
+            log::info!(
+                "Sending DHCP DISCOVER (raw) on {} (attempt {})",
+                interface,
+                attempt
+            );
+
+            let discover = self.build_discover_packet(mac, xid, hostname);
+            if let Err(e) = send_raw_dhcp(fd, ifindex, mac, &discover) {
+                unsafe {
+                    libc::close(fd);
+                }
+                return Err(NetlinkError::DhcpClient(DhcpClientError::SendFailed {
+                    packet_type: "DISCOVER".to_string(),
+                    interface: interface.to_string(),
+                    source: e,
+                }));
+            }
+
+            match wait_for_offer_raw(fd, interface, xid, &self) {
+                Ok(offer) => {
+                    unsafe {
+                        libc::close(fd);
+                    }
+                    return Ok(offer);
+                }
+                Err(e) => {
+                    if attempt < 3 {
+                        log::warn!(
+                            "DHCP offer timeout (raw) on {} (attempt {}), retrying...",
+                            interface,
+                            attempt
+                        );
+                        std::thread::sleep(Duration::from_secs(1));
+                    } else {
+                        unsafe {
+                            libc::close(fd);
+                        }
+                        return Err(e);
+                    }
+                }
+            }
         }
 
-        socket
-            .set_broadcast(true)
-            .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
+        unsafe {
+            libc::close(fd);
+        }
+        Err(NetlinkError::DhcpClient(DhcpClientError::NoOffer {
+            interface: interface.to_string(),
+            retries: 3,
+        }))
+    }
 
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
+    #[cfg(target_os = "linux")]
+    fn request_and_wait_for_ack_raw(
+        &self,
+        interface: &str,
+        mac: &[u8; 6],
+        xid: u32,
+        offer: &DhcpOffer,
+        hostname: Option<&str>,
+    ) -> Result<DhcpLease> {
+        let (fd, ifindex) = open_raw_socket(interface)?;
 
-        Ok(socket)
+        log::info!(
+            "Sending DHCP REQUEST (raw) for {} on {}",
+            offer.offered_ip,
+            interface
+        );
+
+        let request = self.build_request_packet(mac, xid, offer, hostname);
+        if let Err(e) = send_raw_dhcp(fd, ifindex, mac, &request) {
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(NetlinkError::DhcpClient(DhcpClientError::SendFailed {
+                packet_type: "REQUEST".to_string(),
+                interface: interface.to_string(),
+                source: e,
+            }));
+        }
+
+        let lease = wait_for_ack_raw(fd, interface, xid, offer, self)?;
+        unsafe {
+            libc::close(fd);
+        }
+        Ok(lease)
     }
 
     fn discover_and_wait_for_offer(
@@ -889,45 +1121,6 @@ impl DhcpClient {
                 })
             })?;
 
-        if let Some(gateway) = lease.gateway {
-            self.route_mgr
-                .add_default_route(gateway.into(), interface)
-                .await
-                .map_err(|e| {
-                    NetlinkError::DhcpClient(DhcpClientError::GatewayConfigFailed {
-                        gateway,
-                        interface: interface.to_string(),
-                        reason: format!("{}", e),
-                    })
-                })?;
-        }
-
-        if !lease.dns_servers.is_empty() {
-            if let Err(e) = self.configure_dns(&lease.dns_servers) {
-                log::warn!("Failed to configure DNS servers: {}", e);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn configure_dns(&self, servers: &[Ipv4Addr]) -> std::io::Result<()> {
-        use std::io::Write;
-
-        let mut content = String::new();
-        for server in servers {
-            content.push_str(&format!("nameserver {}\n", server));
-        }
-
-        // Write atomically to avoid partial resolv.conf when interrupted
-        let tmp_path = "/etc/resolv.conf.rustyjack.tmp";
-        {
-            let mut file = std::fs::File::create(tmp_path)?;
-            file.write_all(content.as_bytes())?;
-        }
-        std::fs::rename(tmp_path, "/etc/resolv.conf")?;
-
-        log::info!("configured DNS servers: {:?}", servers);
         Ok(())
     }
 }
@@ -973,4 +1166,346 @@ fn subnet_mask_to_prefix(mask: Ipv4Addr) -> u8 {
     let octets = mask.octets();
     let bits = u32::from_be_bytes(octets);
     bits.count_ones() as u8
+}
+
+fn is_addr_in_use(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::AddrInUse
+        || err.raw_os_error() == Some(libc::EADDRINUSE)
+}
+
+#[cfg(target_os = "linux")]
+fn open_raw_socket(interface: &str) -> Result<(RawFd, i32)> {
+    let ifindex = read_ifindex(interface)?;
+    let sock_fd =
+        unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, (0x0800u16).to_be() as i32) };
+    if sock_fd < 0 {
+        return Err(NetlinkError::OperationFailed(format!(
+            "Failed to open raw DHCP socket: {}",
+            io::Error::last_os_error()
+        )));
+    }
+
+    let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    sll.sll_family = libc::AF_PACKET as u16;
+    sll.sll_protocol = (0x0800u16).to_be();
+    sll.sll_ifindex = ifindex;
+
+    let bind_res = unsafe {
+        libc::bind(
+            sock_fd,
+            &sll as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+        )
+    };
+    if bind_res < 0 {
+        let err = io::Error::last_os_error();
+        unsafe {
+            libc::close(sock_fd);
+        }
+        return Err(NetlinkError::OperationFailed(format!(
+            "Failed to bind raw DHCP socket: {}",
+            err
+        )));
+    }
+
+    let timeout = libc::timeval {
+        tv_sec: 5,
+        tv_usec: 0,
+    };
+    unsafe {
+        let _ = libc::setsockopt(
+            sock_fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &timeout as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+
+    Ok((sock_fd, ifindex))
+}
+
+#[cfg(target_os = "linux")]
+fn read_ifindex(interface: &str) -> Result<i32> {
+    let path = format!("/sys/class/net/{}/ifindex", interface);
+    let data = fs::read_to_string(&path).map_err(|e| {
+        NetlinkError::OperationFailed(format!("Failed to read ifindex for {}: {}", interface, e))
+    })?;
+    let value = data.trim().parse::<i32>().map_err(|e| {
+        NetlinkError::OperationFailed(format!("Failed to parse ifindex for {}: {}", interface, e))
+    })?;
+    Ok(value)
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_offer_raw(
+    fd: RawFd,
+    interface: &str,
+    xid: u32,
+    client: &DhcpClient,
+) -> Result<DhcpOffer> {
+    let mut buf = [0u8; 2048];
+    loop {
+        let len = match recv_raw_packet(fd, &mut buf) {
+            Ok(len) => len,
+            Err(e) => {
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
+                    return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
+                        packet_type: "offer".to_string(),
+                        interface: interface.to_string(),
+                        timeout_secs: 5,
+                    }));
+                }
+                return Err(NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
+                    interface: interface.to_string(),
+                    source: e,
+                }));
+            }
+        };
+
+        if let Some(payload) = extract_dhcp_payload(&buf[..len]) {
+            if let Ok(offer) = client.parse_offer_packet(payload, interface, xid) {
+                return Ok(offer);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_ack_raw(
+    fd: RawFd,
+    interface: &str,
+    xid: u32,
+    offer: &DhcpOffer,
+    client: &DhcpClient,
+) -> Result<DhcpLease> {
+    let mut buf = [0u8; 2048];
+    let mut attempts: u8 = 0;
+    loop {
+        attempts += 1;
+        let len = match recv_raw_packet(fd, &mut buf) {
+            Ok(len) => len,
+            Err(e) => {
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
+                    return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
+                        packet_type: "ACK".to_string(),
+                        interface: interface.to_string(),
+                        timeout_secs: 5,
+                    }));
+                }
+                return Err(NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
+                    interface: interface.to_string(),
+                    source: e,
+                }));
+            }
+        };
+
+        if let Some(payload) = extract_dhcp_payload(&buf[..len]) {
+            match client.parse_ack_packet(payload, interface, xid, offer) {
+                Ok(lease) => return Ok(lease),
+                Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket { .. })) => {}
+                Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak { reason, .. })) => {
+                    return Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak {
+                        interface: interface.to_string(),
+                        reason,
+                    }))
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if attempts >= 5 {
+            return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
+                packet_type: "ACK".to_string(),
+                interface: interface.to_string(),
+                timeout_secs: 5,
+            }));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn recv_raw_packet(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
+    let ret = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
+    if ret < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn extract_dhcp_payload(frame: &[u8]) -> Option<&[u8]> {
+    if frame.len() < 42 {
+        return None;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    if ethertype != 0x0800 {
+        return None;
+    }
+    let ip_start = 14;
+    let ver_ihl = frame.get(ip_start)?;
+    if (ver_ihl >> 4) != 4 {
+        return None;
+    }
+    let ihl = (ver_ihl & 0x0f) as usize * 4;
+    if frame.len() < ip_start + ihl + 8 {
+        return None;
+    }
+    let proto = frame[ip_start + 9];
+    if proto != 17 {
+        return None;
+    }
+    let udp_start = ip_start + ihl;
+    let src_port = u16::from_be_bytes([frame[udp_start], frame[udp_start + 1]]);
+    let dst_port = u16::from_be_bytes([frame[udp_start + 2], frame[udp_start + 3]]);
+    if src_port != DHCP_SERVER_PORT || dst_port != DHCP_CLIENT_PORT {
+        return None;
+    }
+    let udp_len = u16::from_be_bytes([frame[udp_start + 4], frame[udp_start + 5]]) as usize;
+    if udp_len < 8 {
+        return None;
+    }
+    let payload_start = udp_start + 8;
+    let payload_end = payload_start.saturating_add(udp_len - 8);
+    if payload_start >= frame.len() {
+        return None;
+    }
+    let end = payload_end.min(frame.len());
+    Some(&frame[payload_start..end])
+}
+
+#[cfg(target_os = "linux")]
+fn send_raw_dhcp(fd: RawFd, ifindex: i32, src_mac: &[u8; 6], payload: &[u8]) -> io::Result<()> {
+    let src_ip = Ipv4Addr::new(0, 0, 0, 0);
+    let dst_ip = Ipv4Addr::new(255, 255, 255, 255);
+    let udp_len = 8 + payload.len();
+    let total_len = 20 + udp_len;
+    let identification = rand::random::<u16>();
+
+    let ip_header = build_ipv4_header(total_len as u16, identification, src_ip, dst_ip);
+    let udp_header = build_udp_header(
+        DHCP_CLIENT_PORT,
+        DHCP_SERVER_PORT,
+        udp_len as u16,
+        src_ip,
+        dst_ip,
+        payload,
+    );
+
+    let mut frame = Vec::with_capacity(14 + total_len);
+    frame.extend_from_slice(&[0xff; 6]);
+    frame.extend_from_slice(src_mac);
+    frame.extend_from_slice(&0x0800u16.to_be_bytes());
+    frame.extend_from_slice(&ip_header);
+    frame.extend_from_slice(&udp_header);
+    frame.extend_from_slice(payload);
+
+    let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    sll.sll_family = libc::AF_PACKET as u16;
+    sll.sll_protocol = (0x0800u16).to_be();
+    sll.sll_ifindex = ifindex;
+    sll.sll_halen = 6;
+    sll.sll_addr[..6].copy_from_slice(&[0xff; 6]);
+
+    let ret = unsafe {
+        libc::sendto(
+            fd,
+            frame.as_ptr() as *const libc::c_void,
+            frame.len(),
+            0,
+            &sll as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+        )
+    };
+    if ret < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn build_ipv4_header(
+    total_len: u16,
+    identification: u16,
+    src_ip: Ipv4Addr,
+    dst_ip: Ipv4Addr,
+) -> [u8; 20] {
+    let mut header = [0u8; 20];
+    header[0] = 0x45;
+    header[1] = 0;
+    header[2..4].copy_from_slice(&total_len.to_be_bytes());
+    header[4..6].copy_from_slice(&identification.to_be_bytes());
+    header[6..8].copy_from_slice(&0u16.to_be_bytes());
+    header[8] = 64;
+    header[9] = 17;
+    header[12..16].copy_from_slice(&src_ip.octets());
+    header[16..20].copy_from_slice(&dst_ip.octets());
+    let checksum = checksum16(&header);
+    header[10..12].copy_from_slice(&checksum.to_be_bytes());
+    header
+}
+
+#[cfg(target_os = "linux")]
+fn build_udp_header(
+    src_port: u16,
+    dst_port: u16,
+    udp_len: u16,
+    src_ip: Ipv4Addr,
+    dst_ip: Ipv4Addr,
+    payload: &[u8],
+) -> [u8; 8] {
+    let mut header = [0u8; 8];
+    header[0..2].copy_from_slice(&src_port.to_be_bytes());
+    header[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    header[4..6].copy_from_slice(&udp_len.to_be_bytes());
+    header[6..8].copy_from_slice(&0u16.to_be_bytes());
+
+    let checksum = udp_checksum(src_ip, dst_ip, &header, payload);
+    header[6..8].copy_from_slice(&checksum.to_be_bytes());
+    header
+}
+
+#[cfg(target_os = "linux")]
+fn checksum16(data: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    let mut chunks = data.chunks_exact(2);
+    for chunk in &mut chunks {
+        let word = u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        sum = sum.wrapping_add(word);
+    }
+    if let Some(&byte) = chunks.remainder().first() {
+        sum = sum.wrapping_add((byte as u32) << 8);
+    }
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+#[cfg(target_os = "linux")]
+fn udp_checksum(
+    src_ip: Ipv4Addr,
+    dst_ip: Ipv4Addr,
+    udp_header: &[u8; 8],
+    payload: &[u8],
+) -> u16 {
+    let mut pseudo = Vec::with_capacity(12 + udp_header.len() + payload.len() + 1);
+    pseudo.extend_from_slice(&src_ip.octets());
+    pseudo.extend_from_slice(&dst_ip.octets());
+    pseudo.push(0);
+    pseudo.push(17);
+    pseudo.extend_from_slice(&((udp_header.len() + payload.len()) as u16).to_be_bytes());
+    pseudo.extend_from_slice(udp_header);
+    pseudo.extend_from_slice(payload);
+    if pseudo.len() % 2 != 0 {
+        pseudo.push(0);
+    }
+    let sum = checksum16(&pseudo);
+    if sum == 0 {
+        0xffff
+    } else {
+        sum
+    }
 }

@@ -24,6 +24,15 @@ has_crate_artifact() {
   compgen -G "$base/deps/lib${crate}-*.so" >/dev/null
 }
 
+if [ "$(id -u)" -ne 0 ]; then
+  fail "This installer must run as root."
+fi
+export DEBIAN_FRONTEND=noninteractive
+if [ -r /etc/os-release ]; then
+  . /etc/os-release
+  info "OS: ${PRETTY_NAME:-unknown} (${VERSION_CODENAME:-unknown})"
+fi
+
 check_resolv_conf() {
   local resolv="/etc/resolv.conf"
   info "Checking $resolv writability..."
@@ -47,6 +56,65 @@ check_resolv_conf() {
   fi
 }
 
+validate_network_status() {
+  if ! cmd rustyjack; then
+    fail "rustyjack CLI not found; cannot validate network status"
+  fi
+
+  info "Validating network status via rustyjack..."
+  local output=""
+  local tries=60
+  for _ in $(seq 1 "$tries"); do
+    output=$(rustyjack status network --output json 2>/dev/null || true)
+    if [ -n "$output" ]; then
+      if cmd python3; then
+        if echo "$output" | python3 - <<'PY'
+import json,sys
+data=json.load(sys.stdin)
+payload=data.get("data") or {}
+active=payload.get("active_uplink")
+if not active:
+    sys.exit(1)
+route=payload.get("default_route") or {}
+if route.get("interface") != active:
+    sys.exit(1)
+dns=payload.get("dns_servers") or []
+if not dns:
+    sys.exit(1)
+interfaces=payload.get("interfaces") or []
+iface=None
+for entry in interfaces:
+    if isinstance(entry, dict) and entry.get("name") == active:
+        iface=entry
+        break
+if not iface:
+    sys.exit(1)
+if not iface.get("ip") or not iface.get("gateway"):
+    sys.exit(1)
+sys.exit(0)
+PY
+        then
+          info "[OK] Network validation passed"
+          return 0
+        fi
+      else
+        if echo "$output" | grep -q '"active_uplink"' && echo "$output" | grep -q '"default_route"'; then
+          info "[OK] Network validation passed (basic)"
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+  done
+
+  warn "[X] Network validation failed"
+  if [ -n "$output" ]; then
+    echo "$output"
+  fi
+  journalctl -u rustyjack.service -n 120 --no-pager 2>/dev/null || true
+  return 1
+}
+
 claim_resolv_conf() {
   local resolv="/etc/resolv.conf"
   info "Claiming $resolv for Rustyjack (dedicated device)..."
@@ -68,7 +136,7 @@ claim_resolv_conf() {
     fi
   fi
 
-  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n' > $resolv"
+  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > $resolv"
   sudo chmod 644 "$resolv"
   sudo chown root:root "$resolv"
   info "[OK] $resolv now owned by Rustyjack (plain file, root-writable)"
@@ -76,7 +144,7 @@ claim_resolv_conf() {
 
 bootstrap_resolvers() {
   local resolv="/etc/resolv.conf"
-  local content="# Managed by Rustyjack (bootstrap)\n# Ensures DNS during install\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+  local content="# Managed by Rustyjack (bootstrap)\n# Ensures DNS during install\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n"
   info "Bootstrapping $resolv for installer DNS..."
   if command -v lsattr >/dev/null 2>&1; then
     if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
@@ -145,8 +213,7 @@ PACKAGES=(
   build-essential pkg-config libssl-dev
   # WiFi interface tools
   # - wpasupplicant: provides wpa_supplicant daemon and wpa_cli for WPA auth fallback
-  # - network-manager: provides NetworkManager daemon for D-Bus WiFi management (nmcli not used - we use D-Bus directly)
-  wpasupplicant network-manager
+  wpasupplicant
   # misc
   git i2c-tools curl
 )
@@ -224,42 +291,39 @@ else
   fi
 fi
 
-configure_dns_control() {
-  # Disable competing DNS managers; keep NetworkManager but stop it from touching resolv.conf
+purge_network_manager() {
+  info "Removing NetworkManager..."
+  sudo systemctl stop NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+  sudo systemctl disable NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+  sudo apt-get -y purge network-manager >/dev/null 2>&1 || true
+  sudo apt-get -y autoremove --purge >/dev/null 2>&1 || true
+  if dpkg -s network-manager >/dev/null 2>&1; then
+    fail "ERROR: network-manager still installed after purge"
+  fi
+  sudo systemctl mask NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+}
+
+disable_conflicting_services() {
   if systemctl list-unit-files | grep -q '^systemd-resolved'; then
     warn "Disabling systemd-resolved to prevent resolv.conf rewrites"
     sudo systemctl disable --now systemd-resolved.service 2>/dev/null || true
+    sudo systemctl mask systemd-resolved.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^dhcpcd'; then
-    warn "Disabling dhcpcd (Rustyjack uses dhclient)"
+    warn "Disabling dhcpcd (Rustyjack owns DHCP)"
     sudo systemctl disable --now dhcpcd.service 2>/dev/null || true
+    sudo systemctl mask dhcpcd.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^resolvconf'; then
     warn "Disabling resolvconf to avoid resolv.conf churn"
     sudo systemctl disable --now resolvconf.service 2>/dev/null || true
+    sudo systemctl mask resolvconf.service 2>/dev/null || true
   fi
-
-  local nm_conf="/etc/NetworkManager/NetworkManager.conf"
-  info "Setting NetworkManager DNS handling to 'none' (preserve Rustyjack resolv.conf)"
-  if [ ! -f "$nm_conf" ]; then
-    sudo mkdir -p /etc/NetworkManager
-    cat <<'EOF' | sudo tee "$nm_conf" >/dev/null
-[main]
-dns=none
-EOF
-  else
-    if grep -q '^\[main\]' "$nm_conf"; then
-      if grep -q '^dns=' "$nm_conf"; then
-        sudo sed -i 's/^dns=.*/dns=none/' "$nm_conf"
-      else
-        sudo sed -i '/^\[main\]/a dns=none' "$nm_conf"
-      fi
-    else
-      printf '\n[main]\ndns=none\n' | sudo tee -a "$nm_conf" >/dev/null
-    fi
-  fi
-  sudo systemctl restart NetworkManager.service 2>/dev/null || true
 }
+
+step "Removing conflicting network managers..."
+purge_network_manager
+disable_conflicting_services
 
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."
@@ -342,9 +406,9 @@ info "Using project root: $PROJECT_ROOT"
 info "Stopping rustyjack service for rebuild..."
 sudo systemctl stop rustyjack.service 2>/dev/null || true
 
-# Remove old binary (only rustyjack-ui - core and evasion are library crates)
-info "Removing old binary..."
-sudo rm -f /usr/local/bin/rustyjack-ui
+# Remove old binaries
+info "Removing old binaries..."
+sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack
 
 # Ask user about clean build
 echo ""
@@ -378,14 +442,24 @@ if [ ! -f "$PROJECT_ROOT/target/debug/rustyjack-ui" ]; then
   fail "rustyjack-ui binary not found after build!"
 fi
 
-# Install DEBUG binary
+# Build rustyjack-core CLI (used for status/validation)
+info "Building rustyjack-core CLI (debug)..."
+(cd "$PROJECT_ROOT" && cargo build -p rustyjack-core) || fail "Failed to build rustyjack-core"
+
+if [ ! -f "$PROJECT_ROOT/target/debug/rustyjack-core" ]; then
+  fail "rustyjack-core binary not found after build!"
+fi
+
+# Install DEBUG binaries
 sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-ui" /usr/local/bin/rustyjack-ui
+sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-core" /usr/local/bin/rustyjack
 
 # Verify installation
-if [ -x /usr/local/bin/rustyjack-ui ]; then
-  info "Installed DEBUG binary to /usr/local/bin/"
+if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack ]; then
+  info "Installed DEBUG binaries to /usr/local/bin/"
   info "Binary info:"
   ls -la /usr/local/bin/rustyjack-ui
+  ls -la /usr/local/bin/rustyjack
 else
   fail "Failed to install binaries to /usr/local/bin/"
 fi
@@ -462,8 +536,8 @@ step "Installing systemd service $SERVICE..."
 sudo tee "$SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack UI Service (DEBUG BUILD)
-After=local-fs.target
-Wants=local-fs.target
+After=local-fs.target network.target
+Wants=network.target
 
 [Service]
 Type=simple
@@ -473,9 +547,12 @@ Environment=RUSTYJACK_DISPLAY_ROTATION=landscape
 Environment=RUST_BACKTRACE=1
 Environment="RUST_LOG=rustyjack_hotspot=trace,rustyjack_netlink=trace,rustyjack_wireless=trace,rustyjack_ui=debug"
 Restart=on-failure
-RestartSec=5
+RestartSec=2
 User=root
 Environment=RUSTYJACK_ROOT=$PROJECT_ROOT
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
@@ -488,11 +565,12 @@ info "Rustyjack service enabled"
 # Start the service now
 sudo systemctl start rustyjack.service && info "Rustyjack service started successfully" || warn "Failed to start service - check 'systemctl status rustyjack'"
 
-# Claim resolv.conf and adjust DNS control after installs/builds are complete
+# Claim resolv.conf after installs/builds are complete
 claim_resolv_conf
 check_resolv_conf
-# Defer NetworkManager DNS changes until installs/builds are done so apt isn't impacted
-configure_dns_control
+
+step "Validating network status..."
+validate_network_status || fail "Network validation failed"
 
 # ---- 6: final health-check ----------------------------------
 step "Running post install checks..."
@@ -503,10 +581,10 @@ else
   warn "[X] SPI device NOT found - reboot may be required"
 fi
 
-if cmd wpa_cli || cmd nmcli; then
-  info "[OK] WiFi control present (wpa_cli/nmcli) for client authentication"
+if cmd wpa_cli; then
+  info "[OK] WiFi control present (wpa_cli) for client authentication"
 else
-  warn "[X] Neither wpa_cli nor nmcli found - WiFi client mode needs one of these"
+  warn "[X] wpa_cli not found - WiFi client mode needs wpa_supplicant"
 fi
 
 # Rustyjack replaces core networking binaries with Rust implementations
@@ -516,14 +594,19 @@ info "     rfkill (radio management via /dev/rfkill)"
 info "     process management (pgrep/pkill via /proc)"
 info "     hostapd (software AP via nl80211)"
 info "     nf_tables (netfilter via nf_tables netlink)"
-info "     DHCP + DNS services (replaces dhclient/dnsmasq)"
+info "     DHCP + DNS services (native Rust)"
 info "     ARP operations (raw sockets)"
 
 if [ -x /usr/local/bin/rustyjack-ui ]; then
-  info "[OK] DEBUG binary installed: rustyjack-ui"
-  info "     (rustyjack-core, rustyjack-evasion, rustyjack-wireless are library crates)"
+  info "[OK] DEBUG UI binary installed: rustyjack-ui"
 else
-  fail "[X] Binary missing"
+  fail "[X] rustyjack-ui binary missing"
+fi
+
+if [ -x /usr/local/bin/rustyjack ]; then
+  info "[OK] DEBUG CLI binary installed: rustyjack"
+else
+  fail "[X] rustyjack CLI binary missing"
 fi
 
 # Verify library crates were compiled

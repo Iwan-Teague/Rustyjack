@@ -333,7 +333,7 @@ impl SettingsConfig {
     }
 
     fn default_active_interface() -> String {
-        "eth0".to_string()
+        "wlan0".to_string()
     }
 
     fn default_target_network() -> String {
@@ -364,14 +364,15 @@ impl SettingsConfig {
 impl SettingsConfig {
     fn normalize_active_interface(&mut self) -> bool {
         let iface = self.active_network_interface.trim();
-        let needs_default = iface.is_empty()
-            || iface.eq_ignore_ascii_case("auto")
-            || (iface == "eth0" && !interface_exists("eth0"));
+        let needs_default =
+            iface.is_empty() || iface.eq_ignore_ascii_case("auto") || !interface_exists(iface);
         if needs_default {
-            let preferred = if interface_exists("eth0") {
-                "eth0".to_string()
-            } else if interface_exists("wlan0") {
+            let preferred = if interface_exists("wlan0") {
                 "wlan0".to_string()
+            } else if interface_exists("wlan1") {
+                "wlan1".to_string()
+            } else if interface_exists("eth0") {
+                "eth0".to_string()
             } else {
                 first_non_loopback_interface().unwrap_or_else(|| self.active_network_interface.clone())
             };

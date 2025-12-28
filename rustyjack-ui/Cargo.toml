@@ -29,6 +29,7 @@ linux-embedded-hal = { version = "0.4", features = [] }
 rustyjack-wireless = { path = "../rustyjack-wireless" }
 rustyjack-netlink = { path = "../rustyjack-netlink" }
 tokio = { version = "1.0", features = ["rt", "macros"] }
+libc = "0.2"
 
 [features]
 journald = ["rustyjack-netlink/journald"]

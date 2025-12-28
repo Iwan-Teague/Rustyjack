@@ -8,15 +8,18 @@ fn main() {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
     let cli = Cli::parse();
-    let format = cli.output_format;
-    if let Err(err) = run(cli) {
+    let format = if cli.json {
+        OutputFormat::Json
+    } else {
+        cli.output_format
+    };
+    if let Err(err) = run(cli, format) {
         emit_error(format, &err);
         std::process::exit(1);
     }
 }
 
-fn run(cli: Cli) -> Result<()> {
-    let output_format = cli.output_format;
+fn run(cli: Cli, output_format: OutputFormat) -> Result<()> {
     let root = resolve_root(cli.root)?;
     let (message, data) = dispatch_command(&root, cli.command)?;
     emit_success(output_format, message, data)

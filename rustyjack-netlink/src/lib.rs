@@ -88,7 +88,7 @@ pub use arp_scanner::ArpScanner;
 #[cfg(target_os = "linux")]
 pub use arp_spoofer::{ArpSpoofConfig, ArpSpoofer};
 #[cfg(target_os = "linux")]
-pub use dhcp::{DhcpClient, DhcpLease};
+pub use dhcp::{DhcpAcquireReport, DhcpClient, DhcpLease, DhcpTransport};
 #[cfg(target_os = "linux")]
 pub use dhcp_server::{DhcpConfig, DhcpError, DhcpLease as DhcpServerLease, DhcpServer};
 #[cfg(target_os = "linux")]
@@ -180,6 +180,16 @@ pub async fn add_default_route_with_metric(
 }
 
 #[cfg(target_os = "linux")]
+pub async fn replace_default_route(
+    gateway: IpAddr,
+    interface: &str,
+    metric: Option<u32>,
+) -> Result<()> {
+    let mgr = RouteManager::new()?;
+    mgr.replace_default_route(gateway, interface, metric).await
+}
+
+#[cfg(target_os = "linux")]
 pub async fn delete_default_route() -> Result<()> {
     let mgr = RouteManager::new()?;
     mgr.delete_default_route().await
@@ -201,6 +211,15 @@ pub async fn dhcp_release(interface: &str) -> Result<()> {
 pub async fn dhcp_acquire(interface: &str, hostname: Option<&str>) -> Result<DhcpLease> {
     let client = DhcpClient::new()?;
     client.acquire(interface, hostname).await
+}
+
+#[cfg(target_os = "linux")]
+pub async fn dhcp_acquire_report(
+    interface: &str,
+    hostname: Option<&str>,
+) -> Result<DhcpAcquireReport> {
+    let client = DhcpClient::new()?;
+    Ok(client.acquire_report(interface, hostname).await)
 }
 
 #[cfg(target_os = "linux")]

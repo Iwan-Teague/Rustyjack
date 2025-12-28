@@ -1,16 +1,19 @@
 [Unit]
 Description=Rustyjack UI Service
-After=network-online.target local-fs.target
-Wants=network-online.target
+After=local-fs.target network.target
+Wants=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/root/Rustyjack
 ExecStart=/usr/local/bin/rustyjack-ui
 Restart=on-failure
-RestartSec=5
+RestartSec=2
 User=root
 Environment=RUSTYJACK_ROOT=/root/Rustyjack
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

@@ -2294,6 +2294,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-hal",
  "image",
+ "libc",
  "linux-embedded-hal",
  "log",
  "num_cpus",

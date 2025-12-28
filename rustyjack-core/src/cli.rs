@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -22,6 +22,10 @@ pub struct Cli {
         global = true
     )]
     pub output_format: OutputFormat,
+
+    /// Shortcut for JSON output (same as --output json)
+    #[arg(long = "json", action = ArgAction::SetTrue, global = true)]
+    pub json: bool,
 
     #[command(subcommand)]
     pub command: Commands,

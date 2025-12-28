@@ -127,6 +127,33 @@ impl RouteManager {
         Ok(())
     }
 
+    /// Replace the default route with a new gateway/interface.
+    ///
+    /// Ensures idempotent behavior by deleting conflicting default routes and
+    /// adding the desired one only if missing.
+    pub async fn replace_default_route(
+        &self,
+        gateway: IpAddr,
+        interface: &str,
+        metric: Option<u32>,
+    ) -> Result<()> {
+        let index = self.get_interface_index(interface).await?;
+        let has_match = self
+            .delete_conflicting_default_routes(gateway, index, metric)
+            .await?;
+        if has_match {
+            log::info!(
+                "Default route via {} on {} already present (metric={:?})",
+                gateway,
+                interface,
+                metric
+            );
+            return Ok(());
+        }
+        self.add_default_route_with_metric(gateway, interface, metric)
+            .await
+    }
+
     /// Delete all default routes.
     ///
     /// Removes all IPv4 default routes (0.0.0.0/0). Useful for reconfiguring networking or DHCP renewal.
@@ -146,24 +173,15 @@ impl RouteManager {
                     reason: e.to_string(),
                 })?
         {
-            let mut is_default = false;
+            let prefix_len = route.header.destination_prefix_length;
             let mut gateway = None;
             let mut oif = None;
+            let mut destination = None;
 
             for nla in &route.attributes {
                 match nla {
                     RouteAttribute::Destination(dst) => {
-                        // Check if all octets are zero (default route)
-                        if let Some(ip) = route_address_to_ipaddr(dst) {
-                            match ip {
-                                IpAddr::V4(v4) => {
-                                    is_default = v4.octets().iter().all(|&b| b == 0);
-                                }
-                                IpAddr::V6(v6) => {
-                                    is_default = v6.octets().iter().all(|&b| b == 0);
-                                }
-                            }
-                        }
+                        destination = route_address_to_ipaddr(dst);
                     }
                     RouteAttribute::Gateway(gw) => {
                         gateway = route_address_to_ipaddr(gw);
@@ -175,7 +193,7 @@ impl RouteManager {
                 }
             }
 
-            if is_default {
+            if is_default_route(prefix_len, destination) {
                 let mut del = self.handle.route().del(route.clone());
                 del.message_mut().header = route.header;
 
@@ -300,6 +318,80 @@ impl RouteManager {
             })
         }
     }
+
+    async fn delete_conflicting_default_routes(
+        &self,
+        gateway: IpAddr,
+        interface_index: u32,
+        metric: Option<u32>,
+    ) -> Result<bool> {
+        let mut routes = self.handle.route().get(rtnetlink::IpVersion::V4).execute();
+        let mut found_match = false;
+
+        while let Some(route) =
+            routes
+                .try_next()
+                .await
+                .map_err(|e| NetlinkError::ListRoutesError {
+                    reason: e.to_string(),
+                })?
+        {
+            let prefix_len = route.header.destination_prefix_length;
+            let mut destination = None;
+            let mut route_gateway = None;
+            let mut oif = None;
+            let mut route_metric = None;
+
+            for nla in &route.attributes {
+                match nla {
+                    RouteAttribute::Destination(dst) => {
+                        destination = route_address_to_ipaddr(dst);
+                    }
+                    RouteAttribute::Gateway(gw) => {
+                        route_gateway = route_address_to_ipaddr(gw);
+                    }
+                    RouteAttribute::Oif(idx) => {
+                        oif = Some(*idx);
+                    }
+                    RouteAttribute::Priority(value) => {
+                        route_metric = Some(*value);
+                    }
+                    _ => {}
+                }
+            }
+
+            if !is_default_route(prefix_len, destination) {
+                continue;
+            }
+
+            let matches_gateway = route_gateway == Some(gateway);
+            let matches_oif = oif == Some(interface_index);
+            let matches_metric = metric.map_or(true, |want| route_metric == Some(want));
+            if matches_gateway && matches_oif && matches_metric && !found_match {
+                found_match = true;
+                continue;
+            }
+
+            let mut del = self.handle.route().del(route.clone());
+            del.message_mut().header = route.header;
+
+            del.execute()
+                .await
+                .map_err(|e| NetlinkError::DeleteRouteError {
+                    destination: "default".to_string(),
+                    interface: format!("{:?}", oif),
+                    reason: e.to_string(),
+                })?;
+
+            log::info!(
+                "Deleted conflicting default route via {:?} on interface {:?}",
+                route_gateway,
+                oif
+            );
+        }
+
+        Ok(found_match)
+    }
 }
 
 /// Convert RouteAddress to IpAddr
@@ -310,6 +402,13 @@ fn route_address_to_ipaddr(addr: &netlink_packet_route::route::RouteAddress) -> 
         RouteAddress::Inet6(v6) => Some(IpAddr::V6(*v6)),
         _ => None,
     }
+}
+
+fn is_default_route(prefix_len: u8, destination: Option<IpAddr>) -> bool {
+    if prefix_len != 0 {
+        return false;
+    }
+    destination.map(|ip| ip.is_unspecified()).unwrap_or(true)
 }
 
 /// Routing table entry information.

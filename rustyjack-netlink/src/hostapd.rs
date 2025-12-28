@@ -501,7 +501,15 @@ impl AccessPoint {
         } else {
             self.config.dtim_period
         };
-        for ch in attempt_channels.iter() {
+        let wpa_enabled = matches!(self.config.security, ApSecurity::Wpa2Psk { .. });
+        let hidden_ssid = if self.config.hidden {
+            NL80211_HIDDEN_SSID_ZERO_LEN
+        } else {
+            NL80211_HIDDEN_SSID_NOT_IN_USE
+        };
+        let mut chosen_hw_mode = self.config.hw_mode;
+
+        'channel_loop: for ch in attempt_channels.iter() {
             let frames = build_ap_frame_bundle(&self.config, bssid, *ch, Some(&phy_caps))?;
             log::debug!(
                 "Beacon built for channel {}: head_len={} tail_len={} ssid_len={} basic_rates={} hidden={}",
@@ -523,12 +531,6 @@ impl AccessPoint {
                 ch,
                 channel_to_frequency(*ch).unwrap_or(0)
             );
-            let wpa_enabled = matches!(self.config.security, ApSecurity::Wpa2Psk { .. });
-            let hidden_ssid = if self.config.hidden {
-                NL80211_HIDDEN_SSID_ZERO_LEN
-            } else {
-                NL80211_HIDDEN_SSID_NOT_IN_USE
-            };
             match send_start_ap(
                 ifindex,
                 *ch,
@@ -545,15 +547,60 @@ impl AccessPoint {
             ) {
                 Ok(_) => {
                     chosen_channel = *ch;
+                    chosen_hw_mode = self.config.hw_mode;
                     last_err = None;
                     eprintln!("[HOSTAPD] START_AP succeeded on channel {}", ch);
-                    break;
+                    break 'channel_loop;
                 }
                 Err(e) => {
                     let msg = format!("START_AP failed on channel {}: {}", ch, e);
                     log::warn!("{}", msg);
                     eprintln!("[HOSTAPD] START_AP failed on channel {}: {}", ch, e);
                     last_err = Some(msg);
+                }
+            }
+
+            if frames.ht_enabled {
+                let mut no_ht_config = self.config.clone();
+                no_ht_config.hw_mode = if *ch > 14 {
+                    HardwareMode::A
+                } else {
+                    HardwareMode::G
+                };
+                let no_ht_frames =
+                    build_ap_frame_bundle(&no_ht_config, bssid, *ch, Some(&phy_caps))?;
+                log::warn!("Retrying START_AP on channel {} with HT disabled", ch);
+                eprintln!(
+                    "[HOSTAPD] Retrying START_AP on channel {} with HT disabled",
+                    ch
+                );
+                match send_start_ap(
+                    ifindex,
+                    *ch,
+                    self.config.beacon_interval,
+                    dtim_period,
+                    self.config.ssid.as_bytes(),
+                    &no_ht_frames.beacon_head,
+                    &no_ht_frames.beacon_tail,
+                    &no_ht_frames.probe_resp,
+                    hidden_ssid,
+                    wpa_enabled,
+                    &no_ht_frames.basic_rates,
+                    no_ht_frames.ht_enabled,
+                ) {
+                    Ok(_) => {
+                        chosen_channel = *ch;
+                        chosen_hw_mode = no_ht_config.hw_mode;
+                        last_err = None;
+                        eprintln!("[HOSTAPD] START_AP succeeded on channel {}", ch);
+                        break 'channel_loop;
+                    }
+                    Err(e) => {
+                        let msg = format!("START_AP failed on channel {}: {}", ch, e);
+                        log::warn!("{}", msg);
+                        eprintln!("[HOSTAPD] START_AP failed on channel {}: {}", ch, e);
+                        last_err = Some(msg);
+                    }
                 }
             }
         }
@@ -564,6 +611,7 @@ impl AccessPoint {
         }
 
         self.config.channel = chosen_channel;
+        self.config.hw_mode = chosen_hw_mode;
         log::info!(
             "START_AP succeeded on channel {} (width={})",
             chosen_channel,

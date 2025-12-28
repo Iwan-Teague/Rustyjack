@@ -25,7 +25,7 @@ use rustyjack_wireless::{
     capture_dns_queries, scan_network_services, start_hotspot, status_hotspot, stop_hotspot,
     HotspotConfig, HotspotState,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use walkdir::WalkDir;
 #[cfg(target_os = "linux")]
 use rustyjack_netlink::{WpaManager, WpaSupplicantState};
@@ -48,22 +48,23 @@ use crate::cli::{
 #[cfg(target_os = "linux")]
 use crate::netlink_helpers::netlink_set_interface_up;
 use crate::system::{
-    append_payload_log, backup_repository, backup_routing_state, build_scan_loot_path,
-    build_manual_embed, build_mitm_pcap_path, compose_status_text, connect_wifi_network,
-    default_gateway_ip, delete_wifi_profile, detect_ethernet_interface, detect_interface,
-    disconnect_wifi_interface, dns_spoof_running, enable_ip_forwarding, enforce_single_interface,
-    find_interface_by_mac, git_reset_to_remote, interface_gateway, kill_process,
-    kill_process_pattern, list_interface_summaries, list_wifi_profiles, load_wifi_profile,
-    log_mac_usage, pcap_capture_running, ping_host, process_running_exact, randomize_hostname,
-    read_default_route, read_discord_webhook, read_dns_servers, read_interface_preference,
-    read_interface_preference_with_mac, read_interface_stats, read_wifi_link_info,
-    restart_system_service, restore_routing_state, rewrite_dns_servers,
-    sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks, select_best_interface,
-    select_wifi_interface, send_discord_payload, send_scan_to_discord, set_default_route,
-    set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof, start_pcap_capture,
-    start_php_server, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
-    arp_spoof_running, write_interface_preference,
-    write_wifi_profile, HostInfo, KillResult, WifiProfile,
+    active_uplink, acquire_dhcp_lease, append_payload_log, arp_spoof_running, backup_repository,
+    backup_routing_state, build_scan_loot_path, build_manual_embed, build_mitm_pcap_path,
+    cached_gateway, compose_status_text, connect_wifi_network, default_gateway_ip,
+    delete_wifi_profile, detect_ethernet_interface, detect_interface, disconnect_wifi_interface,
+    dns_spoof_running, enable_ip_forwarding, enforce_single_interface, find_interface_by_mac,
+    git_reset_to_remote, interface_gateway, kill_process, kill_process_pattern,
+    last_dhcp_outcome, lease_record, list_interface_summaries, list_wifi_profiles,
+    load_wifi_profile, log_mac_usage, pcap_capture_running, ping_host, preferred_interface,
+    process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
+    read_dns_servers, read_interface_preference, read_interface_preference_with_mac,
+    read_interface_stats, read_wifi_link_info, restart_system_service, restore_routing_state,
+    sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks,
+    select_active_uplink, select_best_interface, select_wifi_interface, send_discord_payload,
+    send_scan_to_discord, set_interface_metric, spawn_arpspoof_pair, start_bridge_pair,
+    start_dns_spoof, start_pcap_capture, start_php_server, stop_arp_spoof, stop_bridge_pair,
+    stop_dns_spoof, stop_pcap_capture, write_interface_preference, write_wifi_profile, HostInfo,
+    KillResult, WifiProfile,
 };
 
 pub type HandlerResult = (String, Value);
@@ -78,7 +79,10 @@ fn validate_and_enforce_interface(
     requested: Option<&str>,
     allow_multi: bool,
 ) -> Result<String> {
-    let active = get_active_interface(root)?;
+    let active = match get_active_interface(root)? {
+        Some(active) => Some(active),
+        None => Some(preferred_interface()?),
+    };
 
     match (requested, active.as_deref()) {
         (Some(req), Some(act)) if req != act && !allow_multi => {
@@ -186,7 +190,7 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             EthernetCommand::SiteCredCapture(args) => handle_eth_site_cred_capture(root, args),
         },
         Commands::Hotspot(sub) => match sub {
-            HotspotCommand::Start(args) => handle_hotspot_start(args),
+            HotspotCommand::Start(args) => handle_hotspot_start(root, args),
             HotspotCommand::Stop => handle_hotspot_stop(),
             HotspotCommand::Status => handle_hotspot_status(),
         },
@@ -536,7 +540,7 @@ fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<Hand
     ))
 }
 
-fn handle_hotspot_start(args: HotspotStartArgs) -> Result<HandlerResult> {
+fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerResult> {
     use crate::system::apply_interface_isolation;
 
     log::info!(
@@ -557,6 +561,15 @@ fn handle_hotspot_start(args: HotspotStartArgs) -> Result<HandlerResult> {
 
     // Start hotspot FIRST (it handles interface configuration and rfkill)
     let state = start_hotspot(cfg).context("starting hotspot")?;
+
+    let preferred_iface = if !args.upstream_interface.is_empty() {
+        args.upstream_interface.clone()
+    } else {
+        args.ap_interface.clone()
+    };
+    if !preferred_iface.is_empty() {
+        let _ = write_interface_preference(root, "system_preferred", &preferred_iface);
+    }
 
     // Now apply interface isolation to block other interfaces
     // This runs AFTER hotspot is up to avoid interfering with startup
@@ -2219,41 +2232,128 @@ fn handle_status_summary() -> Result<HandlerResult> {
 }
 
 fn handle_network_status() -> Result<HandlerResult> {
-    let interface_info = detect_interface(None).ok();
-
-    let gateway_ip = default_gateway_ip().ok();
-    let gateway_reachable = match gateway_ip {
-        Some(ip) => ping_host(&ip.to_string(), Duration::from_secs(2)).unwrap_or(false),
-        None => false,
-    };
-    let internet_reachable = ping_host("1.1.1.1", Duration::from_secs(2)).unwrap_or(false);
-
-    let interface_stats = interface_info
-        .as_ref()
-        .and_then(|info| read_interface_stats(&info.name).ok());
-
+    let summaries = list_interface_summaries()?;
+    let default_route = read_default_route().unwrap_or(None);
     let dns_servers = read_dns_servers().unwrap_or_default();
+    let now = SystemTime::now();
 
-    let mut data = serde_json::Map::new();
-    if let Some(info) = interface_info.as_ref() {
-        data.insert("interface".into(), Value::String(info.name.clone()));
-        data.insert("address".into(), Value::String(info.address.to_string()));
-        data.insert("cidr".into(), Value::String(info.network_cidr()));
+    let mut interfaces = Vec::new();
+    for summary in summaries {
+        let carrier = fs::read_to_string(format!("/sys/class/net/{}/carrier", summary.name))
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok())
+            .map(|v| v == 1);
+        let wpa_state = if summary.kind == "wireless" {
+            #[cfg(target_os = "linux")]
+            {
+                let mgr = WpaManager::new(&summary.name).ok();
+                mgr.and_then(|m| m.status().ok())
+                    .map(|status| format!("{:?}", status.wpa_state))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                None
+            }
+        } else {
+            None
+        };
+
+        let link_ready = match summary.kind.as_str() {
+            "wired" => carrier.unwrap_or(false),
+            "wireless" => matches!(wpa_state.as_deref(), Some("Completed")),
+            _ => false,
+        };
+
+        let gateway = cached_gateway(&summary.name)
+            .or_else(|| interface_gateway(&summary.name).ok().flatten());
+        let lease_age_secs = lease_record(&summary.name)
+            .and_then(|lease| now.duration_since(lease.acquired_at).ok())
+            .map(|duration| duration.as_secs());
+
+        let dhcp_last = last_dhcp_outcome(&summary.name).map(|outcome| {
+            let age_secs = now
+                .duration_since(outcome.recorded_at)
+                .ok()
+                .map(|duration| duration.as_secs());
+            let mut map = Map::new();
+            map.insert("success".into(), Value::Bool(outcome.success));
+            if let Some(transport) = outcome.transport {
+                map.insert("transport".into(), Value::String(transport));
+            }
+            if let Some(error) = outcome.error {
+                map.insert("error".into(), Value::String(error));
+            }
+            if let Some(address) = outcome.address {
+                map.insert("address".into(), Value::String(address.to_string()));
+            }
+            if let Some(gateway) = outcome.gateway {
+                map.insert("gateway".into(), Value::String(gateway.to_string()));
+            }
+            if let Some(age) = age_secs {
+                map.insert("age_secs".into(), Value::Number(age.into()));
+            }
+            Value::Object(map)
+        });
+
+        let mut iface_map = Map::new();
+        iface_map.insert("name".into(), Value::String(summary.name));
+        iface_map.insert("kind".into(), Value::String(summary.kind));
+        iface_map.insert("oper_state".into(), Value::String(summary.oper_state));
+        iface_map.insert("link_ready".into(), Value::Bool(link_ready));
+        if let Some(carrier) = carrier {
+            iface_map.insert("carrier".into(), Value::Bool(carrier));
+        }
+        if let Some(state) = wpa_state {
+            iface_map.insert("wpa_state".into(), Value::String(state));
+        }
+        if let Some(ip) = summary.ip {
+            iface_map.insert("ip".into(), Value::String(ip));
+        }
+        if let Some(gateway) = gateway {
+            iface_map.insert("gateway".into(), Value::String(gateway.to_string()));
+        }
+        if let Some(age) = lease_age_secs {
+            iface_map.insert("lease_age_secs".into(), Value::Number(age.into()));
+        }
+        if let Some(dhcp_last) = dhcp_last {
+            iface_map.insert("dhcp_last".into(), dhcp_last);
+        }
+
+        interfaces.push(Value::Object(iface_map));
     }
-    if let Some(gw) = gateway_ip {
-        data.insert("gateway".into(), Value::String(gw.to_string()));
-    }
-    data.insert("gateway_reachable".into(), Value::Bool(gateway_reachable));
-    data.insert("internet_reachable".into(), Value::Bool(internet_reachable));
-    if let Some(stats) = interface_stats {
-        data.insert("rx_bytes".into(), Value::Number(stats.rx_bytes.into()));
-        data.insert("tx_bytes".into(), Value::Number(stats.tx_bytes.into()));
-        data.insert("oper_state".into(), Value::String(stats.oper_state.clone()));
+
+    let mut data = Map::new();
+    data.insert(
+        "active_uplink".into(),
+        active_uplink()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    let preferred = preferred_interface().ok();
+    data.insert(
+        "preferred_interface".into(),
+        preferred.map(Value::String).unwrap_or(Value::Null),
+    );
+    if let Some(route) = default_route {
+        let mut route_map = Map::new();
+        if let Some(interface) = route.interface {
+            route_map.insert("interface".into(), Value::String(interface));
+        }
+        if let Some(gateway) = route.gateway {
+            route_map.insert("gateway".into(), Value::String(gateway.to_string()));
+        }
+        if let Some(metric) = route.metric {
+            route_map.insert("metric".into(), Value::Number(metric.into()));
+        }
+        data.insert("default_route".into(), Value::Object(route_map));
+    } else {
+        data.insert("default_route".into(), Value::Null);
     }
     data.insert(
         "dns_servers".into(),
         Value::Array(dns_servers.into_iter().map(Value::String).collect()),
     );
+    data.insert("interfaces".into(), Value::Array(interfaces));
 
     Ok(("Network health collected".to_string(), Value::Object(data)))
 }
@@ -2453,7 +2553,12 @@ fn handle_wifi_best(root: &Path, args: WifiBestArgs) -> Result<HandlerResult> {
 fn handle_wifi_switch(root: &Path, args: WifiSwitchArgs) -> Result<HandlerResult> {
     let interface = args.interface;
     write_interface_preference(root, "system_preferred", &interface)?;
-    let data = json!({ "interface": interface });
+    let selected_uplink = select_active_uplink().ok();
+    let data = json!({
+        "interface": interface,
+        "selected_uplink": selected_uplink,
+        "isolation_enforced": true,
+    });
     Ok(("Interface preference saved".to_string(), data))
 }
 
@@ -2525,53 +2630,9 @@ fn interface_has_carrier(interface: &str) -> bool {
         return false;
     }
     let carrier_path = format!("/sys/class/net/{}/carrier", interface);
-    let oper_path = format!("/sys/class/net/{}/operstate", interface);
-    let oper_state = fs::read_to_string(&oper_path)
-        .unwrap_or_else(|_| "unknown".to_string())
-        .trim()
-        .to_string();
-    let oper_ready = matches!(oper_state.as_str(), "up" | "unknown");
     match fs::read_to_string(&carrier_path) {
-        Ok(val) => val.trim() == "1" || oper_ready,
-        Err(_) => oper_ready,
-    }
-}
-
-fn try_dhcp_acquire(interface: &str) -> Result<Option<Ipv4Addr>> {
-    #[cfg(target_os = "linux")]
-    {
-        let result = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await })
-            }
-            Err(_) => {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow!("Failed to create tokio runtime: {}", e))?;
-                rt.block_on(async { rustyjack_netlink::dhcp_acquire(interface, None).await })
-            }
-        };
-
-        match result {
-            Ok(lease) => {
-                log::info!(
-                    "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
-                    interface,
-                    lease.address,
-                    lease.prefix_len,
-                    lease.gateway
-                );
-                Ok(lease.gateway)
-            }
-            Err(e) => {
-                log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, e);
-                Ok(None)
-            }
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = interface;
-        Ok(None)
+        Ok(val) => val.trim() == "1",
+        Err(_) => false,
     }
 }
 
@@ -2605,13 +2666,7 @@ fn wpa_ready_for_dhcp(interface: &str) -> bool {
         status.ip_address
     );
 
-    matches!(
-        status.wpa_state,
-        WpaSupplicantState::Completed
-            | WpaSupplicantState::Associated
-            | WpaSupplicantState::FourWayHandshake
-            | WpaSupplicantState::GroupHandshake
-    )
+    matches!(status.wpa_state, WpaSupplicantState::Completed)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -2620,8 +2675,6 @@ fn wpa_ready_for_dhcp(_interface: &str) -> bool {
 }
 
 fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<HandlerResult> {
-    use crate::system::enforce_single_interface;
-
     let WifiRouteEnsureArgs { interface } = args;
     ensure_route_health_check()?;
 
@@ -2652,7 +2705,6 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
 
     let _iface = iface.ok_or_else(|| anyhow!("interface {} not found", interface))?;
 
-    enforce_single_interface(&target_interface)?;
     let mut summaries = list_interface_summaries()?;
     let mut iface_summary = summaries
         .iter()
@@ -2660,8 +2712,10 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         .cloned()
         .ok_or_else(|| anyhow!("interface {} not found", target_interface))?;
 
-    let mut dhcp_gateway = None;
-    if iface_summary.ip.is_none() {
+    let mut gateway = cached_gateway(&target_interface).or(interface_gateway(&target_interface)?);
+    let needs_dhcp = iface_summary.ip.is_none() || gateway.is_none();
+
+    if needs_dhcp {
         if iface_summary.kind == "wired" {
             #[cfg(target_os = "linux")]
             let _ = netlink_set_interface_up(&target_interface);
@@ -2671,10 +2725,10 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
                     target_interface
                 );
             }
-            dhcp_gateway = try_dhcp_acquire(&target_interface)?;
+            let _ = acquire_dhcp_lease(&target_interface)?;
         } else if iface_summary.kind == "wireless" {
             if wpa_ready_for_dhcp(&target_interface) {
-                dhcp_gateway = try_dhcp_acquire(&target_interface)?;
+                let _ = acquire_dhcp_lease(&target_interface)?;
             } else {
                 log::info!(
                     "[ROUTE] Skipping DHCP on {} (wireless not associated yet)",
@@ -2683,33 +2737,21 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
             }
         }
 
-        if dhcp_gateway.is_some() {
-            summaries = list_interface_summaries()?;
-            if let Some(updated) = summaries
-                .iter()
-                .find(|s| s.name == target_interface)
-                .cloned()
-            {
-                iface_summary = updated;
-            }
+        summaries = list_interface_summaries()?;
+        if let Some(updated) = summaries
+            .iter()
+            .find(|s| s.name == target_interface)
+            .cloned()
+        {
+            iface_summary = updated;
         }
-    }
-
-    let gateway = interface_gateway(&target_interface)?.or(dhcp_gateway);
-    let mut route_set = false;
-    let mut gateway_ip = None;
-
-    if let Some(gateway) = gateway {
-        set_default_route(&target_interface, gateway)?;
-        let _ = rewrite_dns_servers(&target_interface, gateway);
-        route_set = true;
-        gateway_ip = Some(gateway);
-    } else {
-        // Remove any existing default route so traffic cannot leak to other interfaces
-        let _ = crate::netlink_helpers::netlink_delete_default_route();
+        gateway = cached_gateway(&target_interface).or(interface_gateway(&target_interface)?);
     }
 
     write_interface_preference(root, "system_preferred", &target_interface)?;
+    let selected_uplink = select_active_uplink()?;
+    let route_set = selected_uplink.is_some();
+    let gateway_ip = gateway;
     let ping_success = if route_set {
         ping_host("8.8.8.8", Duration::from_secs(2)).unwrap_or(false)
     } else {
@@ -2720,14 +2762,15 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
         "interface": target_interface,
         "ip": iface_summary.ip,
         "gateway": gateway_ip,
+        "selected_uplink": selected_uplink,
         "route_set": route_set,
         "ping_success": ping_success,
         "isolation_enforced": true,
     });
     let msg = if route_set {
-        "Default route updated"
+        "Uplink selection applied"
     } else {
-        "Interface isolated (no gateway found)"
+        "No eligible uplink found"
     };
     Ok((msg.to_string(), data))
 }
