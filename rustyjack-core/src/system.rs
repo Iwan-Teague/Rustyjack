@@ -1967,8 +1967,8 @@ pub fn scan_wifi_networks(interface: &str) -> Result<Vec<WifiNetwork>> {
     );
 
     let wpa = rustyjack_netlink::WpaManager::new(interface)
-        .with_control_path(control_path)
-        .with_context(|| format!("opening wpa_supplicant control for {}", interface))?;
+        .with_context(|| format!("opening wpa_supplicant control for {}", interface))?
+        .with_control_path(control_path);
     wpa.scan()
         .with_context(|| format!("triggering scan on {}", interface))?;
 
