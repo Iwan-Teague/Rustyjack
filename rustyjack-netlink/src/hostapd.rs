@@ -767,6 +767,8 @@ fn send_start_ap(
     struct StartApAttempt {
         include_channel_type: bool,
         include_channel_width: bool,
+        include_basic_rates: bool,
+        include_probe_resp: bool,
         label: String,
     }
 
@@ -774,14 +776,24 @@ fn send_start_ap(
         (true, false, "chandef (channel_width)"),
         (false, true, "legacy channel_type"),
     ];
+    let frame_attempts = [
+        (true, true, "full frames"),
+        (true, false, "no probe_resp"),
+        (false, true, "no basic_rates"),
+        (false, false, "no basic_rates, no probe_resp"),
+    ];
 
     let mut attempts: Vec<StartApAttempt> = Vec::new();
     for (include_channel_width, include_channel_type, channel_label) in channel_attempts.iter() {
-        attempts.push(StartApAttempt {
-            include_channel_type: *include_channel_type,
-            include_channel_width: *include_channel_width,
-            label: format!("{} + full frames", channel_label),
-        });
+        for (include_basic_rates, include_probe_resp, frame_label) in frame_attempts.iter() {
+            attempts.push(StartApAttempt {
+                include_channel_type: *include_channel_type,
+                include_channel_width: *include_channel_width,
+                include_basic_rates: *include_basic_rates,
+                include_probe_resp: *include_probe_resp,
+                label: format!("{} + {}", channel_label, frame_label),
+            });
+        }
     }
     let mut last_err: Option<NetlinkError> = None;
     for attempt in attempts.iter() {
@@ -799,8 +811,8 @@ fn send_start_ap(
             hidden_ssid,
             attempt.include_channel_type,
             attempt.include_channel_width,
-            true,
-            true,
+            attempt.include_basic_rates,
+            attempt.include_probe_resp,
             true,
             wpa_enabled,
             basic_rates,
