@@ -2158,14 +2158,10 @@ fn basic_rates_to_bytes(basic_rates_100kbps: &[u32]) -> Vec<u8> {
     let mut rates: Vec<u8> = basic_rates_100kbps
         .iter()
         .filter_map(|rate| {
-            if *rate == 0 || rate % 5 != 0 {
+            if *rate == 0 || *rate > u32::from(u8::MAX) {
                 return None;
             }
-            let val = rate / 5;
-            if val == 0 || val > u32::from(u8::MAX) {
-                return None;
-            }
-            Some(val as u8)
+            Some(*rate as u8)
         })
         .collect();
     rates.sort_unstable();

@@ -67,42 +67,32 @@ validate_network_status() {
   for _ in $(seq 1 "$tries"); do
     output=$(RUSTYJACK_ROOT="$PROJECT_ROOT" rustyjack status network --output json 2>/dev/null || true)
     if [ -n "$output" ]; then
-      if cmd python3; then
-        if echo "$output" | python3 - <<'PY'
-import json,sys
-data=json.load(sys.stdin)
-payload=data.get("data") or {}
-active=payload.get("active_uplink")
-if not active:
-    sys.exit(1)
-route=payload.get("default_route") or {}
-if route.get("interface") != active:
-    sys.exit(1)
-dns=payload.get("dns_servers") or []
-if not dns:
-    sys.exit(1)
-interfaces=payload.get("interfaces") or []
-iface=None
-for entry in interfaces:
-    if isinstance(entry, dict) and entry.get("name") == active:
-        iface=entry
-        break
-if not iface:
-    sys.exit(1)
-if not iface.get("ip") or not iface.get("gateway"):
-    sys.exit(1)
-sys.exit(0)
-PY
-        then
-          info "[OK] Network validation passed"
-          return 0
-        fi
-      else
-        if echo "$output" | grep -q '"active_uplink"' && echo "$output" | grep -q '"default_route"'; then
-          info "[OK] Network validation passed (basic)"
-          return 0
-        fi
+      local active=""
+      active=$(echo "$output" | sed -n 's/.*"active_uplink":"\\([^"]*\\)".*/\\1/p' | head -n1)
+      if [ -z "$active" ]; then
+        sleep 1
+        continue
       fi
+      local route_iface=""
+      route_iface=$(echo "$output" | sed -n 's/.*"default_route":{[^}]*"interface":"\\([^"]*\\)".*/\\1/p' | head -n1)
+      if [ "$route_iface" != "$active" ]; then
+        sleep 1
+        continue
+      fi
+      if echo "$output" | grep -q '"dns_servers":\\[\\]'; then
+        sleep 1
+        continue
+      fi
+      if ! echo "$output" | grep -q '"dns_servers":\\['; then
+        sleep 1
+        continue
+      fi
+      if ! echo "$output" | grep -Eq "\"name\":\"${active}\"[^}]*\"ip\":\"[^\"]+\"[^}]*\"gateway\":\"[^\"]+\""; then
+        sleep 1
+        continue
+      fi
+      info "[OK] Network validation passed"
+      return 0
     fi
     sleep 1
   done
@@ -138,30 +128,8 @@ preserve_default_route_interface() {
   ts=$(date -Iseconds 2>/dev/null || date)
 
   info "Preserving default route interface: $iface"
-  if cmd python3; then
-    PREF_PATH="$pref_path" PREF_IFACE="$iface" PREF_MAC="$mac" PREF_TS="$ts" python3 - <<'PY'
-import json, os, datetime
-path = os.environ.get("PREF_PATH")
-iface = os.environ.get("PREF_IFACE")
-mac = os.environ.get("PREF_MAC") or None
-ts = os.environ.get("PREF_TS") or datetime.datetime.now().isoformat()
-data = {}
-try:
-    if path and os.path.exists(path):
-        with open(path) as f:
-            data = json.load(f)
-except Exception:
-    data = {}
-if not isinstance(data, dict):
-    data = {}
-data["system_preferred"] = {"interface": iface, "mac": mac, "timestamp": ts}
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w") as f:
-    json.dump(data, f, indent=2)
-PY
-  else
-    mkdir -p "$pref_dir"
-    cat > "$pref_path" <<EOF
+  mkdir -p "$pref_dir"
+  cat > "$pref_path" <<EOF
 {
   "system_preferred": {
     "interface": "$iface",
@@ -170,7 +138,6 @@ PY
   }
 }
 EOF
-  fi
 }
 
 claim_resolv_conf() {
