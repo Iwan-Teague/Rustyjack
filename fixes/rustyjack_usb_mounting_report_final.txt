@@ -1,0 +1,495 @@
+RUSTYJACK USB MASS-STORAGE MOUNTING PIPELINE
+Senior Review + Corrected/Improved Fix Plan
+(Repository: Rustyjack.zip, paths relative to repo root)
+
+Author: Independent Senior Computer Analyst (2nd reviewer)
+Date: 2025-12-30 (Europe/Dublin)
+
+===============================================================================
+0) PURPOSE
+===============================================================================
+
+You asked for a critical review of the previous USB-mounting report and a final
+document that corrects errors, fills gaps, and gives an extremely detailed,
+actionable fix plan (including what code to change and where).
+
+This review is based on direct inspection of the uploaded source tree (Rustyjack.zip).
+
+===============================================================================
+1) QUICK EXECUTIVE SUMMARY (WHAT IS BROKEN AND WHY IT LOOKS LIKE A “RESET”)
+===============================================================================
+
+The Rustyjack UI process is launched by systemd with a restricted capability set
+that EXCLUDES CAP_SYS_ADMIN:
+
+  Rustyjack/rustyjack.service
+    AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+    CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+    NoNewPrivileges=true
+    User=root
+
+Mounting a filesystem requires CAP_SYS_ADMIN. Because the service removes it,
+any attempt to mount from inside the UI will fail (EPERM), even as root.
+
+In the USB-browsing pipeline (used by “Load Key from USB” and “Import from USB”),
+a mount failure is treated as a fatal error via bail!(...), which propagates out
+of App::run() to main(), causing the process to exit. systemd then restarts it,
+which looks exactly like the Rustyjack “resetting”.
+
+On top of that, the USB logic incorrectly requires the mount to be WRITABLE even
+for read-only operations (key import, wifi import). That causes false failures
+on otherwise readable USB sticks (or sticks mounted read-only).
+
+===============================================================================
+2) ERRORS / OVERSTATEMENTS IN THE PREVIOUS REPORT (CORRECTED)
+===============================================================================
+
+2.1 Misattribution: “select_usb_mount() mounts devices”
+-------------------------------------------------------
+The previous report implied select_usb_mount() itself contained mount logic.
+After inspection:
+
+  - select_usb_mount() only selects from already-found USB mount paths.
+  - Actual mount attempts occur in try_auto_mount_usb().
+
+Relevant file:
+  Rustyjack/rustyjack-ui/src/app.rs
+
+2.2 Overstatement: “tries various filesystem types”
+---------------------------------------------------
+There are comments that say “Try to mount with various common filesystems,” but
+the current implementation makes a single call:
+
+  Command::new("mount").arg(device).arg(mount_point).output();
+
+No -t <fstype> attempts and no explicit fallback types exist in code today.
+
+2.3 “No-USB path is always graceful”
+------------------------------------
+The main UI flow used by browse_usb_for_file() is graceful on “no USB inserted”
+(because select_usb_mount() shows a message and returns Ok(None)). However, there
+is also a find_usb_mount() helper that bails on empty results:
+
+  fn find_usb_mount(&self) -> Result<PathBuf> { ... bail!(...) }
+
+This helper is currently UNUSED (definition only), so it does not affect your
+reported UI behavior, but it is a footgun if used later.
+
+===============================================================================
+3) WHAT THE FIRST REPORT MISSED (IMPORTANT NEW FINDINGS)
+===============================================================================
+
+3.1 CRITICAL DESIGN BUG: “writable mount” is required everywhere
+---------------------------------------------------------------
+Current code treats “USB storage mount” as “USB mount that is writable”:
+
+  - is_usb_storage_mount(): immediately returns false if !is_writable_mount()
+  - find_all_usb_mounts(): only records mounts passing is_writable_mount()
+  - resolve_usb_mount_for_device(): only returns mount if is_writable_mount()
+  - try_auto_mount_usb(): mounts, then unmounts immediately if not writable
+
+But your two key use-cases are read-only:
+  - Load Key from USB
+  - Import WiFi profile from USB
+
+Those operations should work fine on a read-only filesystem or a stick mounted ro.
+
+Worse: is_writable_mount() does an actual write test:
+  fs::write(path.join(".rustyjack_test"), b"test")
+
+On damaged/slow flash or a filesystem needing recovery, that write can block and
+“freeze” the UI, even if it eventually fails.
+
+Fix: stop doing physical writes to test “writable”; parse mount flags instead.
+
+3.2 BUG: lsblk listing can include partitions; auto-mount then silently fails
+-----------------------------------------------------------------------------
+list_usb_devices() uses:
+
+  lsblk -nrpo NAME,RM,SIZE,MODEL,TRAN
+
+lsblk includes partitions by default (e.g., /dev/sda1). The UI may present and
+let the user select a partition. If that happens, select_usb_device_mount()
+calls:
+
+  dev_name = dev.name.trim_start_matches("/dev/").to_string(); // "sda1"
+  mount = self.try_auto_mount_usb(&[dev_name])?
+
+try_auto_mount_usb() then checks:
+  /sys/block/sda1  (does NOT exist for partitions; partitions are under /sys/block/sda/sda1)
+
+So the “export logs” USB selection pipeline can fail to auto-mount purely due to
+type confusion.
+
+Fix: ask lsblk for TYPE and filter to TYPE=="disk", or normalize to parent disk
+before calling try_auto_mount_usb().
+
+3.3 SUBSTRING MATCH BUG in is_usb_storage_mount()
+-------------------------------------------------
+is_usb_storage_mount() uses:
+
+  if line.contains(mount_path_str) { ... }
+
+This can mis-detect if mount_path_str is a substring of another mount path.
+Fix: parse /proc/mounts fields and compare the mountpoint field exactly.
+
+3.4 UI THREAD BLOCKING: mount + filesystem IO are synchronous
+-------------------------------------------------------------
+All mount attempts (Command::new("mount").output()) and directory scans
+(fs::read_dir) run on the UI loop thread. On a Pi Zero 2 W, if mount blocks for
+even a second or two, the UI will appear frozen. Combine that with a subsequent
+bail!(...) exit and you get “freeze then reset.”
+
+Fix: (a) show a progress dialog before scanning/mounting, and/or (b) move the
+mount attempt to a worker thread with a timeout.
+
+3.5 Security architecture: CAP_SYS_ADMIN is extremely powerful
+--------------------------------------------------------------
+Adding CAP_SYS_ADMIN to the UI service “works,” but it is a big escalation:
+CAP_SYS_ADMIN is famously “the new root.” For an offensive/recon appliance, you
+likely want the UI to remain constrained.
+
+Better: keep UI capability-bounded and delegate mounting to a tiny privileged
+helper (or systemd+udev mount units). The previous report mentioned this in
+passing but didn’t provide concrete implementation steps; this report does.
+
+===============================================================================
+4) WHERE USB LOGIC LIVES (CONFIRMED)
+===============================================================================
+
+All major USB mount/detection logic lives in ONE file:
+
+  Rustyjack/rustyjack-ui/src/app.rs
+
+Key functions:
+  - browse_usb_for_file(...)              (file picker used by import/key load)
+  - select_usb_mount()                    (chooses from discovered mount paths)
+  - find_all_usb_mounts()                 (detects mounts; may attempt auto-mount)
+  - find_usb_block_devices()              (sysfs scan of /sys/block)
+  - read_mount_points()                   (reads /proc/mounts)
+  - try_auto_mount_usb(...)               (calls mount, verifies, returns mountpoint)
+  - list_usb_devices()                    (lsblk listing)
+  - select_usb_device_mount(...)          (device picker used by export logs)
+  - resolve_usb_mount_for_device(...)     (maps device -> mountpoint)
+  - is_usb_storage_mount(...)             (classifies mountpoint as USB filesystem)
+  - is_writable_mount(...)                (currently does a write test; should be replaced)
+
+Systemd service file (capabilities):
+  Rustyjack/rustyjack.service
+
+Useful scripts for manual diagnosis (not used by UI directly):
+  Rustyjack/scripts/diagnose_usb.sh
+  Rustyjack/scripts/mount_usb.sh
+  Rustyjack/scripts/fde_prepare_usb.sh
+
+===============================================================================
+5) ROOT CAUSE ANALYSIS (PIPELINE LEVEL)
+===============================================================================
+
+5.1 Crash/reset chain for “Load Key from USB” and “Import from USB”
+-------------------------------------------------------------------
+Call chain:
+  Menu action -> load_encryption_key_from_usb() / import_wifi_from_usb()
+              -> browse_usb_for_file()
+              -> select_usb_mount()
+              -> find_all_usb_mounts()
+
+If no mount is found but a USB block device is detected, find_all_usb_mounts()
+calls try_auto_mount_usb().
+
+If try_auto_mount_usb() returns None, find_all_usb_mounts() does:
+
+  bail!("USB device detected (...) but could not mount ...");
+
+This error propagates back to App::run():
+
+  self.execute_action(action)?;  // App::run exits on Err
+
+main():
+  App::new()?.run()  // main exits on Err
+
+systemd restarts rustyjack-ui -> “Rustyjack resets”.
+
+Why mount fails:
+  - CAP_SYS_ADMIN removed by systemd service config (primary)
+  - additional false failures because writability is required (secondary)
+
+5.2 Freeze mechanism
+--------------------
+The UI loop blocks while:
+  - scanning /sys/block and reading uevent links
+  - calling mount (which can block)
+  - performing write-test to verify mount
+
+On low-power hardware, or with a problematic USB stick, that blocking becomes
+visible as a UI freeze prior to restart.
+
+===============================================================================
+6) FIX PLAN: TWO ARCHITECTURE OPTIONS
+===============================================================================
+
+Option A is the quickest to implement but expands privileges.
+Option B is the “battle-tested appliance” approach and keeps UI constrained.
+
+-------------------------------------------------------------------------------
+OPTION A (QUICK FIX): Allow mounting in UI + stop fatal exits
+-------------------------------------------------------------------------------
+
+A1) Prevent UI restart loops: handle action errors inside App::run()
+--------------------------------------------------------------------
+File:
+  Rustyjack/rustyjack-ui/src/app.rs
+
+Current code in App::run():
+  self.execute_action(action)?;
+
+Replace with:
+  if let Err(e) = self.execute_action(action) {
+      log::error!("Menu action failed: {:#}", e);
+      let msg = shorten_for_display(&e.to_string(), 90);
+      // Show a dialog instead of exiting the process
+      self.show_message("Error", ["Operation failed", &msg])?;
+  }
+
+Why:
+  - Prevents systemd restarts on any menu failure, not just USB.
+  - Makes future errors recoverable in-field.
+
+A2) Restore CAP_SYS_ADMIN for the rustyjack-ui service
+------------------------------------------------------
+File:
+  Rustyjack/rustyjack.service
+
+Change:
+  AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+  CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
+To:
+  AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+  CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+
+Then on device:
+  sudo systemctl daemon-reload
+  sudo systemctl restart rustyjack.service
+
+Risk note:
+  - CAP_SYS_ADMIN is broad. If you can accept it, Option A is simplest.
+  - If you cannot, skip A2 and implement Option B instead.
+
+A3) Remove “writable mount required” for read-only features
+-----------------------------------------------------------
+The simplest minimally-invasive approach:
+
+  - In find_all_usb_mounts(), stop filtering found mounts with is_writable_mount()
+    when the caller is browse_usb_for_file(). Either:
+      (i) remove the writable check entirely for the browse path, or
+      (ii) add a parameter to control access requirements (recommended).
+
+Recommended refactor (clean and explicit):
+
+  enum UsbAccessRequirement { ReadableOk, RequireWritable }
+
+Add:
+  fn find_all_usb_mounts(&self, req: UsbAccessRequirement) -> Result<Vec<PathBuf>>
+  fn is_usb_storage_mount(&self, path: &Path, req: UsbAccessRequirement) -> bool
+  fn resolve_usb_mount_for_device(&self, device: &str, req: UsbAccessRequirement) -> Result<Option<PathBuf>>
+  fn try_auto_mount_usb(&self, usb_devices: &[String], req: UsbAccessRequirement) -> Result<Option<PathBuf>>
+
+Then:
+  - browse_usb_for_file() uses ReadableOk
+  - export_logs_to_usb() uses RequireWritable
+
+A4) Replace “write-test” with parsing mount flags (no IO, no freezes)
+---------------------------------------------------------------------
+Replace is_writable_mount() entirely.
+
+Instead of writing a file, parse /proc/mounts:
+
+  - Find the line whose mountpoint field exactly equals the path.
+  - Read the options field (4th field).
+  - If options contains "rw", treat as writable; if contains "ro", treat as read-only.
+
+Implementation sketch:
+
+  fn mount_options_for(&self, mountpoint: &Path) -> Option<String> { ... }
+
+  fn is_writable_mount(&self, mountpoint: &Path) -> bool {
+      self.mount_options_for(mountpoint)
+          .map(|opts| opts.split(',').any(|o| o == "rw"))
+          .unwrap_or(false)
+  }
+
+Also add:
+  fn is_readable_mount(&self, mountpoint: &Path) -> bool {
+      mountpoint.is_dir() && fs::read_dir(mountpoint).is_ok()
+  }
+
+Then your “ReadableOk” path checks is_readable_mount(), not is_writable_mount().
+
+A5) Fix lsblk partition confusion
+---------------------------------
+File:
+  Rustyjack/rustyjack-ui/src/app.rs
+
+Change list_usb_devices() to include TYPE and filter to disks:
+
+  lsblk -nrpo NAME,TYPE,RM,SIZE,MODEL,TRAN
+
+Then:
+  - require TYPE == "disk" (or normalize partition -> parent disk)
+  - show partitions only if you explicitly want them, but don’t feed them to sysfs
+    code that expects /sys/block/<disk>.
+
+A6) Make mount attempts safe, non-blocking, and diagnosable
+-----------------------------------------------------------
+Improve try_auto_mount_usb():
+
+  - Capture stderr/stdout and log them when mount fails.
+  - Add a timeout (spawn + try_wait loop; kill process if exceeded).
+  - Use safe mount options:
+      nosuid,nodev,noexec
+    Additionally:
+      ro for key import / wifi import
+      rw for export logs
+
+  - Use unique mountpoints per device to avoid collisions:
+      /mnt/rustyjack_usb/<dev>   (e.g., /mnt/rustyjack_usb/sda1)
+
+  - Add small retry loop (udev race):
+      If /dev/sda1 doesn’t exist yet, sleep 200ms and retry a few times.
+
+-------------------------------------------------------------------------------
+OPTION B (RECOMMENDED): Keep UI constrained; delegate mounting to privileged helper
+-------------------------------------------------------------------------------
+
+If you want the UI service to remain limited to CAP_NET_ADMIN/CAP_NET_RAW, do NOT
+add CAP_SYS_ADMIN. Instead:
+
+B1) Remove mount from UI process entirely
+-----------------------------------------
+Change UI code so it NEVER calls "mount" directly.
+
+Instead the UI requests mounting via either:
+  (a) a root-owned setuid helper (small audited program), or
+  (b) systemd oneshot mount service, or
+  (c) udev rule -> systemd mount template
+
+B2) systemd oneshot mount helper (practical, simple, auditable)
+---------------------------------------------------------------
+Create a unit on device (example):
+
+  /etc/systemd/system/rustyjack-usb-mount@.service
+  [Unit]
+  Description=Mount Rustyjack USB %i
+  After=local-fs.target
+  [Service]
+  Type=oneshot
+  ExecStart=/usr/local/sbin/rustyjack-usb-mount %i
+  RemainAfterExit=yes
+
+Create the helper script or binary:
+
+  /usr/local/sbin/rustyjack-usb-mount
+  - Accept device name (e.g., sda or sda1)
+  - Determine partition(s) using lsblk
+  - Mount to /mnt/rustyjack_usb/<dev> with safe options
+  - Print the mountpoint on stdout for the UI to read
+
+Then, in UI:
+  - call: systemctl start rustyjack-usb-mount@sda1.service
+  - then check /proc/mounts for the resulting mount
+  - show user-friendly errors if it failed (read journald output)
+
+This keeps CAP_SYS_ADMIN in systemd’s mount service, not in the UI.
+
+B3) udev-triggered automount (most “battle-tested appliance”)
+-------------------------------------------------------------
+Use udev to trigger systemd mount units whenever a USB filesystem partition
+appears. UI then only scans mounted paths; it never mounts.
+
+Example udev rule (conceptual):
+  ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", \
+    ENV{SYSTEMD_WANTS}+="rustyjack-usb-mount@%k.service"
+
+Advantages:
+  - No UI blocking
+  - Mount happens immediately on insertion
+  - Centralized logs via journald
+  - UI reduces to “list mountpoints and browse”
+
+===============================================================================
+7) SPECIFIC CODE LOCATIONS TO PATCH (DIRECTLY ACTIONABLE)
+===============================================================================
+
+Core patch targets:
+  - Rustyjack/rustyjack.service
+      * add CAP_SYS_ADMIN (Option A) OR keep constrained (Option B)
+
+  - Rustyjack/rustyjack-ui/src/app.rs
+      * App::run(): convert execute_action(action)? into non-fatal dialog
+      * find_all_usb_mounts(): remove/parameterize writability requirement; remove bail! on mount failure
+      * try_auto_mount_usb(): timeout + safe options + per-device mountpoint + diagnostics
+      * is_usb_storage_mount(): exact mountpoint match, not substring match
+      * is_writable_mount(): replace write-test with mount flag parse
+      * list_usb_devices(): include TYPE and filter disks; avoid partition->sysfs mismatch
+      * resolve_usb_mount_for_device(): parameterize on read/write requirement (and avoid write-test)
+
+===============================================================================
+8) TEST PLAN (VALIDATION YOU SHOULD RUN ON THE PI)
+===============================================================================
+
+8.1 Confirm capability-driven mount failure
+-------------------------------------------
+On the device, reproduce and inspect logs:
+  journalctl -u rustyjack.service -b -n 200 --no-pager
+
+If CAP_SYS_ADMIN is missing, you should see mount failures (permission-related)
+once logging is improved.
+
+8.2 Test read-only USB stick behavior
+-------------------------------------
+Use a USB stick formatted FAT32, and set the hardware write-protect switch if
+present (or mount it ro). Confirm that:
+
+  - Load Key from USB can browse and read files
+  - Import WiFi from USB can browse and read files
+  - Export logs either warns “need writable USB” or mounts rw and succeeds
+
+8.3 Partition-selection regression
+----------------------------------
+Insert a partitioned USB and verify the device list does NOT show partitions
+(or if it does, selecting a partition still mounts correctly).
+
+8.4 Timeout / freeze regression
+-------------------------------
+Insert a problematic/slow USB stick. UI should show progress and recover with an
+error dialog, not freeze indefinitely and not restart.
+
+===============================================================================
+9) FINAL CONCLUSION
+===============================================================================
+
+The previous report’s central diagnosis (mounting fails because CAP_SYS_ADMIN is
+dropped; fatal errors propagate and restart the service) is correct.
+
+However, there are additional, meaningful issues that must be addressed for a
+robust fix:
+
+  - “writable mount required” prevents read-only imports and can trigger freezes
+    due to a physical write-test on potentially unhealthy media.
+  - lsblk partition entries can break auto-mount due to /sys/block/<partition>
+    mismatch.
+  - is_usb_storage_mount() uses substring match, which is brittle.
+  - synchronous mount/IO work runs on the UI thread with no timeout/progress.
+
+If you want the fastest repair, Option A is sufficient:
+  - handle errors in App::run()
+  - add CAP_SYS_ADMIN
+  - fix the writability/read-only logic
+
+If you want the safest, most appliance-grade design, Option B is recommended:
+  - keep UI constrained
+  - mount via systemd/udev helper
+  - UI only browses mountpoints
+
+End of document.
