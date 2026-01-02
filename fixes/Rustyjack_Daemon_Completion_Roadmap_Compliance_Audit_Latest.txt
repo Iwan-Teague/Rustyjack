@@ -1,0 +1,535 @@
+RUSTYJACK — DAEMON COMPLETION ROADMAP COMPLIANCE AUDIT (LATEST WORKSPACE)
+Reviewer: Senior software developer specializing in daemons (Rust)
+Date: 2026-01-02 (Europe/Dublin)
+Inputs:
+  - Rustyjack workspace snapshot: Rustyjack.zip (latest)
+  - Roadmap baseline: Rustyjack_Daemon_Completion_Roadmap_NoNewBinaries.txt
+
+What I audited against (high level)
+-----------------------------------
+The roadmap defines “daemon completion” for this phase as:
+  1) rustyjackd is the sole privileged control plane over a local Unix socket.
+  2) rustyjack-ui becomes an unprivileged client that calls daemon endpoints for privileged actions.
+  3) Existing third‑party binaries are not removed in this phase, but *no new ones* should be introduced.
+  4) Job engine supports real JobKinds + progress + cancellation + lock ordering.
+  5) Daemon uses refactored core “services” APIs, not CLI dispatch glue.
+  6) Remaining privileged UI functionality is migrated (system, wifi, hotspot, portal, mounts, etc.)
+     via explicit IPC endpoints and/or job kinds.
+
+EXECUTIVE SUMMARY (verdict)
+---------------------------
+✅ A large portion of the roadmap has been implemented correctly:
+  - A dedicated `rustyjack-client` crate exists and speaks the UDS protocol.
+  - IPC expanded beyond Health/Version to include SystemStatus/DiskUsage/Reboot/Shutdown/Sync,
+    plus diagnostics endpoints and JobStart/JobStatus/JobCancel.
+  - The daemon has a real Job engine with:
+      • progress reporting (throttled)
+      • cancellation token support
+      • lock ordering (LockManager sorts by lock order)
+      • ScanRun + SystemUpdate JobKinds implemented via core services
+  - The UI no longer depends on `rustyjack-core` and no longer shells out directly.
+
+❌ The roadmap is NOT fully completed.
+The remaining gap is “Phase 4 completion”: migrating *all* privileged UI operations into the daemon via
+explicit endpoints/jobs with validation + idempotency + tiering. Right now the project still relies on a
+generic “CoreDispatch” endpoint that calls `rustyjack_core::dispatch_command` (CLI/command-dispatch glue).
+That works as a bridge, but it’s *not* the “finished daemon boundary” described by the roadmap.
+
+The rest of this report:
+  1) confirms what is implemented (with concrete evidence from the repo),
+  2) lists what is missing vs the roadmap,
+  3) gives an *extremely specific* implementation plan to finish what’s missing.
+
+================================================================================
+SECTION 1 — Confirmed implemented items (with repo evidence)
+================================================================================
+
+1. Workspace / crate layout
+   - Workspace members include `rustyjack-daemon`, `rustyjack-ipc`, and `rustyjack-client`.
+   - `rustyjack-client` exists at: rustyjack-client/
+   - Daemon modularization exists (not one giant main.rs): server.rs, dispatch.rs, state.rs, auth.rs,
+     jobs/, locks.rs, systemd.rs, telemetry.rs, etc.
+
+2. “No new binaries” guardrail (Phase 0)
+   - Implemented:
+       ci/no_new_command_new.rs
+       ci/command_new_baseline.txt
+   - Note: the checker correctly skips `ci/` to avoid counting itself.
+
+3. IPC contract expanded (Phase 2)
+   Current Endpoint enum (verbatim from repo):
+      pub enum Endpoint {
+          Health,
+          Version,
+          Status,
+          CoreDispatch,
+          JobStart,
+          JobStatus,
+          JobCancel,
+          SystemStatusGet,
+          DiskUsageGet,
+          SystemReboot,
+          SystemShutdown,
+          SystemSync,
+          HostnameRandomizeNow,
+          BlockDevicesList,
+          SystemLogsGet,
+          WifiCapabilitiesGet,
+          HotspotWarningsGet,
+          HotspotDiagnosticsGet,
+          HotspotClientsList,
+          GpioDiagnosticsGet,
+      }
+
+   Job system includes Progress and real JobKinds (verbatim from repo):
+      pub enum JobKind {
+          Noop,
+          Sleep { seconds: u64 }
+
+4. Daemon job engine features (Phase 2/3)
+   - Progress update helper exists and throttles to 200ms / message changes.
+   - Cancellation is implemented (CancellationToken).
+   - Lock ordering exists in LockManager::acquire (locks sorted by lock.order()).
+   - ScanRun/SystemUpdate jobs are executed in jobs/kinds/{scan,update}.rs via core services.
+
+5. Core refactor: services layer exists (Phase 3)
+   - Directory exists: rustyjack-core/src/services/
+   - Files present:
+     error.rs, hotspot.rs, logs.rs, mod.rs, mount.rs, scan.rs, stats.rs, system.rs, update.rs, wifi.rs
+
+   - Scan/update wrappers exist and are used by the daemon’s job kinds.
+
+6. UI integration (Phase 1)
+   - `rustyjack-ui` Cargo.toml:
+       - depends on `rustyjack-client`: True
+       - depends on `rustyjack-core`:   False
+   - UI source does NOT reference:
+       - rustyjack_core:     True
+       - rustyjack_netlink:  True
+       - rustyjack_wireless: True
+       - Command::new(:      True
+
+   - UI is configured to run unprivileged with systemd:
+       - rustyjack-ui.service exists ✅
+       - service uses User=rustyjack-ui ✅
+       - socket is group-accessible:
+           rustyjackd.socket sets SocketGroup=rustyjack, Mode=0660 ✅
+         and UI service includes SupplementaryGroups=rustyjack ✅
+
+7. Daemon service robustness (systemd)
+   - rustyjackd.service uses Type=notify + WatchdogSec and includes several hardening options
+     (ProtectSystem=strict, ProtectHome=true, etc.).
+
+================================================================================
+SECTION 2 — Roadmap checklist compliance (A–E)
+================================================================================
+
+A) Client/IPC boundary
+   ✅ Implemented:
+     - UDS connect + Hello/HelloAck handshake
+     - framed protocol (length-prefixed JSON)
+     - request_id correlation checks
+     - typed helper methods: health/version/status/disk_usage/system_* / job_* etc.
+
+   ⚠️ Missing vs roadmap (“robust client”):
+     - Request-level timeouts (only handshake has timeout today)
+     - Reconnect / retry logic with backoff
+     - Connection reuse (UI currently reconnects per call)
+
+B) UI integration
+   ✅ Implemented:
+     - UI no longer depends on rustyjack-core/netlink/wireless for privileged ops
+     - UI calls daemon (direct endpoints + CoreDispatch bridge)
+     - Unprivileged systemd unit exists (and alias to rustyjack.service exists)
+
+   ⚠️ Missing vs roadmap:
+     - UI unit hardening is weaker than daemon unit:
+         NoNewPrivileges + PrivateTmp are present, but ProtectSystem/ProtectHome are not set.
+     - Roadmap recommended a persistent DaemonBridge storing a client; current UI connects each call.
+
+C) Daemon integration
+   ✅ Implemented:
+     - tier gating exists per endpoint
+     - jobs are real and have progress/cancel/locks
+     - daemon uses core services for scan/update/stats/system/etc.
+
+   ❌ Not fully implemented:
+     - “Phase 4 completion”: explicit IPC endpoints/jobs for the full set of privileged operations
+       (wifi connect/disconnect/scan, hotspot start/stop, mounts, portal, etc.)
+     - Instead, the project still relies on `CoreDispatch`, which calls
+       `rustyjack_core::dispatch_command` (CLI dispatch glue). This is explicitly something the roadmap
+       intended to move away from.
+
+D) Core refactor
+   ✅ Implemented:
+     - services directory exists and daemon calls it for scan/update.
+
+   ⚠️ Still not “cleanly layered”:
+     - services/scan.rs and services/update.rs still construct `rustyjack_commands::*` args internally.
+       This is acceptable as a transitional step, but not the “final” layering the roadmap describes.
+
+E) “No new binaries”
+   ✅ Implemented (guardrail exists and baseline file is present).
+   - Note: This does not remove existing binaries; it prevents new Command::new usage.
+
+================================================================================
+SECTION 3 — What is NOT implemented yet (the real remaining work)
+================================================================================
+
+(1) Replace or quarantine CoreDispatch (major architectural gap)
+---------------------------------------------------------------
+Current state:
+  - IPC includes Endpoint::CoreDispatch and RequestBody::CoreDispatch.
+  - Daemon dispatch executes:
+      spawn_blocking(|| rustyjack_core::dispatch_command(&root, command))
+  - This bypasses the “explicit endpoints + jobs” contract and makes authorization/validation coarse.
+
+Why this matters:
+  - You can’t meaningfully enforce:
+      • per-operation permissions
+      • input allowlists
+      • idempotency rules
+      • progress/cancellation
+    if everything funnels through a generic “execute arbitrary command” call.
+
+Roadmap expectation:
+  - CoreDispatch might exist as a temporary bridge (fine), but “done” means it is either:
+      a) removed, OR
+      b) strictly limited to a tiny safe subset, OR
+      c) compiled only behind a feature flag and disabled in production builds.
+
+(2) Missing explicit IPC endpoints + handlers for Phase 4 operations
+-------------------------------------------------------------------
+The roadmap’s Phase 4 expects daemon-owned operations such as:
+  - Wifi scan/connect/disconnect, rfkill, tx power
+  - Hotspot start/stop + configuration changes + client control
+  - Portal start/stop/status
+  - Mount list/mount/unmount as jobs
+  - “StatusGet” aggregating system/wifi/hotspot state for the UI
+
+Current state:
+  - IPC exposes some read-only/diagnostics endpoints:
+      SystemStatusGet, DiskUsageGet, WifiCapabilitiesGet, HotspotWarningsGet, etc.
+  - There are NO endpoints for:
+      WifiScanStart, WifiConnectStart, WifiDisconnect, HotspotStart/Stop, PortalStart/Stop,
+      MountStart/UnmountStart, MountList, PortalStatus, etc.
+  - Therefore the UI must still use CoreDispatch for many privileged actions (if it supports them).
+
+(3) UI service hardening is incomplete
+--------------------------------------
+Current rustyjack-ui.service includes:
+  - NoNewPrivileges=true ✅
+  - PrivateTmp=true ✅
+Missing hardening recommended by the roadmap:
+  - ProtectSystem=strict
+  - ProtectHome=true
+  - (Optionally) MemoryDenyWriteExecute=true
+  - (Optionally) RestrictRealtime=true
+  - (Optionally) SystemCallArchitectures=native
+
+(4) Client robustness: timeouts + reconnect strategy
+----------------------------------------------------
+Current state:
+  - handshake is timed out
+  - requests are not timed out
+  - UI reconnects every call (works, but not robust or efficient)
+
+================================================================================
+SECTION 4 — EXACT implementation plan to finish the missing work
+================================================================================
+
+IMPORTANT CONSTRAINTS
+---------------------
+- Do NOT add new third-party binaries during this work.
+- Do NOT remove existing binaries now.
+- All behavior changes must be in Rust code.
+- Prefer job-based endpoints for long-running operations.
+
+IMPLEMENTATION PATH (do this in order)
+--------------------------------------
+Step 1: Turn CoreDispatch into “legacy mode”
+Step 2: Add explicit endpoints + request validation for ONE subsystem at a time
+Step 3: Migrate UI to those endpoints; delete that subsystem’s CoreDispatch usage
+Step 4: Repeat until CoreDispatch is unused and can be removed/feature-gated.
+
+Below are the detailed steps.
+
+-------------------------------------------------------------------------------
+4.1 Step 1 — Quarantine CoreDispatch immediately (safety + clarity)
+-------------------------------------------------------------------------------
+
+Goal:
+  - Prevent CoreDispatch from being a “god endpoint”.
+  - Make it explicit which commands are still using legacy dispatch.
+
+Files to change:
+  - rustyjack-ipc/src/types.rs
+  - rustyjack-daemon/src/auth.rs
+  - rustyjack-daemon/src/dispatch.rs
+  - rustyjack-ui/src/core.rs (and callsites)
+
+4.1.1 IPC: add a “legacy_command” allowlist wrapper (do not accept arbitrary JSON)
+  In rustyjack-ipc/src/types.rs:
+
+    #[derive(Serialize, Deserialize)]
+    pub enum LegacyCommand {
+        // enumerate ONLY what is still unmigrated; start small
+        WifiScan,
+        HotspotStart,
+        HotspotStop,
+        // ...
+    }
+
+    pub struct CoreDispatchRequest {
+        pub legacy: LegacyCommand,
+        pub args: Value, // schema depends on legacy variant
+    }
+
+  Rationale:
+    - You keep CoreDispatch for migration, but you stop accepting an “arbitrary Commands” enum that can
+      grow without review.
+
+4.1.2 Daemon: restrict tier
+  In rustyjack-daemon/src/auth.rs:
+    - Make Endpoint::CoreDispatch require Admin (or at minimum Operator + config flag).
+    - Add config flag in DaemonConfig:
+        pub allow_core_dispatch: bool
+
+  Then in dispatch.rs, if !allow_core_dispatch => return NotImplemented.
+
+4.1.3 Daemon: validate args per legacy variant
+  In dispatch.rs, match legacy command and validate fields strictly.
+  Example for interface name:
+    - regex: ^[a-zA-Z0-9_.-]+$
+    - max length: 32
+
+4.1.4 UI: treat CoreDispatch as temporary
+  In rustyjack-ui, add comments and TODO blocks:
+    - “Legacy CoreDispatch: remove when WifiConnectStart endpoint is implemented.”
+
+-------------------------------------------------------------------------------
+4.2 Step 2 — Add explicit endpoints for the next subsystem (Wi‑Fi first)
+-------------------------------------------------------------------------------
+
+Why Wi‑Fi first:
+  - It’s high-value, frequently used, and has clear permission/validation rules.
+
+Target endpoints (from roadmap Phase 4):
+  - WifiInterfacesList (read-only)
+  - WifiScanStart (job)
+  - WifiConnectStart (job)
+  - WifiDisconnect (idempotent)
+  - RfkillGet / RfkillSet
+  - TxPowerSet
+
+Files to change/add:
+  - rustyjack-ipc/src/types.rs (Endpoint + RequestBody + ResponseOk + types)
+  - rustyjack-ipc/src/job.rs (JobKind variants for wifi scan/connect)
+  - rustyjack-daemon/src/dispatch.rs (match arms)
+  - rustyjack-daemon/src/auth.rs (required_tier mapping)
+  - rustyjack-daemon/src/jobs/mod.rs (required_locks for new JobKinds)
+  - rustyjack-daemon/src/jobs/kinds/wifi_scan.rs (NEW)
+  - rustyjack-daemon/src/jobs/kinds/wifi_connect.rs (NEW)
+  - rustyjack-core/src/services/wifi.rs (extend with scan/connect/disconnect)
+  - rustyjack-ui/src/* (replace CoreDispatch calls with explicit endpoints/jobs)
+
+4.2.1 IPC: define exact request/response structs (no “Value blobs”)
+  In rustyjack-ipc/src/types.rs:
+
+    pub struct WifiInterfacesListResponse { pub interfaces: Vec<String> }
+
+    pub struct WifiScanStartRequest { pub interface: String, pub timeout_ms: u64 }
+    // Response: JobStarted (reuse JobStart response)
+
+    pub struct WifiConnectStartRequest {
+        pub interface: String,
+        pub ssid: String,
+        pub psk: Option<String>, // None => open network
+        pub timeout_ms: u64,
+    }
+
+    pub struct WifiDisconnectRequest { pub interface: String }
+    pub struct WifiDisconnectResponse { pub interface: String, pub disconnected: bool }
+
+  Update Endpoint enum with:
+    WifiInterfacesList,
+    WifiDisconnect
+
+4.2.2 IPC: add JobKinds
+  In rustyjack-ipc/src/job.rs:
+
+    pub enum JobKind {
+        ...
+        WifiScan { req: WifiScanRequestIpc },
+        WifiConnect { req: WifiConnectRequestIpc },
+    }
+
+  Create the Ipc request types in rustyjack-ipc (NOT reusing core service structs directly).
+
+4.2.3 Core services: implement operations (Rust-only behavior)
+  In rustyjack-core/src/services/wifi.rs, extend with:
+
+    pub struct WifiScanRequest { pub interface: String, pub timeout_ms: u64 }
+    pub struct WifiConnectRequest { pub interface: String, pub ssid: String, pub psk: Option<String>, pub timeout_ms: u64 }
+
+    pub fn scan(req: WifiScanRequest, on_progress: impl FnMut(u8,&str)) -> Result<Value, ServiceError>;
+    pub fn connect(req: WifiConnectRequest, on_progress: impl FnMut(u8,&str)) -> Result<Value, ServiceError>;
+    pub fn disconnect(interface: &str) -> Result<bool, ServiceError>;
+
+  Implementation guidance:
+    - Reuse existing netlink/wpa logic currently in core/operations or wireless_native.
+    - Keep the service API synchronous; daemon calls it via spawn_blocking and bridges progress via a channel,
+      as already done in scan/update jobs.
+
+4.2.4 Daemon jobs: wire service calls + progress + cancellation
+  Add:
+    rustyjack-daemon/src/jobs/kinds/wifi_scan.rs
+    rustyjack-daemon/src/jobs/kinds/wifi_connect.rs
+
+  Follow the existing scan/update pattern:
+    - spawn_blocking around the service call
+    - mpsc channel for (percent,message)
+    - cancellation: if cancel.is_cancelled() then return DaemonError Cancelled
+    - locks: require LockKind::Wifi for both jobs
+
+4.2.5 Daemon endpoints: idempotent disconnect
+  Implement RequestBody::WifiDisconnect:
+    - validate interface name
+    - call services::wifi::disconnect
+    - if already disconnected: return Ok { disconnected:false } (or true, but document it)
+
+4.2.6 UI: migrate callsites
+  Replace legacy CoreDispatch usage for Wi‑Fi with:
+    - client.job_start(JobKind::WifiScan{...})
+    - poll job_status for progress
+    - client.job_start(JobKind::WifiConnect{...})
+    - client.wifi_disconnect(...)
+
+-------------------------------------------------------------------------------
+4.3 Step 3 — Hotspot subsystem (start/stop + client list)
+-------------------------------------------------------------------------------
+
+Endpoints:
+  - HotspotStart (job)
+  - HotspotStop (idempotent)
+  - HotspotClientsList (already exists)
+  - (Optional) HotspotBlacklistSet, HotspotDisconnectClient
+
+Core services additions:
+  - rustyjack-core/src/services/hotspot.rs:
+      pub fn start(req, on_progress) -> Result<Value, ServiceError>
+      pub fn stop() -> Result<bool, ServiceError>
+
+Daemon:
+  - Add JobKind::HotspotStart
+  - required_locks() returns LockKind::Wifi (and/or Portal if it uses it)
+  - endpoint gating: Operator
+
+UI:
+  - call explicit endpoints; remove legacy.
+
+-------------------------------------------------------------------------------
+4.4 Step 4 — Mount subsystem (list/mount/unmount as jobs)
+-------------------------------------------------------------------------------
+
+Endpoints:
+  - MountList (read-only)
+  - MountStart (job)
+  - UnmountStart (job)
+  - BlockDevicesList already exists, reuse it
+
+Core services:
+  - You already have services/mount.rs using lsblk/mount/umount today.
+  - Keep binaries for now (per phase constraints), but:
+      - move any remaining usage out of UI
+      - add strict path allowlists:
+          • only mount under /media/rustyjack or /mnt/rustyjack (pick one)
+          • refuse arbitrary mountpoints
+
+Daemon:
+  - Add JobKinds for mount/unmount, lock LockKind::Mount.
+
+-------------------------------------------------------------------------------
+4.5 Step 5 — Portal subsystem (start/stop/status)
+-------------------------------------------------------------------------------
+
+Add core services:
+  - rustyjack-core/src/services/portal.rs (currently missing):
+      pub fn start(cfg, on_progress) -> Result<Value, ServiceError>
+      pub fn stop() -> Result<bool, ServiceError>
+      pub fn status() -> Result<Value, ServiceError>
+
+Daemon:
+  - Add endpoints PortalStart/PortalStop/PortalStatus
+  - Add LockKind::Portal usage for PortalStart jobs
+
+UI:
+  - replace any legacy portal commands.
+
+-------------------------------------------------------------------------------
+4.6 Step 6 — Finish “client robustness” and UI bridge quality
+-------------------------------------------------------------------------------
+
+6.1 Add request timeouts in rustyjack-client
+  In rustyjack-client/src/client.rs:
+    - Wrap write_frame/read_frame for each request in tokio::time::timeout.
+    - Return a typed ClientError::Timeout.
+
+6.2 Add reconnect + backoff
+  - Keep DaemonClient as a thin connection + request object.
+  - Add a new wrapper:
+      pub struct DaemonClientPool { path: PathBuf, inner: Mutex<Option<DaemonClient>> }
+    with:
+      async fn with_client<F, Fut, T>(&self, f: F) -> Result<T>
+      where it reconnects on io::Error::BrokenPipe / ConnectionReset / NotConnected.
+
+6.3 UI: store the client pool once
+  - In rustyjack-ui/src/core.rs:
+      pub struct CoreBridge { client: DaemonClientPool, root: PathBuf }
+  - Stop reconnecting per call.
+
+-------------------------------------------------------------------------------
+4.7 Step 7 — Harden rustyjack-ui.service to match roadmap
+-------------------------------------------------------------------------------
+
+Edit rustyjack-ui.service:
+  Add:
+    ProtectSystem=strict
+    ProtectHome=true
+    RestrictRealtime=true
+    MemoryDenyWriteExecute=true
+    SystemCallArchitectures=native
+
+Confirm:
+  - UI still has access to:
+      /run/rustyjack/rustyjackd.sock   (via supplementary group)
+      SPI/GPIO devices (via supplementary groups)
+      /var/lib/rustyjack (WorkingDirectory)
+
+================================================================================
+SECTION 5 — Definition of “complete” after implementing the above
+================================================================================
+
+You can consider the roadmap fully implemented when:
+
+  [ ] UI uses NO CoreDispatch in normal operation.
+  [ ] All privileged operations the UI needs have explicit endpoints or job kinds.
+  [ ] Long operations are jobs with progress and cancellation.
+  [ ] Endpoints validate inputs + apply idempotency rules.
+  [ ] required_tier mapping is per-operation and CoreDispatch is removed or feature-gated.
+  [ ] rustyjack-client has request timeouts + reconnect logic.
+  [ ] rustyjack-ui.service includes the same class of hardening as the daemon unit.
+
+Appendix A — Current daemon RequestBody match coverage (for quick reference)
+-------------------------------------------------------------------------------
+Implemented request arms in daemon dispatch.rs:
+  Health, Version, Status, SystemStatusGet, DiskUsageGet, SystemReboot, SystemShutdown, SystemSync, HostnameRandomizeNow, BlockDevicesList, SystemLogsGet, WifiCapabilitiesGet, HotspotWarningsGet, HotspotDiagnosticsGet, HotspotClientsList, GpioDiagnosticsGet, CoreDispatch, JobStart, JobStatus, JobCancel
+
+Appendix B — UI hardening flags currently present
+-------------------------------------------------------------------------------
+  NoNewPrivileges: True
+  PrivateTmp:      True
+  ProtectSystem:   False   (missing is OK but not roadmap-complete)
+  ProtectHome:     False   (missing is OK but not roadmap-complete)
+
+END OF REPORT
