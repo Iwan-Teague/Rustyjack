@@ -4,7 +4,6 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
     sync::mpsc::{self, TryRecvError},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -16,17 +15,19 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use rustyjack_core::anti_forensics::perform_complete_purge;
-use rustyjack_core::cli::{
+use rustyjack_commands::{
     Commands, DiscordCommand, DiscordSendArgs, DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand,
     EthernetDiscoverArgs, EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs,
-    HardwareCommand, HotspotCommand, HotspotStartArgs, LootCommand, LootReadArgs, MitmCommand,
-    MitmStartArgs, NotifyCommand, ReverseCommand, ReverseLaunchArgs, SystemCommand, WifiCommand,
-    WifiDeauthArgs, WifiDisconnectArgs,
+    HardwareCommand, HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs,
+    LootCommand, LootReadArgs, MitmCommand,
+    MitmStartArgs, NotifyCommand, ReverseCommand, ReverseLaunchArgs, SystemCommand,
+    SystemFdeMigrateArgs, SystemFdePrepareArgs, UsbMountArgs, UsbMountMode, UsbUnmountArgs,
+    WifiCommand, WifiDeauthArgs, WifiDisconnectArgs, WifiMacRandomizeArgs, WifiMacRestoreArgs,
+    WifiMacSetArgs, WifiMacSetVendorArgs, WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs,
+    WifiStatusArgs, WifiTxPowerArgs,
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
-    WifiRouteCommand, WifiRouteEnsureArgs, WifiScanArgs, WifiStatusArgs,
+    WifiProfileShowArgs,
 };
-use rustyjack_core::{ensure_default_wifi_profiles, InterfaceSummary};
 use rustyjack_encryption::{clear_encryption_key, set_encryption_key};
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
@@ -35,19 +36,9 @@ use zeroize::Zeroize;
 use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
 #[cfg(target_os = "linux")]
-use rustyjack_netlink::{
-    allowed_ap_channels, peek_last_start_ap_error, take_last_ap_error, take_last_start_ap_error,
-    RfkillManager, WirelessManager,
-};
-#[cfg(target_os = "linux")]
-use rustyjack_wireless::crack::{
+use rustyjack_wpa::crack::{
     generate_common_passwords, generate_ssid_passwords, CrackProgress, CrackResult, CrackerConfig,
     WpaCracker,
-};
-#[cfg(target_os = "linux")]
-use rustyjack_wireless::{
-    hotspot_disconnect_client, hotspot_leases, hotspot_set_blacklist, read_regdom_info,
-    take_last_hotspot_warning,
 };
 
 use crate::{
@@ -280,7 +271,7 @@ impl App {
             return Ok(None);
         }
 
-        if !interface_has_ip(&iface) {
+        if !self.interface_has_ip(&iface) {
             self.show_message(
                 title,
                 [
@@ -405,10 +396,18 @@ impl App {
             let button = self.buttons.wait_for_press()?;
             match self.map_button(button) {
                 ButtonAction::Select => {
-                    // Run reboot command and then exit
-                    let _ = Command::new("systemctl").arg("reboot").status();
-                    // If the command succeeded the system will reboot; exit the app regardless.
-                    std::process::exit(0);
+                    match self
+                        .core
+                        .dispatch(Commands::System(SystemCommand::Reboot))
+                    {
+                        Ok(_) => {
+                            std::process::exit(0);
+                        }
+                        Err(err) => {
+                            let msg = shorten_for_display(&err.to_string(), 90);
+                            self.show_message("Reboot Failed", [msg])?;
+                        }
+                    }
                 }
                 ButtonAction::Back | ButtonAction::MainMenu => {
                     // Cancel and return
@@ -688,6 +687,33 @@ struct UsbDevice {
     transport: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum UsbAccessRequirement {
+    ReadableOk,
+    RequireWritable,
+}
+
+impl UsbAccessRequirement {
+    fn mount_mode(self) -> UsbMountMode {
+        match self {
+            UsbAccessRequirement::ReadableOk => UsbMountMode::ReadOnly,
+            UsbAccessRequirement::RequireWritable => UsbMountMode::ReadWrite,
+        }
+    }
+
+    fn needs_write(self) -> bool {
+        matches!(self, UsbAccessRequirement::RequireWritable)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MountEntry {
+    device: String,
+    mount_point: String,
+    fs_type: String,
+    options: String,
+}
+
 impl App {
     pub fn new() -> Result<Self> {
         let core = CoreBridge::with_root(None)?;
@@ -723,11 +749,6 @@ impl App {
         app.try_load_saved_key();
         rustyjack_encryption::set_wifi_profile_encryption(app.wifi_encryption_active());
         rustyjack_encryption::set_loot_encryption(app.loot_encryption_active());
-        if let Ok(count) = ensure_default_wifi_profiles(&app.root) {
-            if count > 0 {
-                log::info!("Seeded {} default WiFi profile(s)", count);
-            }
-        }
         Ok(app)
     }
 
@@ -777,7 +798,11 @@ impl App {
                     ButtonAction::Select => {
                         if let Some(entry) = entries.get(self.menu_state.selection) {
                             let action = entry.action.clone();
-                            self.execute_action(action)?;
+                            if let Err(e) = self.execute_action(action) {
+                                log::error!("Menu action failed: {:#}", e);
+                                let msg = shorten_for_display(&e.to_string(), 90);
+                                self.show_message("Error", ["Operation failed", &msg])?;
+                            }
                         }
                     }
                     ButtonAction::Refresh => {
@@ -791,6 +816,7 @@ impl App {
     }
 
     fn render_menu(&mut self) -> Result<Vec<MenuEntry>> {
+        let status = self.status_overlay();
         let mut entries = self.menu.entries(self.menu_state.current_id())?;
 
         // Dynamic label updates based on current settings
@@ -900,8 +926,7 @@ impl App {
                     entry.label = format!("WiFi Profiles [{}]", state);
                 }
                 MenuAction::ToggleDnsSpoof => {
-                    use rustyjack_core::system::dns_spoof_running;
-                    let is_running = dns_spoof_running();
+                    let is_running = status.dns_spoof_running;
                     let state = if is_running { "ON" } else { "OFF" };
                     entry.label = format!("DNS Spoof [{}]", state);
                 }
@@ -918,7 +943,6 @@ impl App {
         if self.menu_state.selection >= entries.len() {
             self.menu_state.selection = entries.len().saturating_sub(1);
         }
-        let status = self.status_overlay();
         // When there are more entries than fit on-screen, show a sliding window
         // so the selected item is always visible. MenuState::offset tracks the
         // first item index in the current view.
@@ -1577,8 +1601,16 @@ impl App {
     }
 
     fn restart_system(&mut self) -> Result<()> {
-        Command::new("reboot").status().ok();
-        Ok(())
+        match self
+            .core
+            .dispatch(Commands::System(SystemCommand::Reboot))
+        {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                let msg = shorten_for_display(&err.to_string(), 90);
+                self.show_message("Reboot Failed", [msg])
+            }
+        }
     }
 
     /// Attempt to wipe free memory then power off the device.
@@ -1602,10 +1634,6 @@ impl App {
             return Ok(());
         }
 
-        // Sync disks before wiping
-        self.show_progress("Secure Shutdown", ["Syncing disks...", ""])?;
-        let _ = Command::new("sync").status();
-
         // Best-effort memory wipe
         self.show_progress(
             "Secure Shutdown",
@@ -1615,10 +1643,13 @@ impl App {
 
         // Power off
         self.show_progress("Secure Shutdown", ["Powering off now...", ""])?;
-        let _ = Command::new("systemctl")
-            .arg("poweroff")
-            .status()
-            .or_else(|_| Command::new("shutdown").args(["-h", "now"]).status());
+        if let Err(err) = self
+            .core
+            .dispatch(Commands::System(SystemCommand::Poweroff))
+        {
+            let msg = shorten_for_display(&err.to_string(), 90);
+            self.show_message("Shutdown Failed", [msg])?;
+        }
 
         Ok(())
     }
@@ -1940,13 +1971,12 @@ impl App {
                 return Ok(());
             }
 
-            // Directly load profile from disk without connecting
-            use rustyjack_core::system::load_wifi_profile;
-            let profile_data = match load_wifi_profile(&self.root, ssid) {
-                Ok(Some(stored)) => stored,
-                Ok(None) => {
-                    return self.show_message("Saved Networks", ["Profile not found"]);
-                }
+            let (_, data) = match self.core.dispatch(Commands::Wifi(WifiCommand::Profile(
+                WifiProfileCommand::Show(WifiProfileShowArgs {
+                    ssid: ssid.to_string(),
+                }),
+            ))) {
+                Ok(res) => res,
                 Err(e) => {
                     return self.show_message(
                         "Saved Networks",
@@ -1958,10 +1988,9 @@ impl App {
                 }
             };
 
-            let pwd = profile_data
-                .profile
-                .password
-                .as_deref()
+            let pwd = data
+                .get("password")
+                .and_then(|value| value.as_str())
                 .unwrap_or("<no password>");
 
             self.show_message(
@@ -2528,7 +2557,7 @@ impl App {
             }
         }
 
-        let Some(usb_root) = self.select_usb_mount()? else {
+        let Some(usb_root) = self.select_usb_mount(UsbAccessRequirement::RequireWritable)? else {
             return Ok(());
         };
 
@@ -2674,56 +2703,26 @@ impl App {
     }
 
     fn list_usb_devices(&self) -> Result<Vec<UsbDevice>> {
-        let output = Command::new("lsblk")
-            .args(["-nrpo", "NAME,RM,SIZE,MODEL,TRAN"])
-            .output()
-            .context("listing block devices")?;
-        if !output.status.success() {
-            bail!("lsblk failed with status {:?}", output.status.code());
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut devices = Vec::new();
-        for line in stdout.lines() {
-            let mut parts: Vec<String> = line.split_whitespace().map(|s| s.to_string()).collect();
-            if parts.len() < 4 {
+        let devices = self.core.block_devices().context("listing block devices")?;
+        let mut usb_devices = Vec::new();
+        for dev in devices {
+            let is_usb = dev.removable || dev.transport.eq_ignore_ascii_case("usb");
+            if !is_usb {
                 continue;
             }
-            let transport = parts.pop().unwrap_or_default();
-            let removable = parts.get(1).map(|s| s == "1").unwrap_or(false);
-            let name = parts.get(0).cloned().unwrap_or_default();
-
-            // Skip known system devices
-            if name.starts_with("/dev/mmcblk")
-                || name.starts_with("/dev/loop")
-                || name.starts_with("/dev/ram")
-            {
-                continue;
-            }
-
-            // Accept if EITHER removable=1 OR transport=usb (more permissive)
-            let is_usb_transport = transport.eq_ignore_ascii_case("usb");
-            if !removable && !is_usb_transport {
-                continue;
-            }
-
-            let size = parts.get(2).cloned().unwrap_or_default();
-            let model = if parts.len() > 3 {
-                parts[3..].join(" ")
-            } else {
-                String::new()
-            };
-            devices.push(UsbDevice {
-                name,
-                size,
+            let model = dev.model.trim().to_string();
+            usb_devices.push(UsbDevice {
+                name: dev.name,
+                size: dev.size,
                 model: if model.is_empty() {
                     "Unknown".to_string()
                 } else {
                     model
                 },
-                transport,
+                transport: dev.transport,
             });
         }
-        Ok(devices)
+        Ok(usb_devices)
     }
 
     /// Turn off all encryption toggles with a simple progress display.
@@ -3170,189 +3169,81 @@ impl App {
     }
 
     fn run_usb_prepare(&mut self, device: &str) -> Result<()> {
-        let script = self.root.join("scripts").join("fde_prepare_usb.sh");
-        if !script.exists() {
-            return self.show_message(
-                "Full Disk Encryption",
-                [
-                    "Missing script",
-                    &shorten_for_display(&script.to_string_lossy(), 36),
-                ],
-            );
-        }
+        self.show_progress(
+            "Full Disk Encryption",
+            ["Preparing USB key...", "Do not remove power/USB"],
+        )?;
 
-        let mut cmd = Command::new("bash");
-        cmd.arg(&script)
-            .arg(device)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
+        let args = SystemFdePrepareArgs {
+            device: device.to_string(),
+        };
+        let (msg, data) = match self
+            .core
+            .dispatch(Commands::System(SystemCommand::FdePrepare(args)))
+        {
+            Ok(result) => result,
+            Err(err) => {
                 return self.show_message(
                     "Full Disk Encryption",
-                    ["Failed to start", &shorten_for_display(&e.to_string(), 90)],
+                    ["Failed to start", &shorten_for_display(&err.to_string(), 90)],
                 );
             }
         };
 
-        let status = self.stats.snapshot();
-        let mut step = 0usize;
-        let total_steps = 6usize; // unmount, wipe, partition, mkfs, key, sync
-        let mut stdout_lines: Vec<String> = Vec::new();
-
-        if let Some(stdout) = child.stdout.take() {
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines().flatten() {
-                stdout_lines.push(line.clone());
-                step = (step + 1).min(total_steps);
-                let progress = ((step as f32 / total_steps as f32) * 100.0).min(95.0);
-                self.display.draw_progress_dialog(
-                    "Full Disk Encryption",
-                    "Preparing USB key...\nDo not remove power/USB",
-                    progress,
-                    &status,
-                )?;
-            }
+        let stdout = data
+            .get("stdout")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut lines: Vec<String> = stdout
+            .lines()
+            .map(|l| shorten_for_display(l, 32))
+            .collect();
+        if lines.is_empty() {
+            lines.push(msg);
         }
-
-        let stderr = if let Some(mut err) = child.stderr.take() {
-            let mut buf = String::new();
-            let _ = err.read_to_string(&mut buf);
-            buf
-        } else {
-            String::new()
-        };
-
-        let exit = child.wait();
-
-        self.display.draw_progress_dialog(
-            "Full Disk Encryption",
-            "Finishing...",
-            100.0,
-            &status,
-        )?;
-
-        match exit {
-            Ok(status_code) if status_code.success() => {
-                let mut to_show: Vec<String> = stdout_lines
-                    .iter()
-                    .map(|l| shorten_for_display(l, 32))
-                    .collect();
-                if to_show.is_empty() {
-                    to_show.push("USB prepared".to_string());
-                }
-                self.show_message("Full Disk Encryption", to_show)
-            }
-            Ok(status_code) => {
-                let msg = if !stderr.trim().is_empty() {
-                    shorten_for_display(stderr.trim(), 90)
-                } else {
-                    format!("Script failed: {status_code}")
-                };
-                self.show_message("Full Disk Encryption", [msg])
-            }
-            Err(e) => self.show_message(
-                "Full Disk Encryption",
-                ["Process error", &shorten_for_display(&e.to_string(), 90)],
-            ),
-        }
+        self.show_message("Full Disk Encryption", lines)
     }
     #[allow(dead_code)]
     fn run_fde_migrate(&mut self, target: &str, keyfile: &str, execute: bool) -> Result<()> {
-        let script = self.root.join("scripts").join("fde_migrate_root.sh");
-        if !script.exists() {
-            return self.show_message(
-                "Full Disk Encryption",
-                [
-                    "Missing script",
-                    &shorten_for_display(&script.to_string_lossy(), 36),
-                ],
-            );
-        }
+        self.show_progress(
+            "Full Disk Encryption",
+            ["Migrating root...", "Do not remove power/USB"],
+        )?;
 
-        let mut cmd = Command::new("bash");
-        cmd.arg(&script)
-            .arg("--target")
-            .arg(target)
-            .arg("--keyfile")
-            .arg(keyfile)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if execute {
-            cmd.arg("--execute");
-        }
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
+        let args = SystemFdeMigrateArgs {
+            target: target.to_string(),
+            keyfile: keyfile.to_string(),
+            execute,
+        };
+        let (msg, data) = match self
+            .core
+            .dispatch(Commands::System(SystemCommand::FdeMigrate(args)))
+        {
+            Ok(result) => result,
+            Err(err) => {
                 return self.show_message(
                     "Full Disk Encryption",
-                    ["Failed to start", &shorten_for_display(&e.to_string(), 90)],
+                    ["Failed to start", &shorten_for_display(&err.to_string(), 90)],
                 );
             }
         };
 
-        let status = self.stats.snapshot();
-        let mut progress: f32 = 0.0;
-
-        if let Some(stdout) = child.stdout.take() {
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines().flatten() {
-                if let Some(rest) = line.strip_prefix("PROGRESS ") {
-                    if let Ok(val) = rest.trim().parse::<f32>() {
-                        progress = val.min(99.0);
-                    }
-                }
-                self.display.draw_progress_dialog(
-                    "Full Disk Encryption",
-                    "Migrating root...
-Do not remove power/USB",
-                    progress,
-                    &status,
-                )?;
-            }
+        let stderr = data
+            .get("stderr")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !stderr.trim().is_empty() {
+            return self.show_message(
+                "Full Disk Encryption",
+                [shorten_for_display(stderr.trim(), 90)],
+            );
         }
 
-        let stderr = if let Some(mut err) = child.stderr.take() {
-            let mut buf = String::new();
-            let _ = err.read_to_string(&mut buf);
-            buf
-        } else {
-            String::new()
-        };
-
-        let exit = child.wait();
-        self.display.draw_progress_dialog(
-            "Full Disk Encryption",
-            "Finishing...",
-            100.0,
-            &status,
-        )?;
-
-        match exit {
-            Ok(code) if code.success() => self.show_message(
-                "Full Disk Encryption",
-                [if execute {
-                    "Migration completed".to_string()
-                } else {
-                    "Dry run completed".to_string()
-                }],
-            ),
-            Ok(code) => {
-                let msg = if !stderr.trim().is_empty() {
-                    shorten_for_display(stderr.trim(), 90)
-                } else {
-                    format!("Script failed: {code}")
-                };
-                self.show_message("Full Disk Encryption", [msg])
-            }
-            Err(e) => self.show_message(
-                "Full Disk Encryption",
-                ["Process error", &shorten_for_display(&e.to_string(), 90)],
-            ),
+        let mut lines = vec![msg];
+        if execute {
+            lines.push("Reboot required".to_string());
         }
+        self.show_message("Full Disk Encryption", lines)
     }
 
     fn set_webhook_encryption(&mut self, enable: bool, show_msg: bool) -> Result<()> {
@@ -3516,17 +3407,18 @@ Do not remove power/USB",
         };
 
         let dev = &devices[choice];
-        let mut mount = self.resolve_usb_mount_for_device(&dev.name)?;
+        let mut mount =
+            self.resolve_usb_mount_for_device(&dev.name, UsbAccessRequirement::RequireWritable)?;
         if mount.is_none() {
             let dev_name = dev.name.trim_start_matches("/dev/").to_string();
-            mount = self.try_auto_mount_usb(&[dev_name])?;
+            mount = self.try_auto_mount_usb(&[dev_name], UsbAccessRequirement::RequireWritable)?;
         }
 
         let Some(path) = mount else {
             self.show_message(
                 title,
                 [
-                    "USB device found but not mounted",
+                    "USB device not writable or mounted",
                     "Check filesystem and retry",
                 ],
             )?;
@@ -3536,14 +3428,18 @@ Do not remove power/USB",
         Ok(Some((dev.clone(), path)))
     }
 
-    fn resolve_usb_mount_for_device(&self, device: &str) -> Result<Option<PathBuf>> {
+    fn resolve_usb_mount_for_device(
+        &self,
+        device: &str,
+        req: UsbAccessRequirement,
+    ) -> Result<Option<PathBuf>> {
         let dev_name = device.trim_start_matches("/dev/");
         let mounts = self.read_mount_points()?;
-        for (dev, mount_point) in mounts {
-            let mounted_name = dev.trim_start_matches("/dev/");
+        for mount in mounts {
+            let mounted_name = mount.device.trim_start_matches("/dev/");
             if mounted_name.starts_with(dev_name) {
-                let path = PathBuf::from(mount_point);
-                if self.is_writable_mount(&path) {
+                let path = PathBuf::from(mount.mount_point);
+                if self.mount_access_ok(&path, req) {
                     return Ok(Some(path));
                 }
             }
@@ -3552,403 +3448,14 @@ Do not remove power/USB",
     }
 
     fn build_log_export(&self) -> Result<String> {
-        let mut out = String::new();
-
-        Self::append_command_output(
-            &mut out,
-            "journalctl (rustyjack.service)",
-            "journalctl",
-            &[
-                "-u",
-                "rustyjack.service",
-                "-b",
-                "--no-pager",
-                "-o",
-                "short-precise",
-            ],
-        );
-        Self::append_command_output(
-            &mut out,
-            "journalctl (kernel)",
-            "journalctl",
-            &["-k", "-b", "--no-pager", "-o", "short-precise"],
-        );
-        Self::append_command_output(
-            &mut out,
-            "journalctl (system)",
-            "journalctl",
-            &["-b", "--no-pager", "-o", "short-precise"],
-        );
-        Self::append_command_output(
-            &mut out,
-            "journalctl (NetworkManager)",
-            "journalctl",
-            &[
-                "-u",
-                "NetworkManager",
-                "-b",
-                "--no-pager",
-                "-o",
-                "short-precise",
-            ],
-        );
-        Self::append_command_output(
-            &mut out,
-            "journalctl (wpa_supplicant)",
-            "journalctl",
-            &[
-                "-u",
-                "wpa_supplicant",
-                "-b",
-                "--no-pager",
-                "-o",
-                "short-precise",
-            ],
-        );
-
-        self.append_sysfs_network_snapshot(&mut out);
-        self.append_rfkill_status(&mut out);
-        self.append_wpa_preflight(&mut out);
-        self.append_wpa_supplicant_status(&mut out);
-        self.append_netlink_routes(&mut out);
-        Self::append_file_section(&mut out, "/etc/resolv.conf");
-        Self::append_file_section(&mut out, "/proc/net/route");
-        Self::append_file_section(&mut out, "/proc/net/arp");
-        Self::append_file_section(&mut out, "/proc/net/dev");
-        Self::append_file_section_path(
-            &mut out,
-            &self.root.join("loot").join("logs").join("watchdog.log"),
-        );
-
-        Ok(out)
-    }
-
-    fn append_sysfs_network_snapshot(&self, buf: &mut String) {
-        buf.push_str("\n===== sysfs network interfaces =====\n");
-        let entries = match fs::read_dir("/sys/class/net") {
-            Ok(e) => e,
-            Err(err) => {
-                buf.push_str(&format!("ERROR reading /sys/class/net: {err}\n"));
-                return;
-            }
-        };
-
-        for entry in entries.flatten() {
-            let iface = entry.file_name().to_string_lossy().to_string();
-            if iface == "lo" {
-                continue;
-            }
-            let base = Path::new("/sys/class/net").join(&iface);
-            let read_trim = |path: &Path| -> Option<String> {
-                fs::read_to_string(path).ok().map(|v| v.trim().to_string())
-            };
-            let oper = read_trim(&base.join("operstate")).unwrap_or_else(|| "unknown".to_string());
-            let carrier = read_trim(&base.join("carrier")).unwrap_or_else(|| "unknown".to_string());
-            let mac = read_trim(&base.join("address")).unwrap_or_else(|| "unknown".to_string());
-            let mtu = read_trim(&base.join("mtu")).unwrap_or_else(|| "unknown".to_string());
-            let kind = if base.join("wireless").exists() {
-                "wireless"
-            } else {
-                "wired"
-            };
-            buf.push_str(&format!(
-                "{iface}: kind={kind} operstate={oper} carrier={carrier} mac={mac} mtu={mtu}\n"
-            ));
-        }
-    }
-
-    fn append_rfkill_status(&self, buf: &mut String) {
-        buf.push_str("\n===== rfkill status =====\n");
-        let entries = match fs::read_dir("/sys/class/rfkill") {
-            Ok(entries) => entries,
-            Err(err) => {
-                buf.push_str(&format!("ERROR reading /sys/class/rfkill: {err}\n"));
-                return;
-            }
-        };
-
-        let mut found = false;
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with("rfkill") {
-                continue;
-            }
-            found = true;
-            let base = entry.path();
-            let read_trim = |path: &Path| -> Option<String> {
-                fs::read_to_string(path).ok().map(|v| v.trim().to_string())
-            };
-            let rf_type = read_trim(&base.join("type")).unwrap_or_else(|| "unknown".to_string());
-            let rf_name = read_trim(&base.join("name")).unwrap_or_else(|| "unknown".to_string());
-            let soft = read_trim(&base.join("soft")).unwrap_or_else(|| "unknown".to_string());
-            let hard = read_trim(&base.join("hard")).unwrap_or_else(|| "unknown".to_string());
-            buf.push_str(&format!(
-                "{}: type={} name={} soft={} hard={}\n",
-                name, rf_type, rf_name, soft, hard
-            ));
-        }
-        if !found {
-            buf.push_str("No rfkill devices found\n");
-        }
-    }
-
-    fn append_wpa_supplicant_status(&self, buf: &mut String) {
-        buf.push_str("\n===== wpa_supplicant status =====\n");
-
-        #[cfg(target_os = "linux")]
-        {
-            let mut found = false;
-            if let Ok(entries) = fs::read_dir("/sys/class/net") {
-                for entry in entries.flatten() {
-                    let iface = entry.file_name().to_string_lossy().to_string();
-                    if iface == "lo" {
-                        continue;
-                    }
-                    if !Path::new("/sys/class/net")
-                        .join(&iface)
-                        .join("wireless")
-                        .exists()
-                    {
-                        continue;
-                    }
-                    found = true;
-                    match rustyjack_netlink::WpaManager::new(&iface) {
-                        Ok(wpa) => match wpa.status() {
-                            Ok(status) => {
-                                buf.push_str(&format!(
-                                    "{}: state={} ssid={:?} bssid={:?} freq={:?} ip={:?}\n",
-                                    iface,
-                                    status.wpa_state,
-                                    status.ssid,
-                                    status.bssid,
-                                    status.freq,
-                                    status.ip_address
-                                ));
-                            }
-                            Err(err) => {
-                                buf.push_str(&format!(
-                                    "{}: ERROR reading status: {}\n",
-                                    iface, err
-                                ));
-                            }
-                        },
-                        Err(err) => {
-                            buf.push_str(&format!(
-                                "{}: ERROR opening control: {}\n",
-                                iface, err
-                            ));
-                        }
-                    }
-                }
-            }
-            if !found {
-                buf.push_str("No wireless interfaces found\n");
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            buf.push_str("Not supported on this platform\n");
-        }
-    }
-
-    fn append_wpa_preflight(&self, buf: &mut String) {
-        buf.push_str("\n===== wpa_supplicant preflight =====\n");
-
-        #[cfg(target_os = "linux")]
-        {
-            use rustyjack_netlink::ProcessManager;
-
-            let mut found = false;
-            let pm = ProcessManager::new();
-            if let Ok(entries) = fs::read_dir("/sys/class/net") {
-                for entry in entries.flatten() {
-                    let iface = entry.file_name().to_string_lossy().to_string();
-                    if iface == "lo" {
-                        continue;
-                    }
-                    if !Path::new("/sys/class/net")
-                        .join(&iface)
-                        .join("wireless")
-                        .exists()
-                    {
-                        continue;
-                    }
-                    found = true;
-
-                    let candidates = rustyjack_netlink::wpa_control_socket_status(&iface);
-                    if candidates.is_empty() {
-                        buf.push_str(&format!("{iface}: no control socket candidates\n"));
-                    } else {
-                        let rendered = candidates
-                            .iter()
-                            .map(|(path, exists)| {
-                                format!(
-                                    "{}={}",
-                                    path.display(),
-                                    if *exists { "ok" } else { "missing" }
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        buf.push_str(&format!("{iface}: ctrl_sockets: {rendered}\n"));
-                    }
-
-                    match pm.find_by_pattern("wpa_supplicant") {
-                        Ok(list) => {
-                            let matches: Vec<String> = list
-                                .into_iter()
-                                .filter(|p| p.cmdline.contains(&iface))
-                                .map(|p| format!("pid={} cmd={}", p.pid, p.cmdline))
-                                .collect();
-                            if matches.is_empty() {
-                                buf.push_str(&format!("{iface}: wpa_supplicant process: none\n"));
-                            } else {
-                                buf.push_str(&format!(
-                                    "{iface}: wpa_supplicant process: {}\n",
-                                    matches.join(" | ")
-                                ));
-                            }
-                        }
-                        Err(err) => {
-                            buf.push_str(&format!(
-                                "{iface}: wpa_supplicant process lookup error: {err}\n"
-                            ));
-                        }
-                    }
-                }
-            }
-            if !found {
-                buf.push_str("No wireless interfaces found\n");
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            buf.push_str("Not supported on this platform\n");
-        }
-    }
-
-    fn append_netlink_routes(&self, buf: &mut String) {
-        buf.push_str("\n===== netlink routes by interface =====\n");
-
-        #[cfg(target_os = "linux")]
-        {
-            use rustyjack_core::netlink_helpers::{netlink_list_interfaces, netlink_list_routes};
-
-            let interfaces = match netlink_list_interfaces() {
-                Ok(list) => list,
-                Err(err) => {
-                    buf.push_str(&format!("ERROR listing interfaces: {err}\n"));
-                    return;
-                }
-            };
-            let routes = match netlink_list_routes() {
-                Ok(list) => list,
-                Err(err) => {
-                    buf.push_str(&format!("ERROR listing routes: {err}\n"));
-                    return;
-                }
-            };
-
-            let mut iface_map = std::collections::HashMap::new();
-            for iface in &interfaces {
-                iface_map.insert(iface.index, iface.name.clone());
-            }
-
-            let mut routes_by_iface: std::collections::HashMap<String, Vec<String>> =
-                std::collections::HashMap::new();
-            for route in &routes {
-                let iface_name = route
-                    .interface_index
-                    .and_then(|idx| iface_map.get(&idx).cloned())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let dst = route
-                    .destination
-                    .map(|d| d.to_string())
-                    .unwrap_or_else(|| "default".to_string());
-                let gw = route
-                    .gateway
-                    .map(|g| g.to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                let metric = route
-                    .metric
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                let entry = format!(
-                    "dst={}/{} gw={} metric={}",
-                    dst, route.prefix_len, gw, metric
-                );
-                routes_by_iface
-                    .entry(iface_name)
-                    .or_default()
-                    .push(entry);
-            }
-
-            let mut iface_names: Vec<String> = routes_by_iface.keys().cloned().collect();
-            iface_names.sort();
-            if iface_names.is_empty() {
-                buf.push_str("No routes found\n");
-                return;
-            }
-            for name in iface_names {
-                buf.push_str(&format!("{}:\n", name));
-                if let Some(entries) = routes_by_iface.get(&name) {
-                    for entry in entries {
-                        buf.push_str(&format!("  {}\n", entry));
-                    }
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            buf.push_str("Not supported on this platform\n");
-        }
-    }
-
-    fn append_command_output(buf: &mut String, title: &str, program: &str, args: &[&str]) {
-        buf.push_str(&format!("\n===== {title} =====\n"));
-        let output = Command::new(program).args(args).output();
-        match output {
-            Ok(output) => {
-                if !output.status.success() {
-                    buf.push_str(&format!(
-                        "ERROR: command exited with {:?}\n",
-                        output.status.code()
-                    ));
-                }
-                buf.push_str(&String::from_utf8_lossy(&output.stdout));
-                if !output.stderr.is_empty() {
-                    buf.push_str("\n[stderr]\n");
-                    buf.push_str(&String::from_utf8_lossy(&output.stderr));
-                }
-            }
-            Err(err) => {
-                buf.push_str(&format!("ERROR: failed to run {program}: {err}\n"));
-            }
-        }
-    }
-
-    fn append_file_section(buf: &mut String, path: &str) {
-        buf.push_str(&format!("\n===== {path} =====\n"));
-        match fs::read_to_string(path) {
-            Ok(contents) => buf.push_str(&contents),
-            Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
-        }
-    }
-
-    fn append_file_section_path(buf: &mut String, path: &Path) {
-        buf.push_str(&format!("\n===== {} =====\n", path.display()));
-        match fs::read_to_string(path) {
-            Ok(contents) => buf.push_str(&contents),
-            Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
-        }
+        self.core
+            .system_logs()
+            .context("collecting system logs")
     }
 
     fn transfer_to_usb(&mut self) -> Result<()> {
         // Find USB mount point
-        let Some(usb_path) = self.select_usb_mount()? else {
+        let Some(usb_path) = self.select_usb_mount(UsbAccessRequirement::RequireWritable)? else {
             return Ok(());
         };
 
@@ -4023,7 +3530,7 @@ Do not remove power/USB",
         title: &str,
         allowed_ext: Option<&[&str]>,
     ) -> Result<Option<PathBuf>> {
-        let Some(usb_root) = self.select_usb_mount()? else {
+        let Some(usb_root) = self.select_usb_mount(UsbAccessRequirement::ReadableOk)? else {
             return Ok(None);
         };
 
@@ -4160,14 +3667,14 @@ Do not remove power/USB",
 
     #[allow(dead_code)]
     fn find_usb_mount(&self) -> Result<PathBuf> {
-        let all_usb = self.find_all_usb_mounts()?;
+        let all_usb = self.find_all_usb_mounts(UsbAccessRequirement::ReadableOk)?;
         if all_usb.is_empty() {
             bail!("No USB storage drive found. Please insert a USB drive.")
         }
         Ok(all_usb.into_iter().next().unwrap())
     }
 
-    fn find_all_usb_mounts(&self) -> Result<Vec<PathBuf>> {
+    fn find_all_usb_mounts(&self, req: UsbAccessRequirement) -> Result<Vec<PathBuf>> {
         let mut found_mounts = Vec::new();
 
         // First, find USB block devices by checking /sys/block/
@@ -4179,14 +3686,16 @@ Do not remove power/USB",
         // Try to match detected USB devices with mounted filesystems
         for usb_dev in &usb_devices {
             // Check for partitions (e.g., sda1, sdb1) or the device itself
-            for (device, mount_point) in &mounts {
+            for mount in &mounts {
                 // Match if device starts with the USB device name (handles partitions)
                 // e.g., /dev/sda1 starts with "sda"
-                let dev_name = device.strip_prefix("/dev/").unwrap_or(device);
+                let dev_name = mount
+                    .device
+                    .strip_prefix("/dev/")
+                    .unwrap_or(mount.device.as_str());
                 if dev_name.starts_with(usb_dev) {
-                    // Verify it's writable
-                    let path = PathBuf::from(mount_point);
-                    if self.is_writable_mount(&path) && !found_mounts.contains(&path) {
+                    let path = PathBuf::from(&mount.mount_point);
+                    if self.mount_access_ok(&path, req) && !found_mounts.contains(&path) {
                         found_mounts.push(path);
                     }
                 }
@@ -4212,7 +3721,7 @@ Do not remove power/USB",
                             for sub_entry in sub_entries.flatten() {
                                 let sub_path = sub_entry.path();
                                 if sub_path.is_dir()
-                                    && self.is_usb_storage_mount(&sub_path)
+                                    && self.is_usb_storage_mount(&sub_path, req)
                                     && !found_mounts.contains(&sub_path)
                                 {
                                     found_mounts.push(sub_path);
@@ -4220,7 +3729,7 @@ Do not remove power/USB",
                             }
                         }
                         // Also check direct mount
-                        if self.is_usb_storage_mount(&path) && !found_mounts.contains(&path) {
+                        if self.is_usb_storage_mount(&path, req) && !found_mounts.contains(&path) {
                             found_mounts.push(path);
                         }
                     }
@@ -4230,11 +3739,11 @@ Do not remove power/USB",
 
         // If we found USB devices but they're not mounted, try auto-mounting
         if found_mounts.is_empty() && !usb_devices.is_empty() {
-            if let Some(mounted_path) = self.try_auto_mount_usb(&usb_devices)? {
+            if let Some(mounted_path) = self.try_auto_mount_usb(&usb_devices, req)? {
                 found_mounts.push(mounted_path);
             } else {
-                bail!(
-                    "USB device detected ({}) but could not mount. Check device has valid filesystem.",
+                log::warn!(
+                    "USB device detected ({}) but could not mount. Check device filesystem.",
                     usb_devices.join(", ")
                 );
             }
@@ -4243,14 +3752,23 @@ Do not remove power/USB",
         Ok(found_mounts)
     }
 
-    fn select_usb_mount(&mut self) -> Result<Option<PathBuf>> {
-        let all_usb = self.find_all_usb_mounts()?;
+    fn select_usb_mount(&mut self, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
+        let all_usb = self.find_all_usb_mounts(req)?;
 
         if all_usb.is_empty() {
-            self.show_message(
-                "USB",
-                ["No USB drive detected", "Insert a USB drive and retry"],
-            )?;
+            let usb_devices = self.find_usb_block_devices();
+            if usb_devices.is_empty() {
+                self.show_message(
+                    "USB",
+                    ["No USB drive detected", "Insert a USB drive and retry"],
+                )?;
+            } else {
+                let line = match req {
+                    UsbAccessRequirement::RequireWritable => "USB detected but not writable",
+                    UsbAccessRequirement::ReadableOk => "USB device detected but not mounted",
+                };
+                self.show_message("USB", [line, "Check filesystem and retry"])?;
+            }
             return Ok(None);
         }
 
@@ -4275,7 +3793,11 @@ Do not remove power/USB",
     }
 
     /// Attempt to automatically mount a USB device
-    fn try_auto_mount_usb(&self, usb_devices: &[String]) -> Result<Option<PathBuf>> {
+    fn try_auto_mount_usb(
+        &self,
+        usb_devices: &[String],
+        req: UsbAccessRequirement,
+    ) -> Result<Option<PathBuf>> {
         for usb_dev in usb_devices {
             // Check for partitions first
             let sys_dev = Path::new("/sys/block").join(usb_dev);
@@ -4302,24 +3824,50 @@ Do not remove power/USB",
 
             // Try mounting each candidate
             for device in candidates {
-                let mount_point = PathBuf::from("/mnt/rustyjack_usb");
+                let dev_basename = Path::new(&device)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(usb_dev);
+                let request = UsbMountArgs {
+                    device: device.clone(),
+                    mode: req.mount_mode(),
+                    preferred_name: Some(dev_basename.to_string()),
+                };
 
-                // Create mount point
-                let _ = fs::create_dir_all(&mount_point);
-
-                // Try to mount with various common filesystems
-                let mount_result = Command::new("mount")
-                    .arg(&device)
-                    .arg(&mount_point)
-                    .output();
-
-                if mount_result.is_ok() && mount_result.unwrap().status.success() {
-                    // Verify it's writable
-                    if self.is_writable_mount(&mount_point) {
-                        return Ok(Some(mount_point));
-                    } else {
-                        // Unmount if not writable
-                        let _ = Command::new("umount").arg(&mount_point).output();
+                match self
+                    .core
+                    .dispatch(Commands::System(SystemCommand::UsbMount(request)))
+                {
+                    Ok((_, data)) => {
+                        let mountpoint = data
+                            .get("mountpoint")
+                            .and_then(|v| v.as_str())
+                            .map(PathBuf::from);
+                        let readonly = data
+                            .get("readonly")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if let Some(mountpoint) = mountpoint {
+                            if req.needs_write() && readonly {
+                                let _ = self.core.dispatch(Commands::System(
+                                    SystemCommand::UsbUnmount(UsbUnmountArgs {
+                                        mountpoint: mountpoint.to_string_lossy().to_string(),
+                                        detach: false,
+                                    }),
+                                ));
+                                continue;
+                            }
+                            return Ok(Some(mountpoint));
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Mount failed for {} (device={}): {}",
+                            dev_basename,
+                            device,
+                            e
+                        );
+                        continue;
                     }
                 }
             }
@@ -4328,88 +3876,35 @@ Do not remove power/USB",
         Ok(None)
     }
 
-    /// Find USB block devices by checking /sys/block/ for removable USB devices
+    /// Find USB block devices using lsblk filtering.
     fn find_usb_block_devices(&self) -> Vec<String> {
-        let mut usb_devices = Vec::new();
-
-        let sys_block = Path::new("/sys/block");
-        if !sys_block.exists() {
-            return usb_devices;
-        }
-
-        if let Ok(entries) = fs::read_dir(sys_block) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-
-                // Skip loop devices, ram disks, and mmcblk (SD cards - usually the boot drive)
-                if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("mmcblk")
-                {
-                    continue;
-                }
-
-                // Check if it's a removable device
-                let removable_path = entry.path().join("removable");
-                let is_removable = fs::read_to_string(&removable_path)
-                    .map(|s| s.trim() == "1")
-                    .unwrap_or(false);
-
-                // Check if it's a USB device by looking at the device path
-                let device_path = entry.path().join("device");
-                let is_usb = if device_path.exists() {
-                    // Follow symlink and check if path contains "usb"
-                    fs::read_link(&device_path)
-                        .map(|p| p.to_string_lossy().to_lowercase().contains("usb"))
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
-
-                // Also check uevent for DRIVER=usb-storage or any USB subsystem reference
-                let uevent_path = entry.path().join("device").join("uevent");
-                let is_usb_storage = fs::read_to_string(&uevent_path)
-                    .map(|s| {
-                        let lower = s.to_lowercase();
-                        lower.contains("usb-storage") || lower.contains("usb")
-                    })
-                    .unwrap_or(false);
-
-                // Additional check: look for USB subsystem in device hierarchy
-                let subsystem_path = entry.path().join("device").join("subsystem");
-                let has_usb_subsystem = fs::read_link(&subsystem_path)
-                    .map(|p| p.to_string_lossy().to_lowercase().contains("usb"))
-                    .unwrap_or(false);
-
-                if is_removable || is_usb || is_usb_storage || has_usb_subsystem {
-                    // Make sure it has a size > 0 (actually a storage device)
-                    let size_path = entry.path().join("size");
-                    let has_size = fs::read_to_string(&size_path)
-                        .map(|s| s.trim().parse::<u64>().unwrap_or(0) > 0)
-                        .unwrap_or(false);
-
-                    if has_size {
-                        usb_devices.push(name);
-                    }
-                }
+        match self.list_usb_devices() {
+            Ok(devices) => devices.into_iter().map(|dev| dev.name).collect(),
+            Err(e) => {
+                log::warn!("Failed to enumerate USB block devices: {}", e);
+                Vec::new()
             }
         }
-
-        usb_devices
     }
 
     /// Read mount points from /proc/mounts
-    fn read_mount_points(&self) -> Result<Vec<(String, String)>> {
+    fn read_mount_points(&self) -> Result<Vec<MountEntry>> {
         let contents = fs::read_to_string("/proc/mounts").context("Failed to read /proc/mounts")?;
 
         let mut mounts = Vec::new();
         for line in contents.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
+            if parts.len() >= 4 {
                 let device = parts[0].to_string();
-                let mount_point = parts[1].to_string();
 
                 // Only consider actual device mounts (not tmpfs, proc, etc.)
                 if device.starts_with("/dev/") {
-                    mounts.push((device, mount_point));
+                    mounts.push(MountEntry {
+                        device,
+                        mount_point: Self::decode_proc_mount(parts[1]),
+                        fs_type: parts[2].to_string(),
+                        options: parts[3].to_string(),
+                    });
                 }
             }
         }
@@ -4417,54 +3912,63 @@ Do not remove power/USB",
         Ok(mounts)
     }
 
+    fn decode_proc_mount(value: &str) -> String {
+        value
+            .replace("\\134", "\\")
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+    }
+
+    fn mount_entry_for(&self, mountpoint: &Path) -> Option<MountEntry> {
+        let mount_str = mountpoint.to_string_lossy();
+        self.read_mount_points()
+            .ok()
+            .and_then(|mounts| mounts.into_iter().find(|m| m.mount_point == mount_str))
+    }
+
+    fn mount_options_for(&self, mountpoint: &Path) -> Option<String> {
+        self.mount_entry_for(mountpoint)
+            .map(|entry| entry.options)
+    }
+
+    fn is_readable_mount(&self, path: &Path) -> bool {
+        if !path.is_dir() {
+            return false;
+        }
+        self.mount_options_for(path)
+            .map(|opts| opts.split(',').any(|o| o == "ro" || o == "rw"))
+            .unwrap_or(false)
+    }
+
+    fn mount_access_ok(&self, path: &Path, req: UsbAccessRequirement) -> bool {
+        match req {
+            UsbAccessRequirement::ReadableOk => self.is_readable_mount(path),
+            UsbAccessRequirement::RequireWritable => self.is_writable_mount(path),
+        }
+    }
+
     /// Check if a path is likely a USB storage mount (not a WiFi dongle, etc.)
-    fn is_usb_storage_mount(&self, path: &Path) -> bool {
-        // Must be writable
-        if !self.is_writable_mount(path) {
+    fn is_usb_storage_mount(&self, path: &Path, req: UsbAccessRequirement) -> bool {
+        if !self.mount_access_ok(path, req) {
             return false;
         }
 
+        let Some(entry) = self.mount_entry_for(path) else {
+            return false;
+        };
+
         // Check filesystem type - USB storage typically uses vfat, exfat, ntfs, ext4
-        // This helps exclude pseudo-filesystems and network mounts
-        let mount_path_str = path.to_string_lossy();
-
-        if let Ok(contents) = fs::read_to_string("/proc/mounts") {
-            for line in contents.lines() {
-                if line.contains(&*mount_path_str) {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 3 {
-                        let fs_type = parts[2];
-                        // Common USB storage filesystems
-                        if matches!(
-                            fs_type,
-                            "vfat"
-                                | "exfat"
-                                | "ntfs"
-                                | "ntfs3"
-                                | "ext4"
-                                | "ext3"
-                                | "ext2"
-                                | "fuseblk"
-                        ) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        false
+        matches!(
+            entry.fs_type.as_str(),
+            "vfat" | "exfat" | "ntfs" | "ntfs3" | "ext4" | "ext3" | "ext2" | "fuseblk"
+        )
     }
 
     fn is_writable_mount(&self, path: &Path) -> bool {
-        // Try to create a test file to verify write access
-        let test_file = path.join(".rustyjack_test");
-        if fs::write(&test_file, b"test").is_ok() {
-            let _ = fs::remove_file(&test_file);
-            true
-        } else {
-            false
-        }
+        self.mount_options_for(path)
+            .map(|opts| opts.split(',').any(|o| o == "rw"))
+            .unwrap_or(false)
     }
 
     fn build_loot_archive(&self) -> Result<(TempPath, PathBuf)> {
@@ -4784,8 +4288,7 @@ Do not remove power/USB",
 
     fn toggle_dns_spoof(&mut self) -> Result<()> {
         // Check current status
-        use rustyjack_core::system::dns_spoof_running;
-        let is_running = dns_spoof_running();
+        let is_running = self.status_overlay().dns_spoof_running;
 
         if is_running {
             self.stop_dns_spoof()
@@ -4795,7 +4298,7 @@ Do not remove power/USB",
     }
 
     fn recon_gateway(&mut self) -> Result<()> {
-        use rustyjack_core::cli::{WifiReconCommand, WifiReconGatewayArgs};
+        use rustyjack_commands::{WifiReconCommand, WifiReconGatewayArgs};
 
         #[cfg(not(target_os = "linux"))]
         {
@@ -4883,7 +4386,7 @@ Do not remove power/USB",
     }
 
     fn recon_arp_scan(&mut self) -> Result<()> {
-        use rustyjack_core::cli::{WifiReconArpScanArgs, WifiReconCommand};
+        use rustyjack_commands::{WifiReconArpScanArgs, WifiReconCommand};
 
         #[cfg(not(target_os = "linux"))]
         {
@@ -4896,7 +4399,7 @@ Do not remove power/USB",
                 return Ok(());
             };
 
-            if !interface_has_ip(&iface) {
+            if !self.interface_has_ip(&iface) {
                 return self.show_message(
                     "ARP Scan",
                     [
@@ -4994,7 +4497,7 @@ Do not remove power/USB",
     }
 
     fn recon_service_scan(&mut self) -> Result<()> {
-        use rustyjack_core::cli::{WifiReconCommand, WifiReconServiceScanArgs};
+        use rustyjack_commands::{WifiReconCommand, WifiReconServiceScanArgs};
 
         #[cfg(not(target_os = "linux"))]
         {
@@ -5007,7 +4510,7 @@ Do not remove power/USB",
                 return Ok(());
             };
 
-            if !interface_has_ip(&iface) {
+            if !self.interface_has_ip(&iface) {
                 return self.show_message(
                     "Service Scan",
                     [
@@ -5103,7 +4606,7 @@ Do not remove power/USB",
     }
 
     fn recon_mdns_scan(&mut self) -> Result<()> {
-        use rustyjack_core::cli::{WifiReconCommand, WifiReconMdnsScanArgs};
+        use rustyjack_commands::{WifiReconCommand, WifiReconMdnsScanArgs};
 
         #[cfg(not(target_os = "linux"))]
         {
@@ -5204,7 +4707,7 @@ Do not remove power/USB",
     }
 
     fn recon_bandwidth(&mut self) -> Result<()> {
-        use rustyjack_core::cli::{WifiReconBandwidthArgs, WifiReconCommand};
+        use rustyjack_commands::{WifiReconBandwidthArgs, WifiReconCommand};
 
         #[cfg(not(target_os = "linux"))]
         {
@@ -5217,7 +4720,7 @@ Do not remove power/USB",
                 return Ok(());
             };
 
-            if !interface_has_ip(&iface) {
+            if !self.interface_has_ip(&iface) {
                 return self.show_message(
                     "Bandwidth Monitor",
                     [
@@ -5308,7 +4811,7 @@ Do not remove power/USB",
     }
 
     fn recon_dns_capture(&mut self) -> Result<()> {
-        use rustyjack_core::cli::{WifiReconCommand, WifiReconDnsCaptureArgs};
+        use rustyjack_commands::{WifiReconCommand, WifiReconDnsCaptureArgs};
 
         #[cfg(not(target_os = "linux"))]
         {
@@ -5321,7 +4824,7 @@ Do not remove power/USB",
                 return Ok(());
             };
 
-            if !interface_has_ip(&iface) {
+            if !self.interface_has_ip(&iface) {
                 return self.show_message(
                     "DNS Capture",
                     [
@@ -5691,7 +5194,7 @@ Do not remove power/USB",
             );
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !self.monitor_mode_supported(&active_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -6088,7 +5591,7 @@ Do not remove power/USB",
             }
         }
 
-        if !check_monitor_mode_support(&attack_interface) {
+        if !self.monitor_mode_supported(&attack_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -6142,7 +5645,7 @@ Do not remove power/USB",
         }
 
         // Execute evil twin via core with cancel support
-        use rustyjack_core::{Commands, WifiCommand, WifiEvilTwinArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiEvilTwinArgs};
 
         let cmd = Commands::Wifi(WifiCommand::EvilTwin(WifiEvilTwinArgs {
             ssid: target_network.clone(),
@@ -6219,7 +5722,7 @@ Do not remove power/USB",
             );
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !self.monitor_mode_supported(&active_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -6259,7 +5762,7 @@ Do not remove power/USB",
             )?;
         }
 
-        use rustyjack_core::{Commands, WifiCommand, WifiProbeSniffArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiProbeSniffArgs};
 
         let cmd = Commands::Wifi(WifiCommand::ProbeSniff(WifiProbeSniffArgs {
             interface: active_interface,
@@ -6318,7 +5821,7 @@ Do not remove power/USB",
             );
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !self.monitor_mode_supported(&active_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -6362,7 +5865,7 @@ Do not remove power/USB",
             )?;
         }
 
-        use rustyjack_core::{Commands, WifiCommand, WifiPmkidArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiPmkidArgs};
 
         let cmd = Commands::Wifi(WifiCommand::PmkidCapture(WifiPmkidArgs {
             interface: active_interface,
@@ -6797,12 +6300,6 @@ Do not remove power/USB",
     /// Install WiFi drivers for USB dongles
     /// Keeps user on screen until installation completes or fails
     fn install_wifi_drivers(&mut self) -> Result<()> {
-        use std::fs;
-        use std::process::{Command, Stdio};
-
-        // Status file used by the driver installer script
-        let status_file = Path::new("/tmp/rustyjack_wifi_status");
-        let result_file = Path::new("/tmp/rustyjack_wifi_result.json");
         let script_path = self.root.join("scripts/wifi_driver_installer.sh");
 
         // Check if script exists
@@ -6843,286 +6340,82 @@ Do not remove power/USB",
             return Ok(());
         }
 
-        // Clear old status files
-        let _ = fs::remove_file(status_file);
-        let _ = fs::remove_file(result_file);
+        self.show_progress("WiFi Driver", ["Running installer...", "Please wait"])?;
 
-        // Show initial scanning message
-        self.show_progress("WiFi Driver", ["Scanning for USB WiFi...", "Please wait"])?;
-
-        // Run the installer script
-        let mut child = match Command::new("bash")
-            .arg(&script_path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        let (msg, data) = match self
+            .core
+            .dispatch(Commands::System(SystemCommand::InstallWifiDrivers))
         {
-            Ok(c) => c,
+            Ok(result) => result,
             Err(e) => {
                 return self.show_message(
                     "Driver Error",
-                    ["Failed to start installer", "", &format!("{}", e)],
+                    ["Installer failed", "", &shorten_for_display(&e.to_string(), 90)],
                 );
             }
         };
 
-        // Monitor progress
-        let mut last_status = String::new();
-        let mut ticks = 0;
+        let status = data
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("UNKNOWN");
+        let details = data.get("details").and_then(|v| v.as_str()).unwrap_or("");
+        let interfaces = data.get("interfaces").and_then(|v| v.as_array());
 
-        loop {
-            // Check if process finished
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process finished - check result
-                    let exit_code = status.code().unwrap_or(-1);
-
-                    // Read final result
-                    if let Ok(result_json) = fs::read_to_string(result_file) {
-                        if let Ok(result) = serde_json::from_str::<Value>(&result_json) {
-                            let status = result
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("UNKNOWN");
-                            let details =
-                                result.get("details").and_then(|v| v.as_str()).unwrap_or("");
-                            let interfaces = result.get("interfaces").and_then(|v| v.as_array());
-
-                            match status {
-                                "SUCCESS" => {
-                                    let mut lines =
-                                        vec!["Driver installed!".to_string(), "".to_string()];
-                                    if let Some(ifaces) = interfaces {
-                                        lines.push("Available interfaces:".to_string());
-                                        for iface in ifaces {
-                                            if let Some(name) = iface.as_str() {
-                                                lines.push(format!("  - {}", name));
-                                            }
-                                        }
-                                    }
-                                    lines.push("".to_string());
-                                    lines.push("Ready to use!".to_string());
-
-                                    return self.show_message(
-                                        "Driver Success",
-                                        lines.iter().map(|s| s.as_str()),
-                                    );
-                                }
-                                "REBOOT_REQUIRED" => {
-                                    return self.show_message(
-                                        "Reboot Required",
-                                        [
-                                            "Driver installed but",
-                                            "reboot is required.",
-                                            "",
-                                            "Please restart the",
-                                            "device to complete",
-                                            "installation.",
-                                            "",
-                                            "Press KEY3 to reboot",
-                                        ],
-                                    );
-                                }
-                                "NO_DEVICES" => {
-                                    return self.show_message(
-                                        "No Devices",
-                                        [
-                                            "No USB WiFi adapters",
-                                            "were detected.",
-                                            "",
-                                            "Please plug in a USB",
-                                            "WiFi adapter and try",
-                                            "again.",
-                                        ],
-                                    );
-                                }
-                                "FAILED" => {
-                                    return self.show_message(
-                                        "Driver Failed",
-                                        [
-                                            "Failed to install drivers",
-                                            "",
-                                            details,
-                                            "",
-                                            "Check internet connection",
-                                            "and try again.",
-                                            "",
-                                            "Some adapters may not",
-                                            "be supported.",
-                                        ],
-                                    );
-                                }
-                                _ => {
-                                    return self.show_message(
-                                        "Unknown Result",
-                                        [&format!("Status: {}", status), details],
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // No result file - use exit code
-                    if exit_code == 0 {
-                        return self.show_message("Driver Install", ["Installation completed"]);
-                    } else if exit_code == 2 {
-                        return self.show_message(
-                            "Reboot Required",
-                            [
-                                "Driver installed.",
-                                "Reboot required to",
-                                "complete setup.",
-                                "",
-                                "Press KEY3 to reboot",
-                            ],
-                        );
-                    } else {
-                        return self.show_message(
-                            "Driver Failed",
-                            [
-                                "Installation failed",
-                                "",
-                                &format!("Exit code: {}", exit_code),
-                                "",
-                                "Check logs at:",
-                                "/var/log/rustyjack_wifi_driver.log",
-                            ],
-                        );
-                    }
-                }
-                Ok(None) => {
-                    // Still running - update status display
-                    if let Ok(status) = fs::read_to_string(status_file) {
-                        let status = status.trim();
-                        if status != last_status {
-                            last_status = status.to_string();
-
-                            // Parse status and show appropriate message
-                            let (title, messages) = self.parse_driver_status(&last_status, ticks);
-                            self.display.draw_menu(
-                                &title,
-                                &messages,
-                                usize::MAX,
-                                &self.stats.snapshot(),
-                            )?;
-                        }
-                    }
-
-                    // Animate waiting indicator
-                    ticks += 1;
-                    thread::sleep(Duration::from_millis(500));
-
-                    // Check for user cancel (back button)
-                    if let Ok(Some(btn)) = self.buttons.try_read() {
-                        if matches!(self.map_button(btn), ButtonAction::Back) {
-                            // User cancelled - try to kill process
-                            let _ = child.kill();
-                            return self
-                                .show_message("Cancelled", ["Installation cancelled by user"]);
+        match status {
+            "SUCCESS" => {
+                let mut lines = vec!["Driver installed!".to_string(), "".to_string()];
+                if let Some(ifaces) = interfaces {
+                    lines.push("Available interfaces:".to_string());
+                    for iface in ifaces {
+                        if let Some(name) = iface.as_str() {
+                            lines.push(format!("  - {}", name));
                         }
                     }
                 }
-                Err(e) => {
-                    return self
-                        .show_message("Error", ["Failed to check process", &format!("{}", e)]);
-                }
+                lines.push("".to_string());
+                lines.push("Ready to use!".to_string());
+                self.show_message("Driver Success", lines.iter().map(|s| s.as_str()))
             }
-        }
-    }
-
-    /// Parse driver installer status into display messages
-    fn parse_driver_status(&self, status: &str, ticks: u32) -> (String, Vec<String>) {
-        let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(ticks as usize) % 10];
-
-        let parts: Vec<&str> = status.split(':').collect();
-
-        match parts.get(0).map(|s| *s) {
-            Some("SCANNING") => (
-                "WiFi Driver".to_string(),
-                vec![
-                    format!("{} Scanning USB devices...", spinner),
-                    "".to_string(),
-                    "Looking for WiFi".to_string(),
-                    "adapters...".to_string(),
+            "REBOOT_REQUIRED" => self.show_message(
+                "Reboot Required",
+                [
+                    "Driver installed but",
+                    "reboot is required.",
+                    "",
+                    "Please restart the",
+                    "device to complete",
+                    "installation.",
+                    "",
+                    "Press KEY3 to reboot",
                 ],
             ),
-            Some("DETECTED") => {
-                let chipset = parts.get(1).unwrap_or(&"Unknown");
-                (
-                    "Device Found".to_string(),
-                    vec![
-                        format!("Chipset: {}", chipset),
-                        "".to_string(),
-                        format!("{} Preparing driver...", spinner),
-                    ],
-                )
-            }
-            Some("INSTALLING_PREREQUISITES") => (
-                "Prerequisites".to_string(),
-                vec![
-                    format!("{} Installing build tools", spinner),
-                    "".to_string(),
-                    "This may take a few".to_string(),
-                    "minutes...".to_string(),
+            "NO_DEVICES" => self.show_message(
+                "No Devices",
+                [
+                    "No USB WiFi adapters",
+                    "were detected.",
+                    "",
+                    "Please plug in a USB",
+                    "WiFi adapter and try",
+                    "again.",
                 ],
             ),
-            Some("INSTALLING_DRIVER") => {
-                let package = parts.get(1).unwrap_or(&"driver");
-                (
-                    "Installing Driver".to_string(),
-                    vec![
-                        format!("Package: {}", package),
-                        "".to_string(),
-                        format!("{} Compiling...", spinner),
-                        "".to_string(),
-                        "This may take 5-10".to_string(),
-                        "minutes on Pi Zero".to_string(),
-                    ],
-                )
-            }
-            Some("VERIFYING") => {
-                let iface = parts.get(1).unwrap_or(&"wlan");
-                (
-                    "Verifying".to_string(),
-                    vec![
-                        format!("{} Testing interface", spinner),
-                        "".to_string(),
-                        format!("Interface: {}", iface),
-                        "Checking functionality...".to_string(),
-                    ],
-                )
-            }
-            Some("BUILTIN") => {
-                let chipset = parts.get(1).unwrap_or(&"Unknown");
-                (
-                    "Built-in Driver".to_string(),
-                    vec![
-                        format!("Chipset: {}", chipset),
-                        "".to_string(),
-                        format!("{} Loading firmware...", spinner),
-                    ],
-                )
-            }
-            Some("UNKNOWN") => {
-                let usb_id = parts.get(1).unwrap_or(&"????:????");
-                (
-                    "Unknown Device".to_string(),
-                    vec![
-                        format!("USB ID: {}", usb_id),
-                        "".to_string(),
-                        "No driver available".to_string(),
-                        "for this device.".to_string(),
-                    ],
-                )
-            }
-            _ => (
-                "WiFi Driver".to_string(),
-                vec![
-                    format!("{} Working...", spinner),
-                    "".to_string(),
-                    status.to_string(),
+            "FAILED" => self.show_message(
+                "Driver Failed",
+                [
+                    "Failed to install drivers",
+                    "",
+                    details,
+                    "",
+                    "Check internet connection",
+                    "and try again.",
+                    "",
+                    "Some adapters may not",
+                    "be supported.",
                 ],
             ),
+            _ => self.show_message("Driver Install", vec![msg, details.to_string()]),
         }
     }
 
@@ -7145,7 +6438,7 @@ Do not remove power/USB",
             );
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !self.monitor_mode_supported(&active_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -7217,7 +6510,7 @@ Do not remove power/USB",
         };
 
         // Execute via core with cancel support
-        use rustyjack_core::{Commands, WifiCommand, WifiKarmaArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiKarmaArgs};
 
         let cmd = Commands::Wifi(WifiCommand::Karma(WifiKarmaArgs {
             interface: active_interface.clone(),
@@ -7295,7 +6588,7 @@ Do not remove power/USB",
             );
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !self.monitor_mode_supported(&active_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -7818,7 +7111,7 @@ Do not remove power/USB",
         ssid: &str,
         _indefinite_mode: bool,
     ) -> Result<StepOutcome> {
-        use rustyjack_core::{Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiScanArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiScanArgs};
 
         match step {
             0 => {
@@ -7929,7 +7222,7 @@ Do not remove power/USB",
                 if loot_dir.exists() {
                     // Find the most recent handshake export
                     if let Some(handshake_path) = self.find_recent_handshake(&loot_dir) {
-                        use rustyjack_core::cli::WifiCrackArgs;
+                        use rustyjack_commands::WifiCrackArgs;
                         let cmd = Commands::Wifi(WifiCommand::Crack(WifiCrackArgs {
                             file: handshake_path.to_string_lossy().to_string(),
                             ssid: Some(ssid.to_string()),
@@ -7966,7 +7259,7 @@ Do not remove power/USB",
 
     /// Execute a step in the MassCapture pipeline
     fn execute_mass_capture_step(&mut self, step: usize, interface: &str) -> Result<StepOutcome> {
-        use rustyjack_core::{Commands, WifiCommand, WifiPmkidArgs, WifiScanArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiPmkidArgs, WifiScanArgs};
 
         match step {
             0 => {
@@ -8008,7 +7301,7 @@ Do not remove power/USB",
             }
             3 => {
                 // Step 4: Continuous capture (probe sniffing for client info)
-                use rustyjack_core::WifiProbeSniffArgs;
+                use rustyjack_commands::WifiProbeSniffArgs;
                 let cmd = Commands::Wifi(WifiCommand::ProbeSniff(WifiProbeSniffArgs {
                     interface: interface.to_string(),
                     channel: 0,
@@ -8035,14 +7328,18 @@ Do not remove power/USB",
 
     /// Execute a step in the StealthRecon pipeline
     fn execute_stealth_recon_step(&mut self, step: usize, interface: &str) -> Result<StepOutcome> {
-        use rustyjack_core::{Commands, WifiCommand, WifiProbeSniffArgs};
+        use rustyjack_commands::{Commands, WifiCommand, WifiProbeSniffArgs};
 
         match step {
             0 => {
                 // Step 1: Randomize MAC
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = randomize_mac_with_reconnect(interface);
+                    let _ = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
+                        WifiMacRandomizeArgs {
+                            interface: interface.to_string(),
+                        },
+                    )));
                 }
                 thread::sleep(Duration::from_secs(2));
                 return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
@@ -8051,12 +7348,12 @@ Do not remove power/USB",
                 // Step 2: Minimum TX power
                 #[cfg(target_os = "linux")]
                 {
-                    if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
-                        let _ = mgr.set_tx_power(
-                            interface,
-                            rustyjack_netlink::TxPowerSetting::Fixed(100),
-                        );
-                    }
+                    let _ = self.core.dispatch(Commands::Wifi(WifiCommand::TxPower(
+                        WifiTxPowerArgs {
+                            interface: interface.to_string(),
+                            dbm: 1,
+                        },
+                    )));
                 }
                 thread::sleep(Duration::from_secs(1));
                 return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
@@ -8111,7 +7408,7 @@ Do not remove power/USB",
         ssid: &str,
         channel: u8,
     ) -> Result<StepOutcome> {
-        use rustyjack_core::{
+        use rustyjack_commands::{
             Commands, WifiCommand, WifiEvilTwinArgs, WifiKarmaArgs, WifiProbeSniffArgs,
         };
 
@@ -8202,7 +7499,7 @@ Do not remove power/USB",
         channel: u8,
         ssid: &str,
     ) -> Result<StepOutcome> {
-        use rustyjack_core::{
+        use rustyjack_commands::{
             Commands, WifiCommand, WifiDeauthArgs, WifiKarmaArgs, WifiPmkidArgs,
             WifiProbeSniffArgs, WifiScanArgs,
         };
@@ -8212,7 +7509,11 @@ Do not remove power/USB",
                 // Step 1: Stealth recon - MAC randomization + passive scan
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = randomize_mac_with_reconnect(interface);
+                    let _ = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
+                        WifiMacRandomizeArgs {
+                            interface: interface.to_string(),
+                        },
+                    )));
                 }
                 let cmd = Commands::Wifi(WifiCommand::ProbeSniff(WifiProbeSniffArgs {
                     interface: interface.to_string(),
@@ -8320,7 +7621,7 @@ Do not remove power/USB",
                 let loot_dir = self.root.join("loot/Wireless");
                 if loot_dir.exists() {
                     if let Some(handshake_path) = self.find_recent_handshake(&loot_dir) {
-                        use rustyjack_core::cli::WifiCrackArgs;
+                        use rustyjack_commands::WifiCrackArgs;
                         let cmd = Commands::Wifi(WifiCommand::Crack(WifiCrackArgs {
                             file: handshake_path.to_string_lossy().to_string(),
                             ssid: Some(ssid.to_string()),
@@ -8700,7 +8001,11 @@ Do not remove power/USB",
             }
 
             if mac_randomization {
-                if let Err(e) = randomize_mac_with_reconnect(&active_interface) {
+                if let Err(e) = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
+                    WifiMacRandomizeArgs {
+                        interface: active_interface.clone(),
+                    },
+                ))) {
                     log::warn!("[MAC] randomize failed on {}: {}", active_interface, e);
                 }
             }
@@ -8709,7 +8014,7 @@ Do not remove power/USB",
 
     #[cfg(target_os = "linux")]
     fn apply_per_network_mac(&mut self, interface: &str, ssid: &str) -> Result<()> {
-        use rustyjack_evasion::{MacAddress, MacManager};
+        use rustyjack_evasion::MacAddress;
 
         let ssid = ssid.trim();
         if ssid.is_empty() {
@@ -8796,37 +8101,53 @@ Do not remove power/USB",
             }
         }
 
-        let mut manager = MacManager::new().context("creating MacManager")?;
-        manager.set_auto_restore(false);
-
-        let state = manager
-            .set_mac(interface, &target_mac)
+        let args = WifiMacSetArgs {
+            interface: interface.to_string(),
+            mac: target_mac.to_string(),
+        };
+        let (_, data) = self
+            .core
+            .dispatch(Commands::Wifi(WifiCommand::MacSet(args)))
             .context("setting per-network MAC")?;
-        let reconnect_ok = renew_dhcp_and_reconnect(interface);
+        let applied_mac = data
+            .get("new_mac")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&target_mac_str)
+            .to_string();
+        let original_mac = data
+            .get("original_mac")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let original_mac_value = original_mac.clone();
+        let reconnect_ok = data
+            .get("reconnect_ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         self.config
             .settings
             .original_macs
             .entry(interface.to_string())
-            .or_insert_with(|| state.original_mac.to_string());
+            .or_insert_with(|| original_mac_value.clone());
         self.config
             .settings
             .current_macs
-            .insert(interface.to_string(), state.current_mac.to_string());
+            .insert(interface.to_string(), applied_mac.clone());
         self.config
             .settings
             .per_network_macs
             .entry(interface.to_string())
             .or_insert_with(HashMap::new)
-            .insert(ssid.to_string(), state.current_mac.to_string());
+            .insert(ssid.to_string(), applied_mac.clone());
         let _ = self.config.save(&self.root.join("gui_conf.json"));
 
         log::info!(
             "[MAC] per-network MAC set on {} for {}: {} -> {} (vendor_reused={}, reconnect_ok={})",
             interface,
             ssid,
-            state.original_mac,
-            state.current_mac,
+            original_mac_value,
+            applied_mac,
             vendor_reused,
             reconnect_ok
         );
@@ -8893,7 +8214,7 @@ Do not remove power/USB",
             );
         }
 
-        if !check_monitor_mode_support(&active_interface) {
+        if !self.monitor_mode_supported(&active_interface) {
             return self.show_message(
                 "Hardware Error",
                 [
@@ -9005,10 +8326,32 @@ Do not remove power/USB",
                 ],
             )?;
 
-            match randomize_mac_with_reconnect(&active_interface) {
-                Ok((state, reconnect_ok, vendor_reused)) => {
-                    let original_mac = state.original_mac.to_string();
-                    let new_mac = state.current_mac.to_string();
+            let args = WifiMacRandomizeArgs {
+                interface: active_interface.clone(),
+            };
+            match self
+                .core
+                .dispatch(Commands::Wifi(WifiCommand::MacRandomize(args)))
+            {
+                Ok((_, data)) => {
+                    let original_mac = data
+                        .get("original_mac")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let new_mac = data
+                        .get("new_mac")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let vendor_reused = data
+                        .get("vendor_reused")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let reconnect_ok = data
+                        .get("reconnect_ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
 
                     self.config
                         .settings
@@ -9082,7 +8425,7 @@ Do not remove power/USB",
 
         #[cfg(target_os = "linux")]
         {
-            use rustyjack_evasion::{MacGenerationStrategy, MacManager, VENDOR_DATABASE};
+            use rustyjack_evasion::VENDOR_DATABASE;
 
             // Create vendor list for selection
             let mut vendors: Vec<String> = VENDOR_DATABASE
@@ -9105,18 +8448,30 @@ Do not remove power/USB",
 
             let _ = self.show_progress("MAC Address", ["Setting vendor MAC...", "Please wait"]);
 
-            let mut manager = MacManager::new().context("creating MacManager")?;
-            manager.set_auto_restore(false);
+            let args = WifiMacSetVendorArgs {
+                interface: interface.clone(),
+                vendor: selected_vendor.name.to_string(),
+            };
+            match self
+                .core
+                .dispatch(Commands::Wifi(WifiCommand::MacSetVendor(args)))
+            {
+                Ok((_, data)) => {
+                    let new_mac = data
+                        .get("new_mac")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let orig_mac = data
+                        .get("original_mac")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let reconnect_ok = data
+                        .get("reconnect_ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
 
-            match manager.set_with_strategy(
-                &interface,
-                MacGenerationStrategy::Vendor(selected_vendor.name),
-            ) {
-                Ok(state) => {
-                    let reconnect_ok = renew_dhcp_and_reconnect(&interface);
-
-                    let new_mac = state.current_mac.to_string();
-                    let orig_mac = state.original_mac.to_string();
                     log::info!(
                         "[MAC] vendor set on {}: {} -> {} (vendor={}, reconnect_ok={})",
                         interface,
@@ -9125,6 +8480,11 @@ Do not remove power/USB",
                         selected_vendor.name,
                         reconnect_ok
                     );
+                    self.config
+                        .settings
+                        .original_macs
+                        .entry(interface.clone())
+                        .or_insert_with(|| orig_mac.clone());
                     self.config
                         .settings
                         .current_macs
@@ -9192,40 +8552,56 @@ Do not remove power/USB",
             };
 
         self.show_progress("Restore MAC", [&format!("Restoring: {}", original_mac)])?;
-        let restored = restore_original_mac(&active_interface, &original_mac);
 
-        if restored {
-            let reconnect_ok = renew_dhcp_and_reconnect(&active_interface);
+        let args = WifiMacRestoreArgs {
+            interface: active_interface.clone(),
+            original_mac: original_mac.clone(),
+        };
+        match self
+            .core
+            .dispatch(Commands::Wifi(WifiCommand::MacRestore(args)))
+        {
+            Ok((_, data)) => {
+                let restored_mac = data
+                    .get("restored_mac")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&original_mac)
+                    .to_string();
+                let reconnect_ok = data
+                    .get("reconnect_ok")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
-            self.config.settings.current_macs.remove(&active_interface);
-            self.config.settings.original_macs.remove(&active_interface);
-            let config_path = self.root.join("gui_conf.json");
-            let _ = self.config.save(&config_path);
+                self.config.settings.current_macs.remove(&active_interface);
+                self.config.settings.original_macs.remove(&active_interface);
+                let config_path = self.root.join("gui_conf.json");
+                let _ = self.config.save(&config_path);
 
-            let interface_line = format!("Interface: {}", active_interface);
-            let mac_line = format!("MAC: {}", original_mac);
-            let mut lines = vec![&interface_line, "", &mac_line, ""];
+                let interface_line = format!("Interface: {}", active_interface);
+                let mac_line = format!("MAC: {}", restored_mac);
+                let mut lines = vec![&interface_line, "", &mac_line, ""];
 
-            if reconnect_ok {
-                lines.push("Original MAC restored.");
-            } else {
-                lines.push("MAC restored.");
-                lines.push("Warning: reconnect may");
-                lines.push("have failed. Check DHCP.");
+                if reconnect_ok {
+                    lines.push("Original MAC restored.");
+                } else {
+                    lines.push("MAC restored.");
+                    lines.push("Warning: reconnect may");
+                    lines.push("have failed. Check DHCP.");
+                }
+
+                return self.show_message("MAC Restored", lines);
             }
-
-            return self.show_message("MAC Restored", lines);
+            Err(e) => {
+                return self.show_message(
+                    "Restore Error",
+                    [
+                        "Failed to restore MAC",
+                        "",
+                        &shorten_for_display(&e.to_string(), 60),
+                    ],
+                );
+            }
         }
-
-        self.show_message(
-            "Restore Error",
-            [
-                "Failed to restore MAC",
-                "",
-                "Check permissions/driver",
-                "or reboot to reset.",
-            ],
-        )
     }
 
     /// Set TX power level
@@ -9256,18 +8632,14 @@ Do not remove power/USB",
         self.bump_to_custom();
         self.show_progress("TX Power", [&format!("Setting to: {}", label)])?;
 
-        let success = match rustyjack_netlink::WirelessManager::new() {
-            Ok(mut mgr) => mgr
-                .set_tx_power(
-                    &active_interface,
-                    rustyjack_netlink::TxPowerSetting::Fixed((dbm as u32) * 100),
-                )
-                .is_ok(),
-            Err(e) => {
-                log::warn!("Failed to open nl80211 socket: {}", e);
-                false
-            }
+        let args = WifiTxPowerArgs {
+            interface: active_interface.clone(),
+            dbm,
         };
+        let success = self
+            .core
+            .dispatch(Commands::Wifi(WifiCommand::TxPower(args)))
+            .is_ok();
 
         if success {
             // Save selected power level
@@ -11736,7 +11108,6 @@ Do not remove power/USB",
     }
 
     fn complete_purge(&mut self) -> Result<()> {
-        let root = self.root.clone();
         self.show_message(
             "Complete Purge",
             [
@@ -11766,11 +11137,29 @@ Do not remove power/USB",
         }
 
         self.show_progress("Complete Purge", ["Removing Rustyjack...", "Please wait"])?;
-        let report = perform_complete_purge(&root);
+        let (msg, data) = match self
+            .core
+            .dispatch(Commands::System(SystemCommand::Purge))
+        {
+            Ok(result) => result,
+            Err(err) => {
+                return self.show_message(
+                    "Complete Purge",
+                    ["Purge failed", &shorten_for_display(&err.to_string(), 90)],
+                );
+            }
+        };
+
+        let removed = data.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
+        let service_disabled = data
+            .get("service_disabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let errors = data.get("errors").and_then(|v| v.as_array());
 
         let mut lines = vec![
-            format!("Removed {} item(s)", report.removed),
-            if report.service_disabled {
+            format!("Removed {} item(s)", removed),
+            if service_disabled {
                 "Service disabled".to_string()
             } else {
                 "Service disable failed".to_string()
@@ -11779,17 +11168,24 @@ Do not remove power/USB",
             "Reboot recommended".to_string(),
         ];
 
-        if !report.errors.is_empty() {
-            lines.push("Errors:".to_string());
-            for err in report.errors.iter().take(3) {
-                lines.push(shorten_for_display(err, 18));
-            }
-            if report.errors.len() > 3 {
-                lines.push(format!("+{} more", report.errors.len() - 3));
+        if let Some(errors) = errors {
+            if !errors.is_empty() {
+                lines.push("Errors:".to_string());
+                for err in errors.iter().take(3) {
+                    if let Some(text) = err.as_str() {
+                        lines.push(shorten_for_display(text, 18));
+                    }
+                }
+                if errors.len() > 3 {
+                    lines.push(format!("+{} more", errors.len() - 3));
+                }
+            } else {
+                lines.push("No errors reported".to_string());
             }
         } else {
             lines.push("No errors reported".to_string());
         }
+        lines.push(msg);
         lines.push("UI exiting now".to_string());
 
         self.show_message("Complete Purge", lines)?;
@@ -11899,23 +11295,25 @@ Do not remove power/USB",
                     .dispatch(Commands::Hotspot(HotspotCommand::Status))?;
                 let data = status.1;
 
-                if let Some(err) = take_last_ap_error() {
-                    self.show_message(
-                        "Hotspot error",
-                        [
-                            "Hotspot encountered an error:",
-                            &shorten_for_display(&err, 90),
-                        ],
-                    )?;
-                }
-                if let Some(warn) = take_last_hotspot_warning() {
-                    self.show_message(
-                        "Hotspot warning",
-                        [
-                            "Hotspot reported a warning:",
-                            &shorten_for_display(&warn, 90),
-                        ],
-                    )?;
+                if let Ok(warnings) = self.core.hotspot_warnings() {
+                    if let Some(err) = warnings.last_ap_error.as_deref() {
+                        self.show_message(
+                            "Hotspot error",
+                            [
+                                "Hotspot encountered an error:",
+                                &shorten_for_display(err, 90),
+                            ],
+                        )?;
+                    }
+                    if let Some(warn) = warnings.last_warning.as_deref() {
+                        self.show_message(
+                            "Hotspot warning",
+                            [
+                                "Hotspot reported a warning:",
+                                &shorten_for_display(warn, 90),
+                            ],
+                        )?;
+                    }
                 }
 
                 let running = data
@@ -12143,7 +11541,9 @@ Do not remove power/USB",
                         if upstream_choice == Some(0) {
                             upstream_note =
                                 "No upstream selected; hotspot will have no internet.".to_string();
-                        } else if !upstream_iface.is_empty() && !interface_has_ip(&upstream_iface) {
+                        } else if !upstream_iface.is_empty()
+                            && !self.interface_has_ip(&upstream_iface)
+                        {
                             upstream_note = format!(
                                 "{} has no IP; hotspot will be local-only until it connects.",
                                 upstream_iface
@@ -12247,28 +11647,35 @@ Do not remove power/USB",
                                 ];
                                 #[cfg(target_os = "linux")]
                                 {
-                                    if let Some(start_err) = take_last_start_ap_error() {
-                                        lines.push(shorten_for_display(
-                                            &format!("START_AP: {}", start_err),
-                                            90,
-                                        ));
-                                        if let Some(hint) = classify_start_ap_error(&start_err) {
+                                    if let Ok(warnings) = self.core.hotspot_warnings() {
+                                        if let Some(start_err) = warnings.last_start_error.as_deref()
+                                        {
+                                            lines.push(shorten_for_display(
+                                                &format!("START_AP: {}", start_err),
+                                                90,
+                                            ));
+                                            if let Some(hint) = classify_start_ap_error(start_err)
+                                            {
+                                                lines.push(format!("Cause: {}", hint.category));
+                                                lines.push(format!("Hint: {}", hint.hint));
+                                            }
+                                        } else if let Some(hint) = classify_start_ap_error(&err) {
                                             lines.push(format!("Cause: {}", hint.category));
                                             lines.push(format!("Hint: {}", hint.hint));
+                                        }
+                                        if let Some(ap_err) = warnings.last_ap_error.as_deref() {
+                                            lines.push(shorten_for_display(
+                                                &format!("AP detail: {}", ap_err),
+                                                90,
+                                            ));
                                         }
                                     } else if let Some(hint) = classify_start_ap_error(&err) {
                                         lines.push(format!("Cause: {}", hint.category));
                                         lines.push(format!("Hint: {}", hint.hint));
                                     }
-                                    if let Some(ap_err) = take_last_ap_error() {
-                                        lines.push(shorten_for_display(
-                                            &format!("AP detail: {}", ap_err),
-                                            90,
-                                        ));
-                                    }
                                 }
                                 lines.push(
-                                    "See journalctl -u rustyjack.service for full logs."
+                                    "See journalctl -u rustyjack-ui.service for full logs."
                                         .to_string(),
                                 );
                                 self.show_message("Hotspot error", lines)?;
@@ -12314,7 +11721,7 @@ Do not remove power/USB",
                     (false, Some(3)) => {
                         #[cfg(target_os = "linux")]
                         {
-                            let ssid = rustyjack_wireless::random_ssid();
+                            let ssid = random_hotspot_ssid();
                             self.config.settings.hotspot_ssid = ssid.clone();
                             let config_path = self.root.join("gui_conf.json");
                             let _ = self.config.save(&config_path);
@@ -12324,7 +11731,7 @@ Do not remove power/USB",
                     (false, Some(4)) => {
                         #[cfg(target_os = "linux")]
                         {
-                            let pw = rustyjack_wireless::random_password();
+                            let pw = random_hotspot_password();
                             self.config.settings.hotspot_password = pw.clone();
                             let config_path = self.root.join("gui_conf.json");
                             let _ = self.config.save(&config_path);
@@ -12358,6 +11765,34 @@ Do not remove power/USB",
         Ok(wifi)
     }
 
+    fn interface_has_ip(&self, interface: &str) -> bool {
+        if interface.trim().is_empty() {
+            return false;
+        }
+        if let Ok((_, data)) = self.core.dispatch(Commands::Wifi(WifiCommand::List)) {
+            if let Ok(list) = serde_json::from_value::<WifiListResponse>(data) {
+                return list
+                    .interfaces
+                    .iter()
+                    .any(|iface| iface.name == interface && iface.ip.as_deref().unwrap_or("").len() > 0);
+            }
+        }
+        false
+    }
+
+    fn monitor_mode_supported(&self, interface: &str) -> bool {
+        if interface.trim().is_empty() {
+            return false;
+        }
+        match self.core.wifi_capabilities(interface) {
+            Ok(caps) => caps.supports_monitor_mode,
+            Err(err) => {
+                log::warn!("Failed to read capabilities for {}: {}", interface, err);
+                false
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn resolve_hotspot_interface(&mut self, ap_iface_hint: &str) -> Result<Option<String>> {
         if !ap_iface_hint.is_empty() {
@@ -12389,8 +11824,8 @@ Do not remove power/USB",
             None => return Ok(None),
         };
 
-        let mut channels = match allowed_ap_channels(&ap_iface) {
-            Ok(list) => list,
+        let mut channels = match self.core.hotspot_diagnostics(&ap_iface) {
+            Ok(diag) => diag.allowed_channels,
             Err(err) => {
                 self.show_message(
                     "Hotspot",
@@ -12437,12 +11872,24 @@ Do not remove power/USB",
             None => return Ok(()),
         };
 
+        let diag = match self.core.hotspot_diagnostics(&ap_iface) {
+            Ok(diag) => diag,
+            Err(err) => {
+                return self.show_message(
+                    "Hotspot diag",
+                    [
+                        "Diagnostics unavailable",
+                        &shorten_for_display(&err.to_string(), 90),
+                    ],
+                );
+            }
+        };
+
         let mut lines = Vec::new();
         lines.push(format!("Interface: {}", ap_iface));
 
-        let regdom = read_regdom_info();
-        match regdom.raw.as_deref() {
-            Some(raw) if regdom.valid => {
+        match diag.regdom_raw.as_deref() {
+            Some(raw) if diag.regdom_valid => {
                 lines.push(format!("Regdom: {}", raw));
             }
             Some(raw) => {
@@ -12455,87 +11902,48 @@ Do not remove power/USB",
             }
         }
 
-        let rfkill = RfkillManager::new();
-        match rfkill.list() {
-            Ok(devices) => {
-                if devices.is_empty() {
-                    lines.push("RF-kill: none".to_string());
-                } else {
-                    lines.push("RF-kill:".to_string());
-                    for dev in devices {
-                        lines.push(format!(
-                            "rfkill{}: {} {}",
-                            dev.idx,
-                            dev.type_.name(),
-                            dev.state_string()
-                        ));
-                    }
-                }
-            }
-            Err(err) => {
+        if diag.rfkill.is_empty() {
+            lines.push("RF-kill: none".to_string());
+        } else {
+            lines.push("RF-kill:".to_string());
+            for dev in diag.rfkill.iter() {
                 lines.push(format!(
-                    "RF-kill error: {}",
-                    shorten_for_display(&err.to_string(), 60)
+                    "rfkill{}: {} {}",
+                    dev.idx, dev.type_name, dev.state
                 ));
             }
         }
 
-        match WirelessManager::new() {
-            Ok(mut mgr) => match mgr.get_phy_capabilities(&ap_iface) {
-                Ok(caps) => {
-                    lines.push(format!(
-                        "AP support: {}",
-                        if caps.supports_ap { "yes" } else { "no" }
-                    ));
-                    if !caps.supported_modes.is_empty() {
-                        let modes = caps
-                            .supported_modes
-                            .iter()
-                            .map(|m| m.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        lines.push(format!("Modes: {}", modes));
-                    }
-                    if !caps.supported_bands.is_empty() {
-                        lines.push(format!("Bands: {}", caps.supported_bands.join(", ")));
-                    }
-                }
-                Err(err) => {
-                    lines.push(format!(
-                        "AP caps: {}",
-                        shorten_for_display(&err.to_string(), 70)
-                    ));
-                }
-            },
-            Err(err) => {
-                lines.push(format!(
-                    "NL80211: {}",
-                    shorten_for_display(&err.to_string(), 70)
-                ));
+        if let Some(caps) = diag.ap_support.as_ref() {
+            lines.push(format!(
+                "AP support: {}",
+                if caps.supports_ap { "yes" } else { "no" }
+            ));
+            if !caps.supported_modes.is_empty() {
+                lines.push(format!("Modes: {}", caps.supported_modes.join(", ")));
             }
+            if !caps.supported_bands.is_empty() {
+                lines.push(format!("Bands: {}", caps.supported_bands.join(", ")));
+            }
+        } else {
+            lines.push("AP support: unknown".to_string());
         }
 
-        match allowed_ap_channels(&ap_iface) {
-            Ok(channels) if !channels.is_empty() => {
-                let list = channels
-                    .iter()
-                    .map(|ch| ch.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                lines.push(format!("Channels: {}", list));
-            }
-            Ok(_) => lines.push("Channels: none".to_string()),
-            Err(err) => {
-                lines.push(format!(
-                    "Channels: {}",
-                    shorten_for_display(&err.to_string(), 70)
-                ));
-            }
+        if !diag.allowed_channels.is_empty() {
+            let list = diag
+                .allowed_channels
+                .iter()
+                .map(|ch| ch.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("Channels: {}", list));
+        } else {
+            lines.push("Channels: none".to_string());
         }
 
-        if let Some(err) = peek_last_start_ap_error() {
+        if let Some(err) = diag.last_start_error.as_deref() {
             lines.push(shorten_for_display(&format!("Last START_AP: {}", err), 90));
-            if let Some(hint) = classify_start_ap_error(&err) {
+            if let Some(hint) = classify_start_ap_error(err) {
                 lines.push(format!("Cause: {}", hint.category));
                 lines.push(format!("Hint: {}", hint.hint));
             }
@@ -12566,7 +11974,7 @@ Do not remove power/USB",
             lines.push(format!("Upstream: {}", upstream_iface));
 
             // Check if upstream has IP/internet
-            if interface_has_ip(upstream_iface) {
+            if self.interface_has_ip(upstream_iface) {
                 lines.push("Status: Online".to_string());
             } else {
                 lines.push("Status: No IP".to_string());
@@ -12627,18 +12035,21 @@ Do not remove power/USB",
             }
         }
 
-        let leases = hotspot_leases();
+        let leases = match self.core.hotspot_clients() {
+            Ok(list) => list,
+            Err(err) => {
+                return self.show_message(
+                    "Connected Devices",
+                    [
+                        "Failed to read hotspot leases",
+                        &shorten_for_display(&err.to_string(), 90),
+                    ],
+                );
+            }
+        };
         for lease in leases {
-            let mac = format!(
-                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                lease.mac[0],
-                lease.mac[1],
-                lease.mac[2],
-                lease.mac[3],
-                lease.mac[4],
-                lease.mac[5]
-            );
-            let ip = lease.ip.to_string();
+            let mac = lease.mac.to_lowercase();
+            let ip = lease.ip;
             let mut hostname = lease.hostname.unwrap_or_else(|| "Unknown".to_string());
             if hostname.is_empty() {
                 hostname = "Unknown".to_string();
@@ -12962,7 +12373,13 @@ Do not remove power/USB",
     }
 
     fn disconnect_hotspot_client(&mut self, mac: &str, _ip: &str) -> Result<()> {
-        if let Err(err) = hotspot_disconnect_client(mac) {
+        let args = HotspotDisconnectArgs {
+            mac: mac.to_string(),
+        };
+        if let Err(err) = self
+            .core
+            .dispatch(Commands::Hotspot(HotspotCommand::DisconnectClient(args)))
+        {
             log::warn!("Hotspot disconnect failed for {}: {}", mac, err);
             return self.show_message(
                 "Disconnect Failed",
@@ -12985,7 +12402,10 @@ Do not remove power/USB",
             .map(|d| d.mac.clone())
             .collect();
 
-        hotspot_set_blacklist(&macs).context("applying hotspot blacklist")?;
+        let args = HotspotBlacklistArgs { macs };
+        self.core
+            .dispatch(Commands::Hotspot(HotspotCommand::SetBlacklist(args)))
+            .context("applying hotspot blacklist")?;
 
         Ok(())
     }

@@ -1,0 +1,32 @@
+[Unit]
+Description=Rustyjack privileged daemon
+After=local-fs.target network.target
+Wants=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/rustyjackd
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=rustyjack
+RuntimeDirectoryMode=0770
+StateDirectory=rustyjack
+StateDirectoryMode=0770
+ConfigurationDirectory=rustyjack
+ConfigurationDirectoryMode=0770
+Group=rustyjack
+Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
+Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
+WatchdogSec=20s
+NotifyAccess=main
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

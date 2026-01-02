@@ -1,0 +1,607 @@
+RUSTYJACK — DEEP DIVE: DAEMON ROADMAP COMPLIANCE (THIS ZIP)
+Date: 2026-01-01 (Europe/Dublin)
+Reviewed artifact: /mnt/data/Rustyjack.zip (extracted to /mnt/data/rustyjack_review/Rustyjack)
+
+Roadmap compared against:
+- Rustyjack_Remaining_Daemon_Work_Roadmap_ExtremeDetail.txt
+
+================================================================================
+A) Verdict
+================================================================================
+
+Not everything has been accomplished.
+
+What IS accomplished (and done to a solid “daemon standard”):
+- `rustyjack-daemon` and `rustyjack-ipc` exist as workspace crates.
+- IPC has explicit framing + max frame size, a mandatory hello handshake, structured error envelopes,
+  peer credential extraction (SO_PEERCRED), a permissions tier model, and systemd supervision (Type=notify)
+  with watchdog + socket activation.
+
+What is NOT accomplished (and is required to meet the roadmap’s standard):
+- The daemon is not yet the system’s control plane: the UI still runs privileged and still calls into core directly.
+- No real operations have been migrated behind the daemon (only Health/Version and toy JobKinds).
+- The “Rust-only / no binaries” requirement is not met across the project: there are still many Command::new() callsites.
+- The “services-first” core refactor is not present.
+- The daemon/proto lack their own tests/fuzzing that the roadmap called for.
+
+================================================================================
+B) Evidence snapshots (selected)
+================================================================================
+
+B.1 Workspace membership now includes daemon + ipc (good):
+0001 [workspace]
+0002 resolver = "2"
+0003 members = [
+0004     "rustyjack-core",
+0005     "rustyjack-evasion",
+0006     "rustyjack-ui",
+0007     "rustyjack-wireless",
+0008     "rustyjack-ethernet",
+0009     "rustyjack-encryption",
+0010     "rustyjack-netlink",
+0011     "rustyjack-portal",
+0012     "rustyjack-ipc",
+0013     "rustyjack-daemon",
+0014 ]
+0015 
+0016 [workspace.package]
+0017 version = "0.1.0"
+0018 edition = "2021"
+0019 authors = ["RustyJack Team"]
+0020 license = "MIT"
+0021 repository = "https://github.com/yourusername/rustyjack"
+0022 
+0023 [workspace.dependencies]
+0024 # Shared dependencies across crates
+0025 anyhow = "1.0"
+0026 chrono = "0.4"
+0027 log = "0.4"
+0028 serde = { version = "1.0", features = ["derive"] }
+0029 serde_json = "1.0"
+0030 thiserror = "1.0"
+
+B.2 systemd daemon units exist (good):
+--- rustyjackd.socket ---
+0001 [Unit]
+0002 Description=Rustyjack daemon socket
+0003 
+0004 [Socket]
+0005 ListenStream=/run/rustyjack/rustyjackd.sock
+0006 SocketMode=0660
+0007 SocketUser=root
+0008 SocketGroup=rustyjack
+0009 RemoveOnStop=true
+0010 
+0011 [Install]
+0012 WantedBy=sockets.target
+
+--- rustyjackd.service ---
+0001 [Unit]
+0002 Description=Rustyjack privileged daemon
+0003 After=local-fs.target network.target
+0004 Wants=network.target
+0005 
+0006 [Service]
+0007 Type=notify
+0008 ExecStart=/usr/local/bin/rustyjackd
+0009 Restart=on-failure
+0010 RestartSec=2
+0011 RuntimeDirectory=rustyjack
+0012 StateDirectory=rustyjack
+0013 ConfigurationDirectory=rustyjack
+0014 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
+0015 WatchdogSec=20s
+0016 NotifyAccess=main
+0017 NoNewPrivileges=true
+0018 PrivateTmp=true
+0019 ProtectSystem=strict
+0020 ProtectHome=true
+0021 RestrictRealtime=true
+0022 LockPersonality=true
+0023 MemoryDenyWriteExecute=true
+0024 SystemCallArchitectures=native
+0025 
+0026 [Install]
+0027 WantedBy=multi-user.target
+
+B.3 UI is still privileged (bad relative to roadmap):
+--- rustyjack.service (existing) ---
+0001 [Unit]
+0002 Description=Rustyjack UI Service
+0003 After=local-fs.target network.target
+0004 Wants=network.target
+0005 
+0006 [Service]
+0007 Type=simple
+0008 WorkingDirectory=/root/Rustyjack
+0009 ExecStart=/usr/local/bin/rustyjack-ui
+0010 Restart=on-failure
+0011 RestartSec=2
+0012 User=root
+0013 Environment=RUSTYJACK_ROOT=/root/Rustyjack
+0014 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+0015 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+0016 NoNewPrivileges=true
+0017 
+0018 [Install]
+0019 WantedBy=multi-user.target
+
+B.4 UI still depends on core and does not use the ipc crate (bad relative to roadmap):
+--- rustyjack-ui/Cargo.toml ---
+0001 [package]
+0002 name = "rustyjack-ui"
+0003 version = "0.1.0"
+0004 edition = "2021"
+0005 
+0006 [dependencies]
+0007 anyhow = "1.0"
+0008 chrono = { version = "0.4", features = ["clock"] }
+0009 embedded-graphics = "0.8"
+0010 serde = { version = "1.0", features = ["derive"] }
+0011 serde_json = "1.0"
+0012 embedded-hal = "1.0"
+0013 tempfile = "3.12"
+0014 walkdir = "2.5"
+0015 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+0016 num_cpus = "1.16"
+0017 image = { version = "0.23", default-features = false, features = ["bmp"] }
+0018 tinybmp = "0.5"
+0019 st7735-lcd = "0.10" # Updated for embedded-hal 1.0 compatibility
+0020 log = "0.4"
+0021 rustyjack-core = { path = "../rustyjack-core" }
+0022 rustyjack-evasion = { path = "../rustyjack-evasion" }
+0023 rustyjack-encryption = { path = "../rustyjack-encryption" }
+0024 rand = "0.8"
+0025 zeroize = "1.7"
+0026 
+0027 [target.'cfg(target_os = "linux")'.dependencies]
+0028 linux-embedded-hal = { version = "0.4", features = [] }
+0029 rustyjack-wireless = { path = "../rustyjack-wireless" }
+0030 rustyjack-netlink = { path = "../rustyjack-netlink" }
+0031 tokio = { version = "1.0", features = ["rt", "macros"] }
+0032 libc = "0.2"
+0033 
+0034 [features]
+0035 journald = ["rustyjack-netlink/journald"]
+
+B.5 IPC contract exists but endpoints are minimal (good scaffolding; not full integration):
+--- rustyjack-ipc/src/lib.rs (handshake+envelope excerpt) ---
+0001 use serde::{Deserialize, Serialize};
+0002 use serde_repr::{Deserialize_repr, Serialize_repr};
+0003 
+0004 pub const PROTOCOL_VERSION: u32 = 1;
+0005 pub const MAX_FRAME: u32 = 1_048_576;
+0006 
+0007 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+0008 #[serde(rename_all = "snake_case")]
+0009 pub enum FeatureFlag {
+0010     JobSubscribe,
+0011     Compression,
+0012 }
+0013 
+0014 #[derive(Debug, Clone, Serialize, Deserialize)]
+0015 pub struct ClientHello {
+0016     pub protocol_version: u32,
+0017     pub client_name: String,
+0018     pub client_version: String,
+0019     pub supports: Vec<FeatureFlag>,
+0020 }
+0021 
+0022 #[derive(Debug, Clone, Serialize, Deserialize)]
+0023 pub struct HelloAck {
+0024     pub protocol_version: u32,
+0025     pub daemon_version: String,
+0026     pub features: Vec<FeatureFlag>,
+0027     pub max_frame: u32,
+0028     pub authz: AuthzSummary,
+0029 }
+0030 
+0031 #[derive(Debug, Clone, Serialize, Deserialize)]
+0032 pub struct AuthzSummary {
+0033     pub uid: u32,
+0034     pub gid: u32,
+0035     pub role: AuthorizationTier,
+0036 }
+0037 
+0038 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+0039 #[serde(rename_all = "snake_case")]
+0040 pub enum AuthorizationTier {
+0041     ReadOnly,
+0042     Operator,
+0043     Admin,
+0044 }
+0045 
+0046 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+0047 #[serde(rename_all = "snake_case")]
+0048 pub enum Endpoint {
+0049     Health,
+0050     Version,
+0051     JobStart,
+0052     JobStatus,
+0053     JobCancel,
+0054 }
+0055 
+0056 #[derive(Debug, Clone, Serialize, Deserialize)]
+0057 pub struct RequestEnvelope {
+0058     pub v: u32,
+0059     pub request_id: u64,
+0060     pub endpoint: Endpoint,
+0061     pub body: RequestBody,
+0062 }
+0063 
+0064 #[derive(Debug, Clone, Serialize, Deserialize)]
+0065 pub struct ResponseEnvelope {
+0066     pub v: u32,
+0067     pub request_id: u64,
+0068     pub body: ResponseBody,
+0069 }
+0070 
+0071 #[derive(Debug, Clone, Serialize, Deserialize)]
+0072 #[serde(tag = "type", content = "data")]
+0073 pub enum RequestBody {
+0074     Health,
+0075     Version,
+0076     JobStart(JobStartRequest),
+0077     JobStatus(JobStatusRequest),
+0078     JobCancel(JobCancelRequest),
+0079 }
+0080 
+0081 #[derive(Debug, Clone, Serialize, Deserialize)]
+0082 #[serde(tag = "type", content = "data")]
+0083 pub enum ResponseBody {
+0084     Ok(ResponseOk),
+0085     Err(DaemonError),
+0086     Event(DaemonEvent),
+0087 }
+0088 
+0089 #[derive(Debug, Clone, Serialize, Deserialize)]
+0090 #[serde(tag = "type", content = "data")]
+0091 pub enum ResponseOk {
+0092     Health(HealthResponse),
+0093     Version(VersionResponse),
+0094     JobStarted(JobStarted),
+0095     JobStatus(JobStatusResponse),
+0096     JobCancelled(JobCancelResponse),
+0097 }
+0098 
+0099 #[derive(Debug, Clone, Serialize, Deserialize)]
+0100 pub struct HealthResponse {
+0101     pub ok: bool,
+0102     pub uptime_ms: u64,
+0103     pub message: String,
+0104 }
+0105 
+0106 #[derive(Debug, Clone, Serialize, Deserialize)]
+0107 pub struct VersionResponse {
+0108     pub daemon_version: String,
+0109     pub protocol_version: u32,
+0110 }
+0111 
+0112 #[derive(Debug, Clone, Serialize, Deserialize)]
+0113 pub struct JobStartRequest {
+0114     pub job: JobSpec,
+0115 }
+0116 
+0117 #[derive(Debug, Clone, Serialize, Deserialize)]
+0118 pub struct JobSpec {
+0119     pub kind: JobKind,
+0120     pub requested_by: Option<String>,
+
+--- Endpoint enum (only Health/Version/Job*) ---
+0048 pub enum Endpoint {
+0049     Health,
+0050     Version,
+0051     JobStart,
+0052     JobStatus,
+0053     JobCancel,
+0054 }
+0055 
+0056 #[derive(Debug, Clone, Serialize, Deserialize)]
+0057 pub struct RequestEnvelope {
+0058     pub v: u32,
+0059     pub request_id: u64,
+0060     pub endpoint: Endpoint,
+0061     pub body: RequestBody,
+0062 }
+0063 
+0064 #[derive(Debug, Clone, Serialize, Deserialize)]
+0065 pub struct ResponseEnvelope {
+0066     pub v: u32,
+0067     pub request_id: u64,
+0068     pub body: ResponseBody,
+0069 }
+0070 
+0071 #[derive(Debug, Clone, Serialize, Deserialize)]
+0072 #[serde(tag = "type", content = "data")]
+0073 pub enum RequestBody {
+0074     Health,
+0075     Version,
+0076     JobStart(JobStartRequest),
+0077     JobStatus(JobStatusRequest),
+0078     JobCancel(JobCancelRequest),
+
+B.6 Daemon implements SO_PEERCRED + handshake + socket activation + sd_notify (good):
+--- peer credentials extraction ---
+0362     }
+0363 }
+0364 
+0365 #[derive(Debug, Clone, Copy)]
+0366 struct PeerCred {
+0367     pid: u32,
+0368     uid: u32,
+0369     gid: u32,
+0370 }
+0371 
+0372 fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCred> {
+0373     let fd = stream.as_raw_fd();
+0374     let mut cred = libc::ucred {
+0375         pid: 0,
+0376         uid: 0,
+0377         gid: 0,
+0378     };
+0379     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+0380     let rc = unsafe {
+0381         libc::getsockopt(
+0382             fd,
+0383             libc::SOL_SOCKET,
+0384             libc::SO_PEERCRED,
+0385             &mut cred as *mut _ as *mut libc::c_void,
+0386             &mut len,
+0387         )
+0388     };
+0389     if rc != 0 {
+0390         return Err(io::Error::last_os_error());
+0391     }
+0392 
+0393     Ok(PeerCred {
+0394         pid: cred.pid as u32,
+0395         uid: cred.uid as u32,
+0396         gid: cred.gid as u32,
+0397     })
+
+--- hello protocol version enforcement ---
+0618                 &mut stream,
+0619                 PROTOCOL_VERSION,
+0620                 ERROR_REQUEST_ID,
+0621                 protocol_violation(format!("invalid hello: {}", err)),
+0622             )
+0623             .await;
+0624             return;
+0625         }
+0626     };
+0627 
+0628     if hello.protocol_version != PROTOCOL_VERSION {
+0629         let _ = send_error(
+0630             &mut stream,
+0631             PROTOCOL_VERSION,
+0632             ERROR_REQUEST_ID,
+0633             DaemonError::new(
+0634                 ErrorCode::IncompatibleProtocol,
+0635                 format!(
+0636                     "unsupported protocol {}",
+0637                     hello.protocol_version
+0638                 ),
+0639                 false,
+0640             ),
+0641         )
+0642         .await;
+0643         return;
+0644     }
+0645 
+0646     let ack = HelloAck {
+0647         protocol_version: PROTOCOL_VERSION,
+0648         daemon_version: state.version.clone(),
+0649         features: Vec::new(),
+0650         max_frame: state.config.max_frame,
+0651         authz: AuthzSummary {
+0652             uid: peer.uid,
+0653             gid: peer.gid,
+0654             role: authz,
+0655         },
+0656     };
+0657 
+0658     let ack_bytes = match serde_json::to_vec(&ack) {
+
+--- socket activation (LISTEN_FDS) ---
+0474     };
+0475     let payload = serde_json::to_vec(&envelope)?;
+0476     write_frame(stream, &payload).await?;
+0477     Ok(())
+0478 }
+0479 
+0480 fn systemd_listener() -> io::Result<Option<UnixListener>> {
+0481     let listen_pid = env::var("LISTEN_PID")
+0482         .ok()
+0483         .and_then(|v| v.parse::<u32>().ok());
+0484     let listen_fds = env::var("LISTEN_FDS")
+0485         .ok()
+0486         .and_then(|v| v.parse::<i32>().ok());
+0487 
+0488     if listen_pid != Some(std::process::id()) {
+0489         return Ok(None);
+0490     }
+0491 
+0492     let fds = listen_fds.unwrap_or(0);
+0493     if fds < 1 {
+0494         return Ok(None);
+0495     }
+0496 
+0497     if fds > 1 {
+0498         warn!("LISTEN_FDS={} (expected 1)", fds);
+0499     }
+0500 
+0501     let fd = 3;
+0502     let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+0503     std_listener.set_nonblocking(true)?;
+0504     Ok(Some(UnixListener::from_std(std_listener)?))
+0505 }
+0506 
+0507 fn bind_socket(path: &Path, group: Option<&str>) -> io::Result<UnixListener> {
+0508     if let Some(parent) = path.parent() {
+0509         fs::create_dir_all(parent)?;
+0510     }
+0511     if path.exists() {
+0512         fs::remove_file(path)?;
+0513     }
+0514 
+0515     let listener = std::os::unix::net::UnixListener::bind(path)?;
+0516     fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
+0517 
+0518     if let Some(group) = group {
+0519         if let Err(err) = apply_socket_group(path, group) {
+0520             warn!("Failed to set socket group {}: {}", group, err);
+0521         }
+0522     }
+0523 
+0524     listener.set_nonblocking(true)?;
+
+--- sd_notify readiness/watchdog ---
+0543     if grp.is_null() {
+0544         return Err(io::Error::new(
+0545             io::ErrorKind::NotFound,
+0546             format!("group {} not found", group),
+0547         ));
+0548     }
+0549     let gid = unsafe { (*grp).gr_gid } as u32;
+0550     Ok(gid)
+0551 }
+0552 
+0553 fn sd_notify(message: &str) -> io::Result<()> {
+0554     let notify_socket = match env::var("NOTIFY_SOCKET") {
+0555         Ok(value) => value,
+0556         Err(_) => return Ok(()),
+0557     };
+0558 
+0559     let addr = if let Some(stripped) = notify_socket.strip_prefix('@') {
+0560         SocketAddr::from_abstract_name(stripped.as_bytes())
+0561             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad notify socket"))?
+0562     } else {
+0563         SocketAddr::from_pathname(&notify_socket)
+0564             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad notify socket"))?
+0565     };
+0566 
+0567     let sock = UnixDatagram::unbound()?;
+0568     sock.send_to(message.as_bytes(), &addr)?;
+0569     Ok(())
+0570 }
+0571 
+0572 fn watchdog_interval() -> Option<Duration> {
+0573     let usec = env::var("WATCHDOG_USEC")
+0574         .ok()
+0575         .and_then(|v| v.parse::<u64>().ok())?;
+0576     if usec == 0 {
+0577         return None;
+0578     }
+0579 
+0580     if let Ok(pid) = env::var("WATCHDOG_PID") {
+0581         if pid.parse::<u32>().ok() != Some(std::process::id()) {
+0582             return None;
+0583         }
+0584     }
+0585 
+0586     let interval = Duration::from_micros(usec / 2).max(Duration::from_secs(1));
+0587     Some(interval)
+0588 }
+0589 
+0590 async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
+0591     let peer = match peer_credentials(&stream) {
+0592         Ok(cred) => cred,
+0593         Err(err) => {
+
+================================================================================
+C) Checklist against the “Extreme Detail” roadmap
+================================================================================
+- [x] Workspace includes `rustyjack-daemon` — OK (Top-level Cargo.toml workspace members)
+- [x] Workspace includes shared protocol crate (`rustyjack-ipc`) — OK (Top-level Cargo.toml workspace members)
+- [ ] Dedicated `rustyjack-client` crate shared by UI/CLI — MISSING/PARTIAL (No `rustyjack-client/` directory)
+- [ ] Optional `rustyjack-cli` thin client crate — MISSING/PARTIAL (No `rustyjack-cli/` directory)
+- [x] systemd: `rustyjackd.service` (Type=notify, watchdog) — OK (File exists and includes WatchdogSec/NotifyAccess)
+- [x] systemd: `rustyjackd.socket` (0660 root:rustyjack) — OK (File exists and defines SocketMode/SocketGroup)
+- [ ] systemd: unprivileged `rustyjack-ui.service` (no caps) — MISSING/PARTIAL (Missing; existing `rustyjack.service` runs UI as root with caps)
+- [ ] UI does NOT link to `rustyjack-core` (daemon-only) — MISSING/PARTIAL (UI Cargo.toml depends on rustyjack-core)
+- [ ] UI implements DaemonClient / uses IPC crate — MISSING/PARTIAL (No refs to rustyjack-ipc or socket path in UI sources)
+- [x] IPC framing + MAX_FRAME enforcement — OK (MAX_FRAME constant and framing in daemon)
+- [x] Mandatory Hello handshake + timeout — OK (ClientHello/HelloAck in ipc; timeout in daemon)
+- [ ] Protocol negotiation (min supported) rather than exact match — MISSING/PARTIAL (Daemon requires exact version match)
+- [x] Peer credential (SO_PEERCRED) authz — OK (peer_credentials uses SO_PEERCRED; tier computed)
+- [x] Authz tiers mapped per endpoint — OK (required_tier() in daemon)
+- [ ] Authz uses gid/group membership (not only uid) — MISSING/PARTIAL (authorization_for() uses only uid)
+- [x] Job model: start/status/cancel + cancellation token — OK (JobManager + CancellationToken present)
+- [ ] Job kinds for real operations (mount/wifi/update/etc.) — MISSING/PARTIAL (Only Noop/Sleep in ipc)
+- [x] Locks with documented ordering — OK (LockKind ordinal ordering and semaphores)
+- [ ] Move privileged ops behind daemon boundary — MISSING/PARTIAL (No endpoints beyond Health/Version/Job*)
+- [ ] Core refactor to services-first (`rustyjack-core/src/services/`) — MISSING/PARTIAL (services dir missing)
+- [ ] No external command spawning anywhere (Rust-only runtime) — MISSING/PARTIAL (53 Command::new callsites remain across repo)
+- [x] Daemon itself spawns no external binaries — OK (No Command::new in daemon crate)
+- [ ] Daemon/ipc unit tests — MISSING/PARTIAL (No #[test] in daemon/ipc)
+- [ ] Proto fuzzing targets — MISSING/PARTIAL (No fuzz directory/targets)
+
+================================================================================
+D) “Search through the repo for roadmap features” (what I found)
+================================================================================
+
+D.1 IPC / protocol features
+- Present: PROTOCOL_VERSION, MAX_FRAME=1,048,576, ClientHello/HelloAck, RequestEnvelope/ResponseEnvelope,
+  ErrorCode (numeric repr), DaemonError{code,message,detail,retryable}.
+- Missing relative to roadmap “best practice”: protocol *negotiation*; daemon currently demands exact version match.
+
+D.2 Permissions / authz
+- Present: endpoint -> required tier mapping, Forbidden errors for insufficient tier, SO_PEERCRED extraction.
+- Missing relative to roadmap: group-based roles (gid/membership) and explicit per-endpoint allowlists (paths, interfaces)
+  because real endpoints are not implemented yet.
+
+D.3 Robustness
+- Present: handshake timeout, max frame enforcement, protocol violation counter, watchdog tick loop,
+  lock ordering via LockKind ordinal, SIGTERM/SIGINT handling.
+- Missing: job persistence/reconciliation policies (not needed until real jobs exist), event subscriptions.
+
+D.4 “Rust-only / no binaries”
+- Daemon crate: clean (no Command::new).
+- Whole repo: still spawns many binaries (53 callsites).
+  Summary (name -> count and example locations):
+- systemctl: 6 callsites (e.g. rustyjack-ui/src/app.rs:410, rustyjack-ui/src/app.rs:1650, rustyjack-core/src/anti_forensics.rs:256 (+3 more))
+- bash: 5 callsites (e.g. rustyjack-ui/src/app.rs:3240, rustyjack-ui/src/app.rs:3331, rustyjack-ui/src/app.rs:6904 (+2 more))
+- journalctl: 5 callsites (e.g. rustyjack-core/src/anti_forensics.rs:168, rustyjack-core/src/anti_forensics.rs:170, rustyjack-core/src/anti_forensics.rs:304 (+2 more))
+- tar: 4 callsites (e.g. rustyjack-core/src/anti_forensics.rs:385, rustyjack-core/src/anti_forensics.rs:426, rustyjack-core/src/anti_forensics.rs:659 (+1 more))
+- openssl: 3 callsites (e.g. rustyjack-core/src/anti_forensics.rs:391, rustyjack-core/src/anti_forensics.rs:418, rustyjack-core/src/anti_forensics.rs:665)
+- git: 2 callsites (e.g. rustyjack-core/src/system.rs:2330, rustyjack-core/src/system.rs:2340)
+- hostnamectl: 2 callsites (e.g. rustyjack-core/src/anti_forensics.rs:727, rustyjack-core/src/system.rs:1425)
+- shutdown: 2 callsites (e.g. rustyjack-ui/src/app.rs:1653, rustyjack-core/src/anti_forensics.rs:583)
+- sync: 2 callsites (e.g. rustyjack-ui/src/app.rs:1639, rustyjack-core/src/anti_forensics.rs:311)
+- timeout: 2 callsites (e.g. rustyjack-core/src/physical_access.rs:210, rustyjack-core/src/physical_access.rs:426)
+- cargo: 1 callsites (e.g. rustyjack-core/src/operations.rs:2860)
+- df: 1 callsites (e.g. rustyjack-ui/src/stats.rs:521)
+- dphys-swapfile: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:793)
+- exiftool: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:490)
+- hostname: 1 callsites (e.g. rustyjack-core/src/system.rs:1428)
+- id: 1 callsites (e.g. rustyjack-core/src/operations.rs:2614)
+- lsblk: 1 callsites (e.g. rustyjack-ui/src/app.rs:2709)
+- mount: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:344)
+- nscd: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:330)
+- pgrep: 1 callsites (e.g. rustyjack-core/src/system.rs:663)
+- pkill: 1 callsites (e.g. rustyjack-core/src/system.rs:630)
+- ps: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:697)
+- reboot: 1 callsites (e.g. rustyjack-ui/src/app.rs:1612)
+- shred: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:62)
+- swapoff: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:790)
+- sysctl: 1 callsites (e.g. rustyjack-core/src/evasion.rs:100)
+- ulimit: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:444)
+- umount: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:364)
+- which: 1 callsites (e.g. rustyjack-core/src/anti_forensics.rs:55)
+- wpa_supplicant: 1 callsites (e.g. rustyjack-netlink/src/station/external/process.rs:67)
+
+================================================================================
+E) Bottom line
+================================================================================
+
+This ZIP represents a high-quality “Phase 1” from the roadmap:
+- You have a real daemon skeleton with a real IPC contract and systemd integration.
+
+But it does NOT meet the roadmap’s end-state standard yet because:
+1) UI is not a daemon client and still runs privileged.
+2) Real operations (mount/wifi/update/etc.) are not behind rustyjackd endpoints/jobs.
+3) “Rust-only” is not achieved across the project.
+4) Core has not been refactored into daemon-consumable services.
+5) Daemon/proto lack tests/fuzzing/soak hooks.
+
+END OF REPORT

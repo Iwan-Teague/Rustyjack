@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  no-new-binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check no new Command::new callsites
+        run: |
+          rustc ci/no_new_command_new.rs -o /tmp/no_new_command_new
+          /tmp/no_new_command_new

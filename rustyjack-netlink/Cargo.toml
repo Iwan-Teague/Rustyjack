@@ -14,9 +14,15 @@ rand = { version = "0.8", features = ["std", "std_rng"] }
 hmac = "0.12"
 sha1 = "0.10"
 once_cell = "1.19"
+aes = "0.8"
+cipher = "0.4"
 
 [features]
 journald = ["systemd-journal-logger"]
+default = ["station_rust_wpa2"]
+station_external = []
+station_rust_open = []
+station_rust_wpa2 = []
 
 [dependencies.systemd-journal-logger]
 version = "2.2.2"

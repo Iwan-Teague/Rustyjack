@@ -1,4 +1,4 @@
-//! Native WPA password cracker
+//! Native WPA password cracker.
 //!
 //! Crack WPA/WPA2 handshakes directly on the device without external tools.
 //! This is slow compared to GPU-based crackers but useful for:
@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::error::{Result, WirelessError};
+use crate::error::{Result, WpaError};
 use crate::handshake::HandshakeExport;
 
 use hmac::{Hmac, Mac};
@@ -31,60 +31,60 @@ use sha1::Sha1;
 
 type HmacSha1 = Hmac<Sha1>;
 
-/// Cracker configuration
+/// Cracker configuration.
 #[derive(Debug, Clone)]
 pub struct CrackerConfig {
-    /// Number of threads to use
+    /// Number of threads to use.
     pub threads: usize,
-    /// Report progress every N attempts
+    /// Report progress every N attempts.
     pub progress_interval: u64,
-    /// Stop after this many attempts (0 = unlimited)
+    /// Stop after this many attempts (0 = unlimited).
     pub max_attempts: u64,
-    /// Yield to OS every N attempts to prevent thermal throttle (0 = no throttle)
+    /// Yield to OS every N attempts to prevent thermal throttle (0 = no throttle).
     pub throttle_interval: u64,
 }
 
 impl Default for CrackerConfig {
     fn default() -> Self {
         Self {
-            threads: 1, // Pi Zero 2 W has 4 cores but limited RAM
+            threads: 1, // Pi Zero 2 W has 4 cores but limited RAM.
             progress_interval: 1000,
             max_attempts: 0,
-            throttle_interval: 50, // Yield every 50 attempts to prevent thermal issues on Pi
+            throttle_interval: 50, // Yield every 50 attempts to prevent thermal issues on Pi.
         }
     }
 }
 
-/// Cracking progress callback
+/// Cracking progress callback.
 pub type ProgressCallback = Box<dyn Fn(CrackProgress) + Send>;
 
-/// Progress information
+/// Progress information.
 #[derive(Debug, Clone)]
 pub struct CrackProgress {
-    /// Passwords attempted
+    /// Passwords attempted.
     pub attempts: u64,
-    /// Current password being tried
+    /// Current password being tried.
     pub current: String,
-    /// Elapsed time
+    /// Elapsed time.
     pub elapsed: Duration,
-    /// Passwords per second
+    /// Passwords per second.
     pub rate: f32,
-    /// Estimated time remaining (if known)
+    /// Estimated time remaining (if known).
     pub eta: Option<Duration>,
 }
 
-/// Crack result
+/// Crack result.
 #[derive(Debug)]
 pub enum CrackResult {
-    /// Password found
+    /// Password found.
     Found(String),
-    /// Exhausted wordlist/attempts
+    /// Exhausted wordlist/attempts.
     Exhausted { attempts: u64 },
-    /// Stopped by user
+    /// Stopped by user.
     Stopped { attempts: u64 },
 }
 
-/// WPA/WPA2 password cracker
+/// WPA/WPA2 password cracker.
 pub struct WpaCracker {
     handshake: HandshakeExport,
     ssid: String,
@@ -94,7 +94,7 @@ pub struct WpaCracker {
 }
 
 impl WpaCracker {
-    /// Create new cracker
+    /// Create new cracker.
     pub fn new(handshake: HandshakeExport, ssid: &str) -> Self {
         Self {
             handshake,
@@ -105,28 +105,28 @@ impl WpaCracker {
         }
     }
 
-    /// Set configuration
+    /// Set configuration.
     pub fn with_config(mut self, config: CrackerConfig) -> Self {
         self.config = config;
         self
     }
 
-    /// Stop cracking
+    /// Stop cracking.
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::Relaxed);
     }
 
-    /// Get a handle to signal stop from another thread
+    /// Get a handle to signal stop from another thread.
     pub fn stop_handle(&self) -> Arc<AtomicBool> {
         self.stop_flag.clone()
     }
 
-    /// Get current attempt count
+    /// Get current attempt count.
     pub fn attempts(&self) -> u64 {
         self.attempts.load(Ordering::Relaxed)
     }
 
-    /// Crack using a password list with progress callback
+    /// Crack using a password list with progress callback.
     pub fn crack_passwords_with_progress(
         &mut self,
         passwords: &[String],
@@ -138,7 +138,7 @@ impl WpaCracker {
         let progress_interval = self.config.progress_interval.max(1);
         let throttle = self.config.throttle_interval;
 
-        for (_idx, password) in passwords.iter().enumerate() {
+        for password in passwords {
             if self.stop_flag.load(Ordering::Relaxed) {
                 return Ok(CrackResult::Stopped {
                     attempts: self.attempts(),
@@ -150,7 +150,7 @@ impl WpaCracker {
                 return Ok(CrackResult::Found(password.clone()));
             }
 
-            // Thermal throttle: yield to OS periodically to prevent overheating
+            // Thermal throttle: yield to OS periodically to prevent overheating.
             if throttle > 0 && attempts % throttle == 0 {
                 std::thread::yield_now();
             }
@@ -185,17 +185,17 @@ impl WpaCracker {
         })
     }
 
-    /// Crack using wordlist file
+    /// Crack using wordlist file.
     pub fn crack_wordlist(&mut self, wordlist_path: &Path) -> Result<CrackResult> {
         if !wordlist_path.exists() {
-            return Err(WirelessError::System(format!(
+            return Err(WpaError::System(format!(
                 "Wordlist not found: {:?}",
                 wordlist_path
             )));
         }
 
         let file = File::open(wordlist_path)
-            .map_err(|e| WirelessError::System(format!("Failed to open wordlist: {}", e)))?;
+            .map_err(|e| WpaError::System(format!("Failed to open wordlist: {}", e)))?;
         let reader = BufReader::new(file);
 
         log::info!("Starting wordlist attack with {:?}", wordlist_path);
@@ -215,7 +215,7 @@ impl WpaCracker {
                 Err(_) => continue,
             };
 
-            // Skip invalid WPA passwords
+            // Skip invalid WPA passwords.
             if password.len() < 8 || password.len() > 63 {
                 continue;
             }
@@ -227,7 +227,7 @@ impl WpaCracker {
 
             let attempts = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // Thermal throttle: yield to OS periodically to prevent overheating
+            // Thermal throttle: yield to OS periodically to prevent overheating.
             if throttle > 0 && attempts % throttle == 0 {
                 std::thread::yield_now();
             }
@@ -253,7 +253,7 @@ impl WpaCracker {
         })
     }
 
-    /// Crack using password list (in memory)
+    /// Crack using password list (in memory).
     pub fn crack_passwords(&mut self, passwords: &[String]) -> Result<CrackResult> {
         log::info!("Starting attack with {} passwords", passwords.len());
 
@@ -267,7 +267,7 @@ impl WpaCracker {
                 });
             }
 
-            // Skip invalid WPA passwords
+            // Skip invalid WPA passwords.
             if password.len() < 8 || password.len() > 63 {
                 continue;
             }
@@ -278,7 +278,7 @@ impl WpaCracker {
 
             let attempts = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // Thermal throttle: yield to OS periodically to prevent overheating
+            // Thermal throttle: yield to OS periodically to prevent overheating.
             if throttle > 0 && attempts % throttle == 0 {
                 std::thread::yield_now();
             }
@@ -295,7 +295,7 @@ impl WpaCracker {
         })
     }
 
-    /// Try 8-digit PIN patterns
+    /// Try 8-digit PIN patterns.
     pub fn crack_pins(&mut self) -> Result<CrackResult> {
         log::info!("Starting 8-digit PIN attack (0-99999999)");
 
@@ -317,7 +317,7 @@ impl WpaCracker {
 
             let attempts = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // Thermal throttle: yield to OS periodically to prevent overheating
+            // Thermal throttle: yield to OS periodically to prevent overheating.
             if throttle > 0 && attempts % throttle == 0 {
                 std::thread::yield_now();
             }
@@ -341,24 +341,24 @@ impl WpaCracker {
         })
     }
 
-    /// Try common password patterns
+    /// Try common password patterns.
     pub fn crack_common_patterns(&mut self) -> Result<CrackResult> {
         let mut patterns = Vec::new();
 
-        // Common base words
+        // Common base words.
         let bases = [
-            "password", "Password", "PASSWORD", "admin", "Admin", "ADMIN", "letmein", "welcome",
-            "monkey", "dragon", "master", "qwerty", "login", "guest", "root", "changeme", "secret",
-            "private",
+            "password", "Password", "PASSWORD", "admin", "Admin", "ADMIN", "letmein",
+            "welcome", "monkey", "dragon", "master", "qwerty", "login", "guest", "root",
+            "changeme", "secret", "private",
         ];
 
-        // Suffixes
+        // Suffixes.
         let suffixes = [
-            "", "1", "12", "123", "1234", "12345", "!", "@", "#", "$", "!!", "123!", "2024",
-            "2023", "2022", "2021",
+            "", "1", "12", "123", "1234", "12345", "!", "@", "#", "$", "!!", "123!",
+            "2024", "2023", "2022", "2021",
         ];
 
-        // Generate combinations
+        // Generate combinations.
         for base in &bases {
             for suffix in &suffixes {
                 let password = format!("{}{}", base, suffix);
@@ -368,7 +368,7 @@ impl WpaCracker {
             }
         }
 
-        // Add phone patterns (common WiFi passwords)
+        // Add phone patterns (common WiFi passwords).
         for i in 0..=9999u32 {
             patterns.push(format!("1234{:04}", i)); // 12340000-12349999
             patterns.push(format!("0000{:04}", i)); // 00000000-00009999
@@ -381,56 +381,56 @@ impl WpaCracker {
         self.crack_passwords(&patterns)
     }
 
-    /// Try a single password
+    /// Try a single password.
     fn try_password(&self, password: &str) -> bool {
-        // Calculate PMK from password + SSID using PBKDF2-SHA1
+        // Calculate PMK from password + SSID using PBKDF2-SHA1.
         let pmk = self.calculate_pmk(password);
 
-        // Calculate PTK from PMK
+        // Calculate PTK from PMK.
         let ptk = self.calculate_ptk(&pmk);
 
-        // Calculate MIC using PTK
+        // Calculate MIC using PTK.
         let calculated_mic = self.calculate_mic(&ptk);
 
-        // Compare with captured MIC
+        // Compare with captured MIC.
         calculated_mic == self.handshake.mic
     }
 
-    /// Calculate PMK using PBKDF2-SHA1
+    /// Calculate PMK using PBKDF2-SHA1.
     fn calculate_pmk(&self, password: &str) -> [u8; 32] {
         let mut pmk = [0u8; 32];
         pbkdf2_hmac::<Sha1>(password.as_bytes(), self.ssid.as_bytes(), 4096, &mut pmk);
         pmk
     }
 
-    /// Calculate PTK using PRF-512
+    /// Calculate PTK using PRF-512.
     fn calculate_ptk(&self, pmk: &[u8; 32]) -> [u8; 64] {
-        // Sort MAC addresses (smaller first)
+        // Sort MAC addresses (smaller first).
         let (mac1, mac2) = if self.handshake.client_mac < self.handshake.bssid {
-            (self.handshake.client_mac.0, self.handshake.bssid.0)
+            (self.handshake.client_mac, self.handshake.bssid)
         } else {
-            (self.handshake.bssid.0, self.handshake.client_mac.0)
+            (self.handshake.bssid, self.handshake.client_mac)
         };
 
-        // Sort nonces (smaller first)
+        // Sort nonces (smaller first).
         let (nonce1, nonce2) = if self.handshake.snonce < self.handshake.anonce {
             (self.handshake.snonce, self.handshake.anonce)
         } else {
             (self.handshake.anonce, self.handshake.snonce)
         };
 
-        // Build data for PRF
+        // Build data for PRF.
         let mut data = Vec::with_capacity(76);
         data.extend_from_slice(&mac1); // 6 bytes
         data.extend_from_slice(&mac2); // 6 bytes
         data.extend_from_slice(&nonce1); // 32 bytes
         data.extend_from_slice(&nonce2); // 32 bytes
 
-        // PRF-512 for CCMP (or 384 for TKIP, but we use 512 for KCK+KEK+TK)
+        // PRF-512 for CCMP (or 384 for TKIP, but we use 512 for KCK+KEK+TK).
         self.prf_512(pmk, b"Pairwise key expansion", &data)
     }
 
-    /// PRF-512 function
+    /// PRF-512 function.
     fn prf_512(&self, key: &[u8], label: &[u8], data: &[u8]) -> [u8; 64] {
         let mut result = [0u8; 64];
         let mut counter = 0u8;
@@ -454,19 +454,19 @@ impl WpaCracker {
         result
     }
 
-    /// Calculate MIC from PTK
+    /// Calculate MIC from PTK.
     fn calculate_mic(&self, ptk: &[u8; 64]) -> [u8; 16] {
-        // KCK is first 16 bytes of PTK
+        // KCK is first 16 bytes of PTK.
         let kck = &ptk[0..16];
 
-        // Zero out MIC field in EAPOL data
+        // Zero out MIC field in EAPOL data.
         let mut eapol = self.handshake.eapol_data.clone();
         if eapol.len() >= 85 {
             eapol[81..97].fill(0);
         }
 
-        // Calculate MIC using HMAC-SHA1 (WPA) or AES-CMAC (WPA2)
-        // For simplicity, we use HMAC-SHA1 which works for WPA
+        // Calculate MIC using HMAC-SHA1 (WPA) or AES-CMAC (WPA2).
+        // For simplicity, we use HMAC-SHA1 which works for WPA.
         let mut hmac = HmacSha1::new_from_slice(kck).expect("HMAC key size");
         hmac.update(&eapol);
         let output = hmac.finalize().into_bytes();
@@ -477,11 +477,11 @@ impl WpaCracker {
     }
 }
 
-/// Generate common passwords for quick testing
+/// Generate common passwords for quick testing.
 pub fn generate_common_passwords() -> Vec<String> {
     let mut passwords = Vec::new();
 
-    // Top 100 most common passwords
+    // Top 100 most common passwords.
     let common = [
         "password",
         "12345678",
@@ -515,7 +515,7 @@ pub fn generate_common_passwords() -> Vec<String> {
         }
     }
 
-    // Year patterns
+    // Year patterns.
     for year in 2015..=2025 {
         passwords.push(format!("password{}", year));
         passwords.push(format!("Password{}", year));
@@ -525,19 +525,19 @@ pub fn generate_common_passwords() -> Vec<String> {
     passwords
 }
 
-/// Quick crack attempt - tries common passwords automatically
-/// Returns the password if found, None otherwise
-/// This is called automatically when a handshake is captured
+/// Quick crack attempt - tries common passwords automatically.
+/// Returns the password if found, None otherwise.
+/// This is called automatically when a handshake is captured.
 pub fn quick_crack(handshake: &HandshakeExport, ssid: &str) -> Option<String> {
     log::info!("Starting quick crack attempt for SSID: {}", ssid);
 
     let mut cracker = WpaCracker::new(handshake.clone(), ssid);
     let passwords = generate_common_passwords();
 
-    // Also try SSID-based passwords
+    // Also try SSID-based passwords.
     let mut ssid_passwords = generate_ssid_passwords(ssid);
 
-    // Combine password lists
+    // Combine password lists.
     let mut all_passwords = passwords;
     all_passwords.append(&mut ssid_passwords);
 
@@ -558,13 +558,13 @@ pub fn quick_crack(handshake: &HandshakeExport, ssid: &str) -> Option<String> {
     }
 }
 
-/// Generate passwords based on SSID name
+/// Generate passwords based on SSID name.
 pub fn generate_ssid_passwords(ssid: &str) -> Vec<String> {
     let mut passwords = Vec::new();
     let ssid_lower = ssid.to_lowercase();
     let ssid_clean: String = ssid.chars().filter(|c| c.is_alphanumeric()).collect();
 
-    // SSID + common suffixes
+    // SSID + common suffixes.
     let suffixes = [
         "", "1", "12", "123", "1234", "!", "!!", "123!", "wifi", "pass", "password",
     ];
@@ -579,14 +579,14 @@ pub fn generate_ssid_passwords(ssid: &str) -> Vec<String> {
         }
     }
 
-    // Common patterns with SSID
+    // Common patterns with SSID.
     if ssid.len() >= 4 {
         passwords.push(format!("{}1234", ssid_clean));
         passwords.push(format!("{}12345", ssid_clean));
         passwords.push(format!("{}{}", ssid_clean, ssid_clean));
     }
 
-    // Phone number patterns (if SSID contains numbers)
+    // Phone number patterns (if SSID contains numbers).
     let digits: String = ssid.chars().filter(|c| c.is_numeric()).collect();
     if digits.len() >= 4 {
         passwords.push(format!("{}0000", digits));
@@ -596,21 +596,21 @@ pub fn generate_ssid_passwords(ssid: &str) -> Vec<String> {
     passwords
 }
 
-/// Auto-crack callback type for integration with capture
+/// Auto-crack callback type for integration with capture.
 pub type CrackCallback = Box<dyn Fn(&str) + Send>;
 
-/// Crack result for UI display
+/// Crack result for UI display.
 #[derive(Debug, Clone)]
 pub struct QuickCrackResult {
-    /// SSID that was cracked
+    /// SSID that was cracked.
     pub ssid: String,
-    /// BSSID of the AP
+    /// BSSID of the AP.
     pub bssid: String,
-    /// Password if found
+    /// Password if found.
     pub password: Option<String>,
-    /// Number of attempts made
+    /// Number of attempts made.
     pub attempts: u64,
-    /// Time taken
+    /// Time taken.
     pub duration: std::time::Duration,
 }
 
@@ -632,5 +632,5 @@ mod tests {
         assert!(passwords.contains(&"HomeNetwork1234".to_string()));
     }
 
-    // Note: Full cracking tests require actual handshake data
+    // Note: Full cracking tests require actual handshake data.
 }

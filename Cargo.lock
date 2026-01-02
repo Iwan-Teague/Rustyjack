@@ -2262,6 +2262,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "rustyjack-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rustyjack-ipc",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rustyjack-commands"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+]
+
+[[package]]
 name = "rustyjack-core"
 version = "0.1.0"
 dependencies = [
@@ -2276,17 +2294,35 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "reqwest",
+ "rustyjack-commands",
  "rustyjack-encryption",
  "rustyjack-ethernet",
  "rustyjack-evasion",
+ "rustyjack-ipc",
  "rustyjack-netlink",
  "rustyjack-portal",
  "rustyjack-wireless",
+ "rustyjack-wpa",
  "serde",
  "serde_json",
  "tokio",
  "walkdir",
  "zeroize",
+]
+
+[[package]]
+name = "rustyjack-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger 0.11.8",
+ "libc",
+ "log",
+ "rustyjack-core",
+ "rustyjack-ipc",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2336,10 +2372,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyjack-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_repr",
+]
+
+[[package]]
 name = "rustyjack-netlink"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
+ "cipher",
  "futures",
  "hmac",
  "ipnetwork",
@@ -2386,16 +2433,16 @@ dependencies = [
  "embedded-graphics",
  "embedded-hal",
  "image",
- "libc",
  "linux-embedded-hal",
  "log",
  "num_cpus",
  "rand 0.8.5",
- "rustyjack-core",
+ "rustyjack-client",
+ "rustyjack-commands",
  "rustyjack-encryption",
  "rustyjack-evasion",
- "rustyjack-netlink",
- "rustyjack-wireless",
+ "rustyjack-ipc",
+ "rustyjack-wpa",
  "serde",
  "serde_json",
  "st7735-lcd",
@@ -2417,7 +2464,6 @@ dependencies = [
  "chrono",
  "env_logger 0.10.2",
  "genetlink",
- "hmac",
  "ipnet",
  "libc",
  "log",
@@ -2426,16 +2472,27 @@ dependencies = [
  "netlink-packet-generic 0.3.3",
  "netlink-sys",
  "nix 0.27.1",
- "pbkdf2",
  "rand 0.8.5",
  "rustyjack-ethernet",
  "rustyjack-evasion",
  "rustyjack-netlink",
+ "rustyjack-wpa",
  "serde",
  "serde_json",
- "sha1",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "rustyjack-wpa"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "log",
+ "pbkdf2",
+ "serde",
+ "sha1",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

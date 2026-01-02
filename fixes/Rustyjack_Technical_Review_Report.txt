@@ -1,0 +1,720 @@
+RUSTYJACK — SENIOR ENGINEERING REVIEW (TEXT EDITION)
+Date: 2025-12-31 (Europe/Dublin)
+Target platform: Raspberry Pi Zero 2 W, Raspberry Pi OS “Trixie” 32-bit CLI (Linux)
+Repo snapshot: Rustyjack.zip (workspace extracted locally for review)
+
+===============================================================================
+0) Scope, safety boundary, and what this report WILL / WILL NOT do
+===============================================================================
+
+You described Rustyjack as an “All Rust” network offence + recon device for
+white-hat hackers. I can review engineering quality and suggest improvements,
+BUT I will not provide instructions, implementation details, or design guidance
+that meaningfully increases the tool’s ability to perform wrongdoing
+(e.g., credential theft/phishing, deauthentication, forced association, stealth/
+anti-forensics for concealment, MITM/DNS spoofing for interception, cracking,
+or similar). Those are dual-use techniques that can be abused.
+
+So this report focuses on:
+  • Making Rustyjack reliable on a constrained Pi Zero 2 W
+  • Enforcing “safe-by-default” behavior and strong authorization/consent
+  • Reducing/isolating external binary dependencies to meet “All Rust” goals
+  • Improving maintainability: crate boundaries, error handling, testing, logging
+  • Hardening: privilege separation, systemd sandboxing, cryptographic hygiene
+  • Refactoring for performance and clarity
+
+Where the repository already contains clearly dual-use modules, I recommend
+either removing them from default builds or placing them behind explicit
+compile-time and runtime gates (lab-only, authorized-only), and I explain how.
+
+===============================================================================
+1) Repository map (what’s here)
+===============================================================================
+
+Top-level (selected):
+  - Cargo.toml (workspace; 8 member crates)
+  - rustyjack-core/        : CLI + orchestration and “one place to call things”
+  - rustyjack-ui/          : on-device UI (TUI + display integration)
+  - rustyjack-netlink/     : netlink/nl80211 plumbing, DHCP/DNS/AP plumbing, etc.
+  - rustyjack-wireless/    : wireless operations (includes dual-use modules)
+  - rustyjack-portal/      : Axum HTTP service library (portal/web UI)
+  - rustyjack-encryption/  : encryption helpers + global feature toggles
+  - rustyjack-ethernet/    : ethernet discovery + TCP helpers
+  - rustyjack-evasion/     : interface “evasion/obfuscation” (naming + scope risk)
+  - install_rustyjack.sh   : installer (writes systemd service unit)
+  - rustyjack.service      : a service unit template (NOTE: differs from installer)
+  - DNSSpoof/              : contains “sites/” and “captures/” (high risk content)
+
+Scale:
+  • ~83 Rust source files
+  • ~61k Rust lines-of-code (LOC) across the workspace
+
+===============================================================================
+2) The “All Rust” promise vs reality (binary dependency audit)
+===============================================================================
+
+Your explicit constraint:
+  “Do NOT incorporate third-party binaries that cannot be edited to match needs.”
+
+Observed: The codebase still shells out to various system binaries. Some are
+core OS utilities (systemctl, journalctl, mount), while others are “big”
+security-critical dependencies (notably wpa_supplicant).
+
+I found 55 distinct `Command::new("...")` callsites across Rust sources.
+Most frequent commands include:
+  - systemctl / journalctl / shutdown / reboot / sync
+  - mount / umount
+  - lsblk / df
+  - bash (used as a general escape hatch)
+  - tar / git (update/backup)
+  - wpa_supplicant (Wi‑Fi station mode)
+  - openssl / shred (used inside anti_forensics.rs)
+
+This directly conflicts with “All Rust” and creates reliability hazards on a
+Pi (blocking calls, error parsing via stdout/stderr, and missing capabilities).
+
+HIGH-PRIORITY RECOMMENDATION:
+  Treat “no uneditable third-party binaries” as TWO separate requirements:
+
+  A) No opaque vendor tools (closed-source, cannot patch).
+  B) Prefer pure-Rust implementations over external processes where feasible.
+
+For A: systemd utilities are part of the OS and are open-source, but you still
+can’t easily patch them on-device. For B: you can eliminate many process calls
+quickly, but replacing wpa_supplicant is a major engineering project.
+
+In Sections 5–8 I give a staged plan: quick wins first (mounting, stats,
+updates), then deep work (Wi‑Fi station).
+
+===============================================================================
+3) The biggest structural risk: dual-use modules are first-class exports
+===============================================================================
+
+In `rustyjack-core/src/lib.rs`, the crate re-exports functions with names that
+strongly imply offensive operations. The wireless crate also contains modules
+named `crack.rs`, `deauth.rs`, `evil_twin.rs`, `karma.rs`, `pmkid.rs`,
+`inject.rs`, etc.
+
+Even if your intended use is “white hat,” this structure makes it easy to
+accidentally ship harmful capabilities and makes audits harder.
+
+RECOMMENDATION: Split the project into “safe core” and “lab-only extensions”.
+
+Implementation blueprint:
+  1) Create a new crate:
+       Rustyjack/rustyjack-lab/
+         Cargo.toml
+         src/lib.rs
+
+  2) Move or re-export dual-use modules ONLY inside rustyjack-lab, and gate
+     them behind a feature flag. For example:
+
+       In Rustyjack/Cargo.toml (workspace members):
+         members += ["rustyjack-lab"]
+
+       In Rustyjack/rustyjack-core/Cargo.toml:
+         [features]
+         default = ["safe"]
+         safe = []
+         lab = ["rustyjack-lab"]   # optional
+
+       In Rustyjack/rustyjack-core/src/lib.rs:
+         #[cfg(feature = "lab")]
+         pub use rustyjack_lab::{ ... };
+
+       In Rustyjack/rustyjack-core/src/cli.rs:
+         Wrap lab-only subcommands with:
+           #[cfg(feature="lab")]
+           ...
+
+  3) Add runtime gates even when compiled:
+       - Require a local, physical unlock action (GPIO button press sequence)
+       - Require an explicit “I have written authorization” acknowledgement
+       - Require an allowlist file containing approved targets or lab SSIDs
+       - Require an audit log to be enabled (cannot be disabled in lab mode)
+
+Files to touch:
+  - Rustyjack/Cargo.toml
+  - Rustyjack/rustyjack-core/Cargo.toml
+  - Rustyjack/rustyjack-core/src/lib.rs
+  - Rustyjack/rustyjack-core/src/cli.rs
+  - Rustyjack/rustyjack-ui/src/app.rs (to expose “safe mode” / “lab mode” state)
+  - NEW: Rustyjack/rustyjack-core/src/authorization.rs (runtime gate logic)
+  - NEW: Rustyjack/rustyjack-lab/src/lib.rs (lab-only exports)
+
+Net effect:
+  • You can ship and install a “safe build” that can’t compile lab features.
+  • You can still build a “lab build” for controlled environments.
+
+===============================================================================
+4) Privilege separation: stop running the UI as root
+===============================================================================
+
+The current installer writes a systemd unit with `User=root` and only
+CAP_NET_ADMIN + CAP_NET_RAW:
+
+  install_rustyjack.sh writes /etc/systemd/system/rustyjack.service:
+    AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+    CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+    NoNewPrivileges=true
+
+Meanwhile, the repo’s `rustyjack.service` file includes CAP_SYS_ADMIN too,
+but the INSTALLER DOES NOT. This mismatch causes confusing “works on my repo,
+fails on device” behavior.
+
+Problem:
+  The UI (`rustyjack-ui`) does UI work + privileged OS work (mounting USB,
+  network changes, service restarts). That is an avoidable foot-gun.
+
+Recommended architecture (Pi-friendly, audit-friendly):
+  - rustyjackd (daemon): privileged backend, no UI, exposes a small IPC API.
+  - rustyjack-ui: unprivileged UI client, talks to daemon via Unix socket.
+  - rustyjack-mountd (optional): tightly-scoped helper for mounting only.
+
+Why:
+  • Reduces blast radius of UI bugs (a UI crash shouldn’t be a root crash).
+  • Makes capability bounding actually meaningful.
+  • Makes “All Rust” easier: all privileged operations live in one crate.
+
+Concrete plan:
+  1) NEW crate: Rustyjack/rustyjack-daemon/
+       - src/main.rs (Tokio runtime; IPC server on /run/rustyjack.sock)
+       - uses rustyjack-core as a library (operations dispatch)
+       - uses `serde_json` request/response structs
+
+  2) Modify UI:
+       - Rustyjack/rustyjack-ui/src/core.rs:
+           Replace direct calls into `rustyjack_core::dispatch_command(...)`
+           with IPC calls to the daemon (request = command + args, response =
+           HandlerResult).
+
+       - Rustyjack/rustyjack-ui/src/app.rs:
+           Add connection health checks and “daemon offline” UX.
+
+  3) Systemd units:
+       - /etc/systemd/system/rustyjackd.service (root, network caps)
+       - /etc/systemd/system/rustyjack-ui.service (User=rustyjack, no caps)
+       - OPTIONAL: rustyjack-mountd.service (root, CAP_SYS_ADMIN only)
+
+  4) Add a udev rule so the UI user can access SPI/I2C display devices:
+       - /etc/udev/rules.d/99-rustyjack-perms.rules
+       - group “spi”, “i2c”, etc as needed
+
+Security hardening knobs (apply thoughtfully):
+  - ProtectSystem=strict
+  - ProtectHome=true
+  - PrivateTmp=true
+  - PrivateDevices=true (if you don’t need raw device access in that service)
+  - RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 (and AF_NETLINK if needed)
+  - SystemCallFilter= (tighten gradually; don’t break netlink)
+
+===============================================================================
+5) USB mounting: replace external “mount/umount” and fix capability model
+===============================================================================
+
+Current behavior:
+  - `rustyjack-ui/src/app.rs` attempts to discover removable devices via /sys,
+    then calls external binaries:
+      Command::new("mount") ... and Command::new("umount") ...
+
+Risks:
+  • External process dependency
+  • Requires CAP_SYS_ADMIN (installer unit does NOT grant it)
+  • Failure modes can look like “UI reset” when errors bubble up badly
+
+Recommendation: Move mounting into a tightly scoped Rust component:
+  A) Create `rustyjack-mount` module inside `rustyjack-core` (or a tiny crate)
+     that performs:
+       - Device discovery: /sys/block + /dev, no lsblk
+       - Filesystem type detection: minimal probing or blkid bindings
+       - Mount via libc `mount(2)`; unmount via `umount2(2)`
+       - Enforce mount options: nosuid,nodev,noexec,ro by default
+       - Enforce mount root: /mnt/rustyjack/<device>
+       - Enforce allowlist for FS types (vfat, ext4, exfat if you support it)
+
+  B) IPC design:
+     UI requests “mount this device id”; daemon validates policy; mount helper
+     performs mount; returns mountpoint.
+
+Where to implement:
+  - NEW: Rustyjack/rustyjack-core/src/mount.rs
+      pub fn mount_device(req: MountRequest) -> Result<MountResponse>
+      pub fn unmount(mountpoint: &Path) -> Result<()>
+
+  - Modify:
+    Rustyjack/rustyjack-ui/src/app.rs
+      Replace direct mount/umount calls with core/daemon call.
+
+  - Installer:
+    Rustyjack/install_rustyjack.sh
+      Install separate units (daemon + UI).
+      Do NOT grant CAP_SYS_ADMIN to UI.
+
+Testing approach:
+  - Add an integration test that uses a loopback file + mkfs in a test-only
+    environment, then mount it to a temp dir using mount(2).
+    On-device tests can be manual.
+
+===============================================================================
+6) Wi‑Fi station (client) mode: wpa_supplicant is the big mountain
+===============================================================================
+
+Observed:
+  - `rustyjack-netlink/src/wpa.rs` shells out to `wpa_supplicant`.
+
+This is the single largest violation of “All Rust” for normal use, because
+joining WPA2/WPA3 networks requires a real supplicant.
+
+Truth-in-engineering:
+  Replacing wpa_supplicant completely is a *major* project. If you want it,
+  scope it narrowly:
+    • Support Open + WPA2-PSK first
+    • Defer WPA3-SAE and Enterprise (EAP) until later
+    • Target your real hardware: brcmfmac “fullmac” driver behavior matters
+
+Staged plan (pragmatic):
+  Stage 0 (now): Make wpa_supplicant dependency explicit and isolated:
+    - Keep it behind a feature flag `station_external`.
+    - Ensure every call is via a single interface:
+        rustyjack-netlink/src/supplicant.rs (StationManager)
+      so you can swap the implementation later.
+
+  Stage 1: Replace scanning + interface selection with pure netlink:
+    - Build on your existing nl80211 querying code
+    - Remove use of external tools for scanning if any remain
+
+  Stage 2: Implement a minimal WPA2-PSK supplicant in Rust (hard):
+    - Create new module:
+        rustyjack-netlink/src/wpa2.rs
+    - Reuse crypto primitives in rustyjack-encryption (but see Section 9)
+    - Implement only:
+        - association via nl80211
+        - EAPOL handshake for WPA2-PSK
+        - key install via nl80211
+    - Add a “known networks” profile format that stores only:
+        SSID, PSK (encrypted at rest), optional BSSID lock, security mode
+
+  Stage 3: WPA3-SAE / Enterprise — later
+
+Where to wire it:
+  - rustyjack-netlink/src/supplicant.rs
+      enum StationBackend { ExternalWpa, RustWpa2, ... }
+  - rustyjack-core/src/system.rs
+      connect_wifi_network() should call StationManager only.
+
+Also: UI freeze risk
+  Any long-running “connect” pipeline should be async, cancellable, and should
+  stream progress events. Make it impossible for a blocking call to hang the UI.
+
+===============================================================================
+7) Replace “bash as an API” with explicit Rust modules
+===============================================================================
+
+Multiple places use `Command::new("bash")` as a general mechanism.
+This makes behavior opaque, fragile, and harder to audit.
+
+Recommendation:
+  - Replace script-driven operations with explicit Rust modules.
+  - If scripts must remain for hardware quirks, treat them like a last-resort
+    “driver shim” and keep them small, versioned, and heavily validated.
+
+Where to start:
+  - `rustyjack-ui/src/app.rs`: remove bash usage for device tasks.
+  - `rustyjack-core/src/system.rs` and `operations.rs`: centralize all OS
+    interactions in one module with strong types and tests.
+
+Create a single “OS facade” module:
+  - NEW: `rustyjack-core/src/os.rs`
+      pub fn reboot() -> Result<()>
+      pub fn shutdown() -> Result<()>
+      pub fn systemd_restart(unit: &str) -> Result<()>
+      pub fn journal_tail(unit: &str, n: usize) -> Result<Vec<LogLine>>
+      pub fn disk_usage() -> Result<DiskUsage>
+
+Then the UI calls those via daemon IPC.
+
+===============================================================================
+8) Update/backup pipeline: stop using git + tar from inside the running UI
+===============================================================================
+
+Observed:
+  - `rustyjack-core/src/system.rs` shells out to tar + git for backup/update.
+Risks:
+  • External binaries
+  • Update semantics tied to a git remote (hard to secure on appliances)
+  • Failure modes: partial update, broken working tree
+
+Recommendation: “appliance-style” signed update bundles.
+  - Build an update bundle: a compressed archive with a manifest:
+      manifest.json: version, file hashes, build timestamp, target arch
+      manifest.sig : signature over manifest
+
+  - Verification:
+      - Add signature verification in `rustyjack-encryption`.
+      - Use a pinned public key compiled into the binary (or stored in /etc).
+
+  - Apply update with an A/B strategy:
+      - Install into /opt/rustyjack/releases/<version>/
+      - Update a symlink /opt/rustyjack/current -> releases/<version>
+      - systemd ExecStart uses /opt/rustyjack/current/bin/rustyjackd
+      - Rollback if healthcheck fails.
+
+Where:
+  - NEW: rustyjack-core/src/update.rs
+  - Modify: rustyjack-core/src/system.rs (remove git/tar logic)
+  - Modify: install_rustyjack.sh (install into /opt/rustyjack layout)
+
+===============================================================================
+9) Cryptography + secrets: make key management explicit and non-global
+===============================================================================
+
+`rustyjack-encryption` currently provides process-wide toggles and “simple key
+management.” On a security tool, “simple” often becomes “surprising.”
+
+Recommendations:
+  1) Introduce a `Keyring` abstraction:
+       - In-memory keys are `Zeroize`d.
+       - The master key is derived from:
+           (user passphrase) + (device salt)
+         using a memory-hard KDF (Argon2id recommended).
+       - The device salt can be stable: /etc/machine-id + random salt file.
+
+  2) Separate toggles from crypto:
+       - Move “encryption enabled” flags OUT of the crypto crate.
+       - Put policy toggles in `rustyjack-core/src/policy.rs`.
+
+  3) Encrypt at rest with clear envelope format:
+       - versioned header
+       - nonce
+       - ciphertext
+       - authentication tag
+     Store as a single file per secret.
+
+Where:
+  - Modify: rustyjack-encryption/src/lib.rs (split into modules)
+  - NEW: rustyjack-encryption/src/kdf.rs
+  - NEW: rustyjack-encryption/src/keyring.rs
+  - Modify: rustyjack-ui/src/config.rs (prompt/unlock workflow)
+  - Modify: rustyjack-core/src/system.rs (Wi‑Fi profiles, artifact storage)
+
+===============================================================================
+10) Logging + audit: do the opposite of anti-forensics
+===============================================================================
+
+The repo contains `rustyjack-core/src/anti_forensics.rs`.
+Even if intended for “cleanup,” anti-forensics is a huge trust red-flag.
+
+Recommendation:
+  - Remove anti-forensics features from default builds.
+  - Replace with:
+      A) Data retention controls (privacy-friendly, not concealment)
+      B) Tamper-evident audit logs (integrity-friendly)
+
+Implementation:
+  - NEW: rustyjack-core/src/audit.rs
+      - Append-only log file
+      - Each record includes previous hash (hash chain)
+      - Optionally also write to journald
+  - UI surfaces:
+      - “Export audit log”
+      - “Clear user data” (only clears specific directories, logged)
+
+Where:
+  - Remove or gate: rustyjack-core/src/anti_forensics.rs
+  - Modify: rustyjack-core/src/lib.rs (stop exporting it by default)
+  - Modify: rustyjack-core/src/operations.rs (every operation logs an audit event)
+
+===============================================================================
+11) Unsafe Rust: centralize it and prove invariants
+===============================================================================
+
+I found ~24 files containing `unsafe` (raw sockets, netlink, packet parsing).
+That is normal for low-level networking, but it needs discipline.
+
+Rules of thumb:
+  - Keep unsafe blocks tiny and localized.
+  - Wrap unsafe in safe APIs that encode invariants.
+  - Add tests that exercise boundary conditions.
+
+Concrete refactor pattern:
+  - In each crate, create `src/ffi/` modules that contain ALL unsafe.
+  - Expose safe wrappers:
+      - Validate lengths before pointer casts
+      - Treat all packet parsing as “untrusted input”
+
+Where:
+  - rustyjack-wireless/src/frames.rs, radiotap.rs, inject.rs, capture.rs
+  - rustyjack-netlink/src/* (netlink + kernel interfaces)
+
+Testing:
+  - Add fuzz targets for frame parsing (cargo-fuzz on dev machine)
+  - Add Miri tests for unsafe wrappers (where applicable)
+
+===============================================================================
+12) UI responsiveness: remove blocking operations from the render loop
+===============================================================================
+
+Even if the UI links against rustyjack-core directly, many core operations do:
+  - disk IO
+  - network IO
+  - process spawning
+  - waiting on timeouts
+
+On a Pi Zero 2 W, these can freeze the UI.
+
+Fix:
+  - Make UI a pure client.
+  - Make backend daemon async.
+  - Stream progress events over IPC.
+  - Allow cancellation that triggers a cancellation token.
+
+Where:
+  - rustyjack-ui/src/app.rs (event loop)
+  - rustyjack-ui/src/core.rs (bridge)
+  - rustyjack-core/src/runtime.rs (structured async tasks)
+
+===============================================================================
+13) Configuration: define a single source of truth
+===============================================================================
+
+Right now config appears scattered across:
+  - environment variables (RUSTYJACK_ROOT, display rotation)
+  - CLI flags (clap)
+  - JSON Wi‑Fi profiles in wifi/profiles/
+  - ad-hoc defaults in code
+
+Recommendation: A layered config system:
+  1) /etc/rustyjack/config.toml (device config)
+  2) /var/lib/rustyjack/state.json (state)
+  3) CLI overrides (debug only)
+  4) Environment (last resort)
+
+Where:
+  - NEW: rustyjack-core/src/config.rs (serde + toml)
+  - Modify: rustyjack-core/src/cli.rs to map CLI -> ConfigOverride
+  - Modify: rustyjack-ui/src/config.rs to read daemon-reported config
+
+===============================================================================
+14) Portal/web service: keep it, but repurpose it safely
+===============================================================================
+
+`rustyjack-portal` (Axum) is a strong direction: compiled, editable, Rust-only.
+
+However, the repo also contains:
+  - DNSSpoof/sites + captures (high-risk; looks like credential capture content)
+
+Recommendation:
+  - Remove DNSSpoof/ from “shipping” builds and installer.
+  - Use rustyjack-portal for legitimate device management:
+      - First-boot setup portal (configure Wi‑Fi, hostname, update channel)
+      - Local documentation viewer
+      - Status dashboard (interfaces, logs, storage, version)
+      - API endpoint for the UI (alternative to raw IPC)
+
+Hardening checklist (for Axum service):
+  - Bind only to localhost or a dedicated management interface by default
+  - Require authentication (even on LAN)
+  - Rate-limit login endpoints
+  - Use CSRF protection for state-changing endpoints
+  - Disable directory listing; serve static assets from embedded resources
+  - Log requests in the audit log (Section 10)
+
+Where:
+  - rustyjack-portal/src/server.rs (routes, middleware)
+  - rustyjack-portal/src/config.rs (bind address + auth config)
+  - rustyjack-core/src/operations.rs (invoke portal start/stop safely)
+
+===============================================================================
+15) Build + release engineering for Pi Zero 2 W
+===============================================================================
+
+Workspace already has:
+  - profile.release: LTO true, codegen-units=1, strip=true
+  - profile.release-pi / release-embedded: opt-level="s"
+
+Add:
+  - panic = "abort" for size + simpler failure mode on embedded builds
+  - reproducible builds: record build metadata in a build.rs
+
+Where:
+  - Rustyjack/Cargo.toml:
+      [profile.release-embedded]
+      panic = "abort"
+  - NEW: build.rs in key binaries to embed version metadata
+  - CI: cross-compile for armv7-unknown-linux-gnueabihf (if 32-bit userland)
+
+===============================================================================
+16) Concrete “next actions” roadmap (practical order)
+===============================================================================
+
+PHASE 1 — Safety + maintainability (1–2 weeks)
+  - Introduce feature gating: safe vs lab
+  - Remove/disable anti_forensics and DNSSpoof shipping content
+  - Add audit log chain (tamper-evident)
+  - Centralize all OS interactions in one module
+
+PHASE 2 — Privilege separation (1–2 weeks)
+  - Add rustyjackd daemon + IPC
+  - Run UI unprivileged
+  - Split systemd units; tighten sandboxing
+
+PHASE 3 — Eliminate easy external commands (2–4 weeks)
+  - Replace df/lsblk with /proc + /sys readers
+  - Replace mount/umount with libc syscalls + strict policy
+  - Replace git/tar updates with signed bundle updates
+
+PHASE 4 — The big one: Wi‑Fi station “All Rust” (multi-phase)
+  - Isolate wpa_supplicant behind StationManager backend
+  - Add pure-Rust scan/selection end-to-end
+  - Then implement minimal WPA2-PSK supplicant (serious work)
+
+===============================================================================
+Appendix A) File-by-file “hotspots” to review first
+===============================================================================
+
+Highest leverage core files:
+  - rustyjack-core/src/operations.rs
+      Central dispatcher; currently mixes policy + OS + networking.
+      Refactor into:
+        - operations/ (command routing)
+        - services/ (network, storage, portal, update)
+        - policy/ (authorization + allowlists)
+  - rustyjack-core/src/system.rs
+      Replace Command::new(...) calls; make it a thin wrapper over netlink
+      + OS facade modules.
+  - rustyjack-ui/src/app.rs
+      Remove mount/systemctl/journalctl calls; UI becomes a client.
+  - rustyjack-netlink/src/wpa.rs
+      Isolate external wpa_supplicant and plan replacement.
+
+High risk / should be gated or removed from default:
+  - rustyjack-core/src/anti_forensics.rs
+  - rustyjack-evasion/ (rename/re-scope)
+  - rustyjack-wireless/src/* modules with attack/crack naming
+  - rustyjack-netlink/src/arp_spoofer.rs (gate/remove from safe builds)
+  - DNSSpoof/ directory
+
+===============================================================================
+Appendix B) Notes on naming and project signaling
+===============================================================================
+
+Language matters for trust:
+  - “evasion”, “anti_forensics”, “loot”, “site-cred capture” terminology reads
+    as adversarial tooling even if your intent is defensive.
+  - Consider renaming:
+      rustyjack-evasion   -> rustyjack-privacy or rustyjack-interface-hygiene
+      loot                -> artifacts or reports
+      anti_forensics      -> data_retention or storage_hygiene
+
+This isn’t cosmetic. It helps:
+  • external audits
+  • user trust
+  • keeping contributors aligned with ethical use
+
+===============================================================================
+END OF REPORT
+===============================================================================
+
+===============================================================================
+Appendix C) External command inventory (where “All Rust” still shells out)
+===============================================================================
+
+Below is an inventory of `Command::new("...")` usage by file. This is useful
+because it tells you exactly where external process dependencies still exist,
+and therefore where replacement work buys you the most “All Rust” progress.
+
+Total Command::new callsites found in Rust sources: 55
+
+- rustyjack-core/src/anti_forensics.rs: dphys-swapfile (x1), exiftool (x1), hostnamectl (x1), journalctl (x5), mount (x1), nscd (x1), openssl (x3), ps (x1), shred (x1), shutdown (x1), swapoff (x1), sync (x1), systemctl (x4), tar (x3), ulimit (x1), umount (x1), which (x1)
+- rustyjack-core/src/operations.rs: bash (x2), cargo (x1), id (x1)
+- rustyjack-core/src/physical_access.rs: timeout (x2)
+- rustyjack-core/src/system.rs: git (x2), hostname (x1), hostnamectl (x1), pgrep (x1), pkill (x1), tar (x1)
+- rustyjack-netlink/src/wpa.rs: wpa_supplicant (x1)
+- rustyjack-ui/src/app.rs: bash (x3), lsblk (x1), mount (x1), reboot (x1), shutdown (x1), sync (x1), systemctl (x2), umount (x1)
+
+Replacement guidance (safe engineering direction, not offensive guidance):
+  • df/lsblk: read /proc/mounts + statvfs + /sys/block instead of spawning tools.
+  • mount/umount: use libc mount(2)/umount2(2) with strict policy + allowlisted FS.
+  • systemctl/journalctl: talk to systemd/journald via D-Bus or libraries; move to daemon.
+  • reboot/shutdown/sync: systemd D-Bus requests; UI should not call them directly.
+  • tar/git: replace with signed update bundles + staged releases (see Section 8).
+  • wpa_supplicant: isolate behind StationManager backend; plan staged replacement (Section 6).
+  • openssl/shred: remove anti_forensics from default builds; implement privacy-friendly retention.
+
+===============================================================================
+Appendix D) Crate-by-crate refactor targets (where to implement what)
+===============================================================================
+
+This appendix is intentionally file-oriented: it tells you WHERE to implement
+changes and WHAT needs to change to accommodate them.
+
+D1) rustyjack-core/
+  Key theme: separate policy, OS access, and networking orchestration.
+  - src/operations.rs:
+      * Split into modules: operations/scan.rs, operations/system.rs, operations/wifi.rs, etc.
+      * Convert large match blocks into small handler functions with typed args.
+      * Add audit logging at the start/end of every operation (see new audit.rs).
+  - src/system.rs:
+      * Replace ad-hoc process spawns (pkill/pgrep/hostnamectl/tar/git) with Rust implementations
+        or a single OS facade module (new os.rs).
+      * Make interface selection deterministic + testable (pure functions over InterfaceSummary).
+  - NEW src/os.rs:
+      * Centralize any remaining system integration (systemd D-Bus, disk stats, reboot/shutdown).
+      * Make this module the ONLY place allowed to touch std::process::Command (temporary rule).
+  - NEW src/audit.rs:
+      * Add tamper-evident append-only audit log and a small log reader API for the UI.
+  - NEW src/authorization.rs:
+      * Implements safe/lab mode runtime gate: physical unlock + allowlists + mandatory audit.
+  - src/lib.rs:
+      * Stop re-exporting dual-use functions in default build; gate behind feature flags.
+
+D2) rustyjack-ui/
+  Key theme: UI becomes an unprivileged client. No system commands in the UI.
+  - src/core.rs:
+      * Replace direct calls into rustyjack-core with IPC calls to a daemon.
+      * Add retry/backoff and user-facing errors when daemon is offline.
+  - src/app.rs:
+      * Remove mount/systemctl/journalctl/bash usage. All privileged actions become daemon requests.
+      * Ensure UI event loop never blocks on IO; use background tasks and message passing.
+  - src/stats.rs:
+      * Replace df calls with Rust disk usage computations (statvfs).
+
+D3) rustyjack-netlink/
+  Key theme: this should be the canonical source for interface/network control.
+  - src/supplicant.rs + src/wpa.rs:
+      * Introduce a backend enum; keep wpa_supplicant behind a feature flag; plan Rust WPA2 module.
+  - src/dhcp.rs / dns_server.rs / hostapd.rs:
+      * These are already aligned with the 'no external daemons' goal; keep hardening + tests.
+  - src/process.rs:
+      * If this wraps external processes, move logic up into core os.rs, or replace with Rust.
+
+D4) rustyjack-portal/
+  Key theme: use as legitimate device-management portal, not credential interception.
+  - src/server.rs:
+      * Add auth + CSRF + rate limits; bind default to localhost; log to audit log.
+  - src/state.rs:
+      * Remove/contain unsafe; document invariants; add tests for state transitions.
+
+D5) rustyjack-encryption/
+  Key theme: explicit key management + separation of crypto from policy toggles.
+  - src/lib.rs:
+      * Split into modules: keyring.rs, kdf.rs, envelope.rs, secrets.rs.
+      * Enforce Zeroize on key material; avoid global mutable flags that affect security.
+
+D6) rustyjack-evasion/
+  Key theme: rename/re-scope to privacy-friendly interface hygiene.
+  - Rename crate + module docs to reflect privacy (e.g., stable-per-network MAC randomization).
+  - Ensure any “stealth” semantics are removed from defaults and treated as lab-only at most.
+
+D7) rustyjack-wireless/
+  Key theme: keep benign radio plumbing in safe builds; gate/remove dual-use modules.
+  - Keep: nl80211 query helpers, interface inspection, capability checks.
+  - Gate/remove by default: modules named crack/deauth/evil_twin/karma/pmkid/inject/capture.
+  - Move lab-only modules into the new rustyjack-lab crate.
+
+D8) Installer + systemd units
+  - install_rustyjack.sh:
+      * Stop generating a single root UI service. Install two units: daemon + UI.
+      * Align the generated unit with repo templates (or delete repo template to avoid drift).
+  - rustyjack.service (repo):
+      * Treat as a template only OR remove it if installer is source-of-truth.

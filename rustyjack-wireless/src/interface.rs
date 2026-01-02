@@ -196,18 +196,10 @@ impl WirelessInterface {
 
     /// Restart network services (NetworkManager, etc.)
     fn restart_network_services(&self) -> Result<()> {
-        use std::process::Command;
-
-        // Try to restart NetworkManager
-        let _ = Command::new("systemctl")
-            .args(["restart", "NetworkManager"])
-            .status();
-
-        // Also try wpa_supplicant
-        let _ = Command::new("systemctl")
-            .args(["restart", "wpa_supplicant"])
-            .status();
-
+        log::info!(
+            "Skipping network service restarts for {} (Rustyjack manages the interface state)",
+            self.name
+        );
         Ok(())
     }
 

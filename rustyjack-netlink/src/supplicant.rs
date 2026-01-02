@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use log::{debug, info, warn};
+use log::{info, warn};
 
 use crate::error::{NetlinkError, Result};
-use crate::wpa::{
-    ensure_wpa_control_socket, BssInfo, WpaManager, WpaNetworkConfig, WpaState, WpaStatus,
-};
+use crate::station::backend::{ScanOutcome, StationBackend, StationBackendKind};
+use crate::wpa::{BssInfo, WpaNetworkConfig, WpaState, WpaStatus};
 
 // Station connect flow modeled after wpa_supplicant SME/scan logic (sme.c, scan.c, bss.c, wpa_ie.c).
 const RSN_OUI: [u8; 3] = [0x00, 0x0f, 0xac];
@@ -68,7 +67,7 @@ pub enum StationState {
 }
 
 impl StationState {
-    fn from_wpa_state(state: WpaState) -> Self {
+    pub(crate) fn from_wpa_state(state: WpaState) -> Self {
         match state {
             WpaState::Scanning => StationState::Scanning,
             WpaState::Authenticating => StationState::Authenticating,
@@ -84,16 +83,57 @@ impl StationState {
 
 pub struct StationManager {
     interface: String,
-    wpa: WpaManager,
+    backend: Box<dyn StationBackend>,
 }
 
 impl StationManager {
     pub fn new(interface: &str) -> Result<Self> {
-        let control_path = ensure_wpa_control_socket(interface, None)?;
-        let wpa = WpaManager::new(interface)?.with_control_path(control_path);
+        Self::new_with_backend(interface, StationBackendKind::RustWpa2)
+    }
+
+    pub fn new_with_backend(interface: &str, kind: StationBackendKind) -> Result<Self> {
+        let backend: Box<dyn StationBackend> = match kind {
+            StationBackendKind::ExternalWpa => {
+                #[cfg(feature = "station_external")]
+                {
+                    Box::new(crate::station::external::ExternalBackend::new(interface)?)
+                }
+                #[cfg(not(feature = "station_external"))]
+                {
+                    return Err(NetlinkError::OperationNotSupported(
+                        "station_external feature disabled".to_string(),
+                    ));
+                }
+            }
+            StationBackendKind::RustOpen => {
+                #[cfg(feature = "station_rust_open")]
+                {
+                    Box::new(crate::station::rust_open::RustOpenBackend::new(interface)?)
+                }
+                #[cfg(not(feature = "station_rust_open"))]
+                {
+                    return Err(NetlinkError::OperationNotSupported(
+                        "station_rust_open feature disabled".to_string(),
+                    ));
+                }
+            }
+            StationBackendKind::RustWpa2 => {
+                #[cfg(feature = "station_rust_wpa2")]
+                {
+                    Box::new(crate::station::rust_wpa2::RustWpa2Backend::new(interface)?)
+                }
+                #[cfg(not(feature = "station_rust_wpa2"))]
+                {
+                    return Err(NetlinkError::OperationNotSupported(
+                        "station_rust_wpa2 feature disabled".to_string(),
+                    ));
+                }
+            }
+        };
+
         Ok(Self {
             interface: interface.to_string(),
-            wpa,
+            backend,
         })
     }
 
@@ -102,15 +142,20 @@ impl StationManager {
             return Err(NetlinkError::InvalidInput("SSID cannot be empty".to_string()));
         }
 
-        self.cleanup_networks();
+        self.backend.ensure_ready()?;
+        self.backend.cleanup()?;
 
-        let (mut candidates, used_scan_ssid) = self.scan_and_select_candidates(config)?;
+        let ScanOutcome {
+            mut candidates,
+            used_scan_ssid,
+        } = self.backend.scan(config)?;
+        let used_scan_ssid = used_scan_ssid || config.force_scan_ssid;
         if candidates.is_empty() {
             warn!(
                 "[WIFI] No scan candidates for ssid={} on {}, attempting hidden connect",
                 config.ssid, self.interface
             );
-            return self.connect_without_candidate(config, used_scan_ssid || config.force_scan_ssid);
+            return self.connect_without_candidate(config, used_scan_ssid);
         }
 
         candidates.sort_by(|a, b| b.score.cmp(&a.score));
@@ -136,30 +181,20 @@ impl StationManager {
                 candidate.signal_dbm
             );
 
-            let net_cfg = build_network_config(config, Some(&candidate), used_scan_ssid)?;
-            let net_id = match self.wpa.connect_network(&net_cfg) {
-                Ok(id) => id,
-                Err(e) => {
-                    failed_bssids.insert(candidate.bssid.clone());
-                    warn!("[WIFI] Network config failed for {}: {}", candidate.bssid, e);
-                    continue;
-                }
-            };
+            let mut connect_cfg = config.clone();
+            connect_cfg.force_scan_ssid = used_scan_ssid;
 
-            match self.wait_for_connection(config.connect_timeout, config.stage_timeout) {
-                Ok(status) => {
-                    return Ok(StationOutcome {
-                        status,
-                        selected_bssid: Some(candidate.bssid),
-                        selected_freq: candidate.frequency,
-                        attempts: tried,
-                        used_scan_ssid,
-                        final_state: StationState::Completed,
-                    });
+            match self.backend.connect(&connect_cfg, Some(&candidate)) {
+                Ok(mut outcome) => {
+                    outcome.attempts = tried;
+                    outcome.used_scan_ssid = used_scan_ssid;
+                    outcome.selected_bssid = Some(candidate.bssid);
+                    outcome.selected_freq = candidate.frequency.or(outcome.selected_freq);
+                    outcome.final_state = StationState::Completed;
+                    return Ok(outcome);
                 }
                 Err(e) => {
-                    let _ = self.wpa.disconnect();
-                    let _ = self.wpa.remove_network(net_id);
+                    let _ = self.backend.disconnect();
                     failed_bssids.insert(candidate.bssid.clone());
                     warn!("[WIFI] Connect attempt failed (bssid={}): {}", candidate.bssid, e);
                 }
@@ -177,183 +212,26 @@ impl StationManager {
         config: &StationConfig,
         scan_ssid: bool,
     ) -> Result<StationOutcome> {
-        let net_cfg = build_network_config(config, None, scan_ssid)?;
-        let net_id = self.wpa.connect_network(&net_cfg)?;
-
-        match self.wait_for_connection(config.connect_timeout, config.stage_timeout) {
-            Ok(status) => {
-                let selected_bssid = status.bssid.clone();
-                let selected_freq = status.freq;
-                Ok(StationOutcome {
-                    status,
-                    selected_bssid,
-                    selected_freq,
-                    attempts: 1,
-                    used_scan_ssid: scan_ssid,
-                    final_state: StationState::Completed,
-                })
-            }
-            Err(e) => {
-                let _ = self.wpa.disconnect();
-                let _ = self.wpa.remove_network(net_id);
-                Err(e)
-            }
-        }
-    }
-
-    fn cleanup_networks(&self) {
-        if let Err(e) = self.wpa.disconnect() {
-            debug!(
-                "[WIFI] Disconnect before connect returned error (may be disconnected): {}",
-                e
-            );
-        }
-
-        if let Ok(networks) = self.wpa.list_networks() {
-            for net in networks {
-                if let Some(id_str) = net.get("network_id") {
-                    if let Ok(id) = id_str.parse::<u32>() {
-                        let _ = self.wpa.remove_network(id);
-                    }
-                }
-            }
-        }
-    }
-
-    fn scan_and_select_candidates(
-        &self,
-        config: &StationConfig,
-    ) -> Result<(Vec<BssCandidate>, bool)> {
-        info!("[WIFI] Scanning for ssid={} on {}", config.ssid, self.interface);
-        self.wpa.scan()?;
-
-        let start = Instant::now();
-        let mut results = Vec::new();
-        while start.elapsed() < config.scan_timeout {
-            if let Ok(scan_results) = self.wpa.scan_results() {
-                results = parse_scan_results(scan_results);
-                if !results.is_empty() {
-                    break;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(250));
-        }
-
-        if results.is_empty() {
-            warn!(
-                "[WIFI] Scan results empty for ssid={} on {}, continuing without candidate",
-                config.ssid, self.interface
-            );
-            return Ok((Vec::new(), true));
-        }
-
-        let mut matching: Vec<ScanEntry> = results
-            .iter()
-            .cloned()
-            .filter(|entry| entry.ssid == config.ssid)
-            .collect();
-
-        let mut used_scan_ssid = false;
-        if matching.is_empty() {
-            used_scan_ssid = true;
-            matching = results
-                .iter()
-                .cloned()
-                .filter(|entry| entry.ssid.is_empty())
-                .collect();
-        }
-
-        let candidates = matching
-            .into_iter()
-            .filter_map(|entry| self.build_candidate(config, entry))
-            .collect();
-
-        Ok((candidates, used_scan_ssid || config.force_scan_ssid))
-    }
-
-    fn build_candidate(&self, config: &StationConfig, entry: ScanEntry) -> Option<BssCandidate> {
-        let bss = self.wpa.bss(&entry.bssid).ok();
-        let mut security = if let Some(ref info) = bss {
-            security_from_bss(info)
-        } else {
-            security_from_flags(&entry.flags)
-        };
-
-        if security.is_empty() {
-            security = security_from_flags(&entry.flags);
-        }
-
-        let score = score_candidate(config, &entry, &security)?;
-        Some(BssCandidate {
-            bssid: entry.bssid,
-            frequency: entry.frequency,
-            signal_dbm: entry.signal_dbm,
-            security,
-            score,
-        })
-    }
-
-    fn wait_for_connection(
-        &self,
-        connect_timeout: Duration,
-        stage_timeout: Duration,
-    ) -> Result<WpaStatus> {
-        let start = Instant::now();
-        let mut last_state = StationState::Idle;
-        let mut stage_start = Instant::now();
-
-        loop {
-            if start.elapsed() >= connect_timeout {
-                return Err(NetlinkError::Timeout {
-                    operation: "wifi connect".to_string(),
-                    timeout_secs: connect_timeout.as_secs(),
-                });
-            }
-
-            let status = self.wpa.status()?;
-            let state = StationState::from_wpa_state(status.wpa_state);
-
-            if state != last_state {
-                info!(
-                    "[WIFI] Station state {} -> {}",
-                    format!("{:?}", last_state).to_lowercase(),
-                    format!("{:?}", state).to_lowercase()
-                );
-                last_state = state;
-                stage_start = Instant::now();
-            }
-
-            match state {
-                StationState::Completed => return Ok(status),
-                StationState::Disconnected => {
-                    return Err(NetlinkError::Wpa(
-                        "Connection failed (disconnected)".to_string(),
-                    ))
-                }
-                _ => {
-                    if stage_start.elapsed() > stage_timeout {
-                        return Err(NetlinkError::Timeout {
-                            operation: format!("wifi stage {:?}", state).to_lowercase(),
-                            timeout_secs: stage_timeout.as_secs(),
-                        });
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-            }
-        }
+        let mut connect_cfg = config.clone();
+        connect_cfg.force_scan_ssid = scan_ssid;
+        let mut outcome = self.backend.connect(&connect_cfg, None)?;
+        outcome.attempts = 1;
+        outcome.used_scan_ssid = scan_ssid;
+        outcome.final_state = StationState::Completed;
+        Ok(outcome)
     }
 }
 
 #[derive(Debug, Clone)]
-struct ScanEntry {
-    bssid: String,
-    frequency: Option<u32>,
-    signal_dbm: Option<i32>,
-    flags: String,
-    ssid: String,
+pub(crate) struct ScanEntry {
+    pub(crate) bssid: String,
+    pub(crate) frequency: Option<u32>,
+    pub(crate) signal_dbm: Option<i32>,
+    pub(crate) flags: String,
+    pub(crate) ssid: String,
 }
 
-fn parse_scan_results(results: Vec<HashMap<String, String>>) -> Vec<ScanEntry> {
+pub(crate) fn parse_scan_results(results: Vec<HashMap<String, String>>) -> Vec<ScanEntry> {
     let mut entries = Vec::new();
     for net in results {
         let bssid = match net.get("bssid") {
@@ -380,30 +258,30 @@ fn parse_scan_results(results: Vec<HashMap<String, String>>) -> Vec<ScanEntry> {
 }
 
 #[derive(Debug, Clone)]
-struct BssCandidate {
-    bssid: String,
-    frequency: Option<u32>,
-    signal_dbm: Option<i32>,
-    security: SecurityInfo,
-    score: i32,
+pub(crate) struct BssCandidate {
+    pub(crate) bssid: String,
+    pub(crate) frequency: Option<u32>,
+    pub(crate) signal_dbm: Option<i32>,
+    pub(crate) security: SecurityInfo,
+    pub(crate) score: i32,
 }
 
 #[derive(Debug, Clone, Default)]
-struct SecurityInfo {
+pub(crate) struct SecurityInfo {
     rsn: Option<RsnInfo>,
     wpa: Option<RsnInfo>,
 }
 
 impl SecurityInfo {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.rsn.is_none() && self.wpa.is_none()
     }
 
-    fn is_open(&self) -> bool {
+    pub(crate) fn is_open(&self) -> bool {
         self.is_empty()
     }
 
-    fn supports_psk(&self) -> bool {
+    pub(crate) fn supports_psk(&self) -> bool {
         self.rsn
             .as_ref()
             .map(|info| info.supports_psk())
@@ -415,25 +293,25 @@ impl SecurityInfo {
                 .unwrap_or(false)
     }
 
-    fn supports_psk_rsn(&self) -> bool {
+    pub(crate) fn supports_psk_rsn(&self) -> bool {
         self.rsn
             .as_ref()
             .map(|info| info.supports_psk())
             .unwrap_or(false)
     }
 
-    fn supports_psk_wpa(&self) -> bool {
+    pub(crate) fn supports_psk_wpa(&self) -> bool {
         self.wpa
             .as_ref()
             .map(|info| info.supports_psk())
             .unwrap_or(false)
     }
 
-    fn prefers_rsn(&self) -> bool {
+    pub(crate) fn prefers_rsn(&self) -> bool {
         self.rsn.is_some()
     }
 
-    fn best_pairwise(&self) -> Option<&'static str> {
+    pub(crate) fn best_pairwise(&self) -> Option<&'static str> {
         if let Some(ref rsn) = self.rsn {
             if let Some(cipher) = rsn.preferred_pairwise() {
                 return Some(cipher);
@@ -445,7 +323,7 @@ impl SecurityInfo {
         None
     }
 
-    fn best_group(&self) -> Option<&'static str> {
+    pub(crate) fn best_group(&self) -> Option<&'static str> {
         if let Some(ref rsn) = self.rsn {
             return rsn.group_cipher.to_wpa_str();
         }
@@ -519,6 +397,14 @@ impl CipherSuite {
     }
 }
 
+pub(crate) fn runtime_sleep(duration: Duration) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(tokio::time::sleep(duration));
+        return;
+    }
+    std::thread::sleep(duration);
+}
+
 fn parse_cipher_suite(bytes: &[u8], expected_oui: &[u8; 3]) -> CipherSuite {
     if bytes.len() != 4 {
         return CipherSuite::Unknown(0);
@@ -566,7 +452,7 @@ fn parse_akm_suite(bytes: &[u8], expected_oui: &[u8; 3]) -> AkmSuite {
     AkmSuite::from_suite_type(bytes[3])
 }
 
-fn score_candidate(
+pub(crate) fn score_candidate(
     config: &StationConfig,
     entry: &ScanEntry,
     security: &SecurityInfo,
@@ -619,7 +505,7 @@ fn signal_score(signal_dbm: Option<i32>) -> i32 {
     normalized * 2
 }
 
-fn build_network_config(
+pub(crate) fn build_network_config(
     config: &StationConfig,
     candidate: Option<&BssCandidate>,
     scan_ssid: bool,
@@ -660,7 +546,7 @@ fn build_network_config(
     Ok(network)
 }
 
-fn security_from_bss(info: &BssInfo) -> SecurityInfo {
+pub(crate) fn security_from_bss(info: &BssInfo) -> SecurityInfo {
     let ies = if let Some(ref ie) = info.ie {
         if !ie.is_empty() {
             ie.as_slice()
@@ -770,7 +656,7 @@ fn parse_rsn_like_ie(body: &[u8], expected_oui: &[u8; 3]) -> Option<RsnInfo> {
     })
 }
 
-fn security_from_flags(flags: &str) -> SecurityInfo {
+pub(crate) fn security_from_flags(flags: &str) -> SecurityInfo {
     let mut security = SecurityInfo::default();
     if flags.contains("WPA2") || flags.contains("RSN") {
         security.rsn = Some(RsnInfo {

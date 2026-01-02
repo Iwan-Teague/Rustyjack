@@ -31,10 +31,10 @@ use std::{
     ffi::CString,
     io::{self, Write},
     mem,
-    net::Ipv4Addr,
+    net::{IpAddr, Ipv4Addr, ToSocketAddrs},
     os::unix::io::RawFd,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
@@ -60,10 +60,11 @@ use serde_json::{json, Map, Value};
 use zeroize::Zeroize;
 
 use rustyjack_netlink::wireless::{InterfaceMode, WirelessManager};
-use rustyjack_netlink::{StationConfig, StationManager};
+use rustyjack_netlink::{StationBackendKind, StationConfig, StationManager};
 
 use crate::netlink_helpers::{
-    netlink_add_default_route, netlink_delete_default_route, netlink_get_interface_index,
+    netlink_add_default_route, netlink_bridge_add_interface, netlink_bridge_create,
+    netlink_bridge_delete, netlink_delete_default_route, netlink_get_interface_index,
     netlink_get_ipv4_addresses, netlink_list_interfaces, netlink_list_routes,
     netlink_set_interface_down, netlink_set_interface_up, process_kill_pattern, process_running,
     rfkill_block, rfkill_find_index, rfkill_unblock,
@@ -340,9 +341,14 @@ pub fn resolve_root(input: Option<PathBuf>) -> Result<PathBuf> {
         return Ok(PathBuf::from(env_path));
     }
 
-    let default = PathBuf::from("/root/Rustyjack");
+    let default = PathBuf::from("/var/lib/rustyjack");
     if default.exists() {
         return Ok(default);
+    }
+
+    let legacy = PathBuf::from("/root/Rustyjack");
+    if legacy.exists() {
+        return Ok(legacy);
     }
 
     env::current_dir().context("determining current directory")
@@ -711,8 +717,8 @@ pub fn scan_local_hosts(interface: &str) -> Result<Vec<HostInfo>> {
                 .await
         }),
         Err(_) => {
-            let rt = tokio::runtime::Runtime::new()
-                .context("creating tokio runtime for ARP scan")?;
+            let rt = crate::runtime::shared_runtime()
+                .context("using shared tokio runtime for ARP scan")?;
             rt.block_on(async {
                 rustyjack_ethernet::discover_hosts_arp(interface, network, rate_limit_pps, timeout)
                     .await
@@ -1195,14 +1201,160 @@ pub fn stop_dns_spoof() -> Result<()> {
 }
 
 pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
-    let seconds = timeout.as_secs().clamp(1, 30).to_string();
-    let status = Command::new("ping")
-        .args(["-c", "1", "-W", &seconds, host])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("pinging {host}"))?;
-    Ok(status.success())
+    #[cfg(target_os = "linux")]
+    {
+        let addr = resolve_ipv4(host)?;
+        let timeout = timeout.clamp(Duration::from_secs(1), Duration::from_secs(30));
+
+        struct FdGuard(RawFd);
+        impl Drop for FdGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::close(self.0);
+                }
+            }
+        }
+
+        let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP) };
+        if fd < 0 {
+            return Err(anyhow!(
+                "Failed to open ICMP socket: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        let _guard = FdGuard(fd);
+
+        let tv = libc::timeval {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_usec: timeout.subsec_micros() as libc::suseconds_t,
+        };
+        unsafe {
+            let _ = libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                &tv as *const libc::timeval as *const libc::c_void,
+                mem::size_of::<libc::timeval>() as libc::socklen_t,
+            );
+        }
+
+        let ident = unsafe { libc::getpid() as u16 };
+        let seq = 1u16;
+        let mut packet = [0u8; 8 + 32];
+        packet[0] = 8; // ICMP Echo Request
+        packet[1] = 0; // code
+        packet[4..6].copy_from_slice(&ident.to_be_bytes());
+        packet[6..8].copy_from_slice(&seq.to_be_bytes());
+        for (idx, byte) in packet[8..].iter_mut().enumerate() {
+            *byte = (idx as u8).wrapping_add(0x42);
+        }
+        let checksum = icmp_checksum(&packet);
+        packet[2..4].copy_from_slice(&checksum.to_be_bytes());
+
+        let sockaddr = libc::sockaddr_in {
+            sin_family: libc::AF_INET as libc::sa_family_t,
+            sin_port: 0,
+            sin_addr: libc::in_addr {
+                s_addr: u32::from_be_bytes(addr.octets()),
+            },
+            sin_zero: [0; 8],
+        };
+
+        let sent = unsafe {
+            libc::sendto(
+                fd,
+                packet.as_ptr() as *const libc::c_void,
+                packet.len(),
+                0,
+                &sockaddr as *const libc::sockaddr_in as *const libc::sockaddr,
+                mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            )
+        };
+        if sent < 0 {
+            return Err(anyhow!(
+                "Failed to send ICMP echo to {host}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+
+        let mut buf = [0u8; 1500];
+        let mut from: libc::sockaddr_in = unsafe { mem::zeroed() };
+        let mut from_len = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        let received = unsafe {
+            libc::recvfrom(
+                fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                0,
+                &mut from as *mut libc::sockaddr_in as *mut libc::sockaddr,
+                &mut from_len,
+            )
+        };
+        if received < 0 {
+            let err = io::Error::last_os_error();
+            if matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) {
+                return Ok(false);
+            }
+            return Err(anyhow!("ICMP receive failed: {}", err));
+        }
+
+        let received = received as usize;
+        if received < 20 {
+            return Ok(false);
+        }
+
+        let ip_header_len = ((buf[0] & 0x0f) as usize) * 4;
+        if received < ip_header_len + 8 {
+            return Ok(false);
+        }
+
+        let icmp = &buf[ip_header_len..];
+        if icmp[0] != 0 || icmp[1] != 0 {
+            return Ok(false);
+        }
+        let recv_id = u16::from_be_bytes([icmp[4], icmp[5]]);
+        let recv_seq = u16::from_be_bytes([icmp[6], icmp[7]]);
+
+        Ok(recv_id == ident && recv_seq == seq)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = host;
+        let _ = timeout;
+        bail!("ping_host is supported on Linux only")
+    }
+}
+
+fn resolve_ipv4(host: &str) -> Result<Ipv4Addr> {
+    if let Ok(addr) = host.parse::<Ipv4Addr>() {
+        return Ok(addr);
+    }
+    let addrs = (host, 0)
+        .to_socket_addrs()
+        .with_context(|| format!("resolving host {host}"))?;
+    for addr in addrs {
+        if let IpAddr::V4(v4) = addr.ip() {
+            return Ok(v4);
+        }
+    }
+    bail!("No IPv4 address found for host {host}")
+}
+
+fn icmp_checksum(data: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut chunks = data.chunks_exact(2);
+    for chunk in &mut chunks {
+        let word = u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        sum = sum.wrapping_add(word);
+    }
+    if let Some(&last) = chunks.remainder().get(0) {
+        sum = sum.wrapping_add((last as u32) << 8);
+    }
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
 }
 
 pub fn read_dns_servers() -> Result<Vec<String>> {
@@ -1480,8 +1632,8 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                 rustyjack_netlink::dhcp_acquire_report(interface, hostname).await
             }),
             Err(_) => {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow!("Failed to create tokio runtime: {}", e))?;
+                let rt = crate::runtime::shared_runtime()
+                    .map_err(|e| anyhow!("Failed to use tokio runtime: {}", e))?;
                 rt.block_on(async {
                     rustyjack_netlink::dhcp_acquire_report(interface, hostname).await
                 })
@@ -1994,7 +2146,7 @@ pub fn set_default_route_with_metric(
                 })
             })
             .unwrap_or_else(|_| {
-                tokio::runtime::Runtime::new()?.block_on(async {
+                crate::runtime::shared_runtime()?.block_on(async {
                     rustyjack_netlink::replace_default_route(gw, &iface, metric)
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to set default route: {}", e))
@@ -2204,38 +2356,34 @@ pub fn git_reset_to_remote(root: &Path, remote: &str, branch: &str) -> Result<()
 }
 
 pub fn restart_system_service(service: &str) -> Result<()> {
-    Command::new("systemctl")
-        .arg("restart")
-        .arg(service)
-        .status()
-        .with_context(|| format!("restarting service {service}"))?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("systemctl restart failed"))
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::systemd_restart_unit(service)
+                    .await
+                    .map_err(|e| anyhow!("Failed to restart {service}: {e}"))
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::systemd_restart_unit(service)
+                    .await
+                    .map_err(|e| anyhow!("Failed to restart {service}: {e}"))
+            })
+        })
 }
 
 pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
     let _ = netlink_set_interface_down("br0");
-    let _ = Command::new("brctl").args(["delbr", "br0"]).status();
+    let _ = netlink_bridge_delete("br0");
     for iface in [interface_a, interface_b] {
         netlink_set_interface_down(iface)
             .with_context(|| format!("bringing {iface} down"))?;
     }
-    Command::new("brctl")
-        .args(["addbr", "br0"])
-        .status()
-        .context("creating br0 bridge")?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("brctl addbr failed"))?;
+    netlink_bridge_create("br0").context("creating br0 bridge")?;
     for iface in [interface_a, interface_b] {
-        Command::new("brctl")
-            .args(["addif", "br0", iface])
-            .status()
-            .with_context(|| format!("adding {iface} to br0"))?
-            .success()
-            .then_some(())
-        .ok_or_else(|| anyhow!("brctl addif failed for {iface}"))?;
+        netlink_bridge_add_interface("br0", iface)
+            .with_context(|| format!("adding {iface} to br0"))?;
     }
     for iface in [interface_a, interface_b, "br0"] {
         netlink_set_interface_up(iface)
@@ -2246,7 +2394,7 @@ pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
 
 pub fn stop_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
     let _ = netlink_set_interface_down("br0");
-    let _ = Command::new("brctl").args(["delbr", "br0"]).status();
+    let _ = netlink_bridge_delete("br0");
     for iface in [interface_a, interface_b] {
         let _ = netlink_set_interface_down(iface);
     }
@@ -2377,7 +2525,52 @@ pub fn scan_wifi_networks(interface: &str) -> Result<Vec<WifiNetwork>> {
     }
 
     let _ = netlink_set_interface_up(interface);
-    std::thread::sleep(std::time::Duration::from_millis(750));
+    runtime_sleep(std::time::Duration::from_millis(750));
+
+    if wifi_backend_from_env() != StationBackendKind::ExternalWpa {
+        let rt = crate::runtime::shared_runtime()
+            .with_context(|| "Failed to use tokio runtime for WiFi scan")?;
+        let access_points = rt
+            .block_on(async { rustyjack_netlink::networkmanager::list_wifi_networks(interface).await })
+            .with_context(|| format!("NetworkManager scan failed for {interface}"))?;
+
+        let mut networks = Vec::new();
+        for ap in access_points {
+            let ssid = ap.ssid.trim().to_string();
+            if ssid.is_empty() {
+                continue;
+            }
+            let channel = if ap.frequency > 0 {
+                freq_to_channel(ap.frequency)
+            } else {
+                None
+            };
+            let signal_dbm = if ap.signal_strength == 0 {
+                None
+            } else {
+                Some(ap.signal_strength as i32 - 100)
+            };
+            let encrypted = !ap
+                .security_flags
+                .iter()
+                .any(|flag| flag.eq_ignore_ascii_case("Open"));
+
+            networks.push(WifiNetwork {
+                ssid: Some(ssid),
+                bssid: Some(ap.bssid),
+                quality: Some(format!("{}%", ap.signal_strength)),
+                signal_dbm,
+                channel,
+                encrypted,
+            });
+        }
+
+        if networks.is_empty() {
+            bail!("WiFi scan returned no results for {interface}");
+        }
+
+        return Ok(networks);
+    }
 
     if let Err(e) = rustyjack_netlink::start_wpa_supplicant(interface, None) {
         log::warn!("[WIFI] wpa_supplicant not started for {}: {}", interface, e);
@@ -2408,7 +2601,7 @@ pub fn scan_wifi_networks(interface: &str) -> Result<Vec<WifiNetwork>> {
                 break;
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        runtime_sleep(std::time::Duration::from_millis(250));
     }
 
     if results.is_empty() {
@@ -2441,6 +2634,18 @@ pub fn scan_wifi_networks(interface: &str) -> Result<Vec<WifiNetwork>> {
     }
 
     Ok(networks)
+}
+
+fn runtime_sleep(duration: Duration) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(tokio::time::sleep(duration));
+        return;
+    }
+    if let Ok(rt) = crate::runtime::shared_runtime() {
+        rt.block_on(tokio::time::sleep(duration));
+        return;
+    }
+    std::thread::sleep(duration);
 }
 
 fn log_wifi_preflight(interface: &str) {
@@ -3040,6 +3245,21 @@ pub fn write_wifi_profile(path: &Path, profile: &WifiProfile) -> Result<()> {
     Ok(())
 }
 
+fn wifi_backend_from_env() -> StationBackendKind {
+    match env::var("RUSTYJACK_WIFI_BACKEND")
+        .ok()
+        .map(|v| v.trim().to_lowercase())
+        .as_deref()
+    {
+        Some("external") | Some("wpa") | Some("wpa_supplicant") => {
+            StationBackendKind::ExternalWpa
+        }
+        Some("rust_open") | Some("open") => StationBackendKind::RustOpen,
+        Some("rust_wpa2") | Some("wpa2") => StationBackendKind::RustWpa2,
+        _ => StationBackendKind::RustWpa2,
+    }
+}
+
 pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>) -> Result<()> {
     // Check permissions first
     check_network_permissions()?;
@@ -3056,20 +3276,19 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
 
     log_wifi_preflight(interface);
 
-    let rt = tokio::runtime::Runtime::new()
-        .with_context(|| "Failed to create tokio runtime for WiFi connect")?;
+    let rt = crate::runtime::shared_runtime()
+        .with_context(|| "Failed to use tokio runtime for WiFi connect")?;
 
-    // Stop wpa_supplicant if running
-    if let Err(e) = rustyjack_netlink::stop_wpa_supplicant(interface) {
-        log::warn!("Failed to stop wpa_supplicant for {}: {}", interface, e);
+    let mut backend = wifi_backend_from_env();
+    if backend != StationBackendKind::ExternalWpa {
+        log::info!("[WIFI] Station backend set to {:?}", backend);
     }
-    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Release DHCP lease
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(interface).await }) {
         log::warn!("Failed to release DHCP lease for {}: {}", interface, e);
     }
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    runtime_sleep(std::time::Duration::from_millis(100));
 
     // Reset interface: down, flush, set to station, then up
     log::info!(
@@ -3078,7 +3297,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     );
     netlink_set_interface_down(interface)
         .with_context(|| format!("bringing interface {interface} down"))?;
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    runtime_sleep(std::time::Duration::from_millis(200));
     if let Err(e) = rt.block_on(async { rustyjack_netlink::flush_addresses(interface).await }) {
         log::warn!("Failed to flush addresses on {}: {}", interface, e);
     }
@@ -3095,7 +3314,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     }
     netlink_set_interface_up(interface)
         .with_context(|| format!("bringing interface {interface} up"))?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    runtime_sleep(std::time::Duration::from_millis(300));
 
     // Mark interface unmanaged by NetworkManager (best effort)
     if let Ok(nm) =
@@ -3112,17 +3331,8 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         log::debug!("[WIFI] NetworkManager not available; continuing with in-process supplicant");
     }
 
-    // Start wpa_supplicant (in-process helper) and connect via WPA control socket
-    if let Err(e) = rustyjack_netlink::start_wpa_supplicant(interface, None) {
-        log::warn!(
-            "[WIFI] Failed to start wpa_supplicant for {}: {}",
-            interface,
-            e
-        );
-    }
-
-    let station = StationManager::new(interface)
-        .with_context(|| format!("Failed to open supplicant control for {}", interface))?;
+    let station = StationManager::new_with_backend(interface, backend)
+        .with_context(|| format!("Failed to initialize WiFi backend {:?}", backend))?;
     let station_cfg = StationConfig {
         ssid: ssid.to_string(),
         password: password.map(|p| p.to_string()),
@@ -3168,7 +3378,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         }
 
         if attempt < 3 {
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            runtime_sleep(std::time::Duration::from_secs(2));
         }
     }
 
@@ -3196,8 +3406,8 @@ pub fn disconnect_wifi_interface(interface: Option<String>) -> Result<String> {
 
     log::info!("Disconnecting WiFi interface: {iface}");
 
-    let rt = tokio::runtime::Runtime::new()
-        .with_context(|| "Failed to create tokio runtime for disconnect")?;
+    let rt = crate::runtime::shared_runtime()
+        .with_context(|| "Failed to use tokio runtime for disconnect")?;
     if let Err(e) =
         rt.block_on(async { rustyjack_netlink::networkmanager::disconnect_device(&iface).await })
     {
@@ -3206,8 +3416,8 @@ pub fn disconnect_wifi_interface(interface: Option<String>) -> Result<String> {
     }
 
     log::info!("Releasing DHCP lease for {iface}");
-    let rt = tokio::runtime::Runtime::new()
-        .with_context(|| "Failed to create tokio runtime for DHCP release")?;
+    let rt = crate::runtime::shared_runtime()
+        .with_context(|| "Failed to use tokio runtime for DHCP release")?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(&iface).await }) {
         log::warn!("Failed to release DHCP lease for {}: {}", iface, e);
     }
@@ -3239,14 +3449,15 @@ fn check_network_permissions() -> Result<()> {
 pub fn cleanup_wifi_interface(interface: &str) -> Result<()> {
     log::info!("Performing cleanup for interface: {interface}");
 
-    // Stop wpa_supplicant if running
-    if let Err(e) = rustyjack_netlink::stop_wpa_supplicant(interface) {
-        log::warn!("Failed to stop wpa_supplicant during cleanup: {}", e);
+    if wifi_backend_from_env() == StationBackendKind::ExternalWpa {
+        if let Err(e) = rustyjack_netlink::stop_wpa_supplicant(interface) {
+            log::warn!("Failed to stop wpa_supplicant during cleanup: {}", e);
+        }
     }
 
     // Release DHCP if any
-    let rt = tokio::runtime::Runtime::new()
-        .with_context(|| "Failed to create tokio runtime for cleanup DHCP release")?;
+    let rt = crate::runtime::shared_runtime()
+        .with_context(|| "Failed to use tokio runtime for cleanup DHCP release")?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(interface).await }) {
         log::warn!(
             "Failed to release DHCP lease during cleanup for {}: {}",

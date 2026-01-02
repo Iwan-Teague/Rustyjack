@@ -69,6 +69,7 @@ const NL80211_GENL_VERSION: u8 = 1;
 const NL80211_CMD_START_AP: u8 = 95;
 const NL80211_CMD_STOP_AP: u8 = 96;
 const NL80211_CMD_NEW_KEY: u8 = 26;
+const NL80211_CMD_SET_KEY: u8 = 28;
 const NL80211_CMD_SET_STATION: u8 = 19;
 const NL80211_CMD_DEL_STATION: u8 = 20;
 const NL80211_ATTR_IFINDEX: u16 = 3;
@@ -96,6 +97,7 @@ const NL80211_HIDDEN_SSID_ZERO_CONTENTS: u32 = 2;
 const NL80211_ATTR_KEY_DATA: u16 = 13;
 const NL80211_ATTR_KEY_IDX: u16 = 10;
 const NL80211_ATTR_KEY_CIPHER: u16 = 12;
+const NL80211_ATTR_KEY_DEFAULT: u16 = 9;
 const NL80211_ATTR_KEY_TYPE: u16 = 33;
 const NL80211_ATTR_MAC: u16 = 6;
 const NL80211_ATTR_STA_FLAGS2: u16 = 58;
@@ -2883,6 +2885,40 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
         })?;
     }
 
+    // Activate pairwise key so the driver uses it for data frames.
+    {
+        let mut attrs = GenlBuffer::new();
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, 0u32).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &sta[..]).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e))
+            })?,
+        );
+
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_SET_KEY, NL80211_GENL_VERSION, attrs);
+        let nlhdr = Nlmsghdr::new(
+            None,
+            family_id,
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+            None,
+            None,
+            NlPayload::Payload(genlhdr),
+        );
+
+        sock.send(nlhdr).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to send SET_KEY (pairwise): {}", e))
+        })?;
+    }
+
     // Group key
     {
         log::debug!(
@@ -2931,6 +2967,41 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
         sock.send(nlhdr).map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to send NEW_KEY (group): {}", e))
+        })?;
+    }
+
+    // Activate group key and set it as default for broadcast/multicast.
+    {
+        let mut attrs = GenlBuffer::new();
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, 1u32).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e))
+            })?,
+        );
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DEFAULT, &[] as &[u8])
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!("Failed to build key default attr: {}", e))
+                })?,
+        );
+
+        let genlhdr = Genlmsghdr::new(NL80211_CMD_SET_KEY, NL80211_GENL_VERSION, attrs);
+        let nlhdr = Nlmsghdr::new(
+            None,
+            family_id,
+            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
+            None,
+            None,
+            NlPayload::Payload(genlhdr),
+        );
+
+        sock.send(nlhdr).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to send SET_KEY (group): {}", e))
         })?;
     }
 
@@ -3034,7 +3105,7 @@ fn deauth_station(ifindex: u32, sta: &[u8; 6]) -> Result<()> {
 /// Kept for API compatibility and potential future WPA support.
 pub fn generate_pmk(passphrase: &str, ssid: &str) -> Result<[u8; 32]> {
     use pbkdf2::pbkdf2_hmac;
-    use sha2::Sha256;
+    use sha1::Sha1;
 
     if passphrase.len() < 8 || passphrase.len() > 63 {
         return Err(NetlinkError::InvalidInput(
@@ -3043,7 +3114,7 @@ pub fn generate_pmk(passphrase: &str, ssid: &str) -> Result<[u8; 32]> {
     }
 
     let mut pmk = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), ssid.as_bytes(), 4096, &mut pmk);
+    pbkdf2_hmac::<Sha1>(passphrase.as_bytes(), ssid.as_bytes(), 4096, &mut pmk);
 
     Ok(pmk)
 }
@@ -3085,12 +3156,36 @@ mod tests {
     }
 
     #[test]
-    fn test_pmk_generation() {
+    fn test_generate_pmk_vector() {
+        let pmk = generate_pmk("password", "IEEE").expect("pmk");
+        let expected = hex_to_bytes(
+            "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e",
+        );
+        assert_eq!(pmk.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_pmk_generation_validation() {
         let pmk = generate_pmk("password123", "TestNetwork");
         assert!(pmk.is_ok());
         assert_eq!(pmk.unwrap().len(), 32);
 
         let invalid = generate_pmk("short", "TestNetwork");
         assert!(invalid.is_err());
+    }
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        let bytes = hex.as_bytes();
+        assert!(
+            bytes.len() % 2 == 0,
+            "hex string must have even length"
+        );
+        for i in (0..bytes.len()).step_by(2) {
+            let chunk = std::str::from_utf8(&bytes[i..i + 2]).expect("hex utf8");
+            let byte = u8::from_str_radix(chunk, 16).expect("hex byte");
+            out.push(byte);
+        }
+        out
     }
 }

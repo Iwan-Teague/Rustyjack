@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    env,
     fs,
     io::Write,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
@@ -17,44 +18,52 @@ use rustyjack_ethernet::{
     quick_port_scan, DeviceInfo, LanDiscoveryResult,
 };
 use rustyjack_evasion::{
-    MacAddress, MacManager, MacMode, MacPolicyConfig, MacPolicyEngine, MacStage, StableScope,
-    VendorPolicy,
+    MacAddress, MacGenerationStrategy, MacManager, MacMode, MacPolicyConfig, MacPolicyEngine,
+    MacStage, StableScope, VendorOui, VendorPolicy,
 };
 use rustyjack_portal::{start_portal, stop_portal, PortalConfig};
 use rustyjack_wireless::{
     arp_scan, calculate_bandwidth, discover_gateway, discover_mdns_devices, get_traffic_stats,
-    capture_dns_queries, scan_network_services, start_hotspot, status_hotspot, stop_hotspot,
-    HotspotConfig, HotspotState,
+    capture_dns_queries, hotspot_disconnect_client, hotspot_set_blacklist, scan_network_services,
+    start_hotspot, status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
 };
 use serde_json::{json, Map, Value};
 use walkdir::WalkDir;
 #[cfg(target_os = "linux")]
-use rustyjack_netlink::{WpaManager, WpaSupplicantState};
+use rustyjack_netlink::{
+    ensure_wpa_control_socket, TxPowerSetting, WirelessManager, WpaManager, WpaSupplicantState,
+};
 
 use crate::cli::{
     BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
     DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand, EthernetDiscoverArgs,
     EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs, HardwareCommand,
-    HotspotCommand, HotspotStartArgs, LootCommand, LootKind, LootListArgs, LootReadArgs,
+    HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs, LootCommand,
+    LootKind, LootListArgs, LootReadArgs,
     MitmCommand, MitmStartArgs, NotifyCommand, ProcessCommand, ProcessKillArgs, ProcessStatusArgs,
     ReverseCommand, ReverseLaunchArgs, ScanCommand, ScanDiscovery, ScanRunArgs,
     StatusCommand, SystemCommand, SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs,
-    WifiBestArgs, WifiCommand, WifiCrackArgs, WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs,
-    WifiKarmaArgs, WifiPmkidArgs, WifiProbeSniffArgs, WifiProfileCommand, WifiProfileConnectArgs,
-    WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiReconArpScanArgs, WifiReconBandwidthArgs,
-    WifiReconCommand, WifiReconDnsCaptureArgs, WifiReconGatewayArgs, WifiReconMdnsScanArgs,
-    WifiReconServiceScanArgs, WifiRouteCommand, WifiRouteEnsureArgs, WifiRouteMetricArgs,
-    WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
+    UsbMountArgs, UsbMountMode, UsbUnmountArgs, WifiBestArgs, WifiCommand, WifiCrackArgs,
+    WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
+    WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPmkidArgs, WifiProbeSniffArgs,
+    WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
+    WifiProfileShowArgs,
+    WifiReconArpScanArgs, WifiReconBandwidthArgs, WifiReconCommand, WifiReconDnsCaptureArgs,
+    WifiReconGatewayArgs, WifiReconMdnsScanArgs, WifiReconServiceScanArgs, WifiRouteCommand,
+    WifiRouteEnsureArgs, WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
+    WifiTxPowerArgs,
 };
 #[cfg(target_os = "linux")]
 use crate::netlink_helpers::netlink_set_interface_up;
+use crate::anti_forensics::perform_complete_purge;
+use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 use crate::system::{
     active_uplink, acquire_dhcp_lease, append_payload_log, arp_spoof_running, backup_repository,
     backup_routing_state, build_scan_loot_path, build_manual_embed, build_mitm_pcap_path,
     cached_gateway, compose_status_text, connect_wifi_network, default_gateway_ip,
     delete_wifi_profile, detect_ethernet_interface, detect_interface, disconnect_wifi_interface,
     dns_spoof_running, enable_ip_forwarding, enforce_single_interface, find_interface_by_mac,
-    git_reset_to_remote, interface_gateway, kill_process, kill_process_pattern,
+    git_reset_to_remote, interface_gateway, kill_process,
     last_dhcp_outcome, lease_record, list_interface_summaries, list_wifi_profiles,
     load_wifi_profile, log_mac_usage, pcap_capture_running, ping_host, preferred_interface,
     process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
@@ -131,9 +140,15 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             WifiCommand::Status(args) => handle_wifi_status(root, args),
             WifiCommand::Best(args) => handle_wifi_best(root, args),
             WifiCommand::Switch(args) => handle_wifi_switch(root, args),
+            WifiCommand::MacRandomize(args) => handle_wifi_mac_randomize(args),
+            WifiCommand::MacSetVendor(args) => handle_wifi_mac_set_vendor(args),
+            WifiCommand::MacSet(args) => handle_wifi_mac_set(args),
+            WifiCommand::MacRestore(args) => handle_wifi_mac_restore(args),
+            WifiCommand::TxPower(args) => handle_wifi_tx_power(args),
             WifiCommand::Scan(args) => handle_wifi_scan(root, args),
             WifiCommand::Profile(profile) => match profile {
                 WifiProfileCommand::List => handle_wifi_profile_list(root),
+                WifiProfileCommand::Show(args) => handle_wifi_profile_show(root, args),
                 WifiProfileCommand::Save(args) => handle_wifi_profile_save(root, args),
                 WifiProfileCommand::Connect(args) => handle_wifi_profile_connect(root, args),
                 WifiProfileCommand::Delete(args) => handle_wifi_profile_delete(root, args),
@@ -176,6 +191,12 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
         Commands::System(SystemCommand::RandomizeHostname) => handle_randomize_hostname(),
         Commands::System(SystemCommand::FdePrepare(args)) => handle_system_fde_prepare(root, args),
         Commands::System(SystemCommand::FdeMigrate(args)) => handle_system_fde_migrate(root, args),
+        Commands::System(SystemCommand::Reboot) => handle_system_reboot(),
+        Commands::System(SystemCommand::Poweroff) => handle_system_poweroff(),
+        Commands::System(SystemCommand::Purge) => handle_system_purge(root),
+        Commands::System(SystemCommand::InstallWifiDrivers) => handle_system_install_wifi_drivers(root),
+        Commands::System(SystemCommand::UsbMount(args)) => handle_system_usb_mount(args),
+        Commands::System(SystemCommand::UsbUnmount(args)) => handle_system_usb_unmount(args),
         Commands::Bridge(sub) => match sub {
             BridgeCommand::Start(args) => handle_bridge_start(root, args),
             BridgeCommand::Stop(args) => handle_bridge_stop(root, args),
@@ -194,6 +215,8 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             HotspotCommand::Start(args) => handle_hotspot_start(root, args),
             HotspotCommand::Stop => handle_hotspot_stop(),
             HotspotCommand::Status => handle_hotspot_status(),
+            HotspotCommand::DisconnectClient(args) => handle_hotspot_disconnect(args),
+            HotspotCommand::SetBlacklist(args) => handle_hotspot_set_blacklist(args),
         },
     }
 }
@@ -214,7 +237,8 @@ fn run_arp_discovery(
             discover_hosts_arp(interface, net, rate_limit_pps, timeout).await
         }),
         Err(_) => {
-            let rt = tokio::runtime::Runtime::new().context("creating tokio runtime for ARP")?;
+            let rt =
+                crate::runtime::shared_runtime().context("using shared tokio runtime for ARP")?;
             rt.block_on(async { discover_hosts_arp(interface, net, rate_limit_pps, timeout).await })
         }
     }
@@ -653,6 +677,41 @@ fn handle_hotspot_status() -> Result<HandlerResult> {
         log::debug!("[CORE] Hotspot status not running");
         let data = json!({ "running": false });
         Ok(("Hotspot not running".to_string(), data))
+    }
+}
+
+fn handle_hotspot_disconnect(args: HotspotDisconnectArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("Hotspot client disconnect supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if args.mac.trim().is_empty() {
+            bail!("Client MAC is required");
+        }
+        hotspot_disconnect_client(&args.mac).context("disconnecting hotspot client")?;
+        let data = json!({ "mac": args.mac });
+        Ok(("Hotspot client disconnected".to_string(), data))
+    }
+}
+
+fn handle_hotspot_set_blacklist(args: HotspotBlacklistArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("Hotspot blacklist supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let count = args.macs.len();
+        let macs = args.macs;
+        hotspot_set_blacklist(&macs).context("setting hotspot blacklist")?;
+        let data = json!({ "count": count, "macs": macs });
+        Ok(("Hotspot blacklist updated".to_string(), data))
     }
 }
 
@@ -2848,6 +2907,13 @@ pub fn run_system_update_with_progress<F>(
 where
     F: FnMut(f32, &str),
 {
+    if env::var("RUSTYJACK_ALLOW_UNSAFE_UPDATES")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        bail!("System updates are disabled until the signed Rust-only update pipeline is implemented. Set RUSTYJACK_ALLOW_UNSAFE_UPDATES=1 to override.");
+    }
     on_progress(0.1, "Creating backup...");
     let backup = backup_repository(root, args.backup_dir.as_deref())?;
 
@@ -2992,6 +3058,115 @@ fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<
         },
         data,
     ))
+}
+
+pub(crate) fn handle_system_reboot() -> Result<HandlerResult> {
+    let _ = Command::new("sync").status();
+    let status = Command::new("systemctl").arg("reboot").status();
+    if status.as_ref().map(|s| s.success()).unwrap_or(false) {
+        return Ok(("Reboot initiated".to_string(), json!({ "action": "reboot" })));
+    }
+    let fallback = Command::new("reboot").status();
+    if fallback.as_ref().map(|s| s.success()).unwrap_or(false) {
+        return Ok(("Reboot initiated".to_string(), json!({ "action": "reboot" })));
+    }
+    bail!("Failed to reboot system");
+}
+
+pub(crate) fn handle_system_poweroff() -> Result<HandlerResult> {
+    let _ = Command::new("sync").status();
+    let status = Command::new("systemctl").arg("poweroff").status();
+    if status.as_ref().map(|s| s.success()).unwrap_or(false) {
+        return Ok(("Poweroff initiated".to_string(), json!({ "action": "poweroff" })));
+    }
+    let fallback = Command::new("shutdown").args(["-h", "now"]).status();
+    if fallback.as_ref().map(|s| s.success()).unwrap_or(false) {
+        return Ok(("Poweroff initiated".to_string(), json!({ "action": "poweroff" })));
+    }
+    bail!("Failed to power off system");
+}
+
+fn handle_system_purge(root: &Path) -> Result<HandlerResult> {
+    let report = perform_complete_purge(root);
+    let data = json!({
+        "removed": report.removed,
+        "service_disabled": report.service_disabled,
+        "errors": report.errors,
+    });
+    Ok(("Purge completed".to_string(), data))
+}
+
+fn handle_system_install_wifi_drivers(root: &Path) -> Result<HandlerResult> {
+    let script = root.join("scripts").join("wifi_driver_installer.sh");
+    if !script.exists() {
+        bail!("Installer script missing at {}", script.display());
+    }
+
+    let output = Command::new("bash")
+        .arg(&script)
+        .env("RUSTYJACK_ROOT", root)
+        .output()
+        .with_context(|| format!("running {}", script.display()))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let result_path = Path::new("/tmp/rustyjack_wifi_result.json");
+    let mut data = if let Ok(contents) = fs::read_to_string(result_path) {
+        serde_json::from_str::<Value>(&contents).unwrap_or_else(|_| json!({ "raw": contents }))
+    } else {
+        json!({})
+    };
+
+    if let Value::Object(ref mut map) = data {
+        map.insert("exit_code".into(), json!(output.status.code()));
+        map.insert("stdout".into(), json!(stdout));
+        map.insert("stderr".into(), json!(stderr));
+    }
+
+    let message = if output.status.success() {
+        "WiFi driver installer completed"
+    } else {
+        "WiFi driver installer exited with errors"
+    };
+
+    Ok((message.to_string(), data))
+}
+
+fn handle_system_usb_mount(args: UsbMountArgs) -> Result<HandlerResult> {
+    let mode = match args.mode {
+        UsbMountMode::ReadOnly => MountMode::ReadOnly,
+        UsbMountMode::ReadWrite => MountMode::ReadWrite,
+    };
+    let mut policy = MountPolicy::default();
+    policy.default_mode = mode;
+    policy.allow_rw = matches!(args.mode, UsbMountMode::ReadWrite);
+
+    let request = MountRequest {
+        device: PathBuf::from(&args.device),
+        mode,
+        preferred_name: args.preferred_name,
+    };
+
+    let response = crate::mount::mount_device(&policy, request)?;
+    let data = json!({
+        "device": response.device,
+        "mountpoint": response.mountpoint,
+        "fs_type": format!("{:?}", response.fs_type),
+        "readonly": response.readonly,
+    });
+    Ok(("USB mounted".to_string(), data))
+}
+
+fn handle_system_usb_unmount(args: UsbUnmountArgs) -> Result<HandlerResult> {
+    let policy = MountPolicy::default();
+    let request = UnmountRequest {
+        mountpoint: PathBuf::from(&args.mountpoint),
+        detach: args.detach,
+    };
+    crate::mount::unmount(&policy, request)?;
+    let data = json!({ "mountpoint": args.mountpoint });
+    Ok(("USB unmounted".to_string(), data))
 }
 
 fn handle_bridge_start(root: &Path, args: BridgeStartArgs) -> Result<HandlerResult> {
@@ -3214,6 +3389,237 @@ fn per_network_mac_override(root: &Path, interface: &str, ssid: &str) -> Option<
         .get(ssid)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+fn handle_wifi_mac_randomize(args: WifiMacRandomizeArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("MAC randomization supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let interface = args.interface;
+        let (new_mac, vendor_reused) = generate_vendor_aware_mac(&interface)?;
+        let mut manager = MacManager::new().context("creating MacManager")?;
+        manager.set_auto_restore(false);
+        let state = manager
+            .set_mac(&interface, &new_mac)
+            .context("setting randomized MAC")?;
+        let reconnect_ok = renew_dhcp_and_reconnect(&interface);
+        let data = json!({
+            "interface": interface,
+            "original_mac": state.original_mac.to_string(),
+            "new_mac": state.current_mac.to_string(),
+            "vendor_reused": vendor_reused,
+            "reconnect_ok": reconnect_ok,
+        });
+        Ok(("MAC randomized".to_string(), data))
+    }
+}
+
+fn handle_wifi_mac_set_vendor(args: WifiMacSetVendorArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("MAC vendor setting supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if args.vendor.trim().is_empty() {
+            bail!("Vendor name is required");
+        }
+        let interface = args.interface;
+        let mut manager = MacManager::new().context("creating MacManager")?;
+        manager.set_auto_restore(false);
+        let state = manager
+            .set_with_strategy(&interface, MacGenerationStrategy::Vendor(&args.vendor))
+            .context("setting vendor MAC")?;
+        let reconnect_ok = renew_dhcp_and_reconnect(&interface);
+        let data = json!({
+            "interface": interface,
+            "vendor": args.vendor,
+            "original_mac": state.original_mac.to_string(),
+            "new_mac": state.current_mac.to_string(),
+            "reconnect_ok": reconnect_ok,
+        });
+        Ok(("Vendor MAC set".to_string(), data))
+    }
+}
+
+fn handle_wifi_mac_set(args: WifiMacSetArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("MAC setting supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if args.mac.trim().is_empty() {
+            bail!("MAC address is required");
+        }
+        let interface = args.interface;
+        let mut manager = MacManager::new().context("creating MacManager")?;
+        manager.set_auto_restore(false);
+        let target = MacAddress::parse(&args.mac)?;
+        let state = manager
+            .set_mac(&interface, &target)
+            .context("setting MAC")?;
+        let reconnect_ok = renew_dhcp_and_reconnect(&interface);
+        let data = json!({
+            "interface": interface,
+            "original_mac": state.original_mac.to_string(),
+            "new_mac": state.current_mac.to_string(),
+            "reconnect_ok": reconnect_ok,
+        });
+        Ok(("MAC set".to_string(), data))
+    }
+}
+
+fn handle_wifi_mac_restore(args: WifiMacRestoreArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("MAC restore supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if args.original_mac.trim().is_empty() {
+            bail!("Original MAC is required");
+        }
+        let interface = args.interface;
+        let mut manager = MacManager::new().context("creating MacManager")?;
+        manager.set_auto_restore(false);
+        let target = MacAddress::parse(&args.original_mac)?;
+        let state = manager
+            .set_mac(&interface, &target)
+            .context("restoring MAC")?;
+        let reconnect_ok = renew_dhcp_and_reconnect(&interface);
+        let data = json!({
+            "interface": interface,
+            "original_mac": state.original_mac.to_string(),
+            "restored_mac": state.current_mac.to_string(),
+            "reconnect_ok": reconnect_ok,
+        });
+        Ok(("MAC restored".to_string(), data))
+    }
+}
+
+fn handle_wifi_tx_power(args: WifiTxPowerArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("TX power control supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let interface = args.interface;
+        let mut mgr =
+            WirelessManager::new().map_err(|e| anyhow!("Failed to open nl80211 socket: {}", e))?;
+        mgr.set_tx_power(&interface, TxPowerSetting::Fixed(args.dbm * 100))
+            .with_context(|| format!("setting tx power on {}", interface))?;
+        let data = json!({
+            "interface": interface,
+            "dbm": args.dbm,
+        });
+        Ok(("TX power updated".to_string(), data))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn generate_vendor_aware_mac(interface: &str) -> Result<(MacAddress, bool)> {
+    let current = fs::read_to_string(format!("/sys/class/net/{}/address", interface))
+        .ok()
+        .and_then(|s| MacAddress::parse(s.trim()).ok());
+
+    if let Some(mac) = current {
+        if let Some(vendor) = VendorOui::from_oui(mac.oui()) {
+            let mut candidate = MacAddress::random_with_oui(vendor.oui)?;
+            let mut bytes = *candidate.as_bytes();
+            bytes[0] = (bytes[0] | 0x02) & 0xFE;
+            candidate = MacAddress::new(bytes);
+            return Ok((candidate, true));
+        }
+    }
+
+    Ok((MacAddress::random()?, false))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn generate_vendor_aware_mac(_interface: &str) -> Result<(MacAddress, bool)> {
+    Ok((MacAddress::random()?, false))
+}
+
+#[cfg(target_os = "linux")]
+fn renew_dhcp_and_reconnect(interface: &str) -> bool {
+    let dhcp_success = match crate::runtime::shared_runtime() {
+        Ok(rt) => rt.block_on(async {
+            if let Err(e) = rustyjack_netlink::dhcp_renew(interface, None).await {
+                log::warn!("DHCP renew failed for {}: {}", interface, e);
+                false
+            } else {
+                log::info!("DHCP lease renewed for {}", interface);
+                true
+            }
+        }),
+        Err(e) => {
+            log::warn!("DHCP runtime unavailable: {}", e);
+            false
+        }
+    };
+
+    let wpa_success = match ensure_wpa_control_socket(interface, None) {
+        Ok(control_path) => match WpaManager::new(interface)
+            .map(|mgr| mgr.with_control_path(control_path))
+        {
+            Ok(mgr) => match mgr.reconnect() {
+                Ok(_) => {
+                    log::info!("WPA reconnect triggered for {}", interface);
+                    true
+                }
+                Err(e) => {
+                    log::debug!(
+                        "WPA reconnect failed (may not be using wpa_supplicant): {}",
+                        e
+                    );
+                    false
+                }
+            },
+            Err(e) => {
+                log::debug!("WPA manager creation failed: {}", e);
+                false
+            }
+        },
+        Err(e) => {
+            log::debug!("WPA control socket unavailable: {}", e);
+            false
+        }
+    };
+
+    let nm_success = if !wpa_success {
+        match crate::runtime::shared_runtime() {
+            Ok(rt) => rt.block_on(async {
+                rustyjack_netlink::networkmanager::reconnect_device(interface)
+                    .await
+                    .is_ok()
+            }),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+
+    dhcp_success || wpa_success || nm_success
+}
+
+#[cfg(not(target_os = "linux"))]
+fn renew_dhcp_and_reconnect(_interface: &str) -> bool {
+    false
 }
 
 fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult> {
@@ -3818,8 +4224,8 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
 }
 
 fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> {
-    use rustyjack_wireless::crack::{generate_ssid_passwords, quick_crack, WpaCracker};
-    use rustyjack_wireless::handshake::HandshakeExport;
+    use rustyjack_wpa::crack::{generate_ssid_passwords, quick_crack, CrackResult, WpaCracker};
+    use rustyjack_wpa::handshake::HandshakeExport;
     use std::path::PathBuf;
 
     log::info!("Starting handshake crack on file: {}", args.file);
@@ -3877,9 +4283,10 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
         }
         "pins" => match cracker.crack_pins() {
             Ok(r) => match r {
-                rustyjack_wireless::crack::CrackResult::Found(p) => password = Some(p),
-                rustyjack_wireless::crack::CrackResult::Exhausted { attempts: a }
-                | rustyjack_wireless::crack::CrackResult::Stopped { attempts: a } => attempts = a,
+                CrackResult::Found(p) => password = Some(p),
+                CrackResult::Exhausted { attempts: a } | CrackResult::Stopped { attempts: a } => {
+                    attempts = a
+                }
             },
             Err(e) => bail!("PIN crack error: {}", e),
         },
@@ -3887,11 +4294,9 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
             let patterns = generate_ssid_passwords(&ssid);
             match cracker.crack_passwords(&patterns) {
                 Ok(r) => match r {
-                    rustyjack_wireless::crack::CrackResult::Found(p) => password = Some(p),
-                    rustyjack_wireless::crack::CrackResult::Exhausted { attempts: a }
-                    | rustyjack_wireless::crack::CrackResult::Stopped { attempts: a } => {
-                        attempts = a
-                    }
+                    CrackResult::Found(p) => password = Some(p),
+                    CrackResult::Exhausted { attempts: a }
+                    | CrackResult::Stopped { attempts: a } => attempts = a,
                 },
                 Err(e) => bail!("SSID-pattern crack error: {}", e),
             }
@@ -3903,11 +4308,9 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
                 .ok_or_else(|| anyhow!("wordlist mode requires --wordlist"))?;
             match cracker.crack_wordlist(PathBuf::from(wordlist).as_path()) {
                 Ok(r) => match r {
-                    rustyjack_wireless::crack::CrackResult::Found(p) => password = Some(p),
-                    rustyjack_wireless::crack::CrackResult::Exhausted { attempts: a }
-                    | rustyjack_wireless::crack::CrackResult::Stopped { attempts: a } => {
-                        attempts = a
-                    }
+                    CrackResult::Found(p) => password = Some(p),
+                    CrackResult::Exhausted { attempts: a }
+                    | CrackResult::Stopped { attempts: a } => attempts = a,
                 },
                 Err(e) => bail!("Wordlist crack error: {}", e),
             }
@@ -3977,6 +4380,27 @@ fn handle_wifi_profile_list(root: &Path) -> Result<HandlerResult> {
         "count": profiles.len(),
     });
     Ok(("Wi-Fi profiles loaded".to_string(), data))
+}
+
+fn handle_wifi_profile_show(root: &Path, args: WifiProfileShowArgs) -> Result<HandlerResult> {
+    let stored = load_wifi_profile(root, &args.ssid)?;
+    let stored = match stored {
+        Some(profile) => profile,
+        None => bail!("Wi-Fi profile not found"),
+    };
+
+    let profile = stored.profile;
+    let data = json!({
+        "ssid": profile.ssid,
+        "password": profile.password,
+        "interface": profile.interface,
+        "priority": profile.priority,
+        "auto_connect": profile.auto_connect,
+        "created": profile.created,
+        "last_used": profile.last_used,
+        "notes": profile.notes,
+    });
+    Ok(("Wi-Fi profile loaded".to_string(), data))
 }
 
 fn handle_wifi_profile_save(root: &Path, args: WifiProfileSaveArgs) -> Result<HandlerResult> {

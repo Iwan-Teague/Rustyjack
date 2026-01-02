@@ -1,0 +1,22 @@
+[Unit]
+Description=Rustyjack UI Service (unprivileged)
+After=local-fs.target network.target rustyjackd.socket
+Wants=network.target rustyjackd.socket
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/rustyjack
+ExecStart=/usr/local/bin/rustyjack-ui
+Environment=RUSTYJACK_DISPLAY_ROTATION=landscape
+Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
+Restart=on-failure
+RestartSec=2
+User=rustyjack-ui
+Group=rustyjack-ui
+SupplementaryGroups=rustyjack gpio spi
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+Alias=rustyjack.service

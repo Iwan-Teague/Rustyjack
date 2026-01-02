@@ -15,6 +15,7 @@ use std::net::IpAddr;
 ///
 /// Uses rtnetlink for direct kernel communication. Each manager maintains its own
 /// netlink connection spawned as a background tokio task.
+#[derive(Clone)]
 pub struct InterfaceManager {
     handle: Handle,
 }

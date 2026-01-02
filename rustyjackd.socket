@@ -1,0 +1,12 @@
+[Unit]
+Description=Rustyjack daemon socket
+
+[Socket]
+ListenStream=/run/rustyjack/rustyjackd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=rustyjack
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

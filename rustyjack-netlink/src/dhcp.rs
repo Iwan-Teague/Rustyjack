@@ -134,6 +134,7 @@ pub enum DhcpClientError {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct DhcpClient {
     interface_mgr: InterfaceManager,
 }
@@ -268,11 +269,12 @@ impl DhcpClient {
     pub async fn renew(&self, interface: &str, hostname: Option<&str>) -> Result<DhcpLease> {
         log::info!("Renewing DHCP lease for interface {}", interface);
 
-        self.release(interface).await?;
+        let (lease, _transport) = self
+            .acquire_with_transport(interface, hostname)
+            .await
+            .map_err(|(_transport, err)| err)?;
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        self.acquire(interface, hostname).await
+        Ok(lease)
     }
 
     async fn get_mac_address(&self, interface: &str) -> Result<[u8; 6]> {
@@ -325,15 +327,38 @@ impl DhcpClient {
 
         let xid = self.generate_xid();
 
-        match self.discover_and_wait_for_offer_raw(interface, &mac, xid, hostname) {
-            Ok(offer) => {
-                let lease = self
-                    .request_and_wait_for_ack_raw(interface, &mac, xid, &offer, hostname)
-                    .map_err(|e| (DhcpTransport::Raw, e))?;
+        let hostname_owned = hostname.map(|h| h.to_string());
+
+        let raw_mac = mac;
+        let raw_client = self.clone();
+        let raw_interface = interface.to_string();
+        let raw_hostname = hostname_owned.clone();
+        let raw_attempt = tokio::task::spawn_blocking(move || {
+            let offer =
+                raw_client.discover_and_wait_for_offer_raw(&raw_interface, &raw_mac, xid, raw_hostname.as_deref())?;
+            raw_client.request_and_wait_for_ack_raw(
+                &raw_interface,
+                &raw_mac,
+                xid,
+                &offer,
+                raw_hostname.as_deref(),
+            )
+        })
+        .await;
+
+        match raw_attempt {
+            Ok(Ok(lease)) => {
                 self.configurefinterface(interface, &lease)
                     .await
                     .map_err(|e| (DhcpTransport::Raw, e))?;
                 return Ok((lease, DhcpTransport::Raw));
+            }
+            Ok(Err(err)) => {
+                log::warn!(
+                    "Raw DHCP attempt failed on {}: {}. Falling back to UDP",
+                    interface,
+                    err
+                );
             }
             Err(err) => {
                 log::warn!(
@@ -344,17 +369,37 @@ impl DhcpClient {
             }
         }
 
-        let socket = self
-            .create_client_socket(interface)
-            .map_err(|e| (DhcpTransport::Udp, e))?;
+        let udp_mac = mac;
+        let udp_client = self.clone();
+        let udp_interface = interface.to_string();
+        let udp_hostname = hostname_owned.clone();
+        let udp_attempt = tokio::task::spawn_blocking(move || {
+            let socket = udp_client.create_client_socket(&udp_interface)?;
+            let offer = udp_client.discover_and_wait_for_offer(
+                &socket,
+                &udp_interface,
+                &udp_mac,
+                xid,
+                udp_hostname.as_deref(),
+            )?;
+            udp_client.request_and_wait_for_ack(
+                &socket,
+                &udp_interface,
+                &udp_mac,
+                xid,
+                &offer,
+                udp_hostname.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| {
+            (
+                DhcpTransport::Udp,
+                NetlinkError::OperationFailed(format!("DHCP UDP task failed: {}", e)),
+            )
+        })?;
 
-        let offer = self
-            .discover_and_wait_for_offer(&socket, interface, &mac, xid, hostname)
-            .map_err(|e| (DhcpTransport::Udp, e))?;
-        let lease = self
-            .request_and_wait_for_ack(&socket, interface, &mac, xid, &offer, hostname)
-            .map_err(|e| (DhcpTransport::Udp, e))?;
-
+        let lease = udp_attempt.map_err(|e| (DhcpTransport::Udp, e))?;
         self.configurefinterface(interface, &lease)
             .await
             .map_err(|e| (DhcpTransport::Udp, e))?;

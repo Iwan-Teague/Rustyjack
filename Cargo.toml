@@ -1,14 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
+    "rustyjack-commands",
     "rustyjack-core",
     "rustyjack-evasion",
     "rustyjack-ui",
     "rustyjack-wireless",
     "rustyjack-ethernet",
     "rustyjack-encryption",
+    "rustyjack-wpa",
     "rustyjack-netlink",
     "rustyjack-portal",
+    "rustyjack-ipc",
+    "rustyjack-daemon",
+    "rustyjack-client",
 ]
 
 [workspace.package]

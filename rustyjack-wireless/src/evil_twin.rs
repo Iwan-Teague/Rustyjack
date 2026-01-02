@@ -19,7 +19,6 @@ use std::fs;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -594,11 +593,7 @@ impl EvilTwin {
         let _ = netlink_flush_addresses(iface);
         let _ = netlink_set_interface_down(iface);
 
-        // Restart NetworkManager to restore normal operation
-        Command::new("systemctl")
-            .args(["restart", "NetworkManager"])
-            .output()
-            .ok();
+        // NetworkManager is not restarted here; the interface is left for Rustyjack to manage.
 
         Ok(())
     }

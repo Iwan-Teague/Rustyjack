@@ -21,6 +21,7 @@ path = "src/lib.rs"
 rustyjack-evasion = { path = "../rustyjack-evasion" }
 rustyjack-ethernet = { path = "../rustyjack-ethernet" }
 rustyjack-netlink = { path = "../rustyjack-netlink" }
+rustyjack-wpa = { path = "../rustyjack-wpa" }
 
 # Low-level system interfaces
 libc = "0.2"
@@ -52,11 +53,6 @@ ipnet = "2"
 
 # MAC address parsing
 macaddr = "1.0"
-
-# Cryptography for password cracking
-hmac = "0.12"
-sha1 = "0.10"
-pbkdf2 = "0.12"
 
 # Time handling
 chrono = "0.4"

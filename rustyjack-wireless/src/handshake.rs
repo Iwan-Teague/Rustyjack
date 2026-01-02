@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::capture::CapturedPacket;
 use crate::frames::MacAddress;
 use byteorder::{BigEndian, ByteOrder};
+pub use rustyjack_wpa::handshake::HandshakeExport;
 
 /// EAPOL Ethertype (0x888E)
 #[allow(dead_code)]
@@ -394,8 +395,8 @@ impl HandshakeCapture {
         let msg2 = self.get_message(2)?;
 
         Some(HandshakeExport {
-            bssid: self.bssid,
-            client_mac: msg2.client_mac,
+            bssid: self.bssid.0,
+            client_mac: msg2.client_mac.0,
             anonce,
             snonce,
             mic: msg2.mic?,
@@ -413,51 +414,6 @@ impl HandshakeCapture {
     /// Get capture duration
     pub fn duration(&self) -> Duration {
         self.started.elapsed()
-    }
-}
-
-/// Exported handshake data for cracking
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandshakeExport {
-    /// Access Point BSSID
-    pub bssid: MacAddress,
-    /// Client MAC address
-    pub client_mac: MacAddress,
-    /// ANonce from AP
-    pub anonce: [u8; 32],
-    /// SNonce from client
-    pub snonce: [u8; 32],
-    /// MIC from message 2
-    pub mic: [u8; 16],
-    /// Raw EAPOL data from message 2
-    pub eapol_data: Vec<u8>,
-}
-
-impl HandshakeExport {
-    /// Convert to hashcat format (22000)
-    pub fn to_hashcat_22000(&self) -> String {
-        // WPA*02*MIC*BSSID*CLIENT*ESSID*ANONCE*EAPOL*MSGPAIR
-        let mic_hex: String = self.mic.iter().map(|b| format!("{:02x}", b)).collect();
-        let bssid_hex: String = self.bssid.0.iter().map(|b| format!("{:02x}", b)).collect();
-        let client_hex: String = self
-            .client_mac
-            .0
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect();
-        let anonce_hex: String = self.anonce.iter().map(|b| format!("{:02x}", b)).collect();
-        let eapol_hex: String = self
-            .eapol_data
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect();
-
-        format!(
-            "WPA*02*{}*{}*{}**{}*{}*02",
-            mic_hex, bssid_hex, client_hex, anonce_hex, eapol_hex
-        )
     }
 }
 

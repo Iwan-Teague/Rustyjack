@@ -3,7 +3,6 @@
 //! This module contains all the Serde response types and internal
 //! data structures used throughout the UI.
 
-use rustyjack_core::InterfaceSummary;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -12,7 +11,7 @@ use std::{
 };
 
 #[cfg(target_os = "linux")]
-use rustyjack_wireless::handshake::HandshakeExport;
+use rustyjack_wpa::handshake::HandshakeExport;
 
 // ==================== WiFi Response Types ====================
 
@@ -50,6 +49,14 @@ pub struct WifiProfilesResponse {
 #[derive(Debug, Deserialize)]
 pub struct WifiListResponse {
     pub interfaces: Vec<InterfaceSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InterfaceSummary {
+    pub name: String,
+    pub kind: String,
+    pub oper_state: String,
+    pub ip: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

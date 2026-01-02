@@ -5,9 +5,11 @@
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use log::info;
+use rustyjack_client::DaemonClient;
 use rustyjack_evasion::logs_disabled;
+use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use std::{
+    env,
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -18,38 +20,6 @@ pub fn count_lines(path: &Path) -> std::io::Result<usize> {
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
     Ok(reader.lines().count())
-}
-
-/// Check if an interface has an IPv4 address assigned
-pub fn interface_has_ip(interface: &str) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        use tokio::runtime::Handle;
-
-        let fetch = |handle: &Handle| {
-            handle.block_on(async {
-                let mgr = rustyjack_netlink::InterfaceManager::new()?;
-                mgr.get_ipv4_addresses(interface).await
-            })
-        };
-
-        let addrs = match Handle::try_current() {
-            Ok(handle) => fetch(&handle).ok(),
-            Err(_) => tokio::runtime::Runtime::new()
-                .ok()
-                .and_then(|rt| fetch(rt.handle()).ok()),
-        };
-
-        addrs
-            .unwrap_or_default()
-            .iter()
-            .any(|addr| matches!(addr.address, std::net::IpAddr::V4(_)))
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = interface;
-        false
-    }
 }
 
 /// Check if a directory exists and contains at least one file
@@ -187,86 +157,6 @@ pub fn port_weakness(port: u16) -> Option<&'static str> {
     }
 }
 
-// ==================== Linux-specific Network Helpers ====================
-
-#[cfg(target_os = "linux")]
-pub fn renew_dhcp_and_reconnect(interface: &str) -> bool {
-    use tokio::runtime::Handle;
-
-    let dhcp_success = match Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                if let Err(e) = rustyjack_netlink::dhcp_renew(interface, None).await {
-                    log::warn!("DHCP renew failed for {}: {}", interface, e);
-                    false
-                } else {
-                    log::info!("DHCP lease renewed for {}", interface);
-                    true
-                }
-            })
-        }),
-        Err(_) => {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                if let Err(e) = rustyjack_netlink::dhcp_renew(interface, None).await {
-                    log::warn!("DHCP renew failed for {}: {}", interface, e);
-                    false
-                } else {
-                    log::info!("DHCP lease renewed for {}", interface);
-                    true
-                }
-            })
-        }
-    };
-
-    // Try WPA reconnect via rustyjack-netlink
-    let wpa_success = match rustyjack_netlink::ensure_wpa_control_socket(interface, None) {
-        Ok(control_path) => match rustyjack_netlink::WpaManager::new(interface)
-            .map(|mgr| mgr.with_control_path(control_path))
-        {
-            Ok(mgr) => match mgr.reconnect() {
-                Ok(_) => {
-                    log::info!("WPA reconnect triggered for {}", interface);
-                    true
-                }
-                Err(e) => {
-                    log::debug!(
-                        "WPA reconnect failed (may not be using wpa_supplicant): {}",
-                        e
-                    );
-                    false
-                }
-            },
-            Err(e) => {
-                log::debug!("WPA manager creation failed: {}", e);
-                false
-            }
-        },
-        Err(e) => {
-            log::debug!("WPA control socket unavailable: {}", e);
-            false
-        }
-    };
-
-    // Fallback to NetworkManager if needed
-    let nm_success = if !wpa_success {
-        let rt = tokio::runtime::Runtime::new().ok();
-        if let Some(rt) = rt {
-            rt.block_on(async {
-                rustyjack_netlink::networkmanager::reconnect_device(interface)
-                    .await
-                    .is_ok()
-            })
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    dhcp_success || wpa_success || nm_success
-}
-
 #[cfg(target_os = "linux")]
 pub fn generate_vendor_aware_mac(interface: &str) -> Result<(rustyjack_evasion::MacAddress, bool)> {
     use rustyjack_evasion::{MacAddress, VendorOui};
@@ -289,103 +179,56 @@ pub fn generate_vendor_aware_mac(interface: &str) -> Result<(rustyjack_evasion::
     Ok((MacAddress::random()?, false))
 }
 
-#[cfg(target_os = "linux")]
-pub fn randomize_mac_with_reconnect(
-    interface: &str,
-) -> Result<(rustyjack_evasion::MacState, bool, bool)> {
-    use rustyjack_evasion::MacManager;
-
-    let mut manager = MacManager::new().context("creating MacManager")?;
-    manager.set_auto_restore(false);
-
-    let (new_mac, vendor_reused) = generate_vendor_aware_mac(interface)?;
-    let state = manager
-        .set_mac(interface, &new_mac)
-        .context("setting randomized MAC")?;
-
-    let reconnect_ok = renew_dhcp_and_reconnect(interface);
-    info!(
-        "[MAC] randomized interface {}: {} -> {} (vendor_reused={}, reconnect_ok={})",
-        interface,
-        state.original_mac,
-        state.current_mac,
-        vendor_reused,
-        reconnect_ok
-    );
-    Ok((state, reconnect_ok, vendor_reused))
+pub fn random_hotspot_ssid() -> String {
+    let rand: String = OsRng
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect();
+    format!("RJ-{}", rand)
 }
 
-/// Auto-randomize MAC before attack if enabled in settings
-/// Returns true if MAC was randomized (so caller knows to restore later)
-#[allow(dead_code)]
-pub fn auto_randomize_mac_if_enabled(
-    interface: &str,
-    settings: &crate::config::SettingsConfig,
-) -> bool {
-    if !settings.mac_randomization_enabled {
-        return false;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        randomize_mac_with_reconnect(interface).is_ok()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
+pub fn random_hotspot_password() -> String {
+    OsRng
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect()
 }
 
-/// Restore original MAC from saved settings
-#[allow(dead_code)]
-pub fn restore_original_mac(interface: &str, original_mac: &str) -> bool {
-    if original_mac.is_empty() {
-        return false;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        use rustyjack_evasion::{MacAddress, MacManager};
-        let mut manager = match MacManager::new() {
-            Ok(mgr) => mgr,
-            Err(_) => return false,
-        };
-        manager.set_auto_restore(false);
-        let mac = match MacAddress::parse(original_mac) {
-            Ok(mac) => mac,
-            Err(_) => return false,
-        };
-        manager.set_mac(interface, &mac).is_ok()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = interface;
-        let _ = original_mac;
-        false
-    }
+pub fn fetch_gpio_diagnostics() -> Result<String> {
+    block_on(async {
+        let socket_path = daemon_socket_path();
+        let mut client = DaemonClient::connect(
+            &socket_path,
+            "rustyjack-ui",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await
+        .with_context(|| format!("connecting to {}", socket_path.display()))?;
+        let response = client.gpio_diagnostics().await?;
+        Ok(response.content)
+    })
 }
 
-#[cfg(target_os = "linux")]
-pub fn interface_wiphy(interface: &str) -> Option<String> {
-    let mut mgr = rustyjack_netlink::WirelessManager::new().ok()?;
-    let info = mgr.get_interface_info(interface).ok()?;
-    Some(info.wiphy.to_string())
+fn daemon_socket_path() -> PathBuf {
+    env::var("RUSTYJACKD_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/run/rustyjack/rustyjackd.sock"))
 }
 
-#[cfg(target_os = "linux")]
-pub fn check_monitor_mode_support(interface: &str) -> bool {
-    let mut mgr = match rustyjack_netlink::WirelessManager::new() {
-        Ok(mgr) => mgr,
-        Err(_) => return false,
-    };
-    mgr.get_phy_capabilities(interface)
-        .map(|caps| caps.supports_monitor)
-        .unwrap_or(false)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn check_monitor_mode_support(_interface: &str) -> bool {
-    true
+fn block_on<F, T>(fut: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(fut),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime for daemon client")?;
+            rt.block_on(fut)
+        }
+    }
 }

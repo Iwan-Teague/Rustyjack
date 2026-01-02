@@ -48,6 +48,8 @@ mod arp_scanner;
 #[cfg(target_os = "linux")]
 mod arp_spoofer;
 #[cfg(target_os = "linux")]
+pub mod bridge;
+#[cfg(target_os = "linux")]
 pub mod dhcp;
 #[cfg(target_os = "linux")]
 pub mod dhcp_server;
@@ -71,6 +73,10 @@ pub mod route;
 #[cfg(target_os = "linux")]
 pub mod supplicant;
 #[cfg(target_os = "linux")]
+pub mod station;
+#[cfg(target_os = "linux")]
+pub mod systemd;
+#[cfg(target_os = "linux")]
 pub mod wireless;
 #[cfg(target_os = "linux")]
 pub mod wpa;
@@ -87,6 +93,8 @@ pub use arp::{ArpError, ArpPacket, ArpScanConfig, ArpScanResult};
 pub use arp_scanner::ArpScanner;
 #[cfg(target_os = "linux")]
 pub use arp_spoofer::{ArpSpoofConfig, ArpSpoofer};
+#[cfg(target_os = "linux")]
+pub use bridge::{bridge_add_interface, bridge_create, bridge_delete, bridge_remove_interface};
 #[cfg(target_os = "linux")]
 pub use dhcp::{DhcpAcquireReport, DhcpClient, DhcpLease, DhcpTransport};
 #[cfg(target_os = "linux")]
@@ -113,6 +121,10 @@ pub use rfkill::{RfkillDevice, RfkillError, RfkillManager, RfkillType};
 pub use route::{RouteInfo, RouteManager};
 #[cfg(target_os = "linux")]
 pub use supplicant::{StationConfig, StationManager, StationOutcome, StationState};
+#[cfg(target_os = "linux")]
+pub use station::backend::StationBackendKind;
+#[cfg(target_os = "linux")]
+pub use systemd::restart_unit as systemd_restart_unit;
 #[cfg(target_os = "linux")]
 pub use wireless::{
     ChannelWidth, InterfaceMode, PhyCapabilities, TxPowerSetting, WirelessInfo, WirelessManager,

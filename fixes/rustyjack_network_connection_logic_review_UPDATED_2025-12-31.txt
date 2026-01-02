@@ -1,0 +1,498 @@
+Rustyjack – Network Connection Logic Review (Third-Pass / Verified against current code incl. rustyjack-portal)
+Reviewer: Senior Computer Scientist + Network Security Officer
+Updated: 2025-12-31 (verified against attached Rustyjack.zip workspace snapshot)
+Target: Raspberry Pi Zero 2 W (brcmfmac fullmac), Raspberry Pi OS “Trixie” 32-bit CLI, root privileges
+Goal/Constraint: Network connection logic must work on Pi Zero 2 W, be ~100% Rust; allow only minimal OS interaction (ioctl/netlink, systemd calls/scripts) and avoid relying on large external networking daemons where feasible.
+
+================================================================================
+0) Verdict
+================================================================================
+The original report correctly identified the “big rock” problem: the current Wi‑Fi
+station path is fundamentally built around spawning and controlling
+*wpa_supplicant* (an external binary) and (optionally) poking NetworkManager over
+D‑Bus. That violates the “no third‑party binaries” requirement and introduces
+reliability hazards on a constrained Pi Zero 2 W.
+
+However, the original report missed several *real* sources of brittleness and
+additional third‑party dependencies that are in the actual connection pipeline,
+and it understated the runtime/async blocking problems that can absolutely
+produce UI freezes/resets.
+
+This document corrects those gaps, tightens the technical recommendations, and
+adds an implementation blueprint that is specific enough to build.
+
+--------------------------------------------------------------------------------
+0.1) Note on rustyjack-portal (new since the earlier report)
+--------------------------------------------------------------------------------
+A new workspace member, rustyjack-portal, replaces the older PHP-based captive portal
+web server with a Rust (Axum) service. This is a real improvement for the “100% Rust”
+goal *for the portal layer*.
+
+Important: it does not materially change the core Wi‑Fi station/scan/DHCP logic analyzed
+in this report. The findings about:
+  - wpa_supplicant being spawned/controlled as an external binary,
+  - blocking sleep/poll loops in scan/connect,
+  - per-call Tokio runtime creation,
+  - DHCP doing blocking I/O under async,
+  - NetworkManager D‑Bus “unmanaged” best-effort behavior,
+remain applicable unless those specific code paths have been refactored.
+
+
+================================================================================
+1) Corrections to the previous report (what was wrong / inaccurate)
+================================================================================
+
+1.1) The “systemctl restart NetworkManager/wpa_supplicant” calls are NOT in
+     rustyjack-netlink/src/interface.rs
+     They are in:
+       - Rustyjack/rustyjack-wireless/src/interface.rs
+         Lines 198–212 show restart_network_services() spawning systemctl:
+           - systemctl restart NetworkManager
+           - systemctl restart wpa_supplicant
+
+     Why this matters:
+       - The earlier report referenced the wrong crate/file, which can waste
+         time during remediation.
+
+1.2) Handshake-offload capability detection
+     The earlier report used the correct *concept* (“driver indicates 4-way
+     handshake offload”), but the most concrete “checkpoint” should reference
+     the *nl80211 extended feature bits* that exist in modern kernels:
+       - NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK (station mode PSK offload)
+       - NL80211_EXT_FEATURE_4WAY_HANDSHAKE_AP_PSK  (AP mode PSK offload)
+     and the use of NL80211_ATTR_PMK for PSK material in CONNECT/START_AP.
+
+     (This is consistent with upstream kernel API discussions; see the Linux
+      wireless mailing list patches for details.)
+
+================================================================================
+2) What the previous report missed (high-impact omissions)
+================================================================================
+
+2.1) External binaries/daemons inside *network path* (not just Wi‑Fi)
+The “minimal external dependencies” goal is violated in more places than wpa_supplicant:
+
+  A) Bridge creation uses the *brctl* binary
+     File: Rustyjack/rustyjack-core/src/system.rs
+       - start_bridge_pair(): lines 2217–2245
+         Uses:
+           Command::new("brctl").args(["addbr", "br0"])
+           Command::new("brctl").args(["addif", "br0", iface])
+           Command::new("brctl").args(["delbr", "br0"])
+       - stop_bridge_pair(): lines 2247–2254 (brctl delbr)
+
+  B) Connectivity check uses the *ping* binary
+     File: Rustyjack/rustyjack-core/src/system.rs
+       - ping_host(): lines 1197–1206 uses Command::new("ping")
+
+  C) Systemd service management is a hard dependency in some flows
+     File: Rustyjack/rustyjack-core/src/system.rs
+       - restart_system_service(): lines 2206–2215 uses systemctl
+
+Even if these are not the “happy path” for “connect to Wi‑Fi,” they are
+definitely part of “network management” in the application. If the requirement
+is strict, these must be removed/replaced.
+
+2.2) Blocking / runtime hazards that can cause UI freeze + watchdog reset
+This is big on a Pi Zero 2 W.
+
+  A) Wi‑Fi scan is blocking and sleeps in a loop
+     File: rustyjack-core/src/system.rs
+       - scan_wifi_networks(): lines 2364–2444
+         Uses std::thread::sleep() repeatedly while polling wpa_supplicant scan
+         results.
+
+  B) Wi‑Fi connect creates a *new Tokio runtime* per call and mixes blocking
+     sleeps with rt.block_on(...)
+     File: rustyjack-core/src/system.rs
+       - connect_wifi_network(): lines 3043–3183
+         Creates a new runtime (line 3059), then does:
+           - std::thread::sleep(...) between steps
+           - rt.block_on(...) to run async DHCP/netlink helpers
+
+     Risks:
+       - UI thread stalls hard during connection
+       - multiple runtimes increases memory/FD pressure
+       - blocking sleeps starve other tasks if called from within a runtime
+         (even “separate runtime” usage tends to become accidental deadlock
+          territory when refactoring)
+
+  C) DHCP client is “async” on the surface but does blocking I/O underneath
+     File: rustyjack-netlink/src/dhcp.rs
+       - acquire_with_transport(): line 316+
+         Calls discover_and_wait_for_offer_raw() and other blocking functions
+         synchronously. This can block the executor thread even though the
+         function is async.
+
+     This is exactly the kind of thing that produces “UI freezes then the box
+     reboots” when everything shares one runtime/thread pool.
+
+2.3) NetworkManager reliance is deeper than “optional”
+connect_wifi_network() attempts to mark the interface unmanaged via
+NetworkManager’s D‑Bus API (system.rs lines 3100–3113). In environments where
+NM is present, this introduces ordering/race problems:
+  - NM may still manipulate the interface between your netlink calls
+  - “unmanaged” is best-effort and not a hard guarantee
+  - restarting NM elsewhere (rustyjack-wireless) can undo assumptions
+
+If you want deterministic behavior, you must either:
+  - remove NM from the system (preferred for a dedicated appliance), or
+  - create a hard isolation layer (network namespace / dedicated manager).
+
+2.4) AP-mode implementation issues are real and need fixes too
+Even though the task is “network connection logic,” this project also contains
+a homegrown hostapd-like AP engine. Two correctness issues are worth fixing now
+because they represent the same crypto and key-installation patterns you’ll
+reuse for a Rust station implementation.
+
+  A) PMK derivation is wrong (SHA-256 used instead of SHA-1)
+     File: rustyjack-netlink/src/hostapd.rs
+       - generate_pmk(): lines 3035–3049
+         pbkdf2_hmac::<Sha256>(..., 4096, ...)  <-- WRONG for WPA2 PSK PMK
+
+  B) Keys are created but never “activated/defaulted” for TX/RX
+     File: rustyjack-netlink/src/hostapd.rs
+       - install_keys_and_authorize(): starts at line 2810
+         It sends NL80211_CMD_NEW_KEY for PTK/GTK, then authorizes station,
+         but does not call NL80211_CMD_SET_KEY to set the key as default /
+         attach it as active for data.
+
+     Result: association may “succeed” but data frames fail or behave
+             inconsistently across drivers.
+
+================================================================================
+3) Updated assessment: how the current connection logic actually works
+================================================================================
+
+3.1) Wi‑Fi Scan Pipeline (current)
+  rustyjack-core/src/system.rs :: scan_wifi_networks()
+    - rfkill unblock (best effort)
+    - netlink_set_interface_up()
+    - start_wpa_supplicant()  [external binary]
+    - ensure_wpa_control_socket()
+    - wpa.scan()
+    - poll scan_results() with sleeps until results appear
+
+3.2) Wi‑Fi Connect Pipeline (current)
+  rustyjack-core/src/system.rs :: connect_wifi_network()
+    - create tokio runtime locally
+    - stop_wpa_supplicant() [talks to wpa_supplicant]
+    - dhcp_release()
+    - netlink: interface down, flush addresses, set station mode, interface up
+    - attempt: NM set_device_managed(false) via D‑Bus
+    - start_wpa_supplicant() [external binary]
+    - StationManager.connect() -> wpa_ctrl commands to add network + connect
+    - attempt DHCP acquire 3x with sleeps
+    - select_active_uplink()
+
+3.3) Ethernet/Wired logic (mostly netlink + DHCP)
+The wired path is closer to compliant (netlink + custom DHCP), but:
+  - DHCP implementation needs async correctness and renewal behavior to match
+    battle-tested clients.
+
+================================================================================
+4) Comparison to battle-tested projects (what they do differently)
+================================================================================
+
+4.1) iwd (Intel Wireless Daemon), wpa_supplicant
+Key differences vs Rustyjack current approach:
+  - Event-driven state machines (no “sleep and poll” loops)
+  - One long-lived manager owns wireless state
+  - Async I/O (select/epoll) rather than blocking sleeps
+  - Correct WPA handshake/key install code paths (years of interop testing)
+
+4.2) systemd-networkd / NetworkManager
+Key differences:
+  - Owns the interface configuration lifecycle
+  - Subscribes to netlink events (link up/down, new addr, route changes)
+  - Avoids “restart services to fix state” because it *is the state owner*
+
+4.3) udhcpc/dhcpcd/dhclient
+Key differences vs current DHCP:
+  - Proper renew (T1/T2), rebinding, and lease persistence
+  - Option parsing and route handling (e.g., classless static routes)
+  - Non-blocking I/O and timer-driven retransmits
+
+================================================================================
+5) Concrete fixes (what to change, where, and how)
+================================================================================
+The remainder of this report is written as if you are going to implement the
+“no binaries” requirement fully. If you choose to relax the requirement, you
+can cherry-pick the reliability fixes (async correctness, no sleeps) and keep
+wpa_supplicant.
+
+--------------------------------------------------------------------------------
+5.1) Remove third-party binaries/daemons from the *connection pipeline*
+--------------------------------------------------------------------------------
+
+A) Replace wpa_supplicant-based scan/connect with nl80211-based scan/connect
+   Targets:
+     - rustyjack-core/src/system.rs:
+         scan_wifi_networks()
+         connect_wifi_network()
+     - rustyjack-netlink/src/supplicant.rs (StationManager)
+     - rustyjack-netlink/src/wpa.rs (WpaManager)
+
+   Plan:
+     1) Introduce a new Rust module/crate:
+          rustyjack-netlink/src/nl80211_station.rs (or a new crate
+          rustyjack-netmgr for clarity)
+        Responsibilities:
+          - trigger scan, collect BSS results
+          - connect/disconnect
+          - subscribe to nl80211 multicast groups for events
+          - expose async API to core/UI
+
+     2) Implement SCAN:
+          NL80211_CMD_TRIGGER_SCAN + NL80211_CMD_GET_SCAN
+        Parse:
+          - BSS entries, SSID, BSSID, frequency, signal (mBm), RSN IE
+
+     3) Implement CONNECT (open + WPA2-PSK):
+          NL80211_CMD_CONNECT
+          Required attrs typically include:
+            - NL80211_ATTR_IFINDEX
+            - NL80211_ATTR_SSID (and optionally BSSID or FREQ)
+            - NL80211_ATTR_WIPHY_FREQ (or channel/freq constraints)
+            - NL80211_ATTR_IE (RSN + supported rates IEs as needed)
+          For WPA2-PSK with handshake offload:
+            - NL80211_ATTR_PMK (32 bytes PMK/PSK material)
+          Then listen for:
+            - NL80211_CMD_CONNECT_RESULT / NL80211_CMD_ROAM / DISCONNECT events
+
+B) Replace brctl with rtnetlink bridge operations
+   Target:
+     - rustyjack-core/src/system.rs:
+         start_bridge_pair()
+         stop_bridge_pair()
+
+   Fix:
+     - Implement RTM_NEWLINK to create a bridge:
+         IFLA_IFNAME="br0"
+         IFLA_LINKINFO { IFLA_INFO_KIND="bridge" }
+     - Implement RTM_SETLINK to enslave ports:
+         IFLA_MASTER = br0_ifindex
+     - Bring bridge + ports up with RTM_SETLINK (IFF_UP)
+
+   Location suggestion:
+     - rustyjack-netlink/src/bridge.rs (new)
+     - expose:
+         netlink_bridge_create(name)
+         netlink_bridge_addif(bridge, iface)
+         netlink_bridge_del(name)
+
+C) Replace ping binary with a minimal ICMP echo in Rust
+   Target:
+     - rustyjack-core/src/system.rs :: ping_host()
+
+   Fix:
+     - Implement ICMPv4 Echo Request using:
+         - socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)
+         - build ICMP header + checksum
+         - sendto + recvfrom with timeout (poll/select or tokio AsyncFd)
+     - Keep it small: one packet, one reply, validate id/seq.
+
+D) Remove systemctl dependencies where they affect network state
+   Targets:
+     - rustyjack-wireless/src/interface.rs :: restart_network_services()
+     - rustyjack-core/src/system.rs :: restart_system_service()
+
+   Fix:
+     - Replace “restart daemons” with deterministic ownership:
+         - kill interfering processes only when switching monitor/managed mode
+           (already implemented in process_helpers.rs)
+         - do not restart system services at runtime
+     - For a dedicated appliance, disable NetworkManager and any distro
+       networking tools at boot, so Rustyjack becomes the sole owner.
+
+--------------------------------------------------------------------------------
+5.2) WPA2-PSK in Rust: two viable approaches
+--------------------------------------------------------------------------------
+
+Approach 1 (Recommended on Pi Zero 2 W / brcmfmac): Firmware 4-way handshake offload
+-----------------------------------------------------------------------------
+This is the shortest path if the driver advertises
+NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK.
+
+Workflow:
+  1) SCAN: record RSN IE and BSSID/freq
+  2) Derive PMK (WPA2 PSK PMK):
+       PMK = PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32)
+  3) CONNECT:
+       NL80211_CMD_CONNECT + NL80211_ATTR_PMK = PMK
+       Provide RSN IE and other IEs
+  4) Wait for CONNECT_RESULT success
+  5) Run DHCP
+
+Key detail: the kernel API uses the name “PMK” even for PSK offload because for
+WPA2-PSK the 32-byte PMK is what you pass.
+
+What to implement:
+  - A robust nl80211 event listener (async)
+  - PMK derivation (PBKDF2-HMAC-SHA1)
+  - RSN IE parsing/building (at minimum: verify cipher/AKM compatibility)
+
+Approach 2 (Fallback): Userspace 4-way handshake + key installation
+-----------------------------------------------------------------------------
+If offload is not supported, you must implement:
+  - EAPOL-Key frame exchange (M1–M4)
+  - PTK derivation (PRF-512 / HMAC-SHA1)
+  - MIC verification and replay counter checks
+  - GTK decrypt via KEK (AES key wrap)
+  - Install keys via nl80211 NEW_KEY + SET_KEY
+  - Authorize station (or rely on driver once keys installed)
+
+This is basically “a small wpa_supplicant,” but you can restrict scope:
+  - WPA2-PSK only (no enterprise EAP, no WPA3, no roaming)
+  - CCMP only (AES)
+  - no PMF initially
+
+Given Rustyjack already contains AP-side EAPOL/PTK derivation helpers, you can
+reuse that code (after fixing PMK derivation and key activation).
+
+--------------------------------------------------------------------------------
+5.3) Fix AP-mode crypto correctness now (it’s reused code)
+--------------------------------------------------------------------------------
+
+A) Fix PBKDF2 hash function
+   File: rustyjack-netlink/src/hostapd.rs
+     - generate_pmk() lines 3035–3049
+
+   Change:
+     - Replace Sha256 with Sha1:
+         use sha1::Sha1;
+         pbkdf2_hmac::<Sha1>(..., 4096, ...)
+
+   Also update/add test vectors:
+     - “password” / “IEEE” vector is a known PMK test.
+
+B) Activate keys after NEW_KEY
+   File: rustyjack-netlink/src/hostapd.rs
+     - install_keys_and_authorize() starting line 2810
+
+   Add after each NL80211_CMD_NEW_KEY:
+     - NL80211_CMD_SET_KEY with:
+         NL80211_ATTR_IFINDEX
+         NL80211_ATTR_KEY_IDX
+         (for pairwise: NL80211_ATTR_MAC may be needed depending on driver)
+         NL80211_ATTR_KEY_DEFAULT = true (for group key)
+         NL80211_ATTR_KEY_DEFAULT_MGMT = as needed
+
+   Without SET_KEY, many drivers will not use the keys for TX/RX data.
+
+--------------------------------------------------------------------------------
+5.4) Make DHCP actually async + production-grade
+--------------------------------------------------------------------------------
+
+A) Remove blocking I/O from async functions
+   File: rustyjack-netlink/src/dhcp.rs
+     - acquire_with_transport() line 316+
+
+   Fix patterns:
+     - Replace std::net::UdpSocket with tokio::net::UdpSocket where possible.
+     - For raw sockets, wrap fd in tokio::io::unix::AsyncFd and await readiness.
+     - Replace std::thread::sleep with tokio::time::sleep.
+
+B) Implement renew/rebind logic
+   Current renew() is “release then reacquire” (can drop connectivity).
+   Proper behavior:
+     - T1: unicast DHCPREQUEST to server to renew
+     - T2: broadcast DHCPREQUEST (rebind) if server unreachable
+     - expiry: drop address if no ack
+
+C) Request and process more options
+   At minimum, consider:
+     - option 26 (interface MTU)
+     - option 119 (domain search)
+     - option 121 (classless static routes) if you care about enterprise nets
+
+--------------------------------------------------------------------------------
+5.5) Fix the architecture (the part that makes everything reliable)
+--------------------------------------------------------------------------------
+Right now, “connect Wi‑Fi” is a synchronous function that:
+  - creates its own runtime
+  - blocks/sleeps while polling state
+
+This is not how reliable network managers are built.
+
+Recommended architecture:
+  - One long-lived async “Network Manager” task owns:
+      - nl80211 socket + event subscriptions
+      - rtnetlink socket + event subscriptions
+      - DHCP client state machine
+  - UI/operations talk to it via an internal IPC:
+      - Unix domain socket, or
+      - an in-process channel if everything is in one binary
+  - The manager exposes:
+      - scan()
+      - connect(profile)
+      - disconnect()
+      - status()
+
+This eliminates “freeze in UI” failure modes and makes reconnect logic clean.
+
+================================================================================
+6) Security hardening recommendations (because this is an offence/recon device)
+================================================================================
+
+6.1) Secrets handling
+  - Never write passphrases to world-readable locations.
+  - If you store profiles, ensure 0600 perms (already done via write_private_file).
+  - Use zeroize on passphrase buffers after deriving PMK/PTK.
+  - Avoid “update_config=1” wpa_supplicant style configs (once wpa_supplicant is removed,
+    this disappears anyway).
+
+6.2) Control-plane authentication
+If you build a manager IPC:
+  - bind Unix socket permissions to root only
+  - validate all inputs (SSID length, UTF-8, etc.)
+  - rate-limit scan/connect commands to avoid DoS
+
+6.3) Network namespace isolation (optional but powerful)
+If you want offensive tooling without bricking management access:
+  - keep a “mgmt namespace” for SSH/control
+  - put attack interfaces in separate namespaces
+  - bridge/iptables inside namespaces via netlink
+
+================================================================================
+7) Implementation checklist (a pragmatic build plan)
+================================================================================
+
+Milestone 1: Reliability fixes without changing Wi‑Fi backend
+  - Remove std::thread::sleep loops from scan/connect; make them async.
+  - Stop creating new tokio runtimes inside connect_wifi_network().
+  - Convert DHCP to real async (AsyncFd/tokio sockets).
+
+Milestone 2: Remove third-party binaries from wired + bridge + ping
+  - Replace brctl with netlink bridge
+  - Replace ping with ICMP echo
+  - Remove systemctl restarts (wireless interface mode changes)
+
+Milestone 3: Replace wpa_supplicant for station mode (Pi Zero 2 W target)
+  - Implement nl80211 scan + connect with PMK offload path
+  - Validate on WPA2-PSK networks
+  - Ensure reconnect on disconnect events
+
+Milestone 4: Add userspace handshake fallback (optional)
+  - Implement minimal WPA2-PSK 4-way handshake if offload absent
+  - Add key install correctness tests
+
+Milestone 5: Regression tests
+  - Unit tests: PBKDF2 PMK vectors, PTK derivation vectors, MIC vectors
+  - Integration tests: (on dev machine) mac80211_hwsim if possible; on Pi test
+    against known APs.
+
+================================================================================
+8) One-line “most likely root causes” for current field failures
+================================================================================
+If users are reporting “UI freezes/crashes then device resets during networking,”
+the likely culprits are:
+  - long blocking sleeps/polls in scan/connect (system.rs) on a constrained CPU
+  - async functions doing blocking I/O (dhcp.rs)
+  - multiple runtimes / blocking block_on calls that starve the UI loop
+  - interference from NetworkManager + systemctl restarts fighting interface state
+
+Those are fixable, but only if you make the network manager event-driven and
+single-owner.
+
+End of report.

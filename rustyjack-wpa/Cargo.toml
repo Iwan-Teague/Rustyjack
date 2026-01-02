@@ -1,0 +1,16 @@
+[package]
+name = "rustyjack-wpa"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rustyjack_wpa"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+thiserror = "1.0"
+hmac = "0.12"
+sha1 = "0.10"
+pbkdf2 = "0.12"

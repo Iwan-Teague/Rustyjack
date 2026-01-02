@@ -20,6 +20,9 @@ ipnet = "2.9"
 rustyjack-ethernet = { path = "../rustyjack-ethernet" }
 rustyjack-evasion = { path = "../rustyjack-evasion" }
 rustyjack-portal = { path = "../rustyjack-portal" }
+rustyjack-commands = { path = "../rustyjack-commands" }
+rustyjack-ipc = { path = "../rustyjack-ipc" }
+rustyjack-wpa = { path = "../rustyjack-wpa" }
 rand = "0.8"
 zeroize = "1.7"
 rustyjack-encryption = { path = "../rustyjack-encryption" }

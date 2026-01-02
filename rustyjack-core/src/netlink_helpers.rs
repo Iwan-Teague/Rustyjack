@@ -12,7 +12,7 @@ pub fn netlink_set_interface_up(interface: &str) -> Result<()> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::set_interface_up(interface)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to set {} up: {}", interface, e))
@@ -31,7 +31,7 @@ pub fn netlink_set_interface_down(interface: &str) -> Result<()> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::set_interface_down(interface)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to set {} down: {}", interface, e))
@@ -52,7 +52,7 @@ pub fn netlink_flush_addresses(interface: &str) -> Result<()> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::flush_addresses(interface)
                     .await
                     .map_err(|e| {
@@ -81,7 +81,7 @@ pub fn netlink_add_address(interface: &str, addr: IpAddr, prefix_len: u8) -> Res
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::add_address(interface, addr, prefix_len)
                     .await
                     .map_err(|e| {
@@ -108,7 +108,7 @@ pub fn netlink_list_interfaces() -> Result<Vec<rustyjack_netlink::InterfaceInfo>
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::list_interfaces()
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to list interfaces: {}", e))
@@ -137,7 +137,7 @@ pub fn netlink_get_ipv4_addresses(
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
                 mgr.get_ipv4_addresses(interface)
@@ -166,7 +166,7 @@ pub fn netlink_get_interface_index(interface: &str) -> Result<u32> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
                 mgr.get_interface_index(interface)
@@ -187,7 +187,7 @@ pub fn netlink_list_routes() -> Result<Vec<rustyjack_netlink::RouteInfo>> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::list_routes()
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to list routes: {}", e))
@@ -206,7 +206,7 @@ pub fn netlink_delete_default_route() -> Result<()> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::delete_default_route()
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to delete default route: {}", e))
@@ -236,7 +236,7 @@ pub fn netlink_add_default_route(
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::add_default_route_with_metric(gateway, interface, metric)
                     .await
                     .map_err(|e| {
@@ -244,6 +244,110 @@ pub fn netlink_add_default_route(
                             "Failed to add default route via {} on {}: {}",
                             gateway,
                             interface,
+                            e
+                        )
+                    })
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_bridge_create(name: &str) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::bridge_create(name)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to create bridge {}: {}", name, e))
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::bridge_create(name)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to create bridge {}: {}", name, e))
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_bridge_delete(name: &str) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::bridge_delete(name)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to delete bridge {}: {}", name, e))
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::bridge_delete(name)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to delete bridge {}: {}", name, e))
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_bridge_add_interface(bridge: &str, iface: &str) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::bridge_add_interface(bridge, iface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to add interface {} to bridge {}: {}",
+                            iface,
+                            bridge,
+                            e
+                        )
+                    })
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::bridge_add_interface(bridge, iface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to add interface {} to bridge {}: {}",
+                            iface,
+                            bridge,
+                            e
+                        )
+                    })
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub fn netlink_bridge_remove_interface(bridge: &str, iface: &str) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::bridge_remove_interface(bridge, iface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to remove interface {} from bridge {}: {}",
+                            iface,
+                            bridge,
+                            e
+                        )
+                    })
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::bridge_remove_interface(bridge, iface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to remove interface {} from bridge {}: {}",
+                            iface,
+                            bridge,
                             e
                         )
                     })
@@ -262,7 +366,7 @@ pub fn netlink_dhcp_release(interface: &str) -> Result<()> {
             })
         })
         .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()?.block_on(async {
+            crate::runtime::shared_runtime()?.block_on(async {
                 rustyjack_netlink::dhcp_release(interface)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to release DHCP on {}: {}", interface, e))
@@ -341,6 +445,26 @@ pub fn process_running(pattern: &str) -> Result<bool> {
 #[cfg(not(target_os = "linux"))]
 pub fn rfkill_find_index(_interface: &str) -> Result<Option<u32>> {
     anyhow::bail!("rfkill operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_bridge_create(_name: &str) -> Result<()> {
+    anyhow::bail!("bridge operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_bridge_delete(_name: &str) -> Result<()> {
+    anyhow::bail!("bridge operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_bridge_add_interface(_bridge: &str, _iface: &str) -> Result<()> {
+    anyhow::bail!("bridge operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_bridge_remove_interface(_bridge: &str, _iface: &str) -> Result<()> {
+    anyhow::bail!("bridge operations only supported on Linux")
 }
 
 #[cfg(not(target_os = "linux"))]

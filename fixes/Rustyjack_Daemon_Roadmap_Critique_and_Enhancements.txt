@@ -1,0 +1,353 @@
+RUSTYJACK — DAEMON SPECIALIST REVIEW
+Critique + Clarifications + Enhancements for:
+  “RUSTYJACK — RUST-ONLY DAEMON INTEGRATION ROADMAP (rustyjackd)”
+Date: 2026-01-01 (Europe/Dublin)
+
+Reviewer stance:
+  - I’m treating the roadmap as an engineering specification.
+  - I critique only where ambiguity, risk, or an inferior tradeoff exists.
+  - The core direction (privileged daemon + unprivileged clients over UDS, job model, systemd integration)
+    is sound and matches industry practice for embedded Linux appliances.
+
+================================================================================
+0) Executive summary
+================================================================================
+
+What’s already strong / correct:
+  - Daemon boundary: one privileged control plane (rustyjackd), UI/CLI as clients.
+  - Unix domain socket IPC with peer credential checks (SO_PEERCRED) for local authorization.
+  - Job-based API (start/status/cancel) for long-running operations.
+  - systemd supervision + restart semantics.
+  - Phased plan: create the boundary first, then migrate privileged operations, then harden / eliminate
+    external command spawning.
+
+What needs tightening:
+  - IPC envelope/handshake is left unspecified (“Envelope: …”) and is the single biggest source of drift.
+  - “Optional” features (subscriptions, watchdog, persistence) need concrete defaults so implementation is not
+    interpretation-driven.
+  - Daemon lifecycle + crash semantics (what happens to jobs, locks, mounts, Wi-Fi state) need explicit rules.
+  - systemd socket activation is recommended but the roadmap doesn’t specify how the daemon consumes the inherited FD.
+  - Capability / privilege strategy needs a crisp decision (root-with-sandbox vs caps) and a migration plan if you
+    intend to reduce privileges later.
+  - Observability (structured logging, request correlation) should be specified in “MUST/SHOULD” terms with exact fields.
+  - Deadlock avoidance: lock ordering and cancellation interaction needs to be written down.
+
+None of these are architectural dealbreakers. They’re the kind of “daemon correctness” details that decide whether this
+stays pleasant or becomes a heisenbug farm.
+
+================================================================================
+1) IPC: make the contract unambiguous (biggest gap)
+================================================================================
+
+Roadmap gap:
+  - The IPC section specifies framing and transport, but leaves the envelope and handshake unspecified.
+
+Why this matters:
+  - Without an explicit envelope and handshake, clients and daemon will diverge, and you’ll end up with subtle
+    compatibility problems during incremental refactors.
+
+Recommended concrete IPC contract (MUST-level):
+
+1.1 Wire framing (keep as-is, but define limits precisely)
+  - Frame = u32_be length + payload bytes
+  - length MUST be 1..=MAX_FRAME (recommend MAX_FRAME = 1_048_576 bytes)
+  - If length == 0 or > MAX_FRAME => close connection + log “protocol_violation”
+  - If payload cannot be parsed => respond with Error{code=BadRequest, …} and keep connection open
+    (unless repeated violations trigger rate-limit)
+
+1.2 Serialization choice (pick one now; allow migration later)
+  - JSON is OK for early bring-up and debuggability.
+  - If you want a more “daemon-grade” stance: pick CBOR (ciborium) or MessagePack (rmp-serde) from day 1.
+    These keep serde ergonomics but reduce parsing ambiguity and size.
+  - Recommendation: start with JSON but freeze field names/types and add “protocol_version” handshake so migration
+    is explicit (not silent).
+
+1.3 Mandatory handshake (“Hello”)
+  - Client MUST send Hello within T=2s of connect:
+      Hello {
+        protocol_version: u32,
+        client_name: String,
+        client_version: String,
+        supports: Vec<FeatureFlag>,   // e.g. "job_subscribe", "compression"
+      }
+  - Daemon MUST reply:
+      HelloAck {
+        protocol_version: u32,        // negotiated (min supported)
+        daemon_version: String,
+        features: Vec<FeatureFlag>,
+        max_frame: u32,
+        authz: AuthzSummary,          // e.g. {uid, gid, role}
+      }
+  - If protocol_version not supported => Error{code=IncompatibleProtocol} then close.
+
+1.4 Envelope (THIS SHOULD BE WRITTEN INTO THE ROADMAP)
+  Every message is one of:
+    RequestEnvelope {
+      v: u32,                 // protocol version (post-negotiation)
+      request_id: u64,         // client-generated, monotonic preferred
+      endpoint: Endpoint,      // enum
+      body: RequestBody,       // tagged enum
+    }
+
+    ResponseEnvelope {
+      v: u32,
+      request_id: u64,
+      body: ResponseBody,      // Ok(...) | Err(DaemonError) | Event(...)
+    }
+
+  Rules:
+    - request_id MUST be echoed back.
+    - Daemon MUST NOT reorder responses within a single connection.
+    - For long ops: StartJob returns immediately with JobStarted{job_id}.
+    - Events MUST include a job_id when they relate to a job.
+
+1.5 Subscription / push events (optional in roadmap; should have a default)
+  If you implement JobSubscribe:
+    - Define whether events are multiplexed on same connection or separate “events connection”.
+    - Tried-and-true pattern:
+        * Connection A: requests/responses
+        * Connection B: events stream (server -> client)
+      This avoids head-of-line blocking when client is slow to read.
+  If you do NOT implement JobSubscribe initially:
+    - Specify that the UI polls JobStatus every N ms (recommend 250–1000ms depending on op type).
+
+================================================================================
+2) Authorization model: specify exactly who can do what
+================================================================================
+
+Roadmap says “use SO_PEERCRED” and implies uid/gid checks, but it needs explicit policy:
+
+Recommended:
+  - Create a system group: rustyjack
+  - Socket ownership: root:rustyjack, mode 0660
+  - Only clients in group rustyjack can connect.
+
+Authorization tiers (industry standard for local daemons):
+  - ReadOnly: status, list devices, read logs (sanitized), get version
+  - Operator: start/stop wifi/hotspot, mount/unmount approved media, run scans
+  - Admin: firmware/update, encryption key management, evasion/anti-forensics actions, reboot/shutdown
+
+Implementation note:
+  - You can map tier by uid/gid:
+      * root => Admin
+      * members of group rustyjack => Operator
+      * everyone else => deny connect (preferred) or ReadOnly (if you want public status)
+
+Roadmap improvement:
+  - Add a table: Endpoint -> RequiredTier.
+  - Add a “dangerous operations” kill switch in config, default OFF unless explicitly enabled on that device.
+
+================================================================================
+3) Daemon robustness: define lifecycle + crash semantics (not optional)
+================================================================================
+
+3.1 Job + lock semantics
+  The roadmap mentions locks but doesn’t define ordering or cancellation interactions.
+
+MUST specify:
+  - Lock ordering (to prevent deadlocks):
+      update_lock > mount_lock > wifi_lock > portal_lock (example)
+    Document the exact order and enforce it.
+  - Cancellation:
+      * Cancelling a job MUST:
+          - signal cancellation token
+          - attempt to unwind safely
+          - ensure partial state is rolled back (or explicitly documented as “best-effort cleanup”)
+      * If cleanup fails, job ends as Error{code=CleanupFailed, …} and daemon logs full context.
+
+3.2 Idempotency rules
+  Write down which endpoints are idempotent.
+  Example:
+    - WifiDisconnect is idempotent (disconnect when not connected => Ok)
+    - MountUnmount is idempotent (unmount when not mounted => Ok)
+    - UpdateApply is NOT idempotent (must reject if update already in progress)
+
+3.3 Crash recovery
+  Decide and specify:
+    - If daemon restarts mid-job, what happens?
+      * Recommended: jobs are “lost” but daemon performs best-effort cleanup on startup:
+          - release stale locks
+          - reconcile mounts against /proc/mounts
+          - reconcile wifi state against nl80211
+      * UI sees “job interrupted” for previously active jobs.
+  - If you want persistence, define:
+      * what is persisted (job metadata only, not huge logs)
+      * where (/var/lib/rustyjack/jobs.jsonl)
+      * retention policy (e.g. keep last 200 jobs, rotate)
+
+================================================================================
+4) Error handling: more specific taxonomy + “retryability”
+================================================================================
+
+The roadmap is directionally correct (“typed errors with codes”), but it should define:
+
+4.1 Error structure (stable)
+  DaemonError {
+    code: ErrorCode,               // enum with stable numeric discriminants
+    message: String,               // short human text
+    detail: Option<String>,        // longer optional context (NOT secrets)
+    retryable: bool,
+    source: Option<String>,        // for logs / debugging; can be omitted in client response
+  }
+
+4.2 Suggested ErrorCode set (minimum viable)
+  - BadRequest
+  - IncompatibleProtocol
+  - Unauthorized
+  - Forbidden
+  - NotFound
+  - Busy (lock held)
+  - Timeout
+  - Cancelled
+  - Io
+  - Netlink
+  - MountFailed
+  - WifiFailed
+  - UpdateFailed
+  - Internal
+
+4.3 Logging vs user-facing details
+  - Client gets message + code + retryable.
+  - Daemon logs include full chain / errno / file paths (careful with secrets).
+
+================================================================================
+5) Concurrency + runtime: pick a “boring” proven model
+================================================================================
+
+On Pi Zero 2 W (32-bit OS), the best daemon is usually:
+  - single-process, async I/O, small thread count.
+
+Tried-and-true approaches:
+  A) Tokio current-thread runtime + spawn_blocking for heavy syscalls
+     - Great control over threads and memory.
+  B) Tokio multi-thread with 2 threads
+     - Simpler when you have mixed workloads but still lightweight.
+
+Recommendation:
+  - Start with tokio current-thread.
+  - Any CPU-heavy crypto or decompression goes to spawn_blocking.
+
+Also specify:
+  - Backpressure: limit per-client outstanding requests (e.g. max 16).
+  - Rate limiting: deny repeated protocol violations.
+
+================================================================================
+6) systemd integration: remove placeholders, specify units precisely
+================================================================================
+
+Roadmap has “WatchdogSec=…” which is a spec hole.
+
+6.1 If you implement sd_notify (recommended for appliance feel):
+  - In service:
+      WatchdogSec=20s
+      NotifyAccess=main
+  - In daemon:
+      - send READY=1 after socket bound + state initialized
+      - send WATCHDOG=1 every <= 10s (half watchdog)
+
+6.2 Socket activation specifics (if using rustyjackd.socket)
+  The daemon must either:
+    - Use the systemd activation FD (LISTEN_FDS/LISTEN_PID env) and accept() on it, OR
+    - Ignore socket activation and bind itself (then the socket unit is pointless)
+
+Tried-and-true:
+  - Use socket activation. It prevents “bind race” and allows on-demand startup.
+  - Use a Rust crate that understands systemd activation OR implement minimal parsing of LISTEN_FDS.
+    (Both are fine; crate reduces footguns.)
+
+6.3 Suggested unit snippets (fill these into roadmap)
+  rustyjackd.socket:
+      [Socket]
+      ListenStream=/run/rustyjack/rustyjackd.sock
+      SocketMode=0660
+      SocketUser=root
+      SocketGroup=rustyjack
+      RemoveOnStop=true
+
+  rustyjackd.service:
+      [Service]
+      Type=notify              # if sd_notify used; otherwise Type=simple
+      ExecStart=/usr/bin/rustyjackd
+      Restart=on-failure
+      RestartSec=2
+      RuntimeDirectory=rustyjack
+      StateDirectory=rustyjack
+      ConfigurationDirectory=rustyjack
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+      RestrictRealtime=true
+      LockPersonality=true
+      MemoryDenyWriteExecute=true
+      SystemCallArchitectures=native
+      # Add SystemCallFilter= once stable (optional; can break syscalls if wrong)
+
+================================================================================
+7) Privilege strategy: choose now, migrate later (don’t be ambiguous)
+================================================================================
+
+The roadmap’s “start as root + sandbox” is reasonable, but write the decision clearly:
+
+Option 1 (recommended initially):
+  - Run as root.
+  - Use systemd sandboxing to constrain filesystem.
+  - Use explicit allowlists in code (paths, interfaces).
+  - Later, explore dropping privileges.
+
+Option 2 (more complex, more “principled”):
+  - Run as non-root with capabilities:
+      CAP_NET_ADMIN (wifi/netlink)
+      CAP_SYS_ADMIN (mount)  <-- this is huge; effectively root-ish
+      CAP_SYS_BOOT (reboot)  <-- if needed
+  - This is doable but not necessarily worth the complexity early.
+
+Recommendation:
+  - Start with Option 1; only consider caps after daemon is stable.
+
+================================================================================
+8) “Modern / better approach?” — what to change vs keep
+================================================================================
+
+Keep (good choices):
+  - UDS + peer creds (simple, robust, local-only).
+  - Job model with cancellation.
+  - systemd supervision.
+  - Separate proto crate + client crate (prevents UI from reaching into core internals).
+
+Potential modernizations (optional, but genuinely useful):
+  - Use structured logging with tracing:
+      fields: request_id, job_id, endpoint, peer_uid, peer_pid, duration_ms, result_code
+  - Consider CBOR instead of JSON once stable (post-bring-up).
+  - Add a small “health” endpoint that checks internal invariants (locks not wedged, wifi manager alive, mount table sane).
+
+Avoid (not worth it here):
+  - gRPC over UDS (heavy for Pi, complex build, not needed).
+  - Exposing network APIs (HTTP) on an appliance unless you truly need remote control.
+
+================================================================================
+9) Where the roadmap is still a bit “interpretation-prone”
+================================================================================
+
+These are areas where I’d request more “MUST/SHALL” statements:
+
+  - IPC envelope and handshake (must be specified, not implied)
+  - Job persistence default (persist? yes/no? what retention?)
+  - Subscription default (polling interval vs push stream)
+  - Lock ordering
+  - Watchdog on/off and exact seconds
+  - Config reload semantics (SIGHUP? periodic? none?)
+  - Update atomicity rules (A/B partition? staged file swap? rollback?)
+
+Add these, and implementers will build the same daemon instead of 3 slightly different daemons.
+
+================================================================================
+10) Bottom line
+================================================================================
+
+The roadmap is largely correct in architecture and sequencing.
+It deserves critique mainly for a handful of “daemon spec” gaps that will otherwise cause drift.
+
+If you patch the IPC envelope/handshake, systemd activation/watchdog specifics, lock ordering, and crash semantics,
+you’ll have a roadmap that is “implementation-grade” rather than “directional”.
+

@@ -1,0 +1,578 @@
+RUSTYJACK — DAEMON INTEGRATION ROADMAP (WHAT’S LEFT, EXTREME DETAIL)
+Author: Senior Software Engineer (daemon specialist)
+Date: 2026-01-01 (Europe/Dublin)
+Target device: Raspberry Pi Zero 2 W (Pi 0n W 2), Raspbian/Debian “trixie” 32-bit CLI image
+
+This roadmap is written as an implementation plan you can execute in order.
+It assumes a hard constraint: **Rust-only runtime** — *no spawning external binaries* (no `Command::new(...)`).
+System services already present on the OS (systemd, kernel, firmware) can exist, but Rustyjack itself must not
+shell out to them.
+
+-------------------------------------------------------------------------------
+0) Reality check: current repo state (from the attached Rustyjack.zip)
+-------------------------------------------------------------------------------
+
+Workspace members currently are:
+- rustyjack-core
+- rustyjack-evasion
+- rustyjack-ui
+- rustyjack-wireless
+- rustyjack-ethernet
+- rustyjack-encryption
+- rustyjack-netlink
+- rustyjack-portal
+
+Important: in this zip, there is **no `rustyjack-daemon` crate** and no `rustyjack-ipc` / `rustyjack-proto` crate.
+(If you intended to upload a build that already contains the daemon skeleton, it is not present in this archive.)
+
+The project currently shells out to many binaries. Current `Command::new(...)` inventory (top callsites):
+- systemctl (6): rustyjack-ui/src/app.rs:410, rustyjack-ui/src/app.rs:1650, rustyjack-core/src/anti_forensics.rs:256, rustyjack-core/src/anti_forensics.rs:307, rustyjack-core/src/anti_forensics.rs:308, rustyjack-core/src/anti_forensics.rs:325
+- bash (5): rustyjack-ui/src/app.rs:3240, rustyjack-ui/src/app.rs:3331, rustyjack-ui/src/app.rs:6904, rustyjack-core/src/operations.rs:2911, rustyjack-core/src/operations.rs:2955
+- journalctl (5): rustyjack-core/src/anti_forensics.rs:168, rustyjack-core/src/anti_forensics.rs:170, rustyjack-core/src/anti_forensics.rs:304, rustyjack-core/src/anti_forensics.rs:305, rustyjack-core/src/anti_forensics.rs:306
+- tar (4): rustyjack-core/src/anti_forensics.rs:385, rustyjack-core/src/anti_forensics.rs:426, rustyjack-core/src/anti_forensics.rs:659, rustyjack-core/src/system.rs:2315
+- openssl (3): rustyjack-core/src/anti_forensics.rs:391, rustyjack-core/src/anti_forensics.rs:418, rustyjack-core/src/anti_forensics.rs:665
+- sync (2): rustyjack-ui/src/app.rs:1639, rustyjack-core/src/anti_forensics.rs:311
+- shutdown (2): rustyjack-ui/src/app.rs:1653, rustyjack-core/src/anti_forensics.rs:583
+- hostnamectl (2): rustyjack-core/src/anti_forensics.rs:727, rustyjack-core/src/system.rs:1425
+- git (2): rustyjack-core/src/system.rs:2330, rustyjack-core/src/system.rs:2340
+- timeout (2): rustyjack-core/src/physical_access.rs:210, rustyjack-core/src/physical_access.rs:426
+- df (1): rustyjack-ui/src/stats.rs:521
+- reboot (1): rustyjack-ui/src/app.rs:1612
+- lsblk (1): rustyjack-ui/src/app.rs:2709
+- wpa_supplicant (1): rustyjack-netlink/src/station/external/process.rs:67
+- which (1): rustyjack-core/src/anti_forensics.rs:55
+- shred (1): rustyjack-core/src/anti_forensics.rs:62
+- nscd (1): rustyjack-core/src/anti_forensics.rs:330
+- mount (1): rustyjack-core/src/anti_forensics.rs:344
+- umount (1): rustyjack-core/src/anti_forensics.rs:364
+- ulimit (1): rustyjack-core/src/anti_forensics.rs:444
+- exiftool (1): rustyjack-core/src/anti_forensics.rs:490
+- ps (1): rustyjack-core/src/anti_forensics.rs:697
+- swapoff (1): rustyjack-core/src/anti_forensics.rs:790
+- dphys-swapfile (1): rustyjack-core/src/anti_forensics.rs:793
+- sysctl (1): rustyjack-core/src/evasion.rs:100
+- pkill (1): rustyjack-core/src/system.rs:630
+- pgrep (1): rustyjack-core/src/system.rs:663
+- hostname (1): rustyjack-core/src/system.rs:1428
+- id (1): rustyjack-core/src/operations.rs:2614
+- cargo (1): rustyjack-core/src/operations.rs:2860
+
+This roadmap covers:
+1) creating the daemon control plane and IPC contract
+2) refactoring UI/CLI into unprivileged clients
+3) migrating all privileged/system-mutating operations behind the daemon boundary
+4) removing **all** external binary invocations by replacing them with Rust + syscalls + (where needed) FFI/D-Bus
+
+-------------------------------------------------------------------------------
+1) End-state architecture (the “boring, correct” appliance pattern)
+-------------------------------------------------------------------------------
+
+- `rustyjackd` (daemon, root, supervised by systemd)
+  - owns *all* system mutation: mounts, Wi‑Fi, ethernet/bridge, scanning, updates, process control, evasion actions
+  - provides a local-only API over a Unix domain socket (UDS), with peer credential auth
+  - runs long operations as Jobs with progress + cancellation
+  - enforces policy (allowlists, permissions), logs everything with correlation IDs
+
+- `rustyjack-ui` (unprivileged)
+  - **no direct access to core “do the thing” functions**
+  - only talks to `rustyjackd` via a client library
+  - cannot mount, cannot manage Wi‑Fi, cannot start scans directly
+
+- optional `rustyjack-cli` (unprivileged)
+  - thin debug/admin client for SSH sessions and automation
+
+Transport & supervision best practices:
+- systemd socket activation for UDS (decouples “listening socket” from daemon lifetime) citeturn0search4
+- systemd notify + watchdog for appliance robustness (`READY=1`, `WATCHDOG=1`) citeturn0search2turn0search10
+- peer credentials via `SO_PEERCRED` to authenticate the local caller citeturn0search9turn0search13
+
+-------------------------------------------------------------------------------
+2) Create the missing crates (workspace surgery)
+-------------------------------------------------------------------------------
+
+2.1 New crate: `rustyjack-proto` (or `rustyjack-ipc`) — SINGLE SOURCE OF TRUTH
+Files to create:
+- `rustyjack-proto/Cargo.toml`
+- `rustyjack-proto/src/lib.rs`
+- `rustyjack-proto/src/wire.rs` (framing helpers)
+- `rustyjack-proto/src/types.rs` (Hello/Ack, envelopes, endpoints, requests/responses)
+- `rustyjack-proto/src/error.rs` (ErrorCode, DaemonError)
+- `rustyjack-proto/src/authz.rs` (Authz tiers, role mapping struct)
+- `rustyjack-proto/src/job.rs` (JobId, JobStatus, JobEvent, JobKind, JobProgress)
+
+Contract MUST be explicit, versioned, and stable:
+- `const PROTOCOL_VERSION: u32 = 1;`
+- `const MAX_FRAME: u32 = 1_048_576;` (1 MiB)
+
+**Handshake (mandatory):**
+- Client MUST send `ClientHello` within 2 seconds of connect.
+- Daemon replies `HelloAck` with:
+  - negotiated protocol version
+  - daemon_version
+  - enabled features
+  - max_frame
+  - authz summary (uid/gid/role)
+
+**Envelope (mandatory):**
+- RequestEnvelope { v, request_id, endpoint, body }
+- ResponseEnvelope { v, request_id, body = Ok | Err(DaemonError) | Event }
+
+Why so strict?
+- Without it, the UI and daemon drift and you get “works on my Pi” protocol entropy.
+
+2.2 New crate: `rustyjack-daemon` (binary: `rustyjackd`)
+Files to create:
+- `rustyjack-daemon/Cargo.toml`
+- `rustyjack-daemon/src/main.rs`
+- `rustyjack-daemon/src/config.rs`
+- `rustyjack-daemon/src/server.rs` (listener + accept loop + connection handler)
+- `rustyjack-daemon/src/dispatch.rs` (endpoint routing)
+- `rustyjack-daemon/src/auth.rs` (peer creds + role resolution)
+- `rustyjack-daemon/src/jobs/mod.rs` (job registry + spawning + cancellation)
+- `rustyjack-daemon/src/jobs/kinds/*.rs` (per operation job)
+- `rustyjack-daemon/src/locks.rs` (subsystem lock ordering)
+- `rustyjack-daemon/src/ops/*.rs` (thin glue calling core services)
+- `rustyjack-daemon/src/telemetry.rs` (logging, timing, optional metrics)
+- `rustyjack-daemon/src/systemd.rs` (socket activation + sd_notify wrapper)
+
+Runtime choice:
+- Tokio (current-thread) is typically best on Pi for predictable resource use.
+- `spawn_blocking` for CPU-heavy crypto or large file IO.
+
+2.3 New crate: `rustyjack-client` (shared client for UI + CLI)
+Files to create:
+- `rustyjack-client/Cargo.toml`
+- `rustyjack-client/src/lib.rs`
+- `rustyjack-client/src/client.rs`
+Responsibilities:
+- connect to UDS
+- perform handshake
+- send request envelopes and receive responses
+- enforce timeouts and reconnect on daemon restart
+- expose ergonomic Rust API for UI/CLI
+
+2.4 Optional new crate: `rustyjack-cli`
+- clap UI only; no privileges; uses rustyjack-client
+- helpful for production debugging (SSH into Pi, run: `rustyjack-cli status`)
+
+2.5 Wire into workspace
+Modify:
+- top-level `Cargo.toml` `[workspace].members` to include new crates
+
+-------------------------------------------------------------------------------
+3) systemd integration (done early; keeps you honest)
+-------------------------------------------------------------------------------
+
+3.1 Create system group + runtime dirs
+- group: `rustyjack`
+- socket directory: `/run/rustyjack/` (systemd RuntimeDirectory=rustyjack)
+
+3.2 Create units (files at repo root or packaging folder)
+Files to create:
+- `rustyjackd.socket`
+- `rustyjackd.service`
+- `rustyjack-ui.service` (replaces privileged `rustyjack.service`)
+
+`rustyjackd.socket` (UDS activation)
+- ListenStream=/run/rustyjack/rustyjackd.sock
+- SocketMode=0660
+- SocketUser=root
+- SocketGroup=rustyjack
+- RemoveOnStop=true
+
+`rustyjackd.service` (privileged daemon)
+- Type=notify
+- WatchdogSec=20s
+- NotifyAccess=main
+- ExecStart=/usr/local/bin/rustyjackd
+- Restart=on-failure
+- RuntimeDirectory=rustyjack
+- StateDirectory=rustyjack
+- ConfigurationDirectory=rustyjack
+- Hardening:
+  - NoNewPrivileges=true
+  - PrivateTmp=true
+  - ProtectSystem=strict
+  - ProtectHome=true
+  - MemoryDenyWriteExecute=true
+  - LockPersonality=true
+  - SystemCallArchitectures=native
+(You may later add SystemCallFilter= once callset is stable; it’s easy to break things prematurely.)
+
+`rustyjack-ui.service` (unprivileged UI)
+- User=rustyjack-ui (or just `pi` depending on your deployment)
+- Group=rustyjack  (so it can connect to the socket)
+- No capabilities. No root.
+- After=rustyjackd.socket
+- Requires=rustyjackd.socket
+
+Why socket activation + notify?
+- It’s standard for local daemons: systemd holds the socket, starts the daemon on demand citeturn0search4
+- READY=1 / WATCHDOG=1 gives “this is alive” semantics citeturn0search2turn0search10
+- Rust support exists via crates like `sd-notify` citeturn0search3
+
+-------------------------------------------------------------------------------
+4) Refactor UI into a real client (CoreBridge -> DaemonClient)
+-------------------------------------------------------------------------------
+
+4.1 Stop linking UI to `rustyjack-core`
+Modify:
+- `rustyjack-ui/Cargo.toml`: remove dependency on `rustyjack-core`
+- add `rustyjack-client` (or directly `rustyjack-proto` + client module)
+
+4.2 Implement `DaemonClient` in UI (or reuse rustyjack-client)
+Create:
+- `rustyjack-ui/src/daemon_client.rs` (if UI-specific) OR use `rustyjack-client`
+
+Update:
+- `rustyjack-ui/src/core.rs`
+  - replace direct calls into core with client calls
+  - any “blocking” operation becomes:
+      StartJob -> return job_id -> subscribe/poll for progress -> update UI
+
+4.3 UI behavioral changes (must be explicit)
+- UI must tolerate daemon restarts:
+  - on disconnect: show “daemon restarting” and retry connect with backoff
+- UI must handle “Forbidden” errors gracefully:
+  - show “requires Admin” or “dangerous operations disabled” rather than generic failure
+
+-------------------------------------------------------------------------------
+5) Refactor core into service modules (daemon-friendly surface)
+-------------------------------------------------------------------------------
+
+Goal:
+- `rustyjack-core` becomes a library of *service modules* that perform operations, without CLI glue and without
+  invoking external binaries.
+
+5.1 Create service module layout
+Create directory:
+- `rustyjack-core/src/services/`
+
+Create files:
+- `rustyjack-core/src/services/mod.rs`
+- `rustyjack-core/src/services/policy.rs` (allowlists, path restrictions, role requirements)
+- `rustyjack-core/src/services/status.rs`
+- `rustyjack-core/src/services/mount.rs`
+- `rustyjack-core/src/services/net.rs` (ethernet/bridge)
+- `rustyjack-core/src/services/wifi.rs`
+- `rustyjack-core/src/services/scan.rs`
+- `rustyjack-core/src/services/loot.rs`
+- `rustyjack-core/src/services/process.rs`
+- `rustyjack-core/src/services/update.rs`
+- `rustyjack-core/src/services/evasion.rs` (anti-forensics)
+
+5.2 Move CLI parsing out of core
+Option A (recommended):
+- create `rustyjack-cli` and move:
+  - `rustyjack-core/src/main.rs`
+  - `rustyjack-core/src/cli.rs`
+  - `rustyjack-core/src/operations.rs` (as adapter)
+into `rustyjack-cli/`.
+
+Option B (acceptable):
+- keep them in core but behind feature flag `cli`, not enabled by default.
+Daemon must compile without `cli`.
+
+5.3 Define stable “service request/response” types
+Each service function should take typed inputs and return typed outputs, not strings.
+Example pattern:
+- `StatusService::get_status() -> Result<DeviceStatus, CoreError>`
+- `MountService::mount(req: MountRequest) -> Result<MountResult, CoreError>`
+
+These types map 1:1 to proto requests/responses.
+
+-------------------------------------------------------------------------------
+6) Migrate operations behind the daemon boundary (subsystem-by-subsystem)
+-------------------------------------------------------------------------------
+
+This is the “real integration”: UI no longer owns privileged logic. Daemon does.
+
+A guiding rule:
+- If it touches /run, /proc, /sys, network interfaces, mounts, processes, update state, encryption keys — it belongs in the daemon.
+
+6.1 Define endpoints + permissions (industry-standard table)
+Implement a single source of truth:
+- `rustyjack-proto/src/types.rs` for Endpoint enum
+- `rustyjack-daemon/src/dispatch.rs` maps Endpoint -> handler -> required tier
+
+Tiers:
+- ReadOnly: status/health/version, list devices, read-only info
+- Operator: start scans, mount/unmount allowed media, wifi connect/disconnect, portal control
+- Admin: updates, reboot/shutdown, anti-forensics destructive actions, key management
+
+Example permission mapping (initial):
+- Health, Version, GetStatus: ReadOnly
+- ListMounts, WifiScan, ListInterfaces: ReadOnly or Operator (your choice)
+- Mount/Unmount, WifiConnect, StartScan: Operator
+- UpdateApply, Reboot, Shutdown, AntiForensicsWipe: Admin + dangerous_ops_enabled
+
+6.2 Implement job kinds in the daemon (one file per job kind)
+Create:
+- `rustyjack-daemon/src/jobs/kinds/status.rs`
+- `.../mount.rs`
+- `.../wifi.rs`
+- `.../scan.rs`
+- `.../update.rs`
+etc.
+
+Each job must:
+- acquire locks in a global order (Update > Mount > Wifi > Portal)
+- publish progress states (0–100 or phase-based)
+- support cancellation tokens
+- on cancellation: cleanup best-effort, then mark Cancelled or CleanupFailed
+
+6.3 Migration order (do in this order)
+This order minimizes risk and gives early wins:
+
+(1) “Read-only” baseline
+- Health, Version, GetStatus
+- ListInterfaces (from /sys/class/net)
+- ListMounts (from /proc/self/mountinfo)
+
+(2) Mount subsystem (you already have Rust mount syscall code)
+- MountList (not a job)
+- Mount (job, because it can block on IO)
+- Unmount (job)
+- Strict allowlists:
+  - only mount under `/mnt/rustyjack/*`
+  - only allow fs types you support (vfat, exfat, ext4)
+  - reject arbitrary mount options from client (daemon constructs options)
+
+(3) Wi‑Fi scan/connect/disconnect (Rust-only)
+- Scan:
+  - use nl80211 scan via `rustyjack-netlink` (already present)
+- Connect:
+  - **IMPORTANT:** “Rust-only WPA supplicant” is a substantial project.
+  - If you require WPA2/WPA3, you must implement:
+    - RSN (Robust Security Network) handshake
+    - key derivation (PBKDF2 for PSK; SAE for WPA3)
+    - EAPOL state machine
+    - rekeying, roaming, etc.
+  - Recommendation for an implementation path:
+    - v1: open networks + WEP disabled + WPA2-PSK only (if feasible)
+    - v2: WPA3-SAE
+  - If you can accept “OS provides a supplicant” then you can talk to it via control socket without spawning it —
+    but your constraint says “no binaries”, so budget accordingly.
+
+(4) Ethernet / bridge / hotspot
+- Replace `ip`/shell with netlink:
+  - create bridge interface (RTM_NEWLINK)
+  - enslave interfaces
+  - set addresses/routes
+- DHCP:
+  - Rust-only DHCP client/server is also non-trivial.
+  - Decide:
+    - if you can rely on OS dhcpcd/systemd-networkd (without spawning) you can configure via D-Bus/config files
+    - otherwise you need a minimal DHCP implementation in Rust.
+
+(5) Scan pipeline (ScanCommand)
+- Make scan a Job with clear phases:
+  - enumerate targets
+  - capture
+  - parse
+  - persist loot
+- Ensure it cannot wedge the daemon:
+  - bound concurrency
+  - timeouts per target
+  - streaming results to file instead of holding in RAM
+
+(6) Update subsystem (Rust-only)
+- Replace git/tar/openssl with:
+  - download via reqwest (or ureq)
+  - verify signature (Ed25519 or minisign-like) using a Rust crypto crate
+  - unpack tarball with `tar` crate + decompressor
+  - stage to /usr/local/lib/rustyjack/staging
+  - atomic swap (rename) and restart daemon
+
+(7) Anti-forensics / evasion (dangerous ops)
+- Gate behind Admin + dangerous_ops_enabled.
+- Replace `shred`, `swapoff`, `sysctl`, etc. with syscalls and /proc writes (see §7).
+
+-------------------------------------------------------------------------------
+7) Eliminate external binaries (Rust-only replacements, mapped to your repo)
+-------------------------------------------------------------------------------
+
+Your current code uses the following binaries; below is the Rust-only replacement plan.
+
+General rule:
+- Replace “run a command” with:
+  - direct syscalls (via libc/nix)
+  - /proc or /sys reads/writes
+  - netlink for network control
+  - D-Bus for systemd/journald operations (if needed) without invoking `systemctl`/`journalctl`
+
+7.1 `systemctl` (service control)
+Replacement:
+- Use D-Bus to systemd (e.g. zbus) to StartUnit/StopUnit/RestartUnit.
+- Or avoid service control entirely by using systemd dependencies: let systemd start/stop units, not your code.
+
+Repo callsites:
+- `rustyjack-ui/src/app.rs`
+- `rustyjack-core/src/anti_forensics.rs`
+Implementation steps:
+- Remove UI-based service control entirely (daemon will own “start portal / stop portal” by jobs).
+- In daemon, if you must restart units, do D-Bus calls.
+
+7.2 `journalctl`
+Replacement:
+- Use libsystemd journal APIs (sd-journal) via FFI, or a Rust crate binding.
+- Or write your own log files in /var/log/rustyjack and read those.
+
+7.3 `bash`, `timeout`, `which`, `ulimit`
+Replacement:
+- Eliminate shell execution.
+- Implement timeouts with tokio timeouts or std::thread + join timeout.
+- `which`: search PATH in Rust.
+- `ulimit`: setrlimit via libc (RLIMIT_NOFILE, etc.).
+
+7.4 `tar`
+Replacement:
+- Use `tar` crate and decompressors (flate2/xz2/zstd) in Rust.
+
+7.5 `openssl`
+Replacement:
+- Use Rust crypto for signature verification (ed25519) and hashing (sha2).
+- For TLS: rely on rustls via reqwest features.
+
+7.6 `git`
+Replacement:
+- Don’t build/update from git on-device.
+- Ship signed release artifacts, download them, verify, stage, atomically install.
+
+7.7 `sync`
+Replacement:
+- libc::sync (or syncfs on specific fd)
+
+7.8 `shutdown`, `reboot`
+Replacement:
+- Use `reboot(2)` syscall (LINUX_REBOOT_CMD_POWER_OFF / RESTART) or write to /proc/sysrq-trigger carefully.
+- Gate behind Admin.
+
+7.9 `hostnamectl`
+Replacement:
+- `sethostname(2)` syscall + write `/etc/hostname` (atomic write).
+
+7.10 `df`, `lsblk`
+Replacement:
+- `statvfs(2)` for filesystem stats.
+- Enumerate block devices via `/sys/class/block` + `/dev` and udev metadata if needed.
+
+7.11 `mount`, `umount`
+Replacement:
+- Always use your Rust mount module (libc::mount/umount2).
+- Enforce allowlists in daemon.
+
+7.12 `wpa_supplicant`
+Replacement (Rust-only):
+- Implement Wi‑Fi station connection using nl80211 + WPA handshake in Rust (large scope).
+- Short-term if you *must* ship: keep wpa_supplicant installed but do not spawn; talk to its control socket.
+  (This violates the strictest interpretation of “no binaries”, but meets “no spawning”. Decide explicitly.)
+
+7.13 `shred`
+Replacement:
+- Secure overwrite in Rust: open file, overwrite blocks with random bytes, fsync, close, unlink.
+- Note: on flash media, secure deletion is not guaranteed (wear leveling).
+
+7.14 `ps`
+Replacement:
+- Parse /proc to enumerate processes.
+
+7.15 `swapoff`, `dphys-swapfile`
+Replacement:
+- Use `swapoff(2)` syscall and edit config files directly (if you still use dphys-swapfile).
+
+7.16 `sysctl`
+Replacement:
+- Write to `/proc/sys/...` nodes directly (with allowlist).
+
+7.17 `exiftool`
+Replacement:
+- Use Rust EXIF parser crate; if “strip metadata” is required, rewrite images without EXIF.
+
+-------------------------------------------------------------------------------
+8) Error handling and “graceful failures” (daemon-grade)
+-------------------------------------------------------------------------------
+
+Every endpoint/job must produce:
+- stable ErrorCode (enum with numeric discriminants)
+- retryable: bool
+- human message: short
+- optional detail: safe, non-secret
+- logs contain full causal chain
+
+Add:
+- `rustyjack-proto/src/error.rs`:
+  - ErrorCode set: BadRequest, Unauthorized, Forbidden, Busy, Timeout, Cancelled, Io, Netlink, MountFailed, WifiFailed, UpdateFailed, Internal
+- In daemon:
+  - map internal errors to DaemonError with retryability rules
+  - attach context (request_id, job_id, endpoint, peer uid/pid)
+
+Design “best effort cleanup” rules:
+- cancellation triggers cleanup
+- cleanup errors become CleanupFailed
+- daemon restart runs reconciliation (mount table, wifi state) and clears stale locks
+
+-------------------------------------------------------------------------------
+9) Testing plan (don’t ship a daemon without this)
+-------------------------------------------------------------------------------
+
+9.1 Unit tests
+- proto serialization round-trips
+- framing parser: malformed frames, oversize, split reads
+- authz tier mapping
+- error mapping table
+
+9.2 Integration tests (run on x86 Linux + on Pi)
+- spawn daemon, connect client, handshake, run health/version
+- run a “mount mock” job using a temp mount namespace (unshare) on CI
+- cancellation tests: cancel mid-job, ensure cleanup executed
+
+9.3 Fuzzing (proto)
+- fuzz frame parser and envelope decode (cargo fuzz)
+
+9.4 Soak tests (Pi)
+- loop connect/disconnect UI, restart daemon, run jobs repeatedly
+- check for fd leaks, memory growth, lock starvation
+
+-------------------------------------------------------------------------------
+10) Clear implementation order (“do this, then this”)
+-------------------------------------------------------------------------------
+
+Milestone 0 — Scaffolding
+1) Add `rustyjack-proto`, `rustyjack-daemon`, `rustyjack-client` crates
+2) Wire workspace + CI build
+3) Add systemd units for daemon + UI (UI becomes unprivileged)
+
+Milestone 1 — Minimal daemon is real
+4) Implement UDS listener + framing + handshake + authz
+5) Implement Health/Version/GetStatus endpoints
+6) Implement sd_notify READY/WATCHDOG + socket activation
+
+Milestone 2 — UI truly becomes a client
+7) Remove UI dependency on rustyjack-core
+8) Implement UI DaemonClient, show Health/Version in UI
+9) Remove privileged UI service, enable rustyjack-ui.service
+
+Milestone 3 — First privileged capability migrated: Mount
+10) Refactor core mount logic into `services/mount.rs`
+11) Add daemon endpoints/jobs: ListMounts/Mount/Unmount
+12) Add UI mount workflows (job progress + cancellation)
+
+Milestone 4 — Wi‑Fi scan/connect (Rust-only)
+13) Migrate scan to daemon (nl80211 scan)
+14) Implement connect path (plan for WPA scope explicitly)
+15) Add idempotent connect/disconnect endpoints
+
+Milestone 5 — Replace binaries everywhere
+16) For each remaining `Command::new`:
+    - move functionality into a service module
+    - add daemon endpoint if it’s privileged
+    - delete the command invocation
+17) Enforce “no Command::new in repo” via CI lint (ripgrep fail)
+
+Milestone 6 — Hardening + operational polish
+18) Job subscription stream (optional) or tune polling
+19) Crash recovery reconciliation + optional job persistence
+20) Observability: structured logs, request correlation, admin diagnostics endpoint
+
+END OF ROADMAP

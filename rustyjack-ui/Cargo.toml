@@ -18,18 +18,15 @@ image = { version = "0.23", default-features = false, features = ["bmp"] }
 tinybmp = "0.5"
 st7735-lcd = "0.10" # Updated for embedded-hal 1.0 compatibility
 log = "0.4"
-rustyjack-core = { path = "../rustyjack-core" }
+rustyjack-commands = { path = "../rustyjack-commands" }
+rustyjack-client = { path = "../rustyjack-client" }
 rustyjack-evasion = { path = "../rustyjack-evasion" }
 rustyjack-encryption = { path = "../rustyjack-encryption" }
+rustyjack-ipc = { path = "../rustyjack-ipc" }
 rand = "0.8"
 zeroize = "1.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-embedded-hal = { version = "0.4", features = [] }
-rustyjack-wireless = { path = "../rustyjack-wireless" }
-rustyjack-netlink = { path = "../rustyjack-netlink" }
+rustyjack-wpa = { path = "../rustyjack-wpa" }
 tokio = { version = "1.0", features = ["rt", "macros"] }
-libc = "0.2"
-
-[features]
-journald = ["rustyjack-netlink/journald"]

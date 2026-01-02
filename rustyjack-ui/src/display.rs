@@ -374,61 +374,14 @@ impl Display {
                                                     continue;
                                                 }
 
-                                                // Before giving up, dump some system state so the
-                                                // user (and us) can see who owns the gpiochip and
-                                                // why the request failed.
                                                 eprintln!("diag: requesting {} line for diag: failed after retries — dumping system state:", consumer);
-                                                // Try `gpioinfo` (preferred) and a few helpful utilities
-                                                // — these may or may not be present on the minimal image,
-                                                // so we ignore errors.
-                                                fn run_cmd(name: &str, args: &[&str]) {
-                                                    match std::process::Command::new(name)
-                                                        .args(args)
-                                                        .output()
-                                                    {
-                                                        Ok(o) => {
-                                                            if !o.stdout.is_empty() {
-                                                                let out = String::from_utf8_lossy(
-                                                                    &o.stdout,
-                                                                );
-                                                                eprintln!(
-                                                                    "--- {} {} stdout ---\n{}",
-                                                                    name,
-                                                                    args.join(" "),
-                                                                    out
-                                                                );
-                                                            }
-                                                            if !o.stderr.is_empty() {
-                                                                let err = String::from_utf8_lossy(
-                                                                    &o.stderr,
-                                                                );
-                                                                eprintln!(
-                                                                    "--- {} {} stderr ---\n{}",
-                                                                    name,
-                                                                    args.join(" "),
-                                                                    err
-                                                                );
-                                                            }
-                                                        }
-                                                        Err(e) => eprintln!(
-                                                            "--- {} not available: {:#}",
-                                                            name, e
-                                                        ),
-                                                    }
+                                                match crate::util::fetch_gpio_diagnostics() {
+                                                    Ok(report) => eprintln!("{report}"),
+                                                    Err(err) => eprintln!(
+                                                        "diag: failed to collect gpio diagnostics: {:#}",
+                                                        err
+                                                    ),
                                                 }
-
-                                                run_cmd("gpioinfo", &[]);
-                                                run_cmd("lsof", &["/dev/gpiochip0"]);
-                                                run_cmd("fuser", &["-v", "/dev/gpiochip0"]);
-                                                run_cmd(
-                                                    "ls",
-                                                    &[
-                                                        "-l",
-                                                        "/dev/gpiochip0",
-                                                        "/dev/spidev0.0",
-                                                        "/dev/spidev0.1",
-                                                    ],
-                                                );
 
                                                 return Err(anyhow::anyhow!("requesting {} line for diag: failed after retries", consumer));
                                             }
@@ -1472,36 +1425,14 @@ impl Display {
                 );
             }
             DashboardView::NetworkInterfaces => {
-                #[cfg(target_os = "linux")]
-                {
-                    use tokio::runtime::Handle;
-                    let fetch = |handle: &Handle| {
-                        handle.block_on(async {
-                            let mgr = rustyjack_netlink::InterfaceManager::new()?;
-                            mgr.list_interfaces().await
-                        })
-                    };
-                    let interfaces = match Handle::try_current() {
-                        Ok(handle) => fetch(&handle).ok(),
-                        Err(_) => tokio::runtime::Runtime::new()
-                            .ok()
-                            .and_then(|rt| fetch(rt.handle()).ok()),
-                    };
-                    if let Some(interfaces) = interfaces {
-                        for iface in interfaces {
-                            for addr in iface.addresses {
-                                if let std::net::IpAddr::V4(v4) = addr.address {
-                                    println!("{}: {}", iface.name, v4);
-                                }
-                            }
-                        }
-                    } else {
-                        println!("No interfaces");
-                    }
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
+                if status.interfaces.is_empty() {
                     println!("No interfaces");
+                } else {
+                    for iface in status.interfaces.iter() {
+                        if let Some(ip) = iface.ip.as_ref() {
+                            println!("{}: {}", iface.name, ip);
+                        }
+                    }
                 }
             }
         }
@@ -1546,6 +1477,7 @@ fn parse_color(input: &str, fallback: Rgb565) -> Rgb565 {
 pub struct StatusOverlay {
     pub temp_c: f32,
     pub text: String,
+    pub dns_spoof_running: bool,
     pub cpu_percent: f32,
     pub mem_used_mb: u64,
     pub mem_total_mb: u64,
@@ -1558,7 +1490,7 @@ pub struct StatusOverlay {
     pub active_interface: String,
     pub original_mac: String,
     pub current_mac: String,
-    pub interfaces: Vec<rustyjack_core::InterfaceSummary>,
+    pub interfaces: Vec<crate::types::InterfaceSummary>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

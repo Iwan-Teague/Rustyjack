@@ -65,7 +65,7 @@ validate_network_status() {
   local output=""
   local tries=60
   for _ in $(seq 1 "$tries"); do
-    output=$(RUSTYJACK_ROOT="$PROJECT_ROOT" rustyjack status network --output json 2>/dev/null || true)
+    output=$(RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack status network --output json 2>/dev/null || true)
     if [ -n "$output" ]; then
       local active=""
       active=$(echo "$output" | sed -n 's/.*"active_uplink":"\\([^"]*\\)".*/\\1/p' | head -n1)
@@ -101,7 +101,7 @@ validate_network_status() {
   if [ -n "$output" ]; then
     echo "$output"
   fi
-  journalctl -u rustyjack.service -n 120 --no-pager 2>/dev/null || true
+  journalctl -u rustyjack-ui.service -n 120 --no-pager 2>/dev/null || true
   return 1
 }
 
@@ -117,7 +117,7 @@ preserve_default_route_interface() {
     return 0
   fi
 
-  local pref_dir="$PROJECT_ROOT/wifi"
+  local pref_dir="$RUNTIME_ROOT/wifi"
   local pref_path="$pref_dir/interface_preferences.json"
   local mac=""
   if [ -r "/sys/class/net/$iface/address" ]; then
@@ -422,14 +422,19 @@ if [ ! -d "$PROJECT_ROOT" ]; then
   PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 fi
 info "Using project root: $PROJECT_ROOT"
+RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/rustyjack}"
+info "Using runtime root: $RUNTIME_ROOT"
 
 # Stop the service before rebuilding
-info "Stopping rustyjack service for rebuild..."
+info "Stopping rustyjack services for rebuild..."
+sudo systemctl stop rustyjack-ui.service 2>/dev/null || true
 sudo systemctl stop rustyjack.service 2>/dev/null || true
+sudo systemctl stop rustyjackd.service 2>/dev/null || true
+sudo systemctl stop rustyjackd.socket 2>/dev/null || true
 
 # Remove old binaries
 info "Removing old binaries..."
-sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack
+sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack /usr/local/bin/rustyjackd
 
 # Ask user about clean build
 echo ""
@@ -471,16 +476,26 @@ if [ ! -f "$PROJECT_ROOT/target/debug/rustyjack-core" ]; then
   fail "rustyjack-core binary not found after build!"
 fi
 
+# Build rustyjackd daemon
+info "Building rustyjackd daemon (debug)..."
+(cd "$PROJECT_ROOT" && cargo build -p rustyjack-daemon) || fail "Failed to build rustyjackd"
+
+if [ ! -f "$PROJECT_ROOT/target/debug/rustyjackd" ]; then
+  fail "rustyjackd binary not found after build!"
+fi
+
 # Install DEBUG binaries
 sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-ui" /usr/local/bin/rustyjack-ui
 sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-core" /usr/local/bin/rustyjack
+sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjackd" /usr/local/bin/rustyjackd
 
 # Verify installation
-if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack ]; then
+if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack ] && [ -x /usr/local/bin/rustyjackd ]; then
   info "Installed DEBUG binaries to /usr/local/bin/"
   info "Binary info:"
   ls -la /usr/local/bin/rustyjack-ui
   ls -la /usr/local/bin/rustyjack
+  ls -la /usr/local/bin/rustyjackd
 else
   fail "Failed to install binaries to /usr/local/bin/"
 fi
@@ -488,19 +503,30 @@ fi
 # ---- 4: WiFi attack setup -----------------------------------
 step "Setting up WiFi attack environment..."
 
-# Create loot directories
-sudo mkdir -p "$PROJECT_ROOT/loot"/{Wireless,Ethernet,Scan,reports}
-sudo chmod -R 755 "$PROJECT_ROOT/loot"
+# Prepare runtime root and static assets
+sudo mkdir -p "$RUNTIME_ROOT"
+for dir in img scripts wordlists DNSSpoof; do
+  if [ -d "$PROJECT_ROOT/$dir" ] && [ ! -d "$RUNTIME_ROOT/$dir" ]; then
+    sudo cp -a "$PROJECT_ROOT/$dir" "$RUNTIME_ROOT/"
+  fi
+done
 
-sudo mkdir -p "$PROJECT_ROOT/wifi/profiles"
-sudo chown root:root "$PROJECT_ROOT/wifi/profiles"
-sudo chmod 700 "$PROJECT_ROOT/wifi/profiles"
+# Create loot directories
+sudo mkdir -p "$RUNTIME_ROOT/loot"/{Wireless,Ethernet,Scan,reports,Hotspot,logs}
+sudo chmod -R 755 "$RUNTIME_ROOT/loot"
+
+sudo mkdir -p "$RUNTIME_ROOT/wifi/profiles"
+sudo chown root:root "$RUNTIME_ROOT/wifi/profiles"
+sudo chmod 700 "$RUNTIME_ROOT/wifi/profiles"
+
+# Create pipelines directory (used by scan pipeline)
+sudo mkdir -p "$RUNTIME_ROOT/pipelines"
 
 # Note: rfkill unblock and interface up operations now handled by rustyjack-netlink
 info "Network interface management delegated to rustyjack-netlink crate"
 
-if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then
-  sudo tee "$PROJECT_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
+if [ ! -f "$RUNTIME_ROOT/wifi/profiles/sample.json" ]; then
+  sudo tee "$RUNTIME_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
 {
   "ssid": "YourWiFiNetwork",
   "password": "your_password_here",
@@ -512,12 +538,12 @@ if [ ! -f "$PROJECT_ROOT/wifi/profiles/sample.json" ]; then
   "notes": "Sample WiFi profile - edit with your network details"
 }
 PROFILE
-  sudo chmod 600 "$PROJECT_ROOT/wifi/profiles/sample.json"
+  sudo chmod 600 "$RUNTIME_ROOT/wifi/profiles/sample.json"
   info "Created sample WiFi profile"
 fi
 
-if [ ! -f "$PROJECT_ROOT/wifi/profiles/rustyjack.json" ]; then
-  sudo tee "$PROJECT_ROOT/wifi/profiles/rustyjack.json" >/dev/null <<'PROFILE'
+if [ ! -f "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" ]; then
+  sudo tee "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" >/dev/null <<'PROFILE'
 {
   "ssid": "rustyjack",
   "password": "123456789",
@@ -529,12 +555,12 @@ if [ ! -f "$PROJECT_ROOT/wifi/profiles/rustyjack.json" ]; then
   "notes": "Preloaded WiFi profile"
 }
 PROFILE
-  sudo chmod 600 "$PROJECT_ROOT/wifi/profiles/rustyjack.json"
+  sudo chmod 600 "$RUNTIME_ROOT/wifi/profiles/rustyjack.json"
   info "Created default WiFi profile: rustyjack"
 fi
 
-if [ ! -f "$PROJECT_ROOT/wifi/profiles/skyhn7xm.json" ]; then
-  sudo tee "$PROJECT_ROOT/wifi/profiles/skyhn7xm.json" >/dev/null <<'PROFILE'
+if [ ! -f "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" ]; then
+  sudo tee "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" >/dev/null <<'PROFILE'
 {
   "ssid": "SKYHN7XM",
   "password": "6HekvGQvxuVV",
@@ -546,12 +572,87 @@ if [ ! -f "$PROJECT_ROOT/wifi/profiles/skyhn7xm.json" ]; then
   "notes": "Preloaded WiFi profile"
 }
 PROFILE
-  sudo chmod 600 "$PROJECT_ROOT/wifi/profiles/skyhn7xm.json"
+  sudo chmod 600 "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json"
   info "Created default WiFi profile: SKYHN7XM"
 fi
 
 # ---- 5: systemd service -------------------------------------
-SERVICE=/etc/systemd/system/rustyjack.service
+step "Ensuring rustyjack system users/groups exist..."
+if ! getent group rustyjack >/dev/null 2>&1; then
+  sudo groupadd --system rustyjack || true
+fi
+if ! getent group rustyjack-ui >/dev/null 2>&1; then
+  sudo groupadd --system rustyjack-ui || true
+fi
+if ! id -u rustyjack-ui >/dev/null 2>&1; then
+  sudo useradd --system --home /var/lib/rustyjack --shell /usr/sbin/nologin -g rustyjack-ui rustyjack-ui || true
+fi
+for grp in rustyjack gpio spi; do
+  if getent group "$grp" >/dev/null 2>&1; then
+    sudo usermod -aG "$grp" rustyjack-ui || true
+  fi
+done
+
+sudo chown -R root:rustyjack "$RUNTIME_ROOT"
+sudo chmod -R g+rwX "$RUNTIME_ROOT"
+sudo find "$RUNTIME_ROOT/wifi/profiles" -type f -exec chmod 660 {} \; 2>/dev/null || true
+sudo chmod 770 "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
+
+DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
+DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
+step "Installing rustyjackd socket/service..."
+
+sudo tee "$DAEMON_SOCKET" >/dev/null <<UNIT
+[Unit]
+Description=Rustyjack daemon socket
+
+[Socket]
+ListenStream=/run/rustyjack/rustyjackd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=rustyjack
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
+UNIT
+
+sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
+[Unit]
+Description=Rustyjack privileged daemon
+After=local-fs.target network.target
+Wants=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/rustyjackd
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=rustyjack
+RuntimeDirectoryMode=0770
+StateDirectory=rustyjack
+StateDirectoryMode=0770
+ConfigurationDirectory=rustyjack
+ConfigurationDirectoryMode=0770
+Group=rustyjack
+Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
+WatchdogSec=20s
+NotifyAccess=main
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+SERVICE=/etc/systemd/system/rustyjack-ui.service
 step "Installing systemd service $SERVICE..."
 
 sudo tee "$SERVICE" >/dev/null <<UNIT
@@ -562,25 +663,29 @@ Wants=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$PROJECT_ROOT
+WorkingDirectory=$RUNTIME_ROOT
 ExecStart=/usr/local/bin/rustyjack-ui
 Environment=RUSTYJACK_DISPLAY_ROTATION=landscape
 Environment=RUST_BACKTRACE=1
 Environment="RUST_LOG=rustyjack_hotspot=trace,rustyjack_netlink=trace,rustyjack_wireless=trace,rustyjack_ui=debug"
 Restart=on-failure
 RestartSec=2
-User=root
-Environment=RUSTYJACK_ROOT=$PROJECT_ROOT
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+User=rustyjack-ui
+Group=rustyjack-ui
+SupplementaryGroups=rustyjack gpio spi
+Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
 NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
+Alias=rustyjack.service
 UNIT
 
 sudo systemctl daemon-reload
-sudo systemctl enable rustyjack.service
+sudo systemctl enable rustyjackd.socket
+sudo systemctl start rustyjackd.socket 2>/dev/null || true
+sudo systemctl enable rustyjack-ui.service
 info "Rustyjack service enabled"
 
 # Finalize network ownership after installs/builds are complete
@@ -590,7 +695,7 @@ purge_network_manager
 disable_conflicting_services
 
 # Start the service now
-sudo systemctl start rustyjack.service && info "Rustyjack service started successfully" || warn "Failed to start service - check 'systemctl status rustyjack'"
+sudo systemctl start rustyjack-ui.service && info "Rustyjack service started successfully" || warn "Failed to start service - check 'systemctl status rustyjack-ui'"
 
 # Claim resolv.conf after installs/builds are complete
 claim_resolv_conf
@@ -636,6 +741,12 @@ else
   fail "[X] rustyjack CLI binary missing"
 fi
 
+if [ -x /usr/local/bin/rustyjackd ]; then
+  info "[OK] DEBUG daemon binary installed: rustyjackd"
+else
+  fail "[X] rustyjackd binary missing"
+fi
+
 # Verify library crates were compiled
 if has_crate_artifact "rustyjack_core" "debug"; then
   info "[OK] rustyjack-core library compiled"
@@ -649,7 +760,7 @@ else
   warn "[X] rustyjack-evasion library not found in target/debug/deps/ (Cargo hashes file names)"
 fi
 
-if systemctl is-active --quiet rustyjack.service; then
+if systemctl is-active --quiet rustyjack-ui.service; then
   info "[OK] Rustyjack service is running"
 else
   warn "[X] Rustyjack service is not running"

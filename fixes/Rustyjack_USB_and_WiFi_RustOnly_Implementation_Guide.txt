@@ -1,0 +1,794 @@
+RUSTYJACK — RUST‑ONLY IMPLEMENTATION GUIDE (DEEP DIVE)
+USB MOUNTING (no /bin/mount) + WI‑FI STATION MODE (toward no wpa_supplicant)
+Author: Senior Engineering Review
+Date: 2025-12-31 (Europe/Dublin)
+Repo: /mnt/data/rustyjack_src2/Rustyjack
+
+================================================================================
+Safety boundary (important)
+================================================================================
+This document is written to help you build:
+  • a safer USB mounting subsystem (Rust + syscalls) and
+  • a Wi‑Fi “station/client mode” subsystem that reduces dependence on external
+    binaries, while keeping behavior safe-by-default.
+
+It intentionally avoids giving step-by-step instructions or code that would
+meaningfully enable cyber abuse. In particular, it does NOT provide the kind of
+cryptographic / key-derivation implementation detail that could be directly
+repurposed into credential cracking tooling.
+
+For Wi‑Fi, the focus is therefore:
+  • architectural refactor for Rust-only backends,
+  • how to isolate wpa_supplicant cleanly,
+  • how to design and wire a Rust station backend,
+  • what files to touch, what types to add, and the exact plumbing,
+…and where cryptographic protocol work is required, it is described at the
+“module + state machine + API surface” level with clear placeholders.
+
+================================================================================
+PART A — USB MOUNTING (remove mount/umount binaries; fix capability model)
+================================================================================
+
+A0) Current state (what your code does today)
+---------------------------------------------
+File: rustyjack-ui/src/app.rs
+
+You already do the hard *policy* bits fairly well in the UI:
+  • Discover USB devices via /sys/block + removable + usb path checks
+  • Construct mount options: nosuid,nodev,noexec + ro/rw
+  • Create a mount point under a project-owned directory
+  • Attempt mount with a timeout and validate access
+But you call external binaries:
+  • Command::new("mount")
+  • Command::new("umount")
+
+Problems this causes:
+  1) Not Rust-only.
+  2) CAP_SYS_ADMIN is required, but your installer’s systemd unit does not grant
+     it (and the repo template differs from the generated service file).
+  3) Doing privileged IO from inside a TUI app increases blast radius.
+
+A1) Target architecture (what “good” looks like)
+------------------------------------------------
+Goal: keep “device discovery + UX” in the UI, but move privileged mounting to a
+very small, auditable Rust component.
+
+Recommended layout:
+  • rustyjack-core/src/mount.rs          (pure policy + syscall layer)
+  • (optional) rustyjack-daemon          (privileged process)
+  • rustyjack-ui                         (unprivileged client)
+
+If you haven’t introduced the daemon split yet, you can still:
+  • move mount code into rustyjack-core,
+  • call it from UI temporarily,
+  • then later migrate UI -> daemon IPC without rewriting the mount logic.
+
+A2) New module: rustyjack-core/src/mount.rs
+-------------------------------------------
+This module should become the ONLY place that is allowed to mount/unmount
+filesystems.
+
+Responsibilities:
+  1) Enumerate eligible USB block devices + partitions (or accept a device path
+     from UI but revalidate it).
+  2) Enforce policy (allowlist FS types, mount root, readonly-by-default).
+  3) Perform mount/unmount using libc syscalls:
+       mount(2), umount2(2), statfs/statvfs for verification.
+
+Design principle:
+  • Treat every device path and mountpoint path as untrusted input.
+  • Treat the filesystem contents as hostile (noexec,nodev,nosuid default).
+
+A3) Types and API surface (concrete)
+------------------------------------
+
+Create these types in rustyjack-core/src/mount.rs:
+
+    use std::path::{Path, PathBuf};
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MountMode {
+        ReadOnly,
+        ReadWrite,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum FsType {
+        Vfat,
+        Ext4,
+        Exfat,
+        Unknown(String),
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MountPolicy {
+        pub mount_root: PathBuf,         // e.g. /mnt/rustyjack
+        pub allowed_fs: BTreeSet<FsType>,
+        pub default_mode: MountMode,     // ReadOnly by default
+        pub allow_rw: bool,              // if false, RW requests downgrade to RO
+        pub max_devices: usize,          // prevent mount spam
+        pub lock_timeout: Duration,      // serialize mounts
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MountRequest {
+        pub device: PathBuf,             // e.g. /dev/sda1
+        pub mode: MountMode,             // ro/rw
+        pub preferred_name: Option<String>, // used to name mountpoint folder
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MountResponse {
+        pub device: PathBuf,
+        pub mountpoint: PathBuf,
+        pub fs_type: FsType,
+        pub readonly: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct UnmountRequest {
+        pub mountpoint: PathBuf,
+        pub detach: bool,                // default false; avoid MNT_DETACH unless needed
+    }
+
+The top-level functions:
+
+    pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> anyhow::Result<MountResponse>;
+    pub fn unmount(policy: &MountPolicy, req: UnmountRequest) -> anyhow::Result<()>;
+    pub fn list_mounts_under(policy: &MountPolicy) -> anyhow::Result<Vec<MountResponse>>;
+
+Why this API:
+  • UI can call list_mounts_under() to show mounted devices.
+  • mount_device() and unmount() are self-contained, testable, and policy-driven.
+
+A4) Implementation detail: serialize mount/unmount operations
+-------------------------------------------------------------
+Mount is global state. Race conditions are real (and ugly).
+
+Implement a lock file:
+  • /run/rustyjack.mount.lock  (tmpfs; cleared on reboot)
+
+Suggested approach:
+  - Open the lock file for read/write.
+  - Acquire an advisory flock() (nix or libc).
+  - Hold the lock for the duration of mount_device/unmount.
+  - Enforce a timeout: if lock not acquired, return a clean error to UI.
+
+Where:
+  • In mount_device() / unmount(), at the start.
+
+A5) Device validation and enumeration
+-------------------------------------
+Even if UI passes “/dev/sda1”, the privileged code must revalidate:
+
+Checks to implement:
+  1) device path must be under /dev and must be a block device:
+       metadata.file_type().is_block_device()  (via libc stat)
+  2) it must correspond to a removable USB drive:
+       /sys/class/block/<name>/removable == "1"
+       AND the realpath of /sys/class/block/<name>/device contains "/usb"
+  3) disallow boot media:
+       deny mmcblk*, loop*, ram*
+  4) prefer partitions (sda1, sda2) over the whole disk (sda) unless you have
+     a deliberate reason to support whole-disk mounts.
+
+Structure:
+  • Reuse the exact logic you already wrote in rustyjack-ui/src/app.rs, but move
+    it into core and make it return structured data.
+
+Suggested structs for enumeration (optional but recommended):
+
+    #[derive(Debug, Clone)]
+    pub struct BlockDevice {
+        pub name: String,           // "sda"
+        pub devnode: PathBuf,       // "/dev/sda"
+        pub removable: bool,
+        pub is_usb: bool,
+        pub partitions: Vec<Partition>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Partition {
+        pub name: String,           // "sda1"
+        pub devnode: PathBuf,       // "/dev/sda1"
+        pub size_bytes: Option<u64>,
+    }
+
+Functions:
+  • fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>>
+  • fn enumerate_partitions(dev: &BlockDevice) -> Result<Vec<Partition>>
+  • fn is_allowed_device(name: &str) -> bool
+
+Where:
+  • rustyjack-core/src/mount.rs (private helpers)
+
+A6) Filesystem type detection (Rust-only)
+-----------------------------------------
+You have 3 practical options:
+
+Option 1 — minimal superblock probing (Rust-only, simplest):
+  • Read small fixed offsets from the block device to detect common FS:
+     - ext4: 0x400 + 0x38 contains 0xEF53 magic (classic superblock)
+     - vfat: boot sector signatures and FAT strings (needs careful heuristics)
+     - exfat: EXFAT signature in boot sector
+  • This is not perfect for all cases, but works for the common ones.
+
+Option 2 — accept “Unknown” and still mount with fstype="auto":
+  • The kernel supports auto-detection when passing NULL fstype in mount(2),
+    but behavior varies and you lose policy clarity.
+  • I do NOT recommend auto-mounting unknown filesystems.
+
+Option 3 — libblkid binding:
+  • This uses a C library (not a binary), but violates “Rust-only purism.”
+  • If you allow it, it’s robust.
+
+Given your constraints, do Option 1 and enforce allowlist. If detection fails,
+return a clear error and refuse to mount.
+
+Add to policy:
+  • allowed_fs: {Vfat, Ext4, Exfat}
+
+A7) Mount syscall implementation (code outline)
+------------------------------------------------
+Use libc::mount directly. In mount(2):
+  - source: device path (C string)
+  - target: mountpoint path (C string)
+  - fstype: e.g. "vfat", "ext4", "exfat"
+  - flags: MS_NOSUID | MS_NODEV | MS_NOEXEC plus MS_RDONLY if ro
+  - data: mount options string; depends on fs type (vfat wants uid/gid, masks)
+
+Outline:
+
+    fn do_mount(
+        device: &Path,
+        target: &Path,
+        fs: &FsType,
+        mode: MountMode,
+    ) -> anyhow::Result<()> {
+        use std::ffi::CString;
+        use libc::{mount, MS_NODEV, MS_NOSUID, MS_NOEXEC, MS_RDONLY};
+
+        let src = CString::new(device.as_os_str().as_bytes())?;
+        let tgt = CString::new(target.as_os_str().as_bytes())?;
+        let fstype = CString::new(match fs {
+            FsType::Vfat => "vfat",
+            FsType::Ext4 => "ext4",
+            FsType::Exfat => "exfat",
+            FsType::Unknown(_) => return Err(anyhow::anyhow!("fs type not allowed")),
+        })?;
+
+        let mut flags: libc::c_ulong = (MS_NOSUID | MS_NODEV | MS_NOEXEC) as _;
+        if mode == MountMode::ReadOnly {
+            flags |= MS_RDONLY as _;
+        }
+
+        // Data string (fs-specific). Keep it small and predictable.
+        let data_str = match fs {
+            FsType::Vfat | FsType::Exfat => "utf8,uid=0,gid=0,fmask=0077,dmask=0077",
+            FsType::Ext4 => "errors=remount-ro",
+            FsType::Unknown(_) => "",
+        };
+        let data = CString::new(data_str)?;
+
+        let rc = unsafe {
+            mount(src.as_ptr(), tgt.as_ptr(), fstype.as_ptr(), flags, data.as_ptr() as *const _)
+        };
+        if rc != 0 {
+            return Err(anyhow::anyhow!("mount(2) failed: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
+Notes:
+  • The above uses OsStrExt::as_bytes (Linux). If you want portability, build a
+    helper to convert Path -> CString safely.
+  • For vfat/exfat, you may want to mount as the UI user rather than root; if
+    so, pass uid/gid of the UI service user (requires looking it up).
+
+A8) Verify mount succeeded (do not trust success alone)
+-------------------------------------------------------
+After mount(), verify:
+  • target appears in /proc/self/mountinfo AND its source is the expected device
+  • options include your safety flags (nosuid/nodev/noexec)
+
+Implement mountinfo parsing in Rust (no external tools):
+  - Read /proc/self/mountinfo
+  - Parse lines: mountpoint is field 5; source appears after the "-" separator
+  - Keep it strict and tested.
+
+Add function:
+  • fn is_mounted(device: &Path, mountpoint: &Path) -> Result<bool>
+
+A9) Unmount implementation
+--------------------------
+Use umount2(2). Default should be a normal unmount (flags=0).
+Only use MNT_DETACH if you have a known reason.
+
+Outline:
+
+    fn do_unmount(target: &Path, detach: bool) -> anyhow::Result<()> {
+        use std::ffi::CString;
+        use libc::{umount2, MNT_DETACH};
+
+        let tgt = CString::new(target.as_os_str().as_bytes())?;
+        let flags = if detach { MNT_DETACH } else { 0 };
+        let rc = unsafe { umount2(tgt.as_ptr(), flags) };
+        if rc != 0 {
+            return Err(anyhow::anyhow!("umount2 failed: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
+Policy enforcement before unmount:
+  • Only allow unmounting directories under policy.mount_root
+  • Ensure the mountpoint is actually a mount (mountinfo check)
+
+A10) How to wire this into rustyjack-ui (no daemon yet)
+-------------------------------------------------------
+Minimal change, immediate benefit:
+  1) Move the device discovery helpers out of app.rs into core mount.rs.
+  2) Replace the mount/umount Command calls with calls to mount_device()/unmount().
+
+Files to edit:
+  - rustyjack-core/src/lib.rs
+      pub mod mount;
+  - rustyjack-ui/src/app.rs
+      • remove Command::new("mount"/"umount") usage
+      • call rustyjack_core::mount::{MountPolicy, MountRequest, mount_device, ...}
+
+Migration step later:
+  - The UI should eventually NOT link mount code directly; it should request
+    mounts from the daemon over IPC (see A11).
+
+A11) Preferred wiring (with daemon)
+-----------------------------------
+Once you have a daemon:
+  • UI sends MountRequest over a Unix socket.
+  • Daemon validates + calls core mount_device.
+  • Daemon returns MountResponse.
+  • UI displays mountpoint, available space, safe “eject” button.
+
+IPC types:
+  - In rustyjack-core (shared):
+      enum DaemonRequest {
+          Mount(MountRequest),
+          Unmount(UnmountRequest),
+          ListMounts,
+      }
+      enum DaemonResponse {
+          MountOk(MountResponse),
+          UnmountOk,
+          MountList(Vec<MountResponse>),
+          Err(String),
+      }
+
+A12) Systemd capabilities (exact)
+---------------------------------
+Mounting requires CAP_SYS_ADMIN.
+
+The safe capability layout:
+  • rustyjack-ui.service: NO CAP_SYS_ADMIN. Prefer no capabilities at all.
+  • rustyjackd.service: CAP_NET_ADMIN, CAP_NET_RAW (for network), and optionally
+    CAP_SYS_ADMIN ONLY if it handles mounts.
+  • or: a separate rustyjack-mountd.service with CAP_SYS_ADMIN only.
+
+If you keep mounts inside rustyjackd:
+  - CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+  - AmbientCapabilities= same set
+  - ProtectSystem=strict, ProtectHome=true, NoNewPrivileges=true
+  - RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+  - PrivateTmp=true
+
+A13) Testing plan (realistic + rust-only)
+-----------------------------------------
+Add an integration test for mount syscalls:
+  • On a dev Linux machine (not necessarily on the Pi):
+      - Create a temp file (e.g. 64MB)
+      - losetup it to a loop device (this itself is a system tool; tests can be
+        “dev-only” and not shipped)
+      - mkfs.ext4 or mkfs.vfat (also tool)
+      - run mount_device() on /dev/loopX
+This validates your mount parsing + policy.
+
+On-device tests:
+  • Insert a USB stick; verify mountpoints created; verify “noexec” by trying
+    to execute a binary and observing failure; verify RW gating.
+
+If you want pure-Rust tests without mkfs/losetup, you can:
+  • unit test FS superblock detection by feeding fixed byte arrays into a
+    detect_fs_from_bytes() helper.
+
+================================================================================
+PART B — WI‑FI STATION MODE (reduce external wpa_supplicant; toward Rust-only)
+================================================================================
+
+B0) Current state (what’s in the repo)
+--------------------------------------
+Files:
+  - rustyjack-netlink/src/supplicant.rs
+      StationManager: high-level connect logic + candidate selection.
+  - rustyjack-netlink/src/wpa.rs
+      WpaManager: talks to wpa_supplicant control socket, and also starts the
+      wpa_supplicant process via Command::new("wpa_supplicant").
+
+You already have:
+  • a pretty serious station selection pipeline
+  • DHCP client in Rust (rustyjack-netlink/src/dhcp.rs)
+  • interface + route helpers in rustyjack-netlink
+
+So the biggest remaining non-Rust piece is: wpa_supplicant (process) and the
+protocol machinery behind it.
+
+B1) The core engineering goal
+-----------------------------
+Make “station connectivity” a pluggable backend. Then you can:
+  1) Keep today’s wpa_supplicant backend as a fallback (stability).
+  2) Introduce a Rust backend gradually.
+  3) Move features over without changing UI/core logic each time.
+
+This is how you avoid bricking the device while iterating.
+
+B2) Step 1 — Make StationManager backend-driven
+-----------------------------------------------
+Right now StationManager owns `wpa: WpaManager`.
+
+Change StationManager to own a trait object / enum backend:
+
+    pub enum StationBackendKind {
+        ExternalWpa,     // current behavior
+        RustOpen,        // open networks only (first Rust backend)
+        RustWpa2,        // WPA2-PSK (later)
+    }
+
+    pub struct StationManager {
+        interface: String,
+        backend: Box<dyn StationBackend>,
+    }
+
+Define the trait (start sync, migrate to async later):
+
+    pub trait StationBackend: Send + Sync {
+        fn ensure_ready(&self) -> Result<()>;
+        fn scan(&self, cfg: &StationConfig) -> Result<Vec<BssCandidate>>;
+        fn connect(&self, cfg: &StationConfig, candidate: &BssCandidate) -> Result<StationOutcome>;
+        fn disconnect(&self) -> Result<()>;
+        fn status(&self) -> Result<WpaStatus>;
+        fn cleanup(&self) -> Result<()>;
+    }
+
+Where to implement:
+  - Modify: rustyjack-netlink/src/supplicant.rs
+      • StationManager::new(...) chooses backend based on config/feature flag
+      • scan_and_select_candidates uses backend.scan (not wpa directly)
+      • connect uses backend.connect per candidate
+
+  - Modify: rustyjack-netlink/src/lib.rs
+      • Expose StationManager + config for callers
+
+B3) Step 2 — Isolate external process spawning behind feature flags
+-------------------------------------------------------------------
+Add Cargo features in rustyjack-netlink/Cargo.toml:
+
+    [features]
+    default = ["station_external"]
+    station_external = []
+    station_rust_open = []
+    station_rust_wpa2 = []
+
+Then in rustyjack-netlink/src/wpa.rs:
+  • wrap every Command::new("wpa_supplicant") usage in:
+        #[cfg(feature="station_external")]
+  • provide a compile error or stub when the feature is not enabled.
+
+Also:
+  • Move process management (start/stop) to a separate file so it’s obvious:
+        rustyjack-netlink/src/station/external/process.rs
+
+Suggested file layout refactor:
+  - rustyjack-netlink/src/station/mod.rs
+  - rustyjack-netlink/src/station/backend.rs          (trait + shared structs)
+  - rustyjack-netlink/src/station/external/mod.rs     (current backend)
+  - rustyjack-netlink/src/station/external/process.rs (spawning)
+  - rustyjack-netlink/src/station/external/ctrl.rs    (control socket protocol)
+  - rustyjack-netlink/src/station/rust_open/mod.rs    (new backend)
+  - rustyjack-netlink/src/station/rust_wpa2/mod.rs    (later)
+
+This replaces today’s “wpa.rs is everything” design with clean boundaries.
+
+B4) Step 3 — Rust backend v1: “Open networks only”
+--------------------------------------------------
+This gives you immediate Rust-only value without touching WPA crypto.
+
+Implementation idea:
+  • Use nl80211 “connect” request for open SSIDs (no RSN IE).
+  • Once associated, run your existing DHCP client (rustyjack-netlink/src/dhcp.rs).
+  • Configure routes and DNS using your route/system helpers.
+
+Where to implement:
+  - NEW: rustyjack-netlink/src/station/rust_open/mod.rs
+      struct RustOpenBackend { interface: String, wireless: WirelessManager }
+      impl StationBackend for RustOpenBackend {
+          fn scan(...) -> Result<Vec<BssCandidate>> { ... }
+          fn connect(...) -> Result<StationOutcome> { ... }
+          ...
+      }
+
+You’ll need nl80211 connect primitives:
+  - If you already have them in rustyjack-wireless, consider moving the safe,
+    benign parts (scan/connect) into rustyjack-netlink to avoid duplication.
+  - If not implemented yet, implement a minimal connect path:
+      * resolve interface index
+      * send NL80211_CMD_CONNECT with SSID
+      * wait for NL80211_CMD_CONNECT / NEW_STATION events
+  - Keep this backend narrow: SSID-only, no RSN, no WEP.
+
+B5) Step 4 — Rust backend v2: WPA2-PSK (architecture only)
+----------------------------------------------------------
+This is the “big mountain”. The safest way to do it is to build an internal
+state machine that mirrors the external one you already model (WpaState).
+
+What to implement (modules + responsibilities):
+
+  (1) Link layer:
+      - Send and receive EAPOL frames on the station interface.
+      - On Linux, this is usually AF_PACKET raw socket with EtherType 0x888e.
+
+      File: rustyjack-netlink/src/station/rust_wpa2/l2.rs
+      Types:
+        struct EapolSocket { fd: RawFd, ifindex: i32 }
+        impl EapolSocket {
+            fn open(interface: &str) -> Result<Self>;
+            fn send(&self, frame: &[u8]) -> Result<()>;
+            fn recv(&self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
+        }
+
+  (2) RSN / security negotiation:
+      - Parse beacon/probe response RSN elements from scan results.
+      - Choose cipher suite and AKM that you support (start with WPA2-PSK only).
+
+      File: rustyjack-netlink/src/station/rust_wpa2/rsn.rs
+      Types:
+        struct RsnInfo { group_cipher, pairwise_ciphers, akms, caps }
+        fn parse_rsn_ie(bytes: &[u8]) -> Result<RsnInfo>;
+        fn choose_profile(rsn: &RsnInfo) -> Result<ChosenRsnProfile>;
+
+  (3) WPA2 state machine:
+      - Model handshake stages explicitly.
+      - Do not intertwine “scan selection” with “handshake logic”.
+
+      File: rustyjack-netlink/src/station/rust_wpa2/state.rs
+      Types:
+        enum HandshakeState { Idle, Associated, Msg1, Msg2, Msg3, Msg4, Completed, Failed }
+        struct HandshakeCtx { ssid, bssid, chosen_rsn, nonces, replay_counter, ... }
+
+      API:
+        fn run_handshake(ctx: &mut HandshakeCtx, sock: &EapolSocket) -> Result<()>;
+
+  (4) Key management (placeholder functions, no cracking-friendly detail here):
+      - You will need to derive session keys from (SSID, PSK) as defined by
+        WPA2, then derive PTK/GTK as specified.
+      - Implement these using well-reviewed Rust crypto crates and constant-time
+        operations. The repo already depends on hmac + sha1, but you should
+        isolate key derivation in its own module and keep it private.
+
+      File: rustyjack-netlink/src/station/rust_wpa2/keys.rs
+      API outline (placeholders):
+        struct KeyMaterial { pmk: [u8; 32], ptk: Vec<u8>, gtk: Option<Vec<u8>> }
+        fn derive_key_material(inputs: &DeriveInputs) -> Result<KeyMaterial>;
+        fn compute_mic(frame: &[u8], km: &KeyMaterial) -> Result<[u8; 16]>;
+
+      Important: keep these functions non-public. Do not expose them through
+      CLI commands or “utilities” that could be repurposed.
+
+  (5) Install keys into the kernel:
+      - After handshake, you must program keys via nl80211 (SET_KEY).
+      - This is a privileged operation; you already require CAP_NET_ADMIN.
+
+      File: rustyjack-netlink/src/station/rust_wpa2/nl80211_keys.rs
+      API:
+        fn install_pairwise_key(ifindex: i32, bssid: [u8;6], key: &[u8]) -> Result<()>;
+        fn install_group_key(ifindex: i32, key_id: u8, key: &[u8]) -> Result<()>;
+
+  (6) IP layer:
+      - After L2 is up, run DHCP client (already in netlink crate).
+      - Configure routes; set DNS.
+
+      Reuse: rustyjack-netlink/src/dhcp.rs, route.rs, systemd.rs
+
+Backend wiring:
+  - NEW: rustyjack-netlink/src/station/rust_wpa2/mod.rs
+      struct RustWpa2Backend { interface: String, ... }
+      impl StationBackend for RustWpa2Backend {
+          fn scan(...) -> ...
+          fn connect(...) -> ...
+      }
+
+B6) How to keep things safe (important design choices)
+------------------------------------------------------
+This is the difference between “station client” and “cracking toolkit”:
+
+  • Do NOT add any API that takes a “wordlist” or iterates candidate PSKs.
+  • Do NOT expose PMK/PTK/GTK derivation functions to other crates.
+  • Do NOT add packet capture outputs for EAPOL or handshake messages by default.
+  • Keep network profiles encrypted at rest and only decrypt in-memory.
+
+In other words:
+  - Station backend gets exactly one credential at a time (the configured PSK).
+  - It either connects or fails. No iteration machinery.
+
+B7) Files to change (exact list)
+--------------------------------
+1) rustyjack-netlink/Cargo.toml
+   - Add features station_external/station_rust_open/station_rust_wpa2
+   - Possibly add small deps needed for raw sockets (libc already available)
+
+2) rustyjack-netlink/src/supplicant.rs
+   - Refactor StationManager to use StationBackend
+   - Move candidate selection logic to shared code so all backends can use it
+
+3) rustyjack-netlink/src/wpa.rs
+   - Move external-only logic into station/external/*
+   - Keep only shared status structs if needed, or fully relocate
+
+4) NEW directory: rustyjack-netlink/src/station/
+   - backend.rs, external/, rust_open/, rust_wpa2/ as described above
+
+5) rustyjack-core/src/system.rs (or wherever connect_wifi_network lives)
+   - Replace “call wpa module” with “call StationManager with backend selection”
+   - Make backend selection configurable (safe default: external backend)
+
+6) (optional) rustyjack-core/src/config.rs
+   - Add:
+        wifi.backend = "external" | "rust_open" | "rust_wpa2"
+     so you can switch without recompiling.
+
+B8) Rollout plan (so you don’t brick devices)
+---------------------------------------------
+Phase 0: refactor only
+  - No behavior change. Still uses external backend.
+  - Adds features + trait + file split.
+
+Phase 1: RustOpen backend
+  - Works only for open networks.
+  - Gate behind config.
+  - Keep external backend as default.
+
+Phase 2: RustWpa2 backend (experimental)
+  - Works only for WPA2-PSK.
+  - Ship disabled by default.
+  - Provide a “fallback to external backend” option if it fails.
+
+Phase 3: external backend optional
+  - Once RustWpa2 is stable, you can build images without station_external.
+
+B9) Testing strategy (practical)
+--------------------------------
+Best approach on a dev Linux machine:
+  • Use mac80211_hwsim (virtual Wi‑Fi hardware) to simulate APs.
+  • Run a test AP (hostapd) with open and WPA2-PSK networks.
+  • Then run Rustyjack station code to connect + DHCP.
+This does not need to run on the Pi to validate logic.
+
+Tests to add:
+  - Unit tests:
+      * RSN IE parsing from known byte strings
+      * Candidate scoring (already present; keep it deterministic)
+  - Integration tests (dev-only):
+      * RustOpen: connect to open hwsim AP, acquire DHCP lease
+      * RustWpa2: connect to WPA2 hwsim AP (when implemented)
+
+On Pi:
+  • Manual tests: connect/disconnect loop; ensure timeouts and cleanup work.
+
+================================================================================
+Appendix — Concrete code skeletons (drop-in starting points)
+================================================================================
+
+C1) rustyjack-core/src/mount.rs (skeleton)
+------------------------------------------
+This is a skeleton; fill in the private helpers progressively.
+
+    // rustyjack-core/src/mount.rs
+    use anyhow::Context;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MountMode { ReadOnly, ReadWrite }
+
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum FsType { Vfat, Ext4, Exfat, Unknown(String) }
+
+    #[derive(Debug, Clone)]
+    pub struct MountPolicy {
+        pub mount_root: PathBuf,
+        pub allowed_fs: BTreeSet<FsType>,
+        pub default_mode: MountMode,
+        pub allow_rw: bool,
+        pub max_devices: usize,
+        pub lock_timeout: Duration,
+    }
+
+    impl Default for MountPolicy {
+        fn default() -> Self {
+            let mut allowed = BTreeSet::new();
+            allowed.insert(FsType::Vfat);
+            allowed.insert(FsType::Ext4);
+            allowed.insert(FsType::Exfat);
+            Self {
+                mount_root: PathBuf::from("/mnt/rustyjack"),
+                allowed_fs: allowed,
+                default_mode: MountMode::ReadOnly,
+                allow_rw: false,
+                max_devices: 4,
+                lock_timeout: Duration::from_secs(3),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MountRequest {
+        pub device: PathBuf,
+        pub mode: MountMode,
+        pub preferred_name: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MountResponse {
+        pub device: PathBuf,
+        pub mountpoint: PathBuf,
+        pub fs_type: FsType,
+        pub readonly: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct UnmountRequest {
+        pub mountpoint: PathBuf,
+        pub detach: bool,
+    }
+
+    pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> anyhow::Result<MountResponse> {
+        // 1) lock
+        // 2) validate req.device is allowed removable usb partition
+        // 3) detect fs type
+        // 4) create mountpoint under policy.mount_root
+        // 5) mount(2) with safe flags
+        // 6) verify via mountinfo
+        // 7) return response
+        todo!()
+    }
+
+    pub fn unmount(policy: &MountPolicy, req: UnmountRequest) -> anyhow::Result<()> {
+        // 1) lock
+        // 2) validate mountpoint under mount_root
+        // 3) verify it is a mount
+        // 4) umount2
+        // 5) cleanup empty dir
+        todo!()
+    }
+
+C2) rustyjack-netlink station backend split (map)
+-------------------------------------------------
+Create these new files:
+
+  rustyjack-netlink/src/station/backend.rs
+  rustyjack-netlink/src/station/external/mod.rs
+  rustyjack-netlink/src/station/external/process.rs
+  rustyjack-netlink/src/station/external/ctrl.rs
+  rustyjack-netlink/src/station/rust_open/mod.rs
+  rustyjack-netlink/src/station/rust_wpa2/mod.rs
+  rustyjack-netlink/src/station/rust_wpa2/l2.rs
+  rustyjack-netlink/src/station/rust_wpa2/rsn.rs
+  rustyjack-netlink/src/station/rust_wpa2/state.rs
+  rustyjack-netlink/src/station/rust_wpa2/keys.rs
+  rustyjack-netlink/src/station/rust_wpa2/nl80211_keys.rs
+
+Then adjust:
+  - rustyjack-netlink/src/supplicant.rs to import station::backend
+
+================================================================================
+END
+================================================================================

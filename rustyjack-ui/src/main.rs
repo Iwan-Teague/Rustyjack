@@ -21,8 +21,5 @@ use anyhow::Result;
 use app::App;
 
 fn main() -> Result<()> {
-    #[cfg(feature = "journald")]
-    rustyjack_netlink::init_journald_logger();
-
     App::new()?.run()
 }

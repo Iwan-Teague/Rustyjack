@@ -50,7 +50,6 @@
 
 // Module declarations
 pub mod capture;
-pub mod crack;
 pub mod deauth;
 pub mod error;
 pub mod evil_twin;
@@ -98,13 +97,14 @@ pub mod stealth {
 
 // Re-exports for convenience
 pub use capture::{CaptureFilter, CapturedPacket, PacketCapture};
-pub use crack::{CrackResult, CrackerConfig, WpaCracker};
 pub use deauth::{DeauthAttacker, DeauthConfig, DeauthStats};
 pub use error::{Result, WirelessError};
 pub use evil_twin::{execute_evil_twin, EvilTwin, EvilTwinConfig, EvilTwinResult, EvilTwinStats};
 pub use frames::{DeauthFrame, DeauthReason, FrameSubtype, FrameType, Ieee80211Frame, MacAddress};
-pub use handshake::{HandshakeCapture, HandshakeExport, HandshakeMessage, HandshakeState};
+pub use handshake::{HandshakeCapture, HandshakeMessage, HandshakeState};
 pub use interface::WirelessInterface;
+pub use rustyjack_wpa::crack;
+pub use rustyjack_wpa::{CrackResult, CrackerConfig, HandshakeExport, WpaCracker};
 pub use karma::{
     execute_karma, execute_karma_with_ap, CapturedProbe, KarmaAttack, KarmaConfig,
     KarmaExecutionResult, KarmaResult, KarmaStats, KarmaVictim,

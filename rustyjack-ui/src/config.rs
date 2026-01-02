@@ -206,7 +206,7 @@ impl Default for PathConfig {
 
 impl PathConfig {
     fn default_image_path() -> PathBuf {
-        PathBuf::from("/root")
+        PathBuf::from("/var/lib/rustyjack")
     }
 
     fn apply_defaults(&mut self) {

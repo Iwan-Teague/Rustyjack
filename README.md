@@ -1,6 +1,6 @@
 # Rustyjack
 
-Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as a root systemd service for on-device use. Additional documentation is in `docs/`.
+Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as an unprivileged UI service backed by a privileged daemon. Additional documentation is in `docs/`.
 
 > Authorized testing and education only. Verify permissions before running any operation.
 
@@ -20,7 +20,7 @@ Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joys
 ## Project Overview
 
 - Linux-only UI (compile guard in `rustyjack-ui/src/main.rs`); designed for a Pi Zero 2 W with an Ethernet HAT.
-- Runs as `rustyjack.service` (root) with `RUSTYJACK_DISPLAY_ROTATION=landscape` by default.
+- Runs as `rustyjack-ui.service` (unprivileged) with `RUSTYJACK_DISPLAY_ROTATION=landscape` by default.
 - Status overlay shows CPU temp/load, memory, disk, uptime, target SSID/BSSID/channel, active interface, current/original MAC, and autopilot status if the CLI autopilot is running.
 - Firewall/NAT rules are applied via Rust nf_tables netlink (no `iptables` binary dependency).
 - Built-in Cypress/Infineon radio cannot monitor/inject; all wireless attacks require an external adapter that supports monitor + injection.
@@ -37,11 +37,12 @@ DNSSpoof/              Captive portal templates for DNS spoof/MITM pipelines
 scripts/               Wi-Fi driver installer + USB hotplug helper (udev rule included)
 wordlists/             Bundled password lists for handshake cracking
 img/                   Splash assets for the LCD (`rustyjack.png`)
-rustyjack.service      Systemd unit (root, sets display rotation and RUSTYJACK_ROOT)
+rustyjack-ui.service   Systemd unit (unprivileged UI, sets display rotation and RUSTYJACK_ROOT)
+rustyjackd.service     Systemd unit (root daemon, privileged operations + IPC)
 install_rustyjack*.sh  Production/dev installers for Pi OS targets
 ```
 
-Runtime directories are created by the installers:
+Runtime directories are created by the installers under `/var/lib/rustyjack`:
 `loot/` (Wireless, Ethernet, reports), `wifi/profiles/`, `DNSSpoof/captures/`, and `gui_conf.json` (pins, colors, settings).
 
 ## Hardware & Wiring
@@ -157,7 +158,7 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
 
 - Raspberry Pi OS Lite (32/64-bit) on a Pi Zero 2 W (or Pi 4/5).
 - External Wi-Fi adapter with monitor + injection for wireless attacks.
-- Root privileges (systemd service runs as root; wireless ops need CAP_NET_ADMIN/RAW).
+- Root privileges (daemon runs as root; UI runs unprivileged but needs SPI/GPIO access).
 
 **Steps**
 
@@ -168,11 +169,11 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
    - Installs packages: build-essential, pkg-config, libssl-dev, DKMS toolchain, `procps`, `network-manager`, `wireless-tools`, `wpa_supplicant`, firmware for Realtek/Atheros/Ralink, git, i2c-tools, curl.
    - Enables I2C/SPI overlays, `dtoverlay=spi0-2cs`, and GPIO pull-ups for all buttons.
    - Ensures ~2 GB swap for compilation, builds `rustyjack-ui` (release), installs to `/usr/local/bin/`.
-   - Creates `loot/{Wireless,Ethernet,reports}`, `wifi/profiles/sample.json`, and keeps WLAN interfaces up.
-   - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT`, installs/enables `rustyjack.service` (root, landscape rotation), starts the service, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
+   - Creates `/var/lib/rustyjack/loot/{Wireless,Ethernet,reports}`, `/var/lib/rustyjack/wifi/profiles/sample.json`, and keeps WLAN interfaces up.
+   - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT=/var/lib/rustyjack`, installs/enables `rustyjack-ui.service` + `rustyjackd.socket`, starts the service, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
    - Claims `/etc/resolv.conf` for Rustyjack (plain root-owned file), disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present), and sets NetworkManager `dns=none` so `nmcli` stays available but does not rewrite `resolv.conf`.
    - Remounts `/` read-write if needed on fresh images to allow installs/edits.
-5. After reboot, the LCD shows the menu. Service status: `systemctl status rustyjack`.
+5. After reboot, the LCD shows the menu. Service status: `systemctl status rustyjack-ui`.
 
 `install_rustyjack_dev.sh` is available for development setups and follows the same dependency/build steps.
 
@@ -180,13 +181,13 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
 
 - `gui_conf.json` (auto-created): pins, colors, active interface, target SSID/BSSID/channel, MAC/hostname/passive toggles, hotspot credentials, log/Discord toggles.
 - `discord_webhook.txt`: webhook URL for Discord uploads.
-- `wifi/profiles/*.json`: saved Wi-Fi profiles used by Connect Known Network (sample provided); directory is `700` and files are `600`.
+- `wifi/profiles/*.json`: saved Wi-Fi profiles used by Connect Known Network (sample provided); directory is `770` and files are `660` for UI access.
 - `loot/`: wireless, Ethernet, and scan captures; pipelines are under `loot/Wireless/<target>/pipelines/`; reports live in `loot/reports/`.
 - `loot/Scan/`: Rust-native scan reports from `rustyjack-core scan run`.
 - `DNSSpoof/sites/`: portal templates for DNS spoof/MITM; captures go to `DNSSpoof/captures/`.
 - `RUSTYJACK_NFTABLES_LOG=1`: optional environment flag (systemd unit) to log nf_tables packet matches in journalctl with `[NFTABLE]` prefixes.
 - Splash image: `img/rustyjack.png` (shown on boot).
-- Systemd unit: `rustyjack.service` sets `RUSTYJACK_DISPLAY_ROTATION` and `RUSTYJACK_ROOT`.
+- Systemd unit: `rustyjack-ui.service` sets `RUSTYJACK_DISPLAY_ROTATION` and `RUSTYJACK_ROOT`.
 
 ## Usage Tips
 
@@ -204,9 +205,9 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
 ## Troubleshooting
 
 - Blank LCD: confirm `/dev/spidev0.0` exists and `dtparam=spi=on` + `dtoverlay=spi0-2cs` are in `/boot/firmware/config.txt`; reboot after installer changes.
-- Buttons not responding: ensure the service runs as root and the pull-up line `gpio=6,19,5,26,13,21,20,16=pu` exists in config.txt.
+- Buttons not responding: ensure the UI user is in `gpio` and the pull-up line `gpio=6,19,5,26,13,21,20,16=pu` exists in config.txt.
 - Wireless attacks fail: verify you are using an adapter with monitor/injection; use Settings -> WiFi Drivers if a USB chipset needs firmware/DKMS.
-- Service issues: `journalctl -u rustyjack -f` and `systemctl status rustyjack`.
+- Service issues: `journalctl -u rustyjack-ui -f` and `systemctl status rustyjack-ui`.
 - Hotspot: set upstream/AP interfaces when starting; randomize SSID/password from the hotspot menu if conflicts occur.
 
 ## Legal

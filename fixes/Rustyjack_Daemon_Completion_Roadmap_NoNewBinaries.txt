@@ -1,0 +1,723 @@
+RUSTYJACK — DAEMON COMPLETION ROADMAP (NO NEW BINARIES)
+Author: Senior Software Engineer (Rust + Daemons)
+Date: 2026-01-01 (Europe/Dublin)
+Repo snapshot: latest Rustyjack workspace (includes `rustyjack-daemon` + `rustyjack-ipc`)
+
+READ THIS FIRST — scope and constraints
+--------------------------------------
+1) Goal (definition of “daemon completion” for this phase)
+   - `rustyjackd` (rustyjack-daemon) becomes the *sole privileged control plane*.
+   - All privileged/system-mutating operations currently performed by `rustyjack-ui` (and any future CLI)
+     must be routed through `rustyjackd` over a local Unix Domain Socket (UDS).
+   - The UI becomes an *unprivileged client* that only:
+       a) renders state
+       b) collects user input
+       c) calls daemon endpoints
+       d) performs pure, non-privileged computations (formatting, rendering, local parsing, etc.)
+
+2) Binary policy for this roadmap
+   - We will NOT remove existing third-party binaries now.
+   - We will NOT add any new uses of external binaries during daemon completion.
+   - As part of the refactor, existing binary invocations must be moved out of the UI and into the daemon
+     (or into daemon-called core services), so the UI can run unprivileged.
+
+3) “Rust code only”
+   - All behavioral changes must be implemented in Rust.
+   - We will still ship systemd unit files (they’re configuration, not “binaries”).
+
+4) Current status (as of the reviewed snapshot)
+   - `rustyjack-daemon` exists and implements:
+       - JSON framed protocol over UDS
+       - Hello/HelloAck handshake
+       - MAX_FRAME limit and protocol-violation disconnect logic
+       - SO_PEERCRED-based peer credential capture
+       - basic AuthorizationTier gating
+       - minimal JobStart/JobStatus/JobCancel with JobKind={Noop,Sleep}
+       - socket activation + sd_notify watchdog integration
+   - `rustyjack-ui` is still privileged and calls into core and netlink directly.
+   - The daemon does not yet expose “real” Rustyjack operations via IPC.
+
+This document is the “no-interpretation” implementation plan to finish daemon integration.
+
+================================================================================
+SECTION 1 — Target architecture (what we are building)
+================================================================================
+
+Processes (systemd-managed):
+  1) rustyjackd (privileged)
+     - Owns the UDS listener at /run/rustyjack/rustyjackd.sock
+     - Owns mutable state: jobs, locks, subsystem managers, caches
+     - Runs privileged operations (wifi, hotspot, mount, reboot, scans, updates, etc.)
+
+  2) rustyjack-ui (unprivileged)
+     - Runs as user `rustyjack-ui`, group `rustyjack`
+     - Connects to /run/rustyjack/rustyjackd.sock
+     - Sends requests; polls job status; renders progress
+
+Crates:
+  - rustyjack-ipc      (already exists)
+      * single source of truth for protocol types and stable error codes
+  - rustyjack-daemon   (already exists)
+      * UDS server + handlers + job engine + authz + lock manager
+  - rustyjack-client   (NEW — must be added)
+      * shared client implementation (UI and future CLI both use this)
+  - rustyjack-core
+      * refactored to expose daemon-friendly “services” APIs (NEW directory src/services/)
+
+Key design rule:
+  - The UI must have *zero* direct dependencies on privileged crates (netlink/wireless/system ops).
+    Any such dependencies are moved into daemon (directly) or into core services called by daemon.
+
+================================================================================
+SECTION 2 — Deliverables checklist (what “done” looks like)
+================================================================================
+
+A) Client/IPC boundary
+  [ ] rustyjack-client crate exists and implements:
+      - UDS connect + Hello handshake
+      - framed request/response (length prefix)
+      - request_id correlation
+      - timeouts + retry for reconnect
+      - typed helpers: health(), version(), job_start(), job_status(), job_cancel()
+
+B) UI integration
+  [ ] rustyjack-ui no longer depends on rustyjack-core / netlink / wireless for privileged ops
+  [ ] rustyjack-ui uses rustyjack-client for all operations
+  [ ] UI runs unprivileged (new systemd unit)
+  [ ] Old root UI service is disabled/removed from default deployment
+
+C) Daemon integration
+  [ ] IPC endpoints expanded to cover the UI’s privileged actions
+  [ ] Daemon handlers implemented for each endpoint, with correct tier gating
+  [ ] Job engine supports real JobKinds with progress + cancellation + lock ordering
+  [ ] Daemon uses core services rather than importing CLI glue
+
+D) Core refactor
+  [ ] rustyjack-core/src/services exists
+  [ ] services expose Clap-free request types (or a strict boundary around Clap types)
+  [ ] daemon calls services, not CLI dispatch
+
+E) “No new binaries”
+  [ ] CI check exists to prevent introducing new Command::new callsites (baseline-limited)
+      (we do NOT remove existing ones in this phase)
+
+================================================================================
+SECTION 3 — Implementation order (strict sequence)
+================================================================================
+
+DO THESE IN ORDER. Each step should compile and run on Pi Zero 2 W before proceeding.
+
+PHASE 0 — Guardrails (1 PR)
+---------------------------
+0.1 Add “no new binaries” check (baseline-limited)
+    Goal: prevent adding more Command::new usages while we refactor.
+
+    Create: `ci/no_new_command_new.rs` (Rust program; no shell)
+      - Walk repo tree.
+      - Count occurrences of `Command::new(` in *.rs.
+      - Compare to a committed baseline number file: `ci/command_new_baseline.txt`.
+      - If count > baseline => fail.
+
+    Files:
+      - ci/no_new_command_new.rs
+      - ci/command_new_baseline.txt (initially: current count)
+
+    Wire it into CI (GitHub Actions / whatever you use).
+    NOTE: you can also whitelist by path if absolutely necessary, but avoid it.
+
+PHASE 1 — Add rustyjack-client and make UI talk to daemon (2–3 PRs)
+-------------------------------------------------------------------
+1.1 Add new crate: `rustyjack-client`
+    - Add to workspace members in top-level Cargo.toml.
+
+    Create files:
+      - rustyjack-client/Cargo.toml
+      - rustyjack-client/src/lib.rs
+      - rustyjack-client/src/framing.rs
+      - rustyjack-client/src/error.rs
+
+    Dependencies:
+      - serde, serde_json
+      - rustyjack-ipc
+      - (Optional) thiserror for ClientError
+
+    Core API (SYNC; UI can call from threads without forcing async everywhere):
+
+      pub struct DaemonClient {
+          stream: std::os::unix::net::UnixStream,
+          negotiated: rustyjack_ipc::HelloAck,
+          next_request_id: std::sync::atomic::AtomicU64,
+      }
+
+      impl DaemonClient {
+          pub fn connect(path: &Path, hello: ClientHello) -> Result<Self, ClientError>;
+          pub fn request(&mut self, body: RequestBody) -> Result<ResponseBody, ClientError>;
+
+          // convenience:
+          pub fn health(&mut self) -> Result<HealthResponse, ClientError>;
+          pub fn version(&mut self) -> Result<VersionResponse, ClientError>;
+          pub fn job_start(&mut self, kind: JobKind) -> Result<JobStarted, ClientError>;
+          pub fn job_status(&mut self, job_id: u64) -> Result<JobStatusResponse, ClientError>;
+          pub fn job_cancel(&mut self, job_id: u64) -> Result<JobCancelResponse, ClientError>;
+      }
+
+    Framing details (MUST MATCH daemon):
+      - write u32_be payload_len, then payload bytes
+      - read u32_be, validate 1..=HelloAck.max_frame (daemon already advertises max_frame)
+      - set read/write timeouts on UnixStream:
+          stream.set_read_timeout(Some(Duration::from_secs(2))) etc
+      - handshake:
+          connect -> send ClientHello -> read HelloAck or Err
+      - request:
+          create RequestEnvelope { v, request_id, endpoint, body }
+          endpoint must match body (central helper function)
+          serialize JSON
+          send frame
+          read frame
+          deserialize ResponseEnvelope
+          validate request_id matches
+          return ResponseBody
+
+1.2 UI: introduce DaemonBridge (replace CoreBridge)
+    Files to change:
+      - rustyjack-ui/src/core.rs (major change)
+
+    Replace:
+      pub struct CoreBridge { root: PathBuf }
+    With:
+      pub struct DaemonBridge {
+          client: Mutex<DaemonClient>,   // std::sync::Mutex is fine if UI is single-threaded
+      }
+
+    Provide methods mirroring what the UI currently calls:
+      - dispatch_command(...) becomes daemon request(s)
+      - run_scan_with_progress(...) becomes JobStart + JobStatus poll loop
+      - run_system_update_with_progress(...) becomes JobStart + JobStatus poll loop
+
+    IMPORTANT: do NOT remove UI features yet — just re-route them.
+
+1.3 UI: stop importing privileged crates for operations
+    Minimum change for Phase 1:
+      - In rustyjack-ui/src/core.rs:
+          remove `use rustyjack_core::...`
+          replace with `use rustyjack_client::DaemonClient; use rustyjack_ipc::...`
+      - Keep the rest of UI compiling by making CoreBridge API-compatible.
+
+    Do NOT attempt a full UI rewrite. You want a mechanical replacement:
+      CoreBridge::dispatch -> DaemonBridge::dispatch
+      CoreBridge::run_scan_with_progress -> DaemonBridge::run_scan_with_progress
+      CoreBridge::run_system_update_with_progress -> DaemonBridge::run_system_update_with_progress
+
+    For now, if the daemon doesn’t implement those jobs yet, return a clear error:
+      Err(anyhow!("daemon endpoint not implemented"))
+
+1.4 systemd: run UI unprivileged
+    Create: `rustyjack-ui.service` (repo root)
+
+      [Unit]
+      Description=Rustyjack UI (unprivileged)
+      After=rustyjackd.socket
+      Requires=rustyjackd.socket
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/rustyjack-ui
+      Restart=on-failure
+      RestartSec=2
+      User=rustyjack-ui
+      Group=rustyjack
+      Environment=RUSTYJACK_ROOT=/root/Rustyjack   # adjust if you relocate root
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+
+      [Install]
+      WantedBy=multi-user.target
+
+    Deployment change:
+      - Disable old `rustyjack.service` (root UI)
+      - Enable:
+          rustyjackd.socket
+          rustyjackd.service
+          rustyjack-ui.service
+
+    Provisioning (Rust-only code, but system config):
+      - Ensure group `rustyjack` exists.
+      - Ensure user `rustyjack-ui` exists and is in group `rustyjack`.
+
+PHASE 2 — Expand the IPC contract for real operations (1–2 PRs)
+--------------------------------------------------------------
+2.1 Add progress to jobs (IPC + daemon)
+    Why:
+      UI currently expects progress callbacks. The daemon must expose progress in JobStatus.
+
+    Modify: rustyjack-ipc/src/lib.rs
+      Add:
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub struct Progress {
+            pub phase: String,
+            pub percent: u8,        // 0..=100
+            pub message: String,
+            pub updated_at_ms: u64,
+        }
+
+      Update JobInfo:
+
+        pub struct JobInfo {
+            ...
+            pub progress: Option<Progress>,
+            ...
+        }
+
+    Modify: rustyjack-daemon (JobManager)
+      - Add helper:
+          async fn update_progress(&self, job_id: u64, phase: &str, percent: u8, message: &str)
+
+      - Store progress in JobInfo under the jobs Mutex.
+      - Throttle updates to avoid spamming:
+          only update if percent changed OR message changed OR >= 200ms elapsed.
+
+2.2 Define real endpoints and request/response types
+    Rule:
+      Endpoint list should be “UI-driven”: add exactly what the UI needs next.
+
+    Add to rustyjack-ipc:
+      - enum Endpoint: add new entries in stable order.
+      - enum RequestBody / ResponseOk: add variants.
+
+    Start with the “minimum to make UI useful”:
+      - SystemStatusGet (read-only)
+      - DiskUsageGet   (read-only; used by stats UI)
+      - SystemReboot   (admin)
+      - SystemShutdown (admin)
+      - HostnameRandomizeNow / HostnameRandomizationToggle (operator/admin depending on your policy)
+      - Job kinds:
+          ScanRun
+          SystemUpdate
+      Then add Wi-Fi/hotspot operations (Phase 4).
+
+    IMPORTANT:
+      - The daemon currently derives endpoint from body (body_endpoint()) — keep that pattern.
+      - Required tier mapping must include every endpoint.
+
+PHASE 3 — Migrate the UI’s two biggest calls: scan + system update (2–4 PRs)
+----------------------------------------------------------------------------
+This phase makes the daemon “real” without tackling every UI feature at once.
+
+3.1 Core refactor: introduce services wrappers without ripping everything apart
+    Create directory: rustyjack-core/src/services/
+      - mod.rs
+      - scan.rs
+      - update.rs
+      - system.rs
+      - stats.rs
+
+    Add in rustyjack-core/src/lib.rs:
+      pub mod services;
+
+    Add “service error”:
+      Create: rustyjack-core/src/services/error.rs
+        pub enum ServiceError {
+            InvalidInput(String),
+            Io(std::io::Error),
+            Netlink(String),
+            External(String),   // for now (because we aren’t removing binaries)
+            Internal(String),
+        }
+
+      Implement:
+        impl From<std::io::Error> for ServiceError { ... }
+        impl ServiceError { pub fn to_daemon_error(&self) -> DaemonError { ... } }
+
+    scan.rs
+      - Provide a Clap-free request type mirroring what the UI needs (not the entire CLI):
+
+          pub struct ScanRequest {
+              pub target: String,           // e.g. CIDR or hostname
+              pub mode: ScanMode,           // e.g. discovery only / discovery+ports
+              pub ports: Option<Vec<u16>>,
+              pub timeout_ms: u64,
+          }
+
+      - Provide:
+
+          pub fn run_scan(
+              root: &Path,
+              req: ScanRequest,
+              mut on_progress: impl FnMut(u8, &str),
+          ) -> Result<serde_json::Value, ServiceError>
+
+      Implementation:
+        - In the short term, adapt existing `run_scan_with_progress` by constructing the existing args
+          (ScanRunArgs) inside scan.rs, so daemon never touches CLI glue.
+        - Keep the “progress callback” signature as u8 percent to match daemon.
+
+    update.rs
+      - Similar pattern:
+
+          pub struct UpdateRequest { ... }  // only what UI uses
+          pub fn run_update(root: &Path, req: UpdateRequest, on_progress: ...) -> Result<serde_json::Value, ServiceError>
+
+        - Internally call existing `run_system_update_with_progress` (for now).
+
+    system.rs
+      - Provide safe wrappers (even if they call binaries for now):
+
+          pub fn reboot() -> Result<(), ServiceError>
+          pub fn shutdown() -> Result<(), ServiceError>
+          pub fn sync() -> Result<(), ServiceError>
+
+    stats.rs
+      - Provide:
+
+          pub fn disk_usage(path: &Path) -> Result<(u64, u64), ServiceError>
+
+        - You may keep the existing df approach temporarily, but move it to daemon side (not UI).
+
+3.2 Daemon: add JobKinds and handlers that call core services
+    Modify: rustyjack-ipc JobKind:
+      - add:
+          ScanRun { req: ScanRequestIpc }
+          SystemUpdate { req: UpdateRequestIpc }
+
+    (Define ScanRequestIpc/UpdateRequestIpc in rustyjack-ipc; do NOT reuse core service structs directly)
+
+    Modify: rustyjack-daemon
+      - In JobManager::run_job match JobKind:
+
+          JobKind::ScanRun { req } => {
+              update_progress("scan", 0, "starting");
+              call core::services::scan::run_scan(...)
+              as progress callback, call update_progress(...)
+              return Ok(result_json)
+          }
+
+      - Acquire appropriate locks:
+          Scan jobs: typically no global locks OR “Wifi” lock if scan touches wifi interfaces.
+          Update jobs: acquire Update lock (already defined as highest priority)
+
+    Add endpoint requests:
+      If you want scan/update to be “job only”, then the endpoint is still JobStart with JobKind.
+      That’s fine; keep it simple.
+
+3.3 UI: wire scan/update UI to daemon jobs
+    Replace:
+      run_scan_with_progress(root,args,cb)
+    With:
+      - client.job_start(JobKind::ScanRun{...})
+      - poll job_status every 250ms:
+          while state in {Queued,Running}:
+              if progress updated: call on_progress(progress.percent as f32 / 100.0, &progress.message)
+          if Failed: return error
+          if Completed: return result JSON
+
+    Implement cancellation:
+      - When UI user cancels: job_cancel(job_id)
+      - UI should treat Cancelled state as non-fatal.
+
+PHASE 4 — Move ALL privileged UI operations into daemon (largest phase)
+----------------------------------------------------------------------
+This is the real daemon completion: after this, the UI can run unprivileged.
+
+4.1 Identify privileged UI responsibilities (must migrate)
+    In the current UI codebase, the following are privileged or should be daemon-owned:
+      - system control: reboot/shutdown/sync, service control
+      - networking control: wifi connect/disconnect/scan, hotspot start/stop, rfkill, tx power
+      - process management: kill/status for system services (if used)
+      - reading sensitive system state: /proc, /sys inventories (ok unprivileged but centralize)
+      - mounting/unmounting removable media
+      - portal start/stop (if it binds low ports, uses netfilter, etc.)
+      - any action that changes /etc or system config
+
+    Concrete “UI hotspots” you must remove/replace:
+      - Command::new("systemctl"), ("reboot"), ("shutdown"), ("sync"), ("lsblk"), ("df"), ("bash") callsites in UI
+      - Direct use of:
+          rustyjack_netlink::WirelessManager
+          rustyjack_netlink::RfkillManager
+          rustyjack_netlink::InterfaceManager
+          rustyjack_netlink::WpaManager
+          rustyjack_netlink::ProcessManager
+          rustyjack_wireless::hotspot_* functions
+          rustyjack_wireless::WpaCracker (if it requires privileged capture)
+      - Any writes to privileged paths (/etc, /run/..., /var/...) from UI.
+
+4.2 Create daemon subsystem managers (stateful)
+    Add new modules in rustyjack-daemon (split main.rs; you can do this gradually):
+
+      rustyjack-daemon/src/state.rs
+        pub struct AppState {
+            pub config: DaemonConfig,
+            pub jobs: Arc<JobManager>,
+            pub locks: Arc<LockManager>,
+            pub wifi: WifiManager,
+            pub hotspot: HotspotManager,
+            pub system: SystemManager,
+            pub stats: StatsManager,
+            pub portal: PortalManager,
+            pub mount: MountManager,
+        }
+
+      rustyjack-daemon/src/handlers/mod.rs
+      rustyjack-daemon/src/handlers/system.rs
+      rustyjack-daemon/src/handlers/wifi.rs
+      rustyjack-daemon/src/handlers/hotspot.rs
+      rustyjack-daemon/src/handlers/mount.rs
+      rustyjack-daemon/src/handlers/portal.rs
+      rustyjack-daemon/src/handlers/stats.rs
+
+    Each handler:
+      - matches RequestBody variants
+      - validates auth tier
+      - validates inputs (allowlists)
+      - either returns immediately (ResponseOk) OR starts a job and returns JobStarted
+
+4.3 IPC additions (concrete endpoints)
+    Extend rustyjack-ipc with the exact actions the UI needs. Add them in this order:
+
+    System / status (read-only first):
+      - StatusGet -> returns:
+          { uptime_ms, hostname, interfaces, wifi_state, hotspot_state, disk_usage, version }
+      - DiskUsageGet { path: String } -> { used_bytes, total_bytes }
+
+    System mutating (admin, often dangerous_ops_enabled):
+      - SystemSync
+      - SystemReboot
+      - SystemShutdown
+
+    Wi-Fi & hotspot (operator):
+      - WifiInterfacesList
+      - WifiScanStart (job)
+      - WifiScanResults { scan_id or job_id } OR just use Job result JSON
+      - WifiConnectStart (job)
+      - WifiDisconnect
+      - HotspotStart (job)
+      - HotspotStop
+      - HotspotClientsList
+      - TxPowerSet { iface, dbm or preset }
+      - RfkillGet / RfkillSet
+
+    Mounting (operator):
+      - BlockDevicesList
+      - MountList
+      - MountStart (job)
+      - UnmountStart (job)
+
+    Portal (operator):
+      - PortalStart (job)
+      - PortalStop
+      - PortalStatus
+
+    For each endpoint:
+      - Add required tier in daemon required_tier()
+      - Add request validation:
+          * string lengths
+          * allowed interface names (regex: ^[a-zA-Z0-9_.-]+$)
+          * allowed paths (must be under a configured root or allowlist)
+
+4.4 Move code out of UI into core services and daemon handlers
+    Approach:
+      - Don’t “copy/paste” UI logic into daemon.
+      - Extract logic into rustyjack-core/services modules where reasonable.
+      - Daemon calls services.
+      - UI becomes thin.
+
+    Concrete file moves/refactors:
+
+    (A) Disk usage / stats
+      FROM: rustyjack-ui/src/stats.rs (read_disk_usage calling df)
+      TO:
+        - rustyjack-core/src/services/stats.rs: disk_usage()
+        - rustyjack-daemon/src/handlers/stats.rs: DiskUsageGet endpoint
+        - rustyjack-ui/src/stats.rs: call daemon, not df
+
+    (B) System actions (reboot/shutdown/sync/systemctl)
+      FROM: rustyjack-ui/src/app.rs (Command::new("reboot"/"shutdown"/"systemctl"/"sync"))
+      TO:
+        - rustyjack-core/src/services/system.rs: reboot(), shutdown(), sync(), restart_unit(unit)
+          (restart_unit may use systemctl for now; later replace)
+        - rustyjack-daemon/src/handlers/system.rs: endpoints SystemReboot/SystemShutdown/SystemSync
+        - rustyjack-ui: call those endpoints; remove all system Command::new in UI
+
+    (C) Network interface and DHCP
+      FROM: rustyjack-ui/src/util.rs + display.rs + stats.rs (InterfaceManager, dhcp_renew)
+      TO:
+        - rustyjack-core/src/services/netif.rs: list_ifaces(), dhcp_renew(iface)
+        - rustyjack-daemon/src/handlers/wifi.rs or netif.rs: endpoints InterfaceList, DhcpRenew
+
+    (D) WPA state / wpa control socket status
+      FROM: rustyjack-ui/src/stats.rs / app.rs (WpaManager, wpa_control_socket_status, ensure_wpa_control_socket)
+      TO:
+        - rustyjack-core/src/services/wifi.rs: get_state(iface), ensure_control_socket(iface), status(iface)
+        - rustyjack-daemon/src/handlers/wifi.rs: endpoints WifiStatus/WpaStatus
+
+    (E) Hotspot operations
+      FROM: rustyjack-ui/src/app.rs (hotspot_disconnect_client, hotspot_leases, hotspot_set_blacklist, etc.)
+      TO:
+        - rustyjack-core/src/services/hotspot.rs: start/stop/clients/blacklist
+        - rustyjack-daemon/src/handlers/hotspot.rs: endpoints HotspotStart/Stop/Clients/Blacklist
+
+    (F) Portal operations
+      FROM: likely core/portal crate invocations in UI (if any)
+      TO:
+        - rustyjack-core/src/services/portal.rs
+        - rustyjack-daemon/src/handlers/portal.rs
+
+    (G) Mount/block device list and mount/unmount
+      FROM: UI (lsblk) and core mount.rs
+      TO:
+        - rustyjack-core/src/services/mount.rs: list_block_devices(), list_mounts(), mount(), unmount()
+        - rustyjack-daemon/src/handlers/mount.rs + JobKinds for mount/unmount
+        - rustyjack-ui: call daemon endpoints
+
+4.5 Add idempotency + permission rules (explicit; implement exactly)
+    For each mutating operation, define behavior when already in target state:
+
+    - WifiDisconnect:
+        If not connected -> Ok (idempotent)
+    - HotspotStop:
+        If hotspot not running -> Ok
+    - PortalStop:
+        If portal not running -> Ok
+    - MountUnmount:
+        If mount not present -> Ok (or NotFound, choose one; recommend Ok for UX)
+
+    Permission tiers (recommendation; implement as table in daemon):
+      ReadOnly:
+        - Health, Version, StatusGet, DiskUsageGet, WifiStatus, MountList
+      Operator:
+        - WifiScanStart, WifiConnectStart, WifiDisconnect
+        - HotspotStart/Stop
+        - PortalStart/Stop
+        - MountStart/UnmountStart
+      Admin:
+        - SystemReboot/SystemShutdown
+        - Update jobs (SystemUpdate)
+      Admin + dangerous_ops_enabled:
+        - Anything anti-forensics / wipe / log tampering (if/when exposed)
+
+4.6 Error handling requirements (daemon-grade; do not improvise)
+    Use DaemonError consistently:
+      - Validate inputs early; return ErrorCode::BadRequest with message “invalid <field>”
+      - For permission denials:
+          - if not allowed by tier: ErrorCode::Forbidden
+          - if not allowed to connect (future): ErrorCode::Unauthorized
+      - For timeouts: ErrorCode::Timeout, retryable=true
+      - For cancellations: ErrorCode::Cancelled
+      - For not-yet-migrated endpoints: ErrorCode::NotImplemented
+
+    Logging:
+      - For every request, log:
+          request_id, endpoint, peer_uid, peer_pid, result (ok/err), duration_ms
+      - For every job:
+          job_id, kind, started/finished, final state, error code
+
+PHASE 5 — Finish core refactor boundary (optional but recommended before “done”)
+------------------------------------------------------------------------------
+5.1 Move CLI entrypoint out of rustyjack-core
+    Why:
+      - Prevents accidental reuse of CLI glue in daemon.
+      - Clarifies layering.
+
+    Create crate: `rustyjack-cli`
+      - Move rustyjack-core/src/main.rs to rustyjack-cli/src/main.rs
+      - Keep Clap types in rustyjack-cli or behind a feature in core.
+
+5.2 Make it impossible for UI to call core directly
+    - Remove core dependency from UI Cargo.toml (mandatory)
+    - Ensure compilation fails if UI tries to import rustyjack-core::operations
+
+================================================================================
+SECTION 4 — Concrete code-writing tasks by file (copy/paste checklist)
+================================================================================
+
+(1) Workspace
+  - Edit: Cargo.toml
+    Add member: "rustyjack-client"
+    (Optional) add member: "rustyjack-cli"
+
+(2) New crate: rustyjack-client
+  - Create: rustyjack-client/Cargo.toml
+  - Create: rustyjack-client/src/lib.rs
+  - Create: rustyjack-client/src/framing.rs
+  - Create: rustyjack-client/src/error.rs
+
+(3) IPC updates
+  - Edit: rustyjack-ipc/src/lib.rs
+    - Add Progress struct + JobInfo.progress
+    - Add new Endpoint variants
+    - Add RequestBody/ResponseOk variants + request/response structs for each endpoint
+    - Add JobKind variants for real operations
+
+(4) Daemon refactor (minimum)
+  - Split: rustyjack-daemon/src/main.rs into:
+      - main.rs (bootstrap)
+      - config.rs
+      - ipc.rs
+      - authz.rs
+      - jobs.rs
+      - locks.rs
+      - handlers/*.rs
+      - state.rs
+
+  Minimum required change:
+    - Implement handle_request() that matches RequestBody and delegates.
+    - Implement JobKinds for ScanRun and SystemUpdate first.
+
+(5) Core services
+  - Create: rustyjack-core/src/services/
+      mod.rs
+      error.rs
+      scan.rs
+      update.rs
+      system.rs
+      stats.rs
+      wifi.rs
+      hotspot.rs
+      mount.rs
+      portal.rs
+
+  - Edit: rustyjack-core/src/lib.rs
+      pub mod services;
+
+(6) UI changes
+  - Edit: rustyjack-ui/Cargo.toml
+      - remove rustyjack-core dependency
+      - add rustyjack-client dependency
+  - Edit: rustyjack-ui/src/core.rs
+      - replace CoreBridge with DaemonBridge using DaemonClient
+  - Edit: rustyjack-ui/src/app.rs, stats.rs, util.rs, display.rs
+      - remove direct privileged calls (Command::new, netlink managers)
+      - route through DaemonBridge requests
+
+(7) systemd units
+  - Add: rustyjack-ui.service
+  - Deprecate: rustyjack.service (root UI)
+  - Keep: rustyjackd.socket + rustyjackd.service
+
+================================================================================
+SECTION 5 — Final “do this in order” implementation path (print this and follow it)
+================================================================================
+
+ORDER OF EXECUTION (recommended):
+1) Add rustyjack-client and make UI show daemon Health/Version (no feature migration yet).
+2) Add job progress to IPC/daemon (Progress struct + JobInfo.progress).
+3) Add ScanRun and SystemUpdate JobKinds; implement them in daemon by calling core service wrappers.
+4) Switch UI scan/update screens to use daemon jobs and remove those core calls from UI.
+5) Add `rustyjack-ui.service` and run UI unprivileged; disable old privileged UI service.
+6) Migrate the remaining privileged UI functionality in batches:
+     Batch A: system actions + disk stats + block device list
+     Batch B: wifi status/scan/connect/disconnect
+     Batch C: hotspot start/stop/clients
+     Batch D: portal start/stop/status
+     Batch E: mounts (list/mount/unmount)
+7) Only after all of the above: optional CLI split + polish (tests, backpressure, tracing spans).
+
+At the end of step 6, the daemon boundary is “complete” for this phase:
+- UI is unprivileged
+- daemon owns all privileged operations
+- existing binaries are confined to daemon/core (UI uses none)
+- no new binaries are introduced during development
+
+END OF ROADMAP
