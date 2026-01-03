@@ -1,0 +1,300 @@
+Rustyjack Daemon Verification Report & Roadmap (Senior Rust Dev)
+
+Source material reviewed
+- ROADMAP_COMPARISON.md (comparison doc)
+- rustyjack_security_review.txt (security review)
+- rustyjack_security_fix_implementation_roadmap.txt (implementation roadmap)
+- Rustyjack.zip (actual Rust sources)
+
+================================================================================
+1) How accurate is ROADMAP_COMPARISON.md?
+================================================================================
+
+Summary:
+- Mostly accurate on big P0 security boundary fixes (JobStart validation, per-job auth,
+  mount policy usage, log bundle caps, moving blocking ops off the single-thread
+  runtime, retention fix).
+- Not fully accurate: multiple concrete doc-vs-code mismatches.
+- Overstates progress by implying “Phase 1 is 100% complete” while several P1 items
+  from the original review are still missing (notably: UDS read/write timeouts and
+  real cancellation).
+
+--------------------------------------------------------------------------------
+Verified as complete (matches the intent)
+--------------------------------------------------------------------------------
+
+1) JobStart no longer bypasses validation
+- Security review’s biggest issue: JobStart bypasses validation.
+- Current code calls validate_job_kind(&job.kind) before starting a job.
+
+2) Per-job authorization tier is enforced
+- Server enforces required_tier_for_jobkind in the request loop.
+- SystemUpdate is effectively admin-only, additionally gated by dangerous_ops_enabled.
+
+3) Mount/unmount path is policy-based (the “good” mount module)
+- Switched to policy-based mount syscalls (core mount policy used).
+- Daemon jobs call the mount service wrapper.
+- Closes internal-device mounting and arbitrary umount target issues.
+
+4) SystemLogsGet response size is capped
+- Log bundling now enforces caps/truncation to avoid exceeding max_frame.
+
+5) Blocking ops moved off current_thread runtime
+- Heavy work moved into spawn_blocking via a helper.
+
+6) Retention no longer evicts running jobs
+- Retention now evicts only terminal jobs, never active jobs.
+
+--------------------------------------------------------------------------------
+Concrete inaccuracies / mismatches in ROADMAP_COMPARISON.md
+--------------------------------------------------------------------------------
+
+A) dangerous_ops_enabled “default change” marked NOT IMPLEMENTED, but IS implemented
+- Comparison doc claims disabling dangerous_ops_enabled by default is not implemented.
+- Code defaults dangerous_ops_enabled to false when env var isn’t set.
+
+B) “Job progress storage” marked not implemented, but job manager stores progress
+- Comparison doc says progress storage is deferred.
+- Code stores progress in JobInfo and updates timestamps.
+
+C) Filesystem allowlist described doesn’t match the validator
+- Comparison doc claims validate_filesystem allowlists ext4/vfat/exfat/ntfs.
+- Code accepts a wider set (ext2/ext3/xfs/btrfs/f2fs/…).
+- Not necessarily a security hole if mount policy enforces, but doc is misleading.
+
+D) Assumptions about UI running as root are outdated
+- Comparison doc claims UI runs as root via systemd.
+- Systemd unit config runs UI as an unprivileged user (doc rationale is stale).
+
+================================================================================
+2) What is still incomplete? What’s left to implement?
+================================================================================
+
+--------------------------------------------------------------------------------
+1) UDS read/write timeouts are missing (HIGH priority)
+--------------------------------------------------------------------------------
+Problem:
+- Only Hello handshake has a timeout; subsequent request/response frames can stall.
+
+Why it matters:
+- A local client can DoS the daemon by connecting and stalling mid-frame indefinitely.
+
+Implementation plan:
+- Add config/env:
+  - RUSTYJACKD_READ_TIMEOUT_MS (default e.g. 5000)
+  - RUSTYJACKD_WRITE_TIMEOUT_MS (default e.g. 5000)
+- Wrap all read_frame / write_frame calls in tokio::time::timeout
+- On timeout:
+  - log peer creds + endpoint (if known)
+  - send best-effort DaemonError{ Timeout } when possible, otherwise close socket
+
+Refactor needed:
+- Introduce helpers to keep server loop readable:
+  - read_frame_timed()
+  - write_frame_timed()
+
+--------------------------------------------------------------------------------
+2) “Real cancellation” is still not real for spawn_blocking jobs (P1)
+--------------------------------------------------------------------------------
+Problem:
+- Many job kinds check cancel once, then await spawn_blocking: cancellation won’t stop
+  underlying work.
+
+Fix design:
+Step 1: add a cancellable blocking runner helper
+- run_blocking_cancellable(cancel, f):
+  - spawn_blocking(f)
+  - tokio::select! on cancel.cancelled() vs handle completion
+  - on cancel: handle.abort() and return Cancelled
+
+Step 2: refactor job kinds to use it
+- Replace spawn_blocking(...).await paths with run_blocking_cancellable(&ctx.cancel, ...)
+
+Step 3: subprocess kill semantics
+- Aborting spawn_blocking won’t necessarily kill child processes.
+- For update/log collection/etc:
+  - replace Command::output() with spawn()
+  - poll child.try_wait() loop
+  - on cancel: child.kill(); then wait()
+
+Refactor impact:
+- Thread cancellation token/callback into core ops for long-running work.
+- Separate “pure compute” vs “sys side effects” for safe cancellation + testing.
+
+--------------------------------------------------------------------------------
+3) Likely compile-time bug in wifi_connect cancellation branch
+--------------------------------------------------------------------------------
+Problem:
+- request is moved into spawn_blocking(move || ...) then later request.interface used
+  in cancellation branch (classic use-after-move).
+
+Fix:
+- Clone interface before moving request:
+  - let iface = request.interface.clone();
+  - move request into closure
+  - use iface for disconnect call
+
+Behavior caution:
+- Disconnect-on-cancel might tear down an existing connection predating the job.
+- Safer: disconnect only if this job established the connection (needs provenance).
+
+--------------------------------------------------------------------------------
+4) Group-based auth is still deferred (but is the correct next step)
+--------------------------------------------------------------------------------
+Current behavior:
+- uid==0 => Admin; else => Operator
+
+Recommended design:
+- Derive tier from supplementary groups via /proc/<pid>/status “Groups:” line.
+- Add config/env for admin/operator group IDs.
+- Server uses authorization_for_peer(peer_cred) for tier.
+
+Why it matters:
+- Lets UI run unprivileged while still enabling Admin tier via group membership.
+- Improves system update usability without running UI as root.
+
+--------------------------------------------------------------------------------
+5) Startup reconciliation is still a stub
+--------------------------------------------------------------------------------
+Review recommends robust crash recovery:
+- mount cleanup, portal teardown, marking jobs cancelled, clearing locks
+Current reconcile_on_startup does not do these actions.
+
+--------------------------------------------------------------------------------
+6) “Phase 0 safety net” tests are missing
+--------------------------------------------------------------------------------
+Roadmap calls for early test harness/validation tests.
+Current tree lacks meaningful tests for critical guardrails:
+- validators, retention, auth logic.
+
+--------------------------------------------------------------------------------
+7) Feature negotiation not wired
+--------------------------------------------------------------------------------
+HelloAck.features remains empty, so clients can’t discover optional behaviors.
+
+--------------------------------------------------------------------------------
+8) Wi-Fi “real logic” appears to remain outside the daemon boundary
+--------------------------------------------------------------------------------
+Review warns daemon-facing wifi service layer is stubby; real capabilities may still
+live outside the daemon boundary (architectural TODO remains).
+
+================================================================================
+3) Clear Roadmap (staged, with refactors + acceptance criteria)
+================================================================================
+
+--------------------------------------------------------------------------------
+Stage 0 — Build-clean + doc-truth (1–2 PRs)
+--------------------------------------------------------------------------------
+Goals:
+- No compile errors
+- No misleading roadmap statements
+- Clippy warnings actionable
+
+Work:
+1) Fix wifi_connect cancellation move bug
+2) Remove unused imports/vars so clippy is meaningful
+3) Align docs:
+   - correct dangerous_ops default claim
+   - correct progress storage claim
+4) Decide validate_filesystem meaning:
+   - Option A (preferred): narrow validator to match mount policy
+   - Option B: update docs to clarify “validator permissive, policy enforces”
+
+Acceptance:
+- cargo build --workspace
+- cargo clippy --workspace -- -D warnings
+- ROADMAP_COMPARISON.md updated to reflect reality
+
+--------------------------------------------------------------------------------
+Stage 1 — UDS robustness: frame read/write timeouts + error codes (Security P0)
+--------------------------------------------------------------------------------
+Work:
+1) Add read_timeout_ms and write_timeout_ms to daemon config
+2) Wrap every read_frame/write_frame in tokio::time::timeout
+3) Add stable timeout error code mapping
+
+Refactor:
+- helpers: read_frame_timed, write_frame_timed
+- ensure timeout errors log peer+endpoint+request_id
+
+Acceptance tests:
+- Connect and send partial frame then stall → daemon drops within timeout
+- Request response then stop reading (write stall) → daemon times out
+
+--------------------------------------------------------------------------------
+Stage 2 — Real cancellation (Security P1)
+--------------------------------------------------------------------------------
+Work:
+1) Implement run_blocking_cancellable(cancel, f)
+2) Refactor job kinds that block:
+   - mount/unmount, portal/hotspot, scan, update, logs (if jobbed)
+3) Add cancellable subprocess runner in core, refactor update pipeline
+
+Refactor:
+- Thread cancellation into core ops
+- Separate side effects for safer cancellation/testing
+
+Acceptance:
+- Sleep job cancels fast and becomes Cancelled
+- Update job cancel kills child processes, no zombies
+
+--------------------------------------------------------------------------------
+Stage 3 — Authorization model upgrade: group-based roles + UI usability
+--------------------------------------------------------------------------------
+Work:
+1) authorization_for_peer(peer):
+   - parse /proc/<pid>/status “Groups:”
+2) Add env/config for admin/operator group IDs
+3) Update systemd/socket policy:
+   - socket group is coarse gate
+   - group membership grants tiers without uid==0
+4) Revisit SystemUpdate usability:
+   - remain Admin-only
+   - UI can be Admin via group membership
+
+Acceptance:
+- Non-root operator can mount/unmount but cannot update
+- Non-root admin can run SystemUpdate (still gated by dangerous_ops_enabled)
+
+--------------------------------------------------------------------------------
+Stage 4 — Observability + correctness guardrails (tests, tracing, features)
+--------------------------------------------------------------------------------
+Work:
+1) Tests for:
+   - validate_job_kind edge cases
+   - mount validation (mmcblk rejected, loop rejected, /dev required)
+   - retention eviction rules
+   - tier mapping for job kinds
+2) Switch logs from env_logger to tracing spans:
+   - per-connection: peer creds, tier
+   - per-request: request_id, endpoint, duration_ms
+3) Implement HelloAck.features advertising:
+   - DangerousOpsEnabled, JobProgress, (future) ChunkedLogs, Compression
+
+Acceptance:
+- Guardrail logic covered
+- Structured logs consistently include peer+request ids
+- Clients can discover features safely
+
+--------------------------------------------------------------------------------
+Stage 5 — Attack surface reduction + packaging reality check
+--------------------------------------------------------------------------------
+Work:
+1) Wi-Fi migration:
+   - move real wifi operations into daemon-callable services
+2) Portal isolation:
+   - consider portal in separate unprivileged process
+3) systemd hardening:
+   - CapabilityBoundingSet, ProtectSystem, ProtectKernel*, etc
+4) Installer updates:
+   - prefer CLI as thin daemon client (aligned with security model)
+
+================================================================================
+4) Bottom line
+================================================================================
+- ROADMAP_COMPARISON.md is a decent high-level changelog but has several factual
+  inaccuracies (dangerous ops default, progress storage, UI/root assumptions) and
+  overstates completion (Phase 1 “100%”) while key items like UDS timeouts and real
+  cancellation remain incomplete.
+- The staged roadmap above prioritizes security boundary correctness first, then
+  reliability, then usability and long-term maintainability.
