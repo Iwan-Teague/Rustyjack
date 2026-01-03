@@ -1,4 +1,4 @@
-use rustyjack_ipc::{DaemonError, ErrorCode};
+use rustyjack_ipc::{DaemonError, ErrorCode, JobKind, ScanModeIpc};
 
 const MAX_INTERFACE_NAME_LEN: usize = 64;
 const MAX_SSID_LEN: usize = 32;
@@ -8,6 +8,13 @@ const MAX_DEVICE_PATH_LEN: usize = 256;
 const MAX_PORT: u16 = 65535;
 const MIN_PORT: u16 = 1;
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
+const MAX_SLEEP_SECONDS: u64 = 86400;
+const MAX_SCAN_TARGET_LEN: usize = 256;
+const MAX_SCAN_PORTS: usize = 128;
+const MAX_SERVICE_NAME_LEN: usize = 64;
+const MAX_GIT_REMOTE_LEN: usize = 512;
+const MAX_GIT_REF_LEN: usize = 128;
+const MAX_BACKUP_DIR_LEN: usize = 256;
 
 pub fn validate_interface_name(interface: &str) -> Result<(), DaemonError> {
     if interface.is_empty() {
@@ -177,4 +184,303 @@ pub fn validate_filesystem(filesystem: &Option<String>) -> Result<(), DaemonErro
         }
     }
     Ok(())
+}
+
+pub fn validate_sleep_seconds(seconds: u64) -> Result<(), DaemonError> {
+    if seconds == 0 {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "sleep duration cannot be zero",
+            false,
+        ));
+    }
+    if seconds > MAX_SLEEP_SECONDS {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "sleep duration too large (max 24 hours)",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_scan_target(target: &str) -> Result<(), DaemonError> {
+    if target.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "scan target cannot be empty",
+            false,
+        ));
+    }
+    if target.len() > MAX_SCAN_TARGET_LEN {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "scan target too long",
+            false,
+        ));
+    }
+    if target.chars().any(|c| c.is_control()) {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "scan target contains control characters",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_scan_ports(mode: ScanModeIpc, ports: Option<&[u16]>) -> Result<(), DaemonError> {
+    match mode {
+        ScanModeIpc::DiscoveryOnly => {
+            if ports.is_some() && !ports.unwrap().is_empty() {
+                return Err(DaemonError::new(
+                    ErrorCode::BadRequest,
+                    "ports must be empty for DiscoveryOnly mode",
+                    false,
+                ));
+            }
+        }
+        ScanModeIpc::DiscoveryAndPorts => {
+            if let Some(port_list) = ports {
+                if port_list.is_empty() {
+                    return Err(DaemonError::new(
+                        ErrorCode::BadRequest,
+                        "ports cannot be empty for DiscoveryAndPorts mode",
+                        false,
+                    ));
+                }
+                if port_list.len() > MAX_SCAN_PORTS {
+                    return Err(DaemonError::new(
+                        ErrorCode::BadRequest,
+                        "too many ports (max 128)",
+                        false,
+                    ));
+                }
+                for &port in port_list {
+                    validate_port(port)?;
+                }
+            } else {
+                return Err(DaemonError::new(
+                    ErrorCode::BadRequest,
+                    "ports required for DiscoveryAndPorts mode",
+                    false,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_update_service(service: &str) -> Result<(), DaemonError> {
+    if service.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "service name cannot be empty",
+            false,
+        ));
+    }
+    if service.len() > MAX_SERVICE_NAME_LEN {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "service name too long",
+            false,
+        ));
+    }
+    let allowed_services = ["rustyjack", "rustyjack-ui", "rustyjackd"];
+    if !allowed_services.contains(&service) {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "unsupported service name",
+            false,
+        ));
+    }
+    if service.chars().any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == '\\') {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "service name contains invalid characters",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_git_remote(remote: &str) -> Result<(), DaemonError> {
+    if remote.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git remote cannot be empty",
+            false,
+        ));
+    }
+    if remote.len() > MAX_GIT_REMOTE_LEN {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git remote too long",
+            false,
+        ));
+    }
+    if remote == "origin" {
+        return Ok(());
+    }
+    if remote.starts_with("https://") || remote.starts_with("git@") {
+        if remote.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return Err(DaemonError::new(
+                ErrorCode::BadRequest,
+                "git remote contains invalid characters",
+                false,
+            ));
+        }
+        Ok(())
+    } else {
+        Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git remote must be 'origin' or start with https:// or git@",
+            false,
+        ))
+    }
+}
+
+pub fn validate_git_ref(branch: &str) -> Result<(), DaemonError> {
+    if branch.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git ref cannot be empty",
+            false,
+        ));
+    }
+    if branch.len() > MAX_GIT_REF_LEN {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git ref too long",
+            false,
+        ));
+    }
+    let invalid_chars = ['~', '^', ':', '?', '*', '[', ']', ' ', '\t', '\r', '\n'];
+    if branch.chars().any(|c| invalid_chars.contains(&c) || c.is_control()) {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git ref contains invalid characters",
+            false,
+        ));
+    }
+    if branch.contains("..") {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "git ref contains directory traversal",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_backup_dir(path: &str) -> Result<(), DaemonError> {
+    if path.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "backup dir cannot be empty",
+            false,
+        ));
+    }
+    if path.len() > MAX_BACKUP_DIR_LEN {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "backup dir too long",
+            false,
+        ));
+    }
+    if path.contains("..") {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "backup dir contains directory traversal",
+            false,
+        ));
+    }
+    let rustyjack_roots = ["/var/lib/rustyjack/backups", "/tmp/rustyjack/backups"];
+    if !rustyjack_roots.iter().any(|root| path.starts_with(root)) {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "backup dir must be under /var/lib/rustyjack/backups or /tmp/rustyjack/backups",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_mount_device_hint(device: &str) -> Result<(), DaemonError> {
+    validate_device_path(device)?;
+    
+    if !device.starts_with("/dev/") {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "device path must start with /dev/",
+            false,
+        ));
+    }
+    
+    if device.starts_with("/dev/mmcblk") || device.starts_with("/dev/loop") {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "mounting internal mmc or loop devices not allowed",
+            false,
+        ));
+    }
+    
+    Ok(())
+}
+
+pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
+    match kind {
+        JobKind::Noop => Ok(()),
+        JobKind::Sleep { seconds } => validate_sleep_seconds(*seconds),
+        JobKind::ScanRun { req } => {
+            validate_scan_target(&req.target)?;
+            validate_timeout_ms(req.timeout_ms)?;
+            validate_scan_ports(req.mode.clone(), req.ports.as_deref())?;
+            Ok(())
+        }
+        JobKind::SystemUpdate { req } => {
+            validate_update_service(&req.service)?;
+            validate_git_remote(&req.remote)?;
+            validate_git_ref(&req.branch)?;
+            if let Some(dir) = &req.backup_dir {
+                validate_backup_dir(dir)?;
+            }
+            Ok(())
+        }
+        JobKind::WifiScan { req } => {
+            validate_interface_name(&req.interface)?;
+            validate_timeout_ms(req.timeout_ms)?;
+            Ok(())
+        }
+        JobKind::WifiConnect { req } => {
+            validate_interface_name(&req.interface)?;
+            validate_ssid(&req.ssid)?;
+            validate_psk(&req.psk)?;
+            validate_timeout_ms(req.timeout_ms)?;
+            Ok(())
+        }
+        JobKind::HotspotStart { req } => {
+            validate_interface_name(&req.interface)?;
+            validate_ssid(&req.ssid)?;
+            validate_psk(&Some(req.passphrase.clone()))?;
+            if let Some(ch) = req.channel {
+                validate_channel(&Some(ch))?;
+            }
+            Ok(())
+        }
+        JobKind::PortalStart { req } => {
+            validate_interface_name(&req.interface)?;
+            validate_port(req.port)?;
+            Ok(())
+        }
+        JobKind::MountStart { req } => {
+            validate_mount_device_hint(&req.device)?;
+            validate_filesystem(&req.filesystem)?;
+            Ok(())
+        }
+        JobKind::UnmountStart { req } => {
+            validate_mount_device_hint(&req.device)?;
+            Ok(())
+        }
+    }
 }

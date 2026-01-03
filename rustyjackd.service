@@ -17,6 +17,9 @@ ConfigurationDirectoryMode=0770
 Group=rustyjack
 Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
+Environment=RUST_LOG=info,rustyjack_daemon=debug,rustyjack_core=info
+StandardOutput=journal
+StandardError=journal
 WatchdogSec=20s
 NotifyAccess=main
 NoNewPrivileges=true

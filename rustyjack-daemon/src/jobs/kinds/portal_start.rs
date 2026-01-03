@@ -30,6 +30,17 @@ where
 
     let result = loop {
         tokio::select! {
+            _ = cancel.cancelled() => {
+                handle.abort();
+                let _ = tokio::task::spawn_blocking(|| {
+                    let _ = rustyjack_core::services::portal::stop();
+                }).await;
+                return Err(DaemonError::new(
+                    ErrorCode::Cancelled,
+                    "Job cancelled",
+                    false
+                ).with_source("daemon.jobs.portal_start"));
+            }
             res = &mut handle => {
                 break res;
             }
@@ -41,10 +52,11 @@ where
 
     match result {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(err.to_daemon_error()),
+        Ok(Err(err)) => Err(err.to_daemon_error_with_source("daemon.jobs.portal_start")),
         Err(err) => Err(
             DaemonError::new(ErrorCode::Internal, "portal start job panicked", false)
-                .with_detail(err.to_string()),
+                .with_detail(err.to_string())
+                .with_source("daemon.jobs.portal_start"),
         ),
     }
 }

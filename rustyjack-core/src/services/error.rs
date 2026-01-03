@@ -46,4 +46,30 @@ impl ServiceError {
             ServiceError::OperationFailed(msg) => DaemonError::new(ErrorCode::Internal, msg, true),
         }
     }
+
+    pub fn to_daemon_error_with_source(&self, source: &'static str) -> DaemonError {
+        self.to_daemon_error().with_source(source)
+    }
+
+    pub fn to_daemon_error_with_code(
+        &self,
+        code: ErrorCode,
+        source: &'static str,
+    ) -> DaemonError {
+        match self {
+            ServiceError::InvalidInput(msg) => DaemonError::new(ErrorCode::BadRequest, msg, false)
+                .with_source(source),
+            ServiceError::Io(err) => DaemonError::new(ErrorCode::Io, err.to_string(), false)
+                .with_detail(format!("{:?}", err))
+                .with_source(source),
+            ServiceError::Netlink(msg) => DaemonError::new(ErrorCode::Netlink, msg, false)
+                .with_source(source),
+            ServiceError::External(msg) => DaemonError::new(code, msg, false)
+                .with_source(source),
+            ServiceError::Internal(msg) => DaemonError::new(ErrorCode::Internal, msg, false)
+                .with_source(source),
+            ServiceError::OperationFailed(msg) => DaemonError::new(code, msg, true)
+                .with_source(source),
+        }
+    }
 }

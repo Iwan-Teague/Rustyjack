@@ -1,7 +1,14 @@
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::mount::{
+    enumerate_usb_block_devices, list_mounts_under, mount_device as policy_mount_device,
+    unmount as policy_unmount, FsType, MountMode, MountPolicy, MountRequest as PolicyMountRequest,
+    UnmountRequest as PolicyUnmountRequest,
+};
 use crate::services::error::ServiceError;
 
 #[derive(Debug, Clone)]
@@ -13,75 +20,79 @@ pub struct BlockDeviceInfo {
     pub removable: bool,
 }
 
+fn default_mount_policy() -> MountPolicy {
+    let root = crate::resolve_root(None).unwrap_or_else(|_| PathBuf::from("/var/lib/rustyjack"));
+    let mount_root = root.join("mounts");
+    
+    let mut allowed_fs = std::collections::BTreeSet::new();
+    allowed_fs.insert(FsType::Vfat);
+    allowed_fs.insert(FsType::Ext4);
+    allowed_fs.insert(FsType::Exfat);
+    
+    MountPolicy {
+        mount_root,
+        allowed_fs,
+        default_mode: MountMode::ReadOnly,
+        allow_rw: false,
+        max_devices: 4,
+        lock_timeout: Duration::from_secs(10),
+    }
+}
+
 pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
-    let output = Command::new("lsblk")
-        .args(["-J", "-p", "-o", "NAME,TYPE,RM,SIZE,MODEL,TRAN"])
-        .output()
-        .map_err(ServiceError::Io)?;
-    if !output.status.success() {
-        return Err(ServiceError::External(format!(
-            "lsblk failed with status {:?}",
-            output.status.code()
-        )));
-    }
-
-    let parsed: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|err| ServiceError::External(format!("parsing lsblk JSON output: {err}")))?;
-    let blockdevices = parsed
-        .get("blockdevices")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| ServiceError::External("lsblk JSON missing blockdevices".to_string()))?;
-
-    let mut devices = Vec::new();
-    for dev in blockdevices {
-        let dev_type = dev.get("type").and_then(Value::as_str).unwrap_or("");
-        if dev_type != "disk" {
-            continue;
-        }
-        let name = dev.get("name").and_then(Value::as_str).unwrap_or("");
-        if name.is_empty() {
-            continue;
-        }
-
-        if name.starts_with("/dev/mmcblk")
-            || name.starts_with("/dev/loop")
-            || name.starts_with("/dev/ram")
-        {
-            continue;
-        }
-
-        let removable = match dev.get("rm") {
-            Some(Value::Bool(v)) => *v,
-            Some(Value::Number(v)) => v.as_u64().unwrap_or(0) != 0,
-            Some(Value::String(v)) => v == "1" || v.eq_ignore_ascii_case("true"),
-            _ => false,
-        };
+    let devices = enumerate_usb_block_devices()
+        .map_err(|e| ServiceError::External(format!("enumerate USB devices: {}", e)))?;
+    
+    let mut result = Vec::new();
+    for dev in devices {
         let size = dev
-            .get("size")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let model = dev
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let transport = dev
-            .get("tran")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-
-        devices.push(BlockDeviceInfo {
-            name: name.to_string(),
+            .partitions
+            .first()
+            .and_then(|p| p.size_bytes)
+            .map(|s| format_size(s))
+            .unwrap_or_else(|| "unknown".to_string());
+        
+        result.push(BlockDeviceInfo {
+            name: dev.devnode.to_string_lossy().to_string(),
             size,
-            model,
-            transport,
-            removable,
+            model: "USB Device".to_string(),
+            transport: if dev.is_usb { "usb" } else { "unknown" }.to_string(),
+            removable: dev.removable,
         });
+        
+        for part in dev.partitions {
+            let part_size = part
+                .size_bytes
+                .map(format_size)
+                .unwrap_or_else(|| "unknown".to_string());
+            
+            result.push(BlockDeviceInfo {
+                name: part.devnode.to_string_lossy().to_string(),
+                size: part_size,
+                model: "Partition".to_string(),
+                transport: if dev.is_usb { "usb" } else { "unknown" }.to_string(),
+                removable: dev.removable,
+            });
+        }
     }
+    
+    Ok(result)
+}
 
-    Ok(devices)
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    
+    if bytes >= GB {
+        format!("{:.1}G", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1}M", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1}K", bytes as f64 / KB as f64)
+    } else {
+        format!("{}B", bytes)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,34 +104,16 @@ pub struct MountInfo {
 }
 
 pub fn list_mounts() -> Result<Vec<MountInfo>, ServiceError> {
-    use std::fs;
-    
-    let mounts = fs::read_to_string("/proc/mounts")
-        .map_err(ServiceError::Io)?;
+    let policy = default_mount_policy();
+    let mounts = list_mounts_under(&policy)
+        .map_err(|e| ServiceError::External(format!("list mounts: {}", e)))?;
     
     let mut result = Vec::new();
-    for line in mounts.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        
-        let device = parts[0];
-        let mountpoint = parts[1];
-        let filesystem = parts[2];
-        
-        if !device.starts_with("/dev/") {
-            continue;
-        }
-        
-        if device.starts_with("/dev/loop") || device.starts_with("/dev/ram") {
-            continue;
-        }
-        
+    for m in mounts {
         result.push(MountInfo {
-            device: device.to_string(),
-            mountpoint: mountpoint.to_string(),
-            filesystem: filesystem.to_string(),
+            device: m.device.to_string_lossy().to_string(),
+            mountpoint: m.mountpoint.to_string_lossy().to_string(),
+            filesystem: format!("{:?}", m.fs_type).to_lowercase(),
             size: "".to_string(),
         });
     }
@@ -142,38 +135,34 @@ where
     }
     
     if !req.device.starts_with("/dev/") {
-        return Err(ServiceError::InvalidInput("device must start with /dev/".to_string()));
+        return Err(ServiceError::InvalidInput(
+            "device must start with /dev/".to_string(),
+        ));
     }
     
-    on_progress(10, "Preparing mount");
+    on_progress(10, "Validating device");
     
-    let device_name = req.device.trim_start_matches("/dev/").replace('/', "_");
-    let mountpoint = format!("/media/rustyjack/{}", device_name);
+    let policy = default_mount_policy();
+    let device = PathBuf::from(&req.device);
     
-    std::fs::create_dir_all(&mountpoint)
-        .map_err(ServiceError::Io)?;
+    let policy_req = PolicyMountRequest {
+        device: device.clone(),
+        mode: MountMode::ReadOnly,
+        preferred_name: None,
+    };
     
-    on_progress(50, "Mounting device");
+    on_progress(30, "Checking device");
     
-    let mut cmd = Command::new("mount");
-    cmd.arg(&req.device).arg(&mountpoint);
-    
-    if let Some(ref fs) = req.filesystem {
-        cmd.arg("-t").arg(fs);
-    }
-    
-    let output = cmd.output().map_err(ServiceError::Io)?;
-    
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ServiceError::External(format!("mount failed: {}", stderr)));
-    }
+    let response = policy_mount_device(&policy, policy_req)
+        .map_err(|e| ServiceError::OperationFailed(format!("mount failed: {}", e)))?;
     
     on_progress(100, "Mounted");
     
     Ok(serde_json::json!({
-        "device": req.device,
-        "mountpoint": mountpoint,
+        "device": response.device.to_string_lossy(),
+        "mountpoint": response.mountpoint.to_string_lossy(),
+        "filesystem": format!("{:?}", response.fs_type).to_lowercase(),
+        "readonly": response.readonly,
         "mounted": true
     }))
 }
@@ -190,17 +179,28 @@ where
         return Err(ServiceError::InvalidInput("device".to_string()));
     }
     
-    on_progress(10, "Unmounting device");
+    on_progress(10, "Finding mount");
     
-    let output = Command::new("umount")
-        .arg(&req.device)
-        .output()
-        .map_err(ServiceError::Io)?;
+    let policy = default_mount_policy();
+    let device = PathBuf::from(&req.device);
     
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ServiceError::External(format!("umount failed: {}", stderr)));
-    }
+    let mounts = list_mounts_under(&policy)
+        .map_err(|e| ServiceError::External(format!("list mounts: {}", e)))?;
+    
+    let mount_entry = mounts
+        .iter()
+        .find(|m| m.device == device)
+        .ok_or_else(|| ServiceError::InvalidInput("device not mounted".to_string()))?;
+    
+    on_progress(30, "Unmounting");
+    
+    let policy_req = PolicyUnmountRequest {
+        mountpoint: mount_entry.mountpoint.clone(),
+        detach: false,
+    };
+    
+    policy_unmount(&policy, policy_req)
+        .map_err(|e| ServiceError::OperationFailed(format!("unmount failed: {}", e)))?;
     
     on_progress(100, "Unmounted");
     

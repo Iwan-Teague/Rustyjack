@@ -32,6 +32,17 @@ where
 
     let result = loop {
         tokio::select! {
+            _ = cancel.cancelled() => {
+                handle.abort();
+                let _ = tokio::task::spawn_blocking(|| {
+                    let _ = rustyjack_core::services::wifi::disconnect(&request.interface);
+                }).await;
+                return Err(DaemonError::new(
+                    ErrorCode::Cancelled,
+                    "Job cancelled",
+                    false
+                ).with_source("daemon.jobs.wifi_connect"));
+            }
             res = &mut handle => {
                 break res;
             }
@@ -43,10 +54,14 @@ where
 
     match result {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(err.to_daemon_error()),
+        Ok(Err(err)) => Err(err.to_daemon_error_with_code(
+            ErrorCode::WifiFailed,
+            "daemon.jobs.wifi_connect",
+        )),
         Err(err) => Err(
             DaemonError::new(ErrorCode::Internal, "wifi connect job panicked", false)
-                .with_detail(err.to_string()),
+                .with_detail(err.to_string())
+                .with_source("daemon.jobs.wifi_connect"),
         ),
     }
 }

@@ -3,7 +3,7 @@ use std::os::unix::io::AsRawFd;
 
 use tokio::net::UnixStream;
 
-use rustyjack_ipc::{AuthorizationTier, Endpoint};
+use rustyjack_ipc::{AuthorizationTier, Endpoint, JobKind};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PeerCred {
@@ -92,5 +92,20 @@ pub fn tier_allows(actual: AuthorizationTier, required: AuthorizationTier) -> bo
         | (AuthorizationTier::Operator, AuthorizationTier::ReadOnly) => true,
         (AuthorizationTier::ReadOnly, AuthorizationTier::ReadOnly) => true,
         _ => false,
+    }
+}
+
+pub fn required_tier_for_jobkind(kind: &JobKind) -> AuthorizationTier {
+    match kind {
+        JobKind::Noop => AuthorizationTier::ReadOnly,
+        JobKind::Sleep { .. } => AuthorizationTier::ReadOnly,
+        JobKind::WifiScan { .. } => AuthorizationTier::Operator,
+        JobKind::WifiConnect { .. } => AuthorizationTier::Operator,
+        JobKind::HotspotStart { .. } => AuthorizationTier::Operator,
+        JobKind::PortalStart { .. } => AuthorizationTier::Operator,
+        JobKind::MountStart { .. } => AuthorizationTier::Operator,
+        JobKind::UnmountStart { .. } => AuthorizationTier::Operator,
+        JobKind::ScanRun { .. } => AuthorizationTier::Operator,
+        JobKind::SystemUpdate { .. } => AuthorizationTier::Admin,
     }
 }

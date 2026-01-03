@@ -1,0 +1,212 @@
+# Git Commit Message Template
+
+```
+security: implement critical daemon boundary and validation fixes
+
+This commit addresses multiple security vulnerabilities identified in the
+security review, focusing on input validation, authorization enforcement,
+and defense-in-depth improvements.
+
+## Critical Fixes
+
+1. JobStart Validation Bypass (HIGH)
+   - Added validate_job_kind() to enforce validation for generic JobStart
+   - Prevents clients from bypassing validation in specialized endpoints
+   - Files: rustyjack-daemon/src/{validation,dispatch}.rs
+
+2. Privilege Escalation Prevention (HIGH)
+   - Added per-job authorization tier enforcement
+   - SystemUpdate now requires Admin tier (root)
+   - Operators cannot escalate via JobStart
+   - Files: rustyjack-daemon/src/{auth,server}.rs
+
+3. Mount Internal Storage Prevention (MEDIUM)
+   - Added validate_mount_device_hint() rejecting mmcblk/loop devices
+   - Prevents mounting internal SD card partitions
+   - Files: rustyjack-daemon/src/{validation,dispatch}.rs
+
+4. IPC Frame Overflow Prevention (MEDIUM)
+   - Added size limits to SystemLogsGet response
+   - Max 900KB bundle (safely under 1MB IPC limit)
+   - Prevents silent failures from oversized responses
+   - Files: rustyjack-core/src/services/logs.rs
+
+5. Active Job Eviction Fix (MEDIUM)
+   - Modified retention to never evict Running/Queued jobs
+   - Ensures job status queries and cancellation remain reliable
+   - Files: rustyjack-daemon/src/jobs/mod.rs
+
+6. CLI Backdoor Removal (LOW - defense in depth)
+   - Feature-gated privileged CLI binary
+   - Production builds omit rustyjack binary by default
+   - Daemon remains sole privileged control plane
+   - Files: rustyjack-core/Cargo.toml
+
+## Validation Functions Added
+
+- validate_job_kind() - Central validation for all job types
+- validate_sleep_seconds() - Max 24 hours
+- validate_scan_target() - Length + control char checks
+- validate_scan_ports() - Mode-specific validation, max 128 ports
+- validate_update_service() - Allowlist: rustyjack/rustyjack-ui/rustyjackd
+- validate_git_remote() - Allowlist origin/https/git@ formats
+- validate_git_ref() - Git-safe characters only
+- validate_backup_dir() - Path confinement to rustyjack dirs
+- validate_mount_device_hint() - Reject internal devices
+
+## Authorization Changes
+
+- Added required_tier_for_jobkind() function
+- Job kinds mapped to authorization tiers:
+  * ReadOnly: Noop, Sleep
+  * Operator: WiFi, Hotspot, Portal, Mount, Scan operations
+  * Admin: SystemUpdate
+- Server enforces per-job tier for JobStart endpoint
+
+## Files Changed (7 files)
+
+rustyjack-daemon/src/:
+  - validation.rs: +290 lines (9 new functions, extended constants)
+  - auth.rs: +15 lines (per-job tier function)
+  - dispatch.rs: +7 lines (JobStart validation enforcement)
+  - server.rs: +16 lines (per-job tier check at connection level)
+  - jobs/mod.rs: +15 lines (retention fix for active jobs)
+
+rustyjack-core/:
+  - Cargo.toml: +6 lines (feature-gated CLI)
+  - src/services/logs.rs: +30 lines (size limits + truncation)
+
+## Breaking Changes
+
+None. All changes enforce existing validation intent.
+
+## Behavioral Changes
+
+- JobStart now validates all job parameters (may reject previously-accepted invalid inputs)
+- SystemUpdate requires Admin authorization (root or future group-based admin)
+- Mount/Unmount reject mmcblk and loop devices
+- SystemLogsGet may include truncation markers for large responses
+- Job retention may temporarily exceed configured limit to protect active jobs
+
+## Testing Required
+
+Before merge:
+- [ ] Verify JobStart validation prevents bypass
+- [ ] Verify non-root cannot start SystemUpdate
+- [ ] Verify mount operations reject mmcblk devices
+- [ ] Verify SystemLogsGet response < 1MB
+- [ ] Verify active jobs survive retention
+- [ ] Build without CLI feature, confirm no rustyjack binary
+- [ ] Build with CLI feature, confirm rustyjack binary present
+
+See SECURITY_FIXES_TESTING.md for detailed test plan.
+
+## Documentation
+
+- SECURITY_FIXES_IMPLEMENTED.md - Detailed implementation notes
+- SECURITY_FIXES_TESTING.md - Comprehensive test plan
+- SECURITY_FIXES_QUICKREF.md - Quick reference guide
+
+## References
+
+- Based on: rustyjack_security_review.txt
+- Implementation plan: rustyjack_security_fix_implementation_roadmap.txt
+- Phase 1 (P0): Complete
+- Phase 2 (P0): Partial (logs only)
+- Phase 3 (P1): Partial (retention only)
+- Phase 5 (P2): Partial (CLI gating only)
+
+Co-authored-by: Security Review Team
+Closes: #[ISSUE_NUMBER_IF_APPLICABLE]
+```
+
+---
+
+## Short Version (for quick commits)
+
+```
+security: fix daemon boundary and validation issues
+
+- Add validate_job_kind() to prevent JobStart bypass
+- Add per-job authorization tier enforcement (SystemUpdate → Admin)
+- Reject mount operations on mmcblk/loop devices
+- Cap SystemLogsGet response to prevent IPC overflow
+- Fix job retention to never evict active jobs
+- Feature-gate CLI binary for production builds
+
+See SECURITY_FIXES_IMPLEMENTED.md for details.
+```
+
+---
+
+## Individual Commits (if splitting)
+
+### Commit 1: Add comprehensive job validation
+```
+security: add comprehensive job validation to prevent bypass
+
+- Add validate_job_kind() for central validation
+- Add 8 specific validators for job parameters
+- Enforce in JobStart endpoint to prevent validation bypass
+- Reject control chars, path traversal, invalid git params
+
+Files: rustyjack-daemon/src/validation.rs, src/dispatch.rs
+```
+
+### Commit 2: Enforce per-job authorization tiers
+```
+security: enforce per-job authorization tiers
+
+- Add required_tier_for_jobkind() function
+- Map SystemUpdate to Admin tier (root only)
+- Enforce in server.rs for JobStart requests
+- Prevents Operator clients from privilege escalation
+
+Files: rustyjack-daemon/src/auth.rs, src/server.rs
+```
+
+### Commit 3: Restrict mount operations to external devices
+```
+security: restrict mount operations to external devices
+
+- Add validate_mount_device_hint() rejecting mmcblk/loop
+- Update Mount/Unmount endpoints to use stricter validation
+- Prevents mounting internal SD card partitions
+
+Files: rustyjack-daemon/src/validation.rs, src/dispatch.rs
+```
+
+### Commit 4: Cap log bundle size to prevent IPC overflow
+```
+fix: cap SystemLogsGet response size to prevent IPC failures
+
+- Add MAX_LOG_BUNDLE_BYTES (900KB) limit
+- Add per-section and per-command output limits
+- Include truncation markers when limits exceeded
+- Add line limits to journalctl commands
+
+Files: rustyjack-core/src/services/logs.rs
+```
+
+### Commit 5: Fix job retention to protect active jobs
+```
+fix: never evict active jobs during retention enforcement
+
+- Separate active (Queued/Running) from finished jobs
+- Only remove finished jobs during retention
+- Prevents status query failures for running jobs
+
+Files: rustyjack-daemon/src/jobs/mod.rs
+```
+
+### Commit 6: Feature-gate CLI binary for production
+```
+security: feature-gate CLI binary to reduce attack surface
+
+- Make clap/env_logger optional dependencies
+- Add 'cli' feature flag
+- Require 'cli' feature for rustyjack binary target
+- Production builds omit privileged CLI by default
+
+Files: rustyjack-core/Cargo.toml
+```

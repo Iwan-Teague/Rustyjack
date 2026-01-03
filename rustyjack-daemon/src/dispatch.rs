@@ -18,6 +18,26 @@ use crate::state::DaemonState;
 use crate::telemetry::log_request;
 use crate::validation;
 
+async fn run_blocking<T, E, F>(label: &'static str, f: F) -> Result<T, DaemonError>
+where
+    T: Send + 'static,
+    E: Into<DaemonError> + Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+{
+    task::spawn_blocking(f)
+        .await
+        .map_err(|e| {
+            DaemonError::new(
+                ErrorCode::Internal,
+                format!("{} panicked", label),
+                false,
+            )
+            .with_detail(e.to_string())
+            .with_source(format!("daemon.dispatch.{}", label))
+        })?
+        .map_err(|e| e.into())
+}
+
 pub async fn handle_request(
     state: &Arc<DaemonState>,
     request: RequestEnvelope,
@@ -44,55 +64,92 @@ pub async fn handle_request(
             }))
         }
         RequestBody::SystemStatusGet => {
-            let hostname = std::fs::read_to_string("/etc/hostname")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-            match rustyjack_core::services::stats::status_summary() {
-                Ok(summary) => ResponseBody::Ok(ResponseOk::SystemStatus(SystemStatusResponse {
-                    uptime_ms: state.uptime_ms(),
-                    hostname,
-                    status_text: Some(summary.status_text),
-                    mitm_running: Some(summary.mitm_running),
-                    dnsspoof_running: Some(summary.dnsspoof_running),
-                })),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+            let result = run_blocking("system_status_get", || {
+                let hostname = std::fs::read_to_string("/etc/hostname")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let summary = rustyjack_core::services::stats::status_summary()?;
+                Ok::<_, rustyjack_core::services::error::ServiceError>((hostname, summary))
+            })
+            .await;
+
+            match result {
+                Ok((hostname, summary)) => {
+                    ResponseBody::Ok(ResponseOk::SystemStatus(SystemStatusResponse {
+                        uptime_ms: state.uptime_ms(),
+                        hostname,
+                        status_text: Some(summary.status_text),
+                        mitm_running: Some(summary.mitm_running),
+                        dnsspoof_running: Some(summary.dnsspoof_running),
+                    }))
+                }
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::DiskUsageGet(DiskUsageRequest { path }) => {
-            let path = std::path::PathBuf::from(path);
-            match rustyjack_core::services::stats::disk_usage(&path) {
+            let path_buf = std::path::PathBuf::from(path);
+            let result = run_blocking("disk_usage_get", move || {
+                rustyjack_core::services::stats::disk_usage(&path_buf)
+            })
+            .await;
+
+            match result {
                 Ok((used, total)) => ResponseBody::Ok(ResponseOk::DiskUsage(DiskUsageResponse {
                     used_bytes: used,
                     total_bytes: total,
                 })),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
             }
         }
-        RequestBody::SystemReboot => match rustyjack_core::services::system::reboot() {
-            Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
-                action: "reboot".to_string(),
-            })),
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
-        RequestBody::SystemShutdown => match rustyjack_core::services::system::shutdown() {
-            Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
-                action: "shutdown".to_string(),
-            })),
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
-        RequestBody::SystemSync => match rustyjack_core::services::system::sync() {
-            Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
-                action: "sync".to_string(),
-            })),
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
-        RequestBody::HostnameRandomizeNow => {
-            match rustyjack_core::services::system::randomize_hostname_now() {
-                Ok(hostname) => ResponseBody::Ok(ResponseOk::Hostname(HostnameResponse {
-                    hostname,
+        RequestBody::SystemReboot => {
+            let result = run_blocking("system_reboot", || {
+                rustyjack_core::services::system::reboot()
+            })
+            .await;
+
+            match result {
+                Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
+                    action: "reboot".to_string(),
                 })),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::SystemShutdown => {
+            let result = run_blocking("system_shutdown", || {
+                rustyjack_core::services::system::shutdown()
+            })
+            .await;
+
+            match result {
+                Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
+                    action: "shutdown".to_string(),
+                })),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::SystemSync => {
+            let result = run_blocking("system_sync", || {
+                rustyjack_core::services::system::sync()
+            })
+            .await;
+
+            match result {
+                Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
+                    action: "sync".to_string(),
+                })),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::HostnameRandomizeNow => {
+            let result = run_blocking("hostname_randomize", || {
+                rustyjack_core::services::system::randomize_hostname_now()
+            })
+            .await;
+
+            match result {
+                Ok(hostname) => ResponseBody::Ok(ResponseOk::Hostname(HostnameResponse { hostname })),
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::BlockDevicesList => {
@@ -150,7 +207,12 @@ pub async fn handle_request(
             }
         }
         RequestBody::WifiCapabilitiesGet(WifiCapabilitiesRequest { interface }) => {
-            match rustyjack_core::services::wifi::capabilities(&interface) {
+            let result = run_blocking("wifi_capabilities_get", move || {
+                rustyjack_core::services::wifi::capabilities(&interface)
+            })
+            .await;
+
+            match result {
                 Ok(caps) => ResponseBody::Ok(ResponseOk::WifiCapabilities(
                     WifiCapabilitiesResponse {
                         native_available: caps.native_available,
@@ -161,11 +223,16 @@ pub async fn handle_request(
                         supports_injection: caps.supports_injection,
                     },
                 )),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::HotspotWarningsGet => {
-            match rustyjack_core::services::hotspot::warnings() {
+            let result = run_blocking("hotspot_warnings_get", || {
+                rustyjack_core::services::hotspot::warnings()
+            })
+            .await;
+
+            match result {
                 Ok(resp) => ResponseBody::Ok(ResponseOk::HotspotWarnings(
                     HotspotWarningsResponse {
                         last_warning: resp.last_warning,
@@ -173,11 +240,16 @@ pub async fn handle_request(
                         last_start_error: resp.last_start_error,
                     },
                 )),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::HotspotDiagnosticsGet(HotspotDiagnosticsRequest { ap_interface }) => {
-            match rustyjack_core::services::hotspot::diagnostics(&ap_interface) {
+            let result = run_blocking("hotspot_diagnostics_get", move || {
+                rustyjack_core::services::hotspot::diagnostics(&ap_interface)
+            })
+            .await;
+
+            match result {
                 Ok(resp) => ResponseBody::Ok(ResponseOk::HotspotDiagnostics(
                     HotspotDiagnosticsResponse {
                         regdom_raw: resp.regdom_raw,
@@ -188,15 +260,22 @@ pub async fn handle_request(
                         last_start_error: resp.last_start_error,
                     },
                 )),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
             }
         }
-        RequestBody::HotspotClientsList => match rustyjack_core::services::hotspot::clients() {
-            Ok(resp) => ResponseBody::Ok(ResponseOk::HotspotClients(HotspotClientsResponse {
-                clients: resp.clients,
-            })),
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
+        RequestBody::HotspotClientsList => {
+            let result = run_blocking("hotspot_clients_list", || {
+                rustyjack_core::services::hotspot::clients()
+            })
+            .await;
+
+            match result {
+                Ok(resp) => ResponseBody::Ok(ResponseOk::HotspotClients(HotspotClientsResponse {
+                    clients: resp.clients,
+                })),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
         RequestBody::GpioDiagnosticsGet => {
             let result = task::spawn_blocking(|| rustyjack_core::services::logs::gpio_diagnostics())
                 .await;
@@ -212,11 +291,16 @@ pub async fn handle_request(
             }
         }
         RequestBody::WifiInterfacesList => {
-            match rustyjack_core::services::wifi::list_interfaces() {
+            let result = run_blocking("wifi_interfaces_list", || {
+                rustyjack_core::services::wifi::list_interfaces()
+            })
+            .await;
+
+            match result {
                 Ok(interfaces) => ResponseBody::Ok(ResponseOk::WifiInterfaces(
                     rustyjack_ipc::WifiInterfacesResponse { interfaces },
                 )),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::WifiDisconnect(rustyjack_ipc::WifiDisconnectRequest { interface }) => {
@@ -227,14 +311,21 @@ pub async fn handle_request(
                     body: ResponseBody::Err(err),
                 };
             }
-            match rustyjack_core::services::wifi::disconnect(&interface) {
+
+            let iface_clone = interface.clone();
+            let result = run_blocking("wifi_disconnect", move || {
+                rustyjack_core::services::wifi::disconnect(&iface_clone)
+            })
+            .await;
+
+            match result {
                 Ok(disconnected) => ResponseBody::Ok(ResponseOk::WifiDisconnect(
                     rustyjack_ipc::WifiDisconnectResponse {
                         interface,
                         disconnected,
                     },
                 )),
-                Err(err) => ResponseBody::Err(err.to_daemon_error()),
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::WifiScanStart(rustyjack_ipc::WifiScanStartRequest {
@@ -396,15 +487,22 @@ pub async fn handle_request(
                 }))
             }
         }
-        RequestBody::HotspotStop => match rustyjack_core::services::hotspot::stop() {
-            Ok(success) => ResponseBody::Ok(ResponseOk::HotspotAction(
-                rustyjack_ipc::HotspotActionResponse {
-                    action: "stop".to_string(),
-                    success,
-                },
-            )),
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
+        RequestBody::HotspotStop => {
+            let result = run_blocking("hotspot_stop", || {
+                rustyjack_core::services::hotspot::stop()
+            })
+            .await;
+
+            match result {
+                Ok(success) => ResponseBody::Ok(ResponseOk::HotspotAction(
+                    rustyjack_ipc::HotspotActionResponse {
+                        action: "stop".to_string(),
+                        success,
+                    },
+                )),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
         RequestBody::PortalStart(rustyjack_ipc::PortalStartRequest { interface, port }) => {
             if let Err(err) = validation::validate_interface_name(&interface) {
                 return ResponseEnvelope {
@@ -440,35 +538,56 @@ pub async fn handle_request(
                 }))
             }
         }
-        RequestBody::PortalStop => match rustyjack_core::services::portal::stop() {
-            Ok(success) => ResponseBody::Ok(ResponseOk::PortalAction(
-                rustyjack_ipc::PortalActionResponse {
-                    action: "stop".to_string(),
-                    success,
-                },
-            )),
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
-        RequestBody::PortalStatus => match rustyjack_core::services::portal::status() {
-            Ok(status) => {
-                let running = status.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
-                let interface = status
-                    .get("interface")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let port = status.get("port").and_then(|v| v.as_u64()).map(|p| p as u16);
-                ResponseBody::Ok(ResponseOk::PortalStatus(
-                    rustyjack_ipc::PortalStatusResponse {
-                        running,
-                        interface,
-                        port,
+        RequestBody::PortalStop => {
+            let result = run_blocking("portal_stop", || {
+                rustyjack_core::services::portal::stop()
+            })
+            .await;
+
+            match result {
+                Ok(success) => ResponseBody::Ok(ResponseOk::PortalAction(
+                    rustyjack_ipc::PortalActionResponse {
+                        action: "stop".to_string(),
+                        success,
                     },
-                ))
+                )),
+                Err(err) => ResponseBody::Err(err),
             }
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
-        RequestBody::MountList => match rustyjack_core::services::mount::list_mounts() {
-            Ok(mounts) => {
+        }
+        RequestBody::PortalStatus => {
+            let result = run_blocking("portal_status", || {
+                rustyjack_core::services::portal::status()
+            })
+            .await;
+
+            match result {
+                Ok(status) => {
+                    let running =
+                        status.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let interface = status
+                        .get("interface")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let port = status.get("port").and_then(|v| v.as_u64()).map(|p| p as u16);
+                    ResponseBody::Ok(ResponseOk::PortalStatus(
+                        rustyjack_ipc::PortalStatusResponse {
+                            running,
+                            interface,
+                            port,
+                        },
+                    ))
+                }
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::MountList => {
+            let result = run_blocking("mount_list", || {
+                rustyjack_core::services::mount::list_mounts()
+            })
+            .await;
+
+            match result {
+                Ok(mounts) => {
                 let mapped = mounts
                     .into_iter()
                     .map(|m| rustyjack_ipc::MountInfo {
@@ -482,10 +601,10 @@ pub async fn handle_request(
                     mounts: mapped,
                 }))
             }
-            Err(err) => ResponseBody::Err(err.to_daemon_error()),
-        },
+            Err(err) => ResponseBody::Err(err),
+        }
         RequestBody::MountStart(rustyjack_ipc::MountStartRequest { device, filesystem }) => {
-            if let Err(err) = validation::validate_device_path(&device) {
+            if let Err(err) = validation::validate_mount_device_hint(&device) {
                 return ResponseEnvelope {
                     v: PROTOCOL_VERSION,
                     request_id: request.request_id,
@@ -520,7 +639,7 @@ pub async fn handle_request(
             }
         }
         RequestBody::UnmountStart(rustyjack_ipc::UnmountStartRequest { device }) => {
-            if let Err(err) = validation::validate_device_path(&device) {
+            if let Err(err) = validation::validate_mount_device_hint(&device) {
                 return ResponseEnvelope {
                     v: PROTOCOL_VERSION,
                     request_id: request.request_id,
@@ -570,6 +689,13 @@ pub async fn handle_request(
             ))
         }
         RequestBody::JobStart(JobStartRequest { job }) => {
+            if let Err(err) = validation::validate_job_kind(&job.kind) {
+                return ResponseEnvelope {
+                    v: PROTOCOL_VERSION,
+                    request_id: request.request_id,
+                    body: ResponseBody::Err(err),
+                };
+            }
             if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
                 ResponseBody::Err(DaemonError::new(
                     ErrorCode::Forbidden,

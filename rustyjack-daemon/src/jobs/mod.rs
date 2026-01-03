@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use log::{debug, info};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -37,6 +38,15 @@ impl JobManager {
     pub async fn start_job(self: &Arc<Self>, spec: JobSpec, state: Arc<DaemonState>) -> u64 {
         let job_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let created_at_ms = DaemonState::now_ms();
+        
+        let kind_name = job_kind_name(&spec.kind);
+        let requested_by = spec.requested_by.as_deref().unwrap_or("unknown");
+        
+        info!(
+            "job_id={} kind={} requested_by={} state=queued",
+            job_id, kind_name, requested_by
+        );
+        
         let info = JobInfo {
             job_id,
             kind: spec.kind.clone(),
@@ -75,6 +85,10 @@ impl JobManager {
         cancel: CancellationToken,
         state: Arc<DaemonState>,
     ) {
+        let kind_name = job_kind_name(&spec.kind);
+        
+        info!("job_id={} kind={} state=running", job_id, kind_name);
+        
         self.update_job_state(job_id, JobState::Running, None, None)
             .await;
         self.update_job_started(job_id).await;
@@ -90,15 +104,35 @@ impl JobManager {
 
         match result {
             Ok(value) => {
+                info!("job_id={} kind={} state=completed", job_id, kind_name);
                 self.update_job_state(job_id, JobState::Completed, Some(value), None)
                     .await;
             }
             Err(err) => {
-                let state = match err.code {
+                let job_state = match err.code {
                     ErrorCode::Cancelled => JobState::Cancelled,
                     _ => JobState::Failed,
                 };
-                self.update_job_state(job_id, state, None, Some(err)).await;
+                
+                let state_name = match job_state {
+                    JobState::Cancelled => "cancelled",
+                    JobState::Failed => "failed",
+                    _ => "unknown",
+                };
+                
+                info!(
+                    "job_id={} kind={} state={} error_code={:?} message={}",
+                    job_id, kind_name, state_name, err.code, err.message
+                );
+                
+                if let Some(source) = &err.source {
+                    debug!("job_id={} error_source={}", job_id, source);
+                }
+                if let Some(detail) = &err.detail {
+                    debug!("job_id={} error_detail={}", job_id, detail);
+                }
+                
+                self.update_job_state(job_id, job_state, None, Some(err)).await;
             }
         }
 
@@ -200,11 +234,27 @@ impl JobManager {
             return;
         }
 
-        let mut entries: Vec<_> = jobs.values().map(|record| record.info.clone()).collect();
-        entries.sort_by_key(|info| info.created_at_ms);
-        let remove_count = jobs.len().saturating_sub(self.retention);
-        for info in entries.into_iter().take(remove_count) {
-            jobs.remove(&info.job_id);
+        let active_ids: std::collections::HashSet<u64> = jobs
+            .values()
+            .filter(|record| {
+                matches!(record.info.state, JobState::Queued | JobState::Running)
+            })
+            .map(|record| record.info.job_id)
+            .collect();
+
+        let mut finished: Vec<(u64, u64)> = jobs
+            .values()
+            .filter(|record| {
+                !matches!(record.info.state, JobState::Queued | JobState::Running)
+            })
+            .map(|record| (record.info.job_id, record.info.created_at_ms))
+            .collect();
+
+        finished.sort_by_key(|(_, created)| *created);
+
+        while jobs.len() > self.retention && !finished.is_empty() {
+            let (job_id, _) = finished.remove(0);
+            jobs.remove(&job_id);
         }
     }
 }
@@ -221,5 +271,20 @@ fn required_locks(kind: &JobKind) -> Vec<LockKind> {
         JobKind::PortalStart { .. } => vec![LockKind::Portal],
         JobKind::MountStart { .. } => vec![LockKind::Mount],
         JobKind::UnmountStart { .. } => vec![LockKind::Mount],
+    }
+}
+
+fn job_kind_name(kind: &JobKind) -> &'static str {
+    match kind {
+        JobKind::Noop => "noop",
+        JobKind::Sleep { .. } => "sleep",
+        JobKind::ScanRun { .. } => "scan",
+        JobKind::SystemUpdate { .. } => "update",
+        JobKind::WifiScan { .. } => "wifi_scan",
+        JobKind::WifiConnect { .. } => "wifi_connect",
+        JobKind::HotspotStart { .. } => "hotspot_start",
+        JobKind::PortalStart { .. } => "portal_start",
+        JobKind::MountStart { .. } => "mount_start",
+        JobKind::UnmountStart { .. } => "unmount_start",
     }
 }

@@ -10,11 +10,14 @@ use tokio::sync::Notify;
 use tokio::time;
 
 use rustyjack_ipc::{
-    endpoint_for_body, AuthzSummary, ClientHello, DaemonError, ErrorCode, HelloAck,
-    RequestEnvelope, ResponseBody, ResponseEnvelope, PROTOCOL_VERSION,
+    endpoint_for_body, AuthzSummary, ClientHello, DaemonError, Endpoint, ErrorCode, HelloAck,
+    JobStartRequest, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
+    PROTOCOL_VERSION,
 };
 
-use crate::auth::{authorization_for, peer_credentials, required_tier, tier_allows};
+use crate::auth::{
+    authorization_for, peer_credentials, required_tier, required_tier_for_jobkind, tier_allows,
+};
 use crate::dispatch::handle_request;
 use crate::state::DaemonState;
 
@@ -211,6 +214,27 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
             )
             .await;
             continue;
+        }
+
+        if request.endpoint == Endpoint::JobStart {
+            if let RequestBody::JobStart(JobStartRequest { ref job }) = request.body {
+                let job_required = required_tier_for_jobkind(&job.kind);
+                if !tier_allows(authz, job_required) {
+                    let _ = send_error(
+                        &mut stream,
+                        PROTOCOL_VERSION,
+                        request.request_id,
+                        DaemonError::new(
+                            ErrorCode::Forbidden,
+                            "insufficient privileges for this job type",
+                            false,
+                        ),
+                        state.config.max_frame,
+                    )
+                    .await;
+                    continue;
+                }
+            }
         }
 
         let response = handle_request(&state, request, peer).await;

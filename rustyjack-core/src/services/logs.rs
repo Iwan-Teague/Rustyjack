@@ -4,6 +4,10 @@ use std::process::Command;
 
 use crate::services::error::ServiceError;
 
+const MAX_LOG_BUNDLE_BYTES: usize = 900_000;
+const MAX_SECTION_BYTES: usize = 200_000;
+const MAX_CMD_OUTPUT_BYTES: usize = 100_000;
+
 pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
     let mut out = String::new();
 
@@ -16,6 +20,8 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
             "rustyjack-ui.service",
             "-b",
             "--no-pager",
+            "-n",
+            "500",
             "-o",
             "short-precise",
         ],
@@ -24,13 +30,13 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
         &mut out,
         "journalctl (kernel)",
         "journalctl",
-        &["-k", "-b", "--no-pager", "-o", "short-precise"],
+        &["-k", "-b", "--no-pager", "-n", "300", "-o", "short-precise"],
     );
     append_command_output(
         &mut out,
         "journalctl (system)",
         "journalctl",
-        &["-b", "--no-pager", "-o", "short-precise"],
+        &["-b", "--no-pager", "-n", "500", "-o", "short-precise"],
     );
     append_command_output(
         &mut out,
@@ -41,6 +47,8 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
             "NetworkManager",
             "-b",
             "--no-pager",
+            "-n",
+            "200",
             "-o",
             "short-precise",
         ],
@@ -54,6 +62,8 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
             "wpa_supplicant",
             "-b",
             "--no-pager",
+            "-n",
+            "200",
             "-o",
             "short-precise",
         ],
@@ -69,6 +79,11 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
     append_file_section(&mut out, "/proc/net/arp");
     append_file_section(&mut out, "/proc/net/dev");
     append_file_section_path(&mut out, &root.join("loot").join("logs").join("watchdog.log"));
+
+    if out.len() > MAX_LOG_BUNDLE_BYTES {
+        out.truncate(MAX_LOG_BUNDLE_BYTES);
+        out.push_str("\n\n--- TRUNCATED: exceeded MAX_LOG_BUNDLE_BYTES ---\n");
+    }
 
     Ok(out)
 }
@@ -381,10 +396,22 @@ fn append_command_output(buf: &mut String, title: &str, program: &str, args: &[&
                     output.status.code()
                 ));
             }
-            buf.push_str(&String::from_utf8_lossy(&output.stdout));
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            if stdout_str.len() > MAX_CMD_OUTPUT_BYTES {
+                buf.push_str(&stdout_str[..MAX_CMD_OUTPUT_BYTES]);
+                buf.push_str("\n[truncated stdout]\n");
+            } else {
+                buf.push_str(&stdout_str);
+            }
             if !output.stderr.is_empty() {
                 buf.push_str("\n[stderr]\n");
-                buf.push_str(&String::from_utf8_lossy(&output.stderr));
+                let stderr_str = String::from_utf8_lossy(&output.stderr);
+                if stderr_str.len() > MAX_CMD_OUTPUT_BYTES {
+                    buf.push_str(&stderr_str[..MAX_CMD_OUTPUT_BYTES]);
+                    buf.push_str("\n[truncated stderr]\n");
+                } else {
+                    buf.push_str(&stderr_str);
+                }
             }
         }
         Err(err) => {
@@ -396,7 +423,14 @@ fn append_command_output(buf: &mut String, title: &str, program: &str, args: &[&
 fn append_file_section(buf: &mut String, path: &str) {
     buf.push_str(&format!("\n===== {path} =====\n"));
     match fs::read_to_string(path) {
-        Ok(contents) => buf.push_str(&contents),
+        Ok(contents) => {
+            if contents.len() > MAX_SECTION_BYTES {
+                buf.push_str(&contents[..MAX_SECTION_BYTES]);
+                buf.push_str("\n[truncated file]\n");
+            } else {
+                buf.push_str(&contents);
+            }
+        }
         Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
     }
 }
@@ -404,7 +438,14 @@ fn append_file_section(buf: &mut String, path: &str) {
 fn append_file_section_path(buf: &mut String, path: &Path) {
     buf.push_str(&format!("\n===== {} =====\n", path.display()));
     match fs::read_to_string(path) {
-        Ok(contents) => buf.push_str(&contents),
+        Ok(contents) => {
+            if contents.len() > MAX_SECTION_BYTES {
+                buf.push_str(&contents[..MAX_SECTION_BYTES]);
+                buf.push_str("\n[truncated file]\n");
+            } else {
+                buf.push_str(&contents);
+            }
+        }
         Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
     }
 }

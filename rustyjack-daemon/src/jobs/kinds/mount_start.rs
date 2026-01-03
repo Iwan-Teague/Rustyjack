@@ -30,6 +30,14 @@ where
 
     let result = loop {
         tokio::select! {
+            _ = cancel.cancelled() => {
+                handle.abort();
+                return Err(DaemonError::new(
+                    ErrorCode::Cancelled,
+                    "Job cancelled",
+                    false
+                ).with_source("daemon.jobs.mount_start"));
+            }
             res = &mut handle => {
                 break res;
             }
@@ -41,10 +49,14 @@ where
 
     match result {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(err.to_daemon_error()),
+        Ok(Err(err)) => Err(err.to_daemon_error_with_code(
+            ErrorCode::MountFailed,
+            "daemon.jobs.mount_start",
+        )),
         Err(err) => Err(
             DaemonError::new(ErrorCode::Internal, "mount job panicked", false)
-                .with_detail(err.to_string()),
+                .with_detail(err.to_string())
+                .with_source("daemon.jobs.mount_start"),
         ),
     }
 }
