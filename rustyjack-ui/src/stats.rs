@@ -9,14 +9,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rustyjack_commands::{Commands, StatusCommand, WifiCommand};
 use serde_json::Value;
 
 use crate::{
     core::CoreBridge,
     display::StatusOverlay,
-    types::WifiListResponse,
+    types::{InterfaceSummary, WifiListResponse},
 };
 
 pub struct StatsSampler {
@@ -24,9 +24,49 @@ pub struct StatsSampler {
     stop: Arc<AtomicBool>,
 }
 
+#[cfg(target_os = "linux")]
+use linux_embedded_hal::gpio_cdev::{Chip, LineHandle, LineRequestFlags};
+
+#[cfg(target_os = "linux")]
+struct StatusLed {
+    handle: LineHandle,
+    is_on: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl StatusLed {
+    fn new(pin: u32) -> Result<Option<Self>> {
+        if pin == 0 {
+            return Ok(None);
+        }
+        let mut chip = Chip::new("/dev/gpiochip0").context("opening gpiochip0")?;
+        let line = chip
+            .get_line(pin)
+            .with_context(|| format!("requesting status LED line {}", pin))?;
+        let handle = line
+            .request(LineRequestFlags::OUTPUT, 0, "rustyjack-status-led")
+            .with_context(|| format!("configuring status LED line {}", pin))?;
+        Ok(Some(Self {
+            handle,
+            is_on: false,
+        }))
+    }
+
+    fn set(&mut self, on: bool) {
+        if on == self.is_on {
+            return;
+        }
+        let value = if on { 1 } else { 0 };
+        if let Err(err) = self.handle.set_value(value) {
+            eprintln!("[status_led] set failed: {err}");
+            return;
+        }
+        self.is_on = on;
+    }
+}
 
 impl StatsSampler {
-    pub fn spawn(core: CoreBridge) -> Self {
+    pub fn spawn(core: CoreBridge, status_led_pin: u32) -> Self {
         let data = Arc::new(Mutex::new(StatusOverlay::default()));
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -35,10 +75,31 @@ impl StatsSampler {
         let root = core.root().to_path_buf();
 
         thread::spawn(move || {
-            while !stop_clone.load(Ordering::Relaxed) {
-                if let Err(err) = sample_once(&core, &data_clone, &root) {
-                    eprintln!("[stats] sampler error: {err:?}");
+            #[cfg(target_os = "linux")]
+            let mut status_led = match StatusLed::new(status_led_pin) {
+                Ok(led) => led,
+                Err(err) => {
+                    eprintln!("[status_led] init failed: {err:?}");
+                    None
                 }
+            };
+            #[cfg(not(target_os = "linux"))]
+            let _ = status_led_pin;
+
+            while !stop_clone.load(Ordering::Relaxed) {
+                let has_ip = match sample_once(&core, &data_clone, &root) {
+                    Ok(has_ip) => has_ip,
+                    Err(err) => {
+                        eprintln!("[stats] sampler error: {err:?}");
+                        false
+                    }
+                };
+                #[cfg(target_os = "linux")]
+                if let Some(led) = status_led.as_mut() {
+                    led.set(has_ip);
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = has_ip;
                 thread::sleep(Duration::from_secs(2));
             }
         });
@@ -60,7 +121,11 @@ impl Drop for StatsSampler {
     }
 }
 
-fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Path) -> Result<()> {
+fn sample_once(
+    core: &CoreBridge,
+    shared: &Arc<Mutex<StatusOverlay>>,
+    root: &Path,
+) -> Result<bool> {
     let temp = read_temp().unwrap_or_default();
     let (cpu_percent, uptime_secs) = read_cpu_and_uptime().unwrap_or((0.0, 0));
     let (mem_used_mb, mem_total_mb) = read_memory().unwrap_or((0, 0));
@@ -83,6 +148,7 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
         snapshot.uptime_secs = uptime_secs;
         snapshot
     };
+    let mut has_ip = has_network_ip(&overlay.interfaces);
 
     if let Ok((_, data)) = core.dispatch(Commands::Status(StatusCommand::Summary)) {
         if let Some(text) = extract_status_text(&data) {
@@ -95,6 +161,7 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
 
     if let Ok((_, data)) = core.dispatch(Commands::Wifi(WifiCommand::List)) {
         if let Ok(list) = serde_json::from_value::<WifiListResponse>(data) {
+            has_ip = has_network_ip(&list.interfaces);
             overlay.interfaces = list.interfaces;
         }
     }
@@ -106,7 +173,7 @@ fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Pat
     if let Ok(mut guard) = shared.lock() {
         *guard = overlay;
     }
-    Ok(())
+    Ok(has_ip)
 }
 
 fn extract_status_text(data: &Value) -> Option<String> {
@@ -124,6 +191,28 @@ fn extract_dns_spoof_running(data: &Value) -> Option<bool> {
         Value::Object(map) => map.get("dnsspoof_running").and_then(|value| value.as_bool()),
         _ => None,
     }
+}
+
+fn has_network_ip(interfaces: &[InterfaceSummary]) -> bool {
+    interfaces.iter().any(|iface| {
+        if iface.name == "lo" {
+            return false;
+        }
+        if iface.oper_state == "down"
+            || iface.oper_state == "dormant"
+            || iface.oper_state == "lowerlayerdown"
+        {
+            return false;
+        }
+        let ip = match iface.ip.as_deref() {
+            Some(ip) => ip,
+            None => return false,
+        };
+        if ip == "0.0.0.0" || ip.starts_with("127.") {
+            return false;
+        }
+        true
+    })
 }
 
 fn network_watchdog(_root: &Path) -> Result<()> {

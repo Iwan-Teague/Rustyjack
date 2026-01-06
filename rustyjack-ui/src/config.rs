@@ -84,6 +84,8 @@ pub struct PinConfig {
     pub key2_pin: u32,
     #[serde(default = "PinConfig::default_key3")]
     pub key3_pin: u32,
+    #[serde(default = "PinConfig::default_status_led")]
+    pub status_led_pin: u32,
 }
 
 impl Default for PinConfig {
@@ -97,6 +99,7 @@ impl Default for PinConfig {
             key1_pin: Self::default_key1(),
             key2_pin: Self::default_key2(),
             key3_pin: Self::default_key3(),
+            status_led_pin: Self::default_status_led(),
         }
     }
 }
@@ -125,6 +128,9 @@ impl PinConfig {
     }
     const fn default_key3() -> u32 {
         16
+    }
+    const fn default_status_led() -> u32 {
+        23
     }
 }
 

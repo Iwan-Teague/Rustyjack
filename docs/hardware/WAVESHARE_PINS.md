@@ -68,11 +68,11 @@ default (see `install_rustyjack.sh` systemd `Environment=` line).
 
 ---
 
-## Status LED (Attack/Recon Activity)
+## Status LED (Network Connectivity)
 
 - **BCM GPIO**: **23**  
 - **Physical Pin**: **16**  
-- **Purpose**: Flashes during any offensive or reconnaissance operation (deauth, PMKID, probe sniff, karma, passive recon, attack pipelines, evil twin).  
+- **Purpose**: On when Rustyjack has an IP on any non-loopback interface; off otherwise.  
 - **Default Behavior**: Enabled by default. Set `status_led_pin: 0` in `gui_conf.json` to disable or change to another free GPIO.  
 
 ### Wiring

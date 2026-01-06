@@ -723,7 +723,7 @@ impl App {
         let _ = display.show_splash_screen(&splash_path);
 
         // Let splash show while stats sampler starts up
-        let stats = StatsSampler::spawn(core.clone());
+        let stats = StatsSampler::spawn(core.clone(), config.pins.status_led_pin);
 
         // Give splash screen time to be visible (1.5 seconds)
         thread::sleep(Duration::from_millis(1500));
