@@ -85,29 +85,17 @@ validate_network_status() {
   for _ in $(seq 1 "$tries"); do
     output=$(RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack status network --output json 2>/dev/null || true)
     if [ -n "$output" ]; then
-      local active=""
-      active=$(echo "$output" | sed -n 's/.*"active_uplink":"\\([^"]*\\)".*/\\1/p' | head -n1)
       local route_iface=""
       route_iface=$(echo "$output" | sed -n 's/.*"default_route":{[^}]*"interface":"\\([^"]*\\)".*/\\1/p' | head -n1)
-      local default_ok=0
-      if [ -n "$route_iface" ] && echo "$output" | grep -Eq '"default_route":{[^}]*"gateway":"[^"]+"' ; then
-        default_ok=1
-      fi
+      local route_gateway=""
+      route_gateway=$(echo "$output" | sed -n 's/.*"default_route":{[^}]*"gateway":"\\([^"]*\\)".*/\\1/p' | head -n1)
       local dns_ok=0
       if echo "$output" | grep -q '"dns_servers":\["[^"]' ; then
         dns_ok=1
       fi
-      if [ "$default_ok" -eq 1 ] && [ "$dns_ok" -eq 1 ]; then
-        info "[OK] Default route $route_iface has gateway and DNS; assuming active uplink"
+      if [ -n "$route_iface" ] && [ -n "$route_gateway" ] && [ "$dns_ok" -eq 1 ]; then
+        info "[OK] Default route $route_iface ($route_gateway) and DNS ready"
         return 0
-      fi
-      if [ -z "$active" ]; then
-        sleep 1
-        continue
-      fi
-      if [ "$route_iface" != "$active" ]; then
-        sleep 1
-        continue
       fi
       if echo "$output" | grep -q '"dns_servers":\[\]' ; then
         sleep 1
@@ -117,7 +105,7 @@ validate_network_status() {
         sleep 1
         continue
       fi
-      if ! echo "$output" | grep -Eq "\"name\":\"${active}\"[^}]*\"ip\":\"[^\"]+\"[^}]*\"gateway\":\"[^\"]+\"" ; then
+      if ! echo "$output" | grep -Eq "\"name\":\"${route_iface}\"[^}]*\"ip\":\"[^\"]+\"[^}]*\"gateway\":\"[^\"]+\"" ; then
         sleep 1
         continue
       fi
