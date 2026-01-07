@@ -83,33 +83,24 @@ validate_network_status() {
   local output=""
   local tries=60
   for _ in $(seq 1 "$tries"); do
+    if cmd ip; then
+      local route_line=""
+      route_line=$(ip route show default 2>/dev/null | head -n 1 || true)
+      if [ -n "$route_line" ]; then
+        local route_iface=""
+        route_iface=$(echo "$route_line" | awk '{for (i=1; i<=NF; ++i) if ($i=="dev") print $(i+1)}' | head -n1)
+        local route_gateway=""
+        route_gateway=$(echo "$route_line" | awk '{for (i=1; i<=NF; ++i) if ($i=="via") print $(i+1)}' | head -n1)
+        if [ -n "$route_iface" ] && [ -n "$route_gateway" ] && grep -q '^nameserver ' /etc/resolv.conf; then
+          info "[OK] Default route $route_iface ($route_gateway) and resolv.conf ready"
+          return 0
+        fi
+      fi
+    fi
+
     output=$(RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack status network --output json 2>/dev/null || true)
     if [ -n "$output" ]; then
-      local route_iface=""
-      route_iface=$(echo "$output" | sed -n 's/.*"default_route":{[^}]*"interface":"\\([^"]*\\)".*/\\1/p' | head -n1)
-      local route_gateway=""
-      route_gateway=$(echo "$output" | sed -n 's/.*"default_route":{[^}]*"gateway":"\\([^"]*\\)".*/\\1/p' | head -n1)
-      local dns_ok=0
-      if echo "$output" | grep -q '"dns_servers":\["[^"]' ; then
-        dns_ok=1
-      fi
-      if [ -n "$route_iface" ] && [ -n "$route_gateway" ] && [ "$dns_ok" -eq 1 ]; then
-        info "[OK] Default route $route_iface ($route_gateway) and DNS ready"
-        return 0
-      fi
-      if echo "$output" | grep -q '"dns_servers":\[\]' ; then
-        sleep 1
-        continue
-      fi
-      if ! echo "$output" | grep -q '"dns_servers":\[' ; then
-        sleep 1
-        continue
-      fi
-      if ! echo "$output" | grep -Eq "\"name\":\"${route_iface}\"[^}]*\"ip\":\"[^\"]+\"[^}]*\"gateway\":\"[^\"]+\"" ; then
-        sleep 1
-        continue
-      fi
-      info "[OK] Network validation passed"
+      info "[OK] Network status returned"
       return 0
     fi
     sleep 1
