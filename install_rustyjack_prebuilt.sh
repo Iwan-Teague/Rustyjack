@@ -90,7 +90,7 @@ validate_network_status() {
       local route_iface=""
       route_iface=$(echo "$output" | sed -n 's/.*"default_route":{[^}]*"interface":"\\([^"]*\\)".*/\\1/p' | head -n1)
       local default_ok=0
-      if [ -n "$route_iface" ] && echo "$output" | grep -Eq '"default_route":{[^}]*"gateway":"[^"]+"}' ; then
+      if [ -n "$route_iface" ] && echo "$output" | grep -Eq '"default_route":{[^}]*"gateway":"[^"]+"' ; then
         default_ok=1
       fi
       local dns_ok=0
