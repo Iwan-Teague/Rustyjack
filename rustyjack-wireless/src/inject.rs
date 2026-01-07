@@ -73,7 +73,7 @@ impl InjectionSocket {
             )));
         }
 
-        log::debug!("Created injection socket on interface index {}", ifindex);
+        tracing::debug!("Created injection socket on interface index {}", ifindex);
 
         Ok(Self { fd, ifindex })
     }
@@ -131,7 +131,7 @@ impl InjectionSocket {
                 }
                 Err(e) => {
                     stats.failed += 1;
-                    log::trace!("Injection failed: {}", e);
+                    tracing::trace!("Injection failed: {}", e);
                 }
             }
         }

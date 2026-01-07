@@ -1,5 +1,5 @@
 use crate::error::{Result, WirelessError};
-use log::{debug, info};
+use tracing::{debug, info};
 use rustyjack_netlink::{HardwareMode, WirelessManager};
 
 pub fn netlink_set_interface_up(interface: &str) -> Result<()> {

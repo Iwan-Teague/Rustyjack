@@ -446,7 +446,7 @@ impl MacManager {
         for state in states {
             if state.needs_restore() {
                 if let Err(e) = self.restore_state(&state) {
-                    log::warn!("Failed to restore MAC on {}: {}", state.interface, e);
+                    tracing::warn!("Failed to restore MAC on {}: {}", state.interface, e);
                     if first_error.is_none() {
                         first_error = Some(e);
                     }
@@ -624,7 +624,7 @@ impl Drop for MacManager {
     fn drop(&mut self) {
         if self.auto_restore && !self.states.is_empty() {
             if let Err(e) = self.restore_all() {
-                log::error!("Failed to restore MAC addresses on drop: {}", e);
+                tracing::error!("Failed to restore MAC addresses on drop: {}", e);
             }
         }
     }

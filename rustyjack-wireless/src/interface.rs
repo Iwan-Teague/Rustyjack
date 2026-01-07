@@ -109,17 +109,17 @@ impl WirelessInterface {
 
     /// Enable monitor mode with options
     pub fn set_monitor_mode_opts(&mut self, opts: MonitorModeOptions) -> Result<()> {
-        log::info!("Enabling monitor mode on {}", self.name);
+        tracing::info!("Enabling monitor mode on {}", self.name);
 
         // Check if already in monitor mode
         if self.is_monitor_mode()? {
-            log::info!("{} already in monitor mode", self.name);
+            tracing::info!("{} already in monitor mode", self.name);
             return Ok(());
         }
 
         // Kill interfering processes
         if opts.kill_processes {
-            log::debug!("Killing interfering processes");
+            tracing::debug!("Killing interfering processes");
             kill_interfering_processes()?;
             thread::sleep(Duration::from_millis(500));
         }
@@ -136,17 +136,17 @@ impl WirelessInterface {
         }
 
         self.we_enabled_monitor = true;
-        log::info!("{} is now in monitor mode", self.name);
+        tracing::info!("{} is now in monitor mode", self.name);
 
         Ok(())
     }
 
     /// Disable monitor mode and return to managed mode
     pub fn set_managed_mode(&mut self) -> Result<()> {
-        log::info!("Disabling monitor mode on {}", self.name);
+        tracing::info!("Disabling monitor mode on {}", self.name);
 
         if !self.is_monitor_mode()? {
-            log::info!("{} not in monitor mode", self.name);
+            tracing::info!("{} not in monitor mode", self.name);
             return Ok(());
         }
 
@@ -156,14 +156,14 @@ impl WirelessInterface {
         self.restart_network_services()?;
 
         self.we_enabled_monitor = false;
-        log::info!("{} is now in managed mode", self.name);
+        tracing::info!("{} is now in managed mode", self.name);
 
         Ok(())
     }
 
     /// Set channel
     pub fn set_channel(&self, channel: u8) -> Result<()> {
-        log::debug!("Setting {} to channel {}", self.name, channel);
+        tracing::debug!("Setting {} to channel {}", self.name, channel);
         set_channel_iw(&self.name, channel)
     }
 
@@ -179,7 +179,7 @@ impl WirelessInterface {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     if attempt < retries - 1 {
-                        log::warn!("Channel set attempt {} failed: {}", attempt + 1, e);
+                        tracing::warn!("Channel set attempt {} failed: {}", attempt + 1, e);
                         thread::sleep(Duration::from_millis(100));
                     } else {
                         return Err(e);
@@ -196,7 +196,7 @@ impl WirelessInterface {
 
     /// Restart network services (NetworkManager, etc.)
     fn restart_network_services(&self) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Skipping network service restarts for {} (Rustyjack manages the interface state)",
             self.name
         );
@@ -221,7 +221,7 @@ impl Drop for WirelessInterface {
         // Optionally restore managed mode when dropped
         if self.we_enabled_monitor {
             if let Err(e) = self.set_managed_mode() {
-                log::warn!("Failed to restore managed mode on {}: {}", self.name, e);
+                tracing::warn!("Failed to restore managed mode on {}: {}", self.name, e);
             }
         }
     }

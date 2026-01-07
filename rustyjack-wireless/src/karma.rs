@@ -18,7 +18,6 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::Local;
-use log::warn;
 use rustyjack_netlink::{
     AccessPoint, ApConfig, ApSecurity, DhcpConfig, DhcpServer, DnsConfig, DnsRule, DnsServer,
 };
@@ -225,7 +224,7 @@ impl KarmaAttack {
         let mut map = match self.ssid_to_bssid.lock() {
             Ok(m) => m,
             Err(e) => {
-                log::warn!(
+                tracing::warn!(
                     "[KARMA] BSSID map mutex poisoned, recovering: {}",
                     e
                 );
@@ -288,7 +287,7 @@ impl KarmaAttack {
             if let Ok(mut probes) = self.probes.lock() {
                 probes.push(probe);
             } else {
-                warn!("[KARMA] probe log mutex poisoned; skipping probe record");
+                tracing::warn!("[KARMA] probe log mutex poisoned; skipping probe record");
             }
         }
 
@@ -300,7 +299,7 @@ impl KarmaAttack {
                     stats.probes_responded += 1;
                 }
             } else {
-                warn!("[KARMA] stats mutex poisoned; skipping stats update");
+                tracing::warn!("[KARMA] stats mutex poisoned; skipping stats update");
             }
         }
 
@@ -347,7 +346,7 @@ impl KarmaAttack {
         if let Ok(mut victims) = self.victims.lock() {
             victims.push(victim);
         } else {
-            warn!("[KARMA] victims mutex poisoned; skipping victim record");
+            tracing::warn!("[KARMA] victims mutex poisoned; skipping victim record");
         }
 
         if let Ok(mut stats) = self.stats.lock() {
@@ -356,7 +355,7 @@ impl KarmaAttack {
                 stats.handshakes += 1;
             }
         } else {
-            warn!("[KARMA] stats mutex poisoned; skipping victim counters");
+            tracing::warn!("[KARMA] stats mutex poisoned; skipping victim counters");
         }
     }
 
@@ -374,7 +373,7 @@ impl KarmaAttack {
             stats.unique_ssids = unique_ssids.len();
             stats.unique_clients = unique_clients.len();
         } else {
-            warn!("[KARMA] probe log mutex poisoned; unique counts unavailable");
+            tracing::warn!("[KARMA] probe log mutex poisoned; unique counts unavailable");
         }
 
         stats
@@ -575,7 +574,7 @@ where
         if hop_channels.len() > 1 && last_hop.elapsed() >= hop_interval {
             channel_index = (channel_index + 1) % hop_channels.len();
             if let Err(e) = interface.set_channel(hop_channels[channel_index]) {
-                log::debug!("Channel hop failed: {}", e);
+                tracing::debug!("Channel hop failed: {}", e);
             }
             last_hop = Instant::now();
         }
@@ -616,7 +615,7 @@ where
             }
             Ok(None) => {}
             Err(e) => {
-                log::debug!("Capture error: {}", e);
+                tracing::debug!("Capture error: {}", e);
             }
         }
     }
@@ -666,7 +665,7 @@ where
 
     // Restore managed mode
     if let Err(e) = interface.set_managed_mode() {
-        log::warn!("Failed to restore managed mode: {}", e);
+        tracing::warn!("Failed to restore managed mode: {}", e);
     }
 
     progress(&format!(
@@ -887,7 +886,7 @@ fn start_dhcp_server(
     server
         .start()
         .map_err(|e| WirelessError::System(format!("Failed to start DHCP server: {}", e)))?;
-    log::info!(
+    tracing::info!(
         "DHCP server bound on {} offering {}-{}",
         interface,
         dhcp_cfg.range_start,
@@ -896,7 +895,7 @@ fn start_dhcp_server(
 
     let handle = thread::spawn(move || {
         if let Err(e) = server.serve() {
-            log::error!("DHCP server exited with error: {}", e);
+            tracing::error!("DHCP server exited with error: {}", e);
         }
     });
 
@@ -934,7 +933,7 @@ fn start_dns_server(
     server
         .start()
         .map_err(|e| WirelessError::System(format!("Failed to start DNS server: {}", e)))?;
-    log::info!("DNS server bound on {} ({})", interface, gateway_ip);
+    tracing::info!("DNS server bound on {} ({})", interface, gateway_ip);
 
     Ok(server)
 }

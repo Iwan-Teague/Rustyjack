@@ -103,7 +103,7 @@ impl PmkidCapturer {
     /// Passive PMKID capture - listen for PMKIDs from any network
     /// This captures PMKIDs from existing authentication attempts
     pub fn passive_capture(&mut self, duration: Duration) -> Result<Vec<PmkidCapture>> {
-        log::info!("Starting passive PMKID capture for {:?}", duration);
+        tracing::info!("Starting passive PMKID capture for {:?}", duration);
 
         let mut capture = PacketCapture::new(&self.interface_name)?;
         capture.set_filter(CaptureFilter::eapol_only());
@@ -114,14 +114,14 @@ impl PmkidCapturer {
         while start.elapsed() < duration {
             if let Some(packet) = capture.next_packet()? {
                 if let Some(pmkid) = self.extract_pmkid(&packet) {
-                    log::info!("Found PMKID for BSSID: {}", pmkid.bssid);
+                    tracing::info!("Found PMKID for BSSID: {}", pmkid.bssid);
                     found.push(pmkid.clone());
                     self.captures.push(pmkid);
                 }
             }
         }
 
-        log::info!("Passive capture complete: {} PMKIDs found", found.len());
+        tracing::info!("Passive capture complete: {} PMKIDs found", found.len());
         Ok(found)
     }
 
@@ -133,7 +133,7 @@ impl PmkidCapturer {
         ssid: Option<&str>,
         timeout: Duration,
     ) -> Result<Option<PmkidCapture>> {
-        log::info!("Starting active PMKID capture for BSSID: {}", bssid);
+        tracing::info!("Starting active PMKID capture for BSSID: {}", bssid);
 
         // Start packet capture
         let mut capture = PacketCapture::new(&self.interface_name)?;
@@ -150,7 +150,7 @@ impl PmkidCapturer {
                 if let Some(mut pmkid) = self.extract_pmkid(&packet) {
                     if pmkid.bssid == bssid {
                         pmkid.ssid = ssid.map(|s| s.to_string());
-                        log::info!("Captured PMKID for target BSSID: {}", bssid);
+                        tracing::info!("Captured PMKID for target BSSID: {}", bssid);
                         self.captures.push(pmkid.clone());
                         return Ok(Some(pmkid));
                     }
@@ -158,7 +158,7 @@ impl PmkidCapturer {
             }
         }
 
-        log::warn!("PMKID capture timeout for BSSID: {}", bssid);
+        tracing::warn!("PMKID capture timeout for BSSID: {}", bssid);
         Ok(None)
     }
 
@@ -425,7 +425,7 @@ pub fn execute_pmkid_capture<F>(
 where
     F: Fn(f32, &str),
 {
-    log::info!("Starting PMKID capture on interface {}", config.interface);
+    tracing::info!("Starting PMKID capture on interface {}", config.interface);
     on_progress(0.05, "Initializing interface...");
 
     // Validate interface
@@ -493,7 +493,7 @@ where
         if channels_to_scan.len() > 1 && last_channel_hop.elapsed() > channel_hop_interval {
             let ch = channels_to_scan[channel_idx % channels_to_scan.len()];
             if iface.set_channel(ch).is_ok() {
-                log::debug!("Hopped to channel {}", ch);
+                tracing::debug!("Hopped to channel {}", ch);
             }
             channel_idx += 1;
             last_channel_hop = Instant::now();
@@ -515,7 +515,7 @@ where
                 capture_entry.ssid = config.ssid.clone();
                 capturer.captures.push(capture_entry);
 
-                log::info!(
+                tracing::info!(
                     "Captured PMKID from BSSID {} (total: {})",
                     pmkid.bssid,
                     capturer.captures.len()
@@ -547,7 +547,7 @@ where
 
     // Restore managed mode
     if let Err(e) = iface.set_managed_mode() {
-        log::warn!("Failed to restore managed mode: {}", e);
+        tracing::warn!("Failed to restore managed mode: {}", e);
     }
 
     // Save hashcat format file if we captured anything

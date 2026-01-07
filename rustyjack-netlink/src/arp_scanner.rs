@@ -102,7 +102,7 @@ impl ArpScanner {
     pub fn scan_subnet(&self, subnet: &str, interface: &str) -> Result<Vec<ArpScanResult>> {
         let ips = subnet_to_ips(subnet)?;
 
-        log::info!(
+        tracing::info!(
             "Scanning {} hosts in subnet {} on {}",
             ips.len(),
             subnet,

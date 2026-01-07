@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tokio::signal;
@@ -8,17 +8,18 @@ use rustyjack_portal::{build_router, run_server, PortalConfig, PortalLogger, Por
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let root = resolve_root();
+    let _logging_guards = init_logging(&root);
 
-    log::info!("Rustyjack Portal starting");
-    log::info!("Version: {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Rustyjack Portal starting");
+    tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     let config = load_config()?;
-    log::info!("Portal configuration loaded");
-    log::info!("  Interface: {}", config.interface);
-    log::info!("  Bind: {}:{}", config.listen_ip, config.listen_port);
-    log::info!("  Site dir: {}", config.site_dir.display());
-    log::info!("  Capture dir: {}", config.capture_dir.display());
+    tracing::info!("Portal configuration loaded");
+    tracing::info!("  Interface: {}", config.interface);
+    tracing::info!("  Bind: {}:{}", config.listen_ip, config.listen_port);
+    tracing::info!("  Site dir: {}", config.site_dir.display());
+    tracing::info!("  Capture dir: {}", config.capture_dir.display());
 
     let index_path = config.site_dir.join("index.html");
     let index_html = std::fs::read_to_string(&index_path)
@@ -33,20 +34,20 @@ async fn main() -> Result<()> {
     let listener = std::net::TcpListener::bind(addr)
         .with_context(|| format!("binding portal listener to {}", addr))?;
     
-    log::info!("Portal server listening on {}", addr);
+    tracing::info!("Portal server listening on {}", addr);
     
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     
     let server_task = tokio::spawn(async move {
         if let Err(e) = run_server(listener, router, shutdown_rx).await {
-            log::error!("Portal server error: {}", e);
+            tracing::error!("Portal server error: {}", e);
         }
     });
     
     // Wait for shutdown signal
     tokio::select! {
         _ = signal::ctrl_c() => {
-            log::info!("Received SIGINT, shutting down...");
+            tracing::info!("Received SIGINT, shutting down...");
         }
         _ = async {
             #[cfg(unix)]
@@ -60,15 +61,112 @@ async fn main() -> Result<()> {
                 futures::future::pending::<()>().await;
             }
         } => {
-            log::info!("Received SIGTERM, shutting down...");
+            tracing::info!("Received SIGTERM, shutting down...");
         }
     }
     
     let _ = shutdown_tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server_task).await;
     
-    log::info!("Portal shutdown complete");
+    tracing::info!("Portal shutdown complete");
     Ok(())
+}
+
+struct LoggingGuards {
+    _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+}
+
+fn init_logging(root: &Path) -> LoggingGuards {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_level(true)
+        .with_line_number(true)
+        .compact();
+
+    let log_dir = root.join("logs");
+    let mut file_guard = None;
+    let mut file_layer = None;
+    let mut warn_msg = None;
+
+    if let Err(err) = std::fs::create_dir_all(&log_dir) {
+        warn_msg = Some(format!(
+            "File logging disabled ({}): {}",
+            log_dir.display(),
+            err
+        ));
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(err) =
+                std::fs::set_permissions(&log_dir, std::fs::Permissions::from_mode(0o2770))
+            {
+                warn_msg = Some(format!(
+                    "Failed to set log directory permissions ({}): {}",
+                    log_dir.display(),
+                    err
+                ));
+            }
+        }
+
+        let file_appender = tracing_appender::rolling::daily(&log_dir, "portal.log");
+        let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+        file_guard = Some(guard);
+        file_layer = Some(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_line_number(true)
+                .with_ansi(false)
+                .compact()
+                .with_writer(file_writer),
+        );
+    }
+
+    if let Some(layer) = file_layer {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .with(layer)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .init();
+    }
+
+    if let Some(message) = warn_msg {
+        tracing::warn!("{message}");
+    }
+
+    LoggingGuards {
+        _file_guard: file_guard,
+    }
+}
+
+fn resolve_root() -> PathBuf {
+    if let Ok(env_path) = env::var("RUSTYJACK_ROOT") {
+        return PathBuf::from(env_path);
+    }
+
+    let default = PathBuf::from("/var/lib/rustyjack");
+    if default.exists() {
+        return default;
+    }
+
+    let legacy = PathBuf::from("/root/Rustyjack");
+    if legacy.exists() {
+        return legacy;
+    }
+
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("/var/lib/rustyjack"))
 }
 
 fn load_config() -> Result<PortalConfig> {

@@ -174,7 +174,7 @@ impl EvilTwin {
 
     /// Start the Evil Twin attack
     pub fn start(&mut self) -> Result<EvilTwinStats> {
-        log::info!("Starting Evil Twin attack for SSID: {}", self.config.ssid);
+        tracing::info!("Starting Evil Twin attack for SSID: {}", self.config.ssid);
 
         let mut stats = EvilTwinStats::default();
         let start = Instant::now();
@@ -246,7 +246,7 @@ impl EvilTwin {
             // Check for connected clients
             if let Ok(clients) = self.get_connected_clients() {
                 if clients > stats.clients_connected {
-                    log::info!("{} clients connected to fake AP", clients);
+                    tracing::info!("{} clients connected to fake AP", clients);
                     stats.clients_connected = clients;
                 }
             }
@@ -266,7 +266,7 @@ impl EvilTwin {
         // Cleanup
         self.cleanup()?;
 
-        log::info!(
+        tracing::info!(
             "Evil Twin attack complete: {} clients, {} handshakes in {:?}",
             stats.clients_connected,
             stats.handshakes_captured,
@@ -374,7 +374,7 @@ impl EvilTwin {
 
         self.ap = Some(ap);
         thread::sleep(Duration::from_secs(2));
-        log::info!("Rust-native AP started for SSID: {}", self.config.ssid);
+        tracing::info!("Rust-native AP started for SSID: {}", self.config.ssid);
         Ok(())
     }
 
@@ -405,7 +405,7 @@ impl EvilTwin {
         server
             .start()
             .map_err(|e| WirelessError::System(format!("Failed to start DHCP server: {}", e)))?;
-        log::info!(
+        tracing::info!(
             "DHCP server bound on {} offering {}-{}",
             self.config.ap_interface,
             dhcp_cfg.range_start,
@@ -414,7 +414,7 @@ impl EvilTwin {
 
         let handle = thread::spawn(move || {
             if let Err(e) = server.serve() {
-                log::error!("DHCP server exited with error: {}", e);
+                tracing::error!("DHCP server exited with error: {}", e);
             }
         });
 
@@ -459,7 +459,7 @@ impl EvilTwin {
         server
             .start()
             .map_err(|e| WirelessError::System(format!("Failed to start DNS server: {}", e)))?;
-        log::info!("DNS server bound on {} ({})", self.config.ap_interface, gateway_ip);
+        tracing::info!("DNS server bound on {} ({})", self.config.ap_interface, gateway_ip);
 
         self.dns = Some(server);
         Ok(())
@@ -474,7 +474,7 @@ impl EvilTwin {
             .map_err(|e| WirelessError::System(format!("Failed to enable IP forward: {}", e)))?;
 
         // Setup iptables for captive portal using Rust implementation
-        log::info!("Configuring captive portal iptables via Rust");
+        tracing::info!("Configuring captive portal iptables via Rust");
 
         let ipt = IptablesManager::new().map_err(|e| {
             WirelessError::System(format!("Failed to create iptables manager: {}", e))
@@ -483,7 +483,7 @@ impl EvilTwin {
         ipt.setup_captive_portal(iface, "192.168.4.1", 80)
             .map_err(|e| WirelessError::System(format!("Failed to setup captive portal: {}", e)))?;
 
-        log::info!("Captive portal configured successfully");
+        tracing::info!("Captive portal configured successfully");
         Ok(())
     }
 
@@ -560,7 +560,7 @@ impl EvilTwin {
 
     /// Cleanup processes and network config
     fn cleanup(&mut self) -> Result<()> {
-        log::info!("Cleaning up Evil Twin...");
+        tracing::info!("Cleaning up Evil Twin...");
 
         // Stop Access Point
         if let Some(mut ap) = self.ap.take() {

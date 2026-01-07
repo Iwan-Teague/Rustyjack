@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::error::{NetlinkError, Result};
-use log::info;
+use tracing::info;
 use rand::{distributions::Alphanumeric, Rng};
 
 /// WPA supplicant manager
@@ -769,7 +769,7 @@ impl WpaManager {
                     )))
                 }
                 _ => {
-                    log::debug!(
+                    tracing::debug!(
                         "WPA state {:?} ssid={:?} bssid={:?} elapsed={:?}",
                         status.wpa_state,
                         status.ssid,

@@ -367,16 +367,16 @@ impl IptablesManager {
         let has_privileges = unsafe { libc::geteuid() } == 0;
 
         if !has_privileges {
-            log::error!("Iptables operations require root privileges (CAP_NET_ADMIN)");
+            tracing::error!("Iptables operations require root privileges (CAP_NET_ADMIN)");
             return Err(IptablesError::PermissionDenied);
         }
 
         let backend = NfTablesManager::new().map_err(|e| {
-            log::error!("Failed to initialize nf_tables backend: {}", e);
+            tracing::error!("Failed to initialize nf_tables backend: {}", e);
             e
         })?;
 
-        log::debug!("IptablesManager initialized with nf_tables backend");
+        tracing::debug!("IptablesManager initialized with nf_tables backend");
         Ok(Self {
             backend: Mutex::new(backend),
         })
@@ -403,7 +403,7 @@ impl IptablesManager {
         let mut rule = rule.counter();
         if Self::logging_enabled() {
             let prefix = format!("{NFT_LOG_PREFIX} {context}");
-            log::info!("{NFT_LOG_PREFIX} packet logging enabled for {}", context);
+            tracing::info!("{NFT_LOG_PREFIX} packet logging enabled for {}", context);
             rule = rule.log_prefix(&prefix);
         }
         rule
@@ -448,7 +448,7 @@ impl IptablesManager {
     /// # }
     /// ```
     pub fn add_masquerade(&self, interface: &str) -> Result<()> {
-        log::info!("Adding MASQUERADE rule for interface {}", interface);
+        tracing::info!("Adding MASQUERADE rule for interface {}", interface);
 
         let rule = Self::with_visibility(
             Rule::new(Table::Nat, Chain::Postrouting, Target::Masquerade)
@@ -461,7 +461,7 @@ impl IptablesManager {
 
     /// Remove NAT masquerading for an interface
     pub fn delete_masquerade(&self, interface: &str) -> Result<()> {
-        log::info!("Removing MASQUERADE rule for interface {}", interface);
+        tracing::info!("Removing MASQUERADE rule for interface {}", interface);
 
         let rule =
             Rule::new(Table::Nat, Chain::Postrouting, Target::Masquerade).out_interface(interface);
@@ -476,7 +476,7 @@ impl IptablesManager {
     /// * `in_iface` - Input interface
     /// * `out_iface` - Output interface
     pub fn add_forward_accept(&self, in_iface: &str, out_iface: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Adding FORWARD ACCEPT rule from {} to {}",
             in_iface,
             out_iface
@@ -494,7 +494,7 @@ impl IptablesManager {
 
     /// Remove a forward rule
     pub fn delete_forward_accept(&self, in_iface: &str, out_iface: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Removing FORWARD ACCEPT rule from {} to {}",
             in_iface,
             out_iface
@@ -511,7 +511,7 @@ impl IptablesManager {
     ///
     /// This allows return traffic for established connections.
     pub fn add_forward_established(&self, in_iface: &str, out_iface: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Adding FORWARD ESTABLISHED rule from {} to {}",
             in_iface,
             out_iface
@@ -530,7 +530,7 @@ impl IptablesManager {
 
     /// Remove a stateful forward rule
     pub fn delete_forward_established(&self, in_iface: &str, out_iface: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Removing FORWARD ESTABLISHED rule from {} to {}",
             in_iface,
             out_iface
@@ -571,7 +571,7 @@ impl IptablesManager {
         to_addr: &str,
         to_port: u16,
     ) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Adding DNAT rule: {}:{} -> {}:{} on {}",
             dst_port,
             to_addr,
@@ -610,7 +610,7 @@ impl IptablesManager {
         to_addr: &str,
         to_port: u16,
     ) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Adding UDP DNAT rule: {}:{} -> {}:{} on {}",
             dst_port,
             to_addr,
@@ -649,7 +649,7 @@ impl IptablesManager {
         to_addr: &str,
         to_port: u16,
     ) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Removing DNAT rule: {}:{} on {}",
             to_addr,
             to_port,
@@ -683,7 +683,7 @@ impl IptablesManager {
         to_addr: &str,
         to_port: u16,
     ) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Removing UDP DNAT rule: {}:{} on {}",
             to_addr,
             to_port,
@@ -717,7 +717,7 @@ impl IptablesManager {
     ///
     /// * `mss` - Maximum segment size in bytes (typically 500-1460)
     pub fn add_tcp_mss(&self, mss: u16) -> Result<()> {
-        log::info!("Adding TCP MSS rule: {} bytes", mss);
+        tracing::info!("Adding TCP MSS rule: {} bytes", mss);
 
         let rule = Self::with_visibility(
             Rule::new(Table::Mangle, Chain::Output, Target::TcpMss { mss }),
@@ -728,7 +728,7 @@ impl IptablesManager {
 
     /// Remove TCP MSS clamping
     pub fn delete_tcp_mss(&self, mss: u16) -> Result<()> {
-        log::info!("Removing TCP MSS rule: {} bytes", mss);
+        tracing::info!("Removing TCP MSS rule: {} bytes", mss);
 
         let rule = Rule::new(Table::Mangle, Chain::Output, Target::TcpMss { mss });
         self.delete_rule(&rule)
@@ -745,7 +745,7 @@ impl IptablesManager {
     /// * `ap_iface` - AP/hotspot interface (e.g., "wlan0")
     /// * `upstream_iface` - Internet-connected interface (e.g., "eth0")
     pub fn setup_nat_forwarding(&self, ap_iface: &str, upstream_iface: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Setting up NAT forwarding: {} -> {}",
             ap_iface,
             upstream_iface
@@ -755,13 +755,13 @@ impl IptablesManager {
         self.add_forward_established(upstream_iface, ap_iface)?;
         self.add_forward_accept(ap_iface, upstream_iface)?;
 
-        log::info!("NAT forwarding configured successfully");
+        tracing::info!("NAT forwarding configured successfully");
         Ok(())
     }
 
     /// Tear down NAT configuration
     pub fn teardown_nat_forwarding(&self, ap_iface: &str, upstream_iface: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Tearing down NAT forwarding: {} -> {}",
             ap_iface,
             upstream_iface
@@ -771,7 +771,7 @@ impl IptablesManager {
         let _ = self.delete_forward_established(upstream_iface, ap_iface);
         let _ = self.delete_forward_accept(ap_iface, upstream_iface);
 
-        log::info!("NAT forwarding torn down");
+        tracing::info!("NAT forwarding torn down");
         Ok(())
     }
 
@@ -790,7 +790,7 @@ impl IptablesManager {
         portal_addr: &str,
         portal_port: u16,
     ) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Setting up captive portal on {} -> {}:{}",
             ap_iface,
             portal_addr,
@@ -804,7 +804,7 @@ impl IptablesManager {
         self.add_dnat(ap_iface, 443, portal_addr, portal_port)?;
         self.add_forward_accept(ap_iface, ap_iface)?;
 
-        log::info!("Captive portal configured successfully");
+        tracing::info!("Captive portal configured successfully");
         Ok(())
     }
 
@@ -815,13 +815,13 @@ impl IptablesManager {
         portal_addr: &str,
         portal_port: u16,
     ) -> Result<()> {
-        log::info!("Tearing down captive portal");
+        tracing::info!("Tearing down captive portal");
 
         let _ = self.delete_dnat(ap_iface, 80, portal_addr, portal_port);
         let _ = self.delete_dnat(ap_iface, 443, portal_addr, portal_port);
         let _ = self.delete_forward_accept(ap_iface, ap_iface);
 
-        log::info!("Captive portal torn down");
+        tracing::info!("Captive portal torn down");
         Ok(())
     }
 }

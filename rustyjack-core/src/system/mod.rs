@@ -65,7 +65,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 use ipnet::Ipv4Net;
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use rustyjack_netlink::{
     ArpSpoofConfig, ArpSpoofer, DhcpTransport, DnsConfig, DnsRule, DnsServer,
     IptablesManager,
@@ -887,9 +887,9 @@ pub fn start_pcap_capture(interface: &str, path: &Path) -> Result<()> {
 
     let thread = std::thread::spawn(move || {
         if let Err(err) = run_pcap_capture(fd, writer, stop_thread, running_thread) {
-            log::error!("[PCAP] capture failed on {}: {}", interface_name, err);
+            tracing::error!("[PCAP] capture failed on {}: {}", interface_name, err);
         }
-        log::info!("[PCAP] capture stopped on {} -> {}", interface_name, path_display);
+        tracing::info!("[PCAP] capture stopped on {} -> {}", interface_name, path_display);
     });
 
     let mut state = capture_state().lock().unwrap();
@@ -898,7 +898,7 @@ pub fn start_pcap_capture(interface: &str, path: &Path) -> Result<()> {
         running,
         thread,
     });
-    log::info!("[PCAP] capture started on {} -> {}", interface, path.display());
+    tracing::info!("[PCAP] capture started on {} -> {}", interface, path.display());
     Ok(())
 }
 
@@ -984,7 +984,7 @@ fn open_packet_socket(interface: &str) -> Result<RawFd> {
     }
 
     if let Err(err) = set_promiscuous(fd, ifindex as i32) {
-        log::warn!(
+        tracing::warn!(
             "[PCAP] failed to set promiscuous mode on {}: {}",
             interface,
             err
@@ -1663,7 +1663,7 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                     };
                     record_lease(interface, &ops_lease);
                     record_dhcp_outcome(interface, true, transport, Some(&ops_lease), None);
-                    log::info!(
+                    tracing::info!(
                         "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
                         interface,
                         ops_lease.ip,
@@ -1676,7 +1676,7 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                         .error
                         .unwrap_or_else(|| "DHCP failed without error detail".to_string());
                     record_dhcp_outcome(interface, false, transport, None, Some(error.clone()));
-                    log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, error);
+                    tracing::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, error);
                     Ok(DhcpAttemptResult::Failed(error))
                 }
             }
@@ -1688,7 +1688,7 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                     None,
                     Some(err.to_string()),
                 );
-                log::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, err);
+                tracing::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, err);
                 Ok(DhcpAttemptResult::Failed(err.to_string()))
             }
         }
@@ -1712,7 +1712,7 @@ pub fn try_acquire_dhcp_lease(interface: &str) -> Result<DhcpAttemptResult> {
     let _guard = match try_lock_interface(interface) {
         Some(guard) => guard,
         None => {
-            log::debug!("[ROUTE] DHCP acquire skipped on {} (lock busy)", interface);
+            tracing::debug!("[ROUTE] DHCP acquire skipped on {} (lock busy)", interface);
             return Ok(DhcpAttemptResult::Busy);
         }
     };
@@ -1935,7 +1935,7 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        log::info!(
+        tracing::info!(
             "[ROUTE] ensure_route_no_isolation iface={} operstate={} carrier={} ipv4={:?}",
             interface,
             oper_state,
@@ -1946,7 +1946,7 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
 
     let mut gateway = candidate_gateway(interface);
     if gateway.is_none() {
-        log::info!(
+        tracing::info!(
             "[ROUTE] No gateway detected for {}; attempting DHCP acquire",
             interface
         );
@@ -1958,7 +1958,7 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
         return Ok(Some(gateway));
     }
 
-    log::warn!("[ROUTE] No gateway found for {} after DHCP", interface);
+    tracing::warn!("[ROUTE] No gateway found for {} after DHCP", interface);
     let _ = select_active_uplink();
     Ok(None)
 }
@@ -2164,7 +2164,7 @@ pub fn set_default_route_with_metric(
 
 pub fn rewrite_dns_servers(interface: &str, dns_servers: &[Ipv4Addr]) -> Result<()> {
     let servers = if dns_servers.is_empty() {
-        log::warn!(
+        tracing::warn!(
             "[DNS] DHCP provided no DNS for {}; using fallback servers",
             interface
         );
@@ -2531,7 +2531,7 @@ pub fn scan_wifi_networks_with_timeout(
 
     if let Ok(Some(idx)) = rfkill_find_index(interface) {
         if let Err(e) = rfkill_unblock(idx) {
-            log::warn!("Failed to unblock rfkill for {interface}: {e}");
+            tracing::warn!("Failed to unblock rfkill for {interface}: {e}");
         }
     }
 
@@ -2612,7 +2612,7 @@ fn signal_to_quality(dbm: i32) -> i32 {
 fn log_wifi_preflight(interface: &str) {
     let base = Path::new("/sys/class/net").join(interface);
     if !base.exists() {
-        log::warn!("[WIFI] Preflight: interface {} not found in sysfs", interface);
+        tracing::warn!("[WIFI] Preflight: interface {} not found in sysfs", interface);
         return;
     }
 
@@ -2633,7 +2633,7 @@ fn log_wifi_preflight(interface: &str) {
             _ => None,
         })
         .collect::<Vec<_>>();
-    log::info!(
+    tracing::info!(
         "[WIFI] Preflight iface={} operstate={} carrier={} mac={} ipv4={:?}",
         interface,
         oper,
@@ -2647,7 +2647,7 @@ fn log_wifi_preflight(interface: &str) {
         let soft = read_trim(&rf_base.join("soft"));
         let hard = read_trim(&rf_base.join("hard"));
         let name = read_trim(&rf_base.join("name"));
-        log::info!(
+        tracing::info!(
             "[WIFI] Preflight rfkill iface={} idx={} name={} soft={} hard={}",
             interface,
             idx,
@@ -2656,7 +2656,7 @@ fn log_wifi_preflight(interface: &str) {
             hard
         );
     } else {
-        log::info!("[WIFI] Preflight rfkill iface={} idx=none", interface);
+        tracing::info!("[WIFI] Preflight rfkill iface={} idx=none", interface);
     }
 
 }
@@ -2711,14 +2711,14 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
     let mut profiles = Vec::new();
     let dir = wifi_profiles_dir(root);
     if !dir.exists() {
-        log::info!(
+        tracing::info!(
             "WiFi profiles directory does not exist yet: {}",
             dir.display()
         );
         return Ok(profiles);
     }
 
-    log::info!("Loading WiFi profiles from: {}", dir.display());
+    tracing::info!("Loading WiFi profiles from: {}", dir.display());
 
     let entries = fs::read_dir(&dir)
         .with_context(|| format!("reading profiles directory {}", dir.display()))?;
@@ -2727,7 +2727,7 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                log::warn!("Error reading directory entry: {e}");
+                tracing::warn!("Error reading directory entry: {e}");
                 continue;
             }
         };
@@ -2752,7 +2752,7 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                             copy
                         }
                         Err(e) => {
-                            log::warn!("Invalid UTF-8 in profile {}: {e}", path.display());
+                            tracing::warn!("Invalid UTF-8 in profile {}: {e}", path.display());
                             bytes.zeroize();
                             continue;
                         }
@@ -2761,7 +2761,7 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                     out
                 }
                 Err(e) => {
-                    log::warn!("Failed to decrypt profile {}: {e}", path.display());
+                    tracing::warn!("Failed to decrypt profile {}: {e}", path.display());
                     continue;
                 }
             }
@@ -2773,7 +2773,7 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                     out
                 }
                 Err(e) => {
-                    log::warn!("Failed to read profile {}: {e}", path.display());
+                    tracing::warn!("Failed to read profile {}: {e}", path.display());
                     continue;
                 }
             }
@@ -2787,7 +2787,7 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                     .unwrap_or_default()
                     .to_string();
 
-                log::debug!("Loaded profile: {} from {}", profile.ssid, filename);
+                tracing::debug!("Loaded profile: {} from {}", profile.ssid, filename);
 
                 profiles.push(WifiProfileRecord {
                     ssid: profile.ssid,
@@ -2800,7 +2800,7 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                 });
             }
             Err(err) => {
-                log::warn!("Failed to parse Wi-Fi profile {}: {err}", path.display());
+                tracing::warn!("Failed to parse Wi-Fi profile {}: {err}", path.display());
             }
         }
     }
@@ -2811,19 +2811,19 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
             .then_with(|| a.ssid.to_lowercase().cmp(&b.ssid.to_lowercase()))
     });
 
-    log::info!("Loaded {} WiFi profile(s)", profiles.len());
+    tracing::info!("Loaded {} WiFi profile(s)", profiles.len());
     Ok(profiles)
 }
 
 pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredWifiProfile>> {
     let dir = wifi_profiles_dir(root);
     if !dir.exists() {
-        log::warn!("WiFi profiles directory does not exist: {}", dir.display());
+        tracing::warn!("WiFi profiles directory does not exist: {}", dir.display());
         return Ok(None);
     }
 
     let identifier_lower = identifier.trim().to_lowercase();
-    log::info!("Loading WiFi profile for identifier: {identifier}");
+    tracing::info!("Loading WiFi profile for identifier: {identifier}");
 
     // Try direct filename match first (case-insensitive), support .json and .json.enc
     let sanitized = sanitize_profile_name(identifier);
@@ -2832,7 +2832,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
 
     for candidate in [&direct_plain, &direct_enc] {
         if candidate.exists() {
-            log::info!("Found profile by direct match: {}", candidate.display());
+            tracing::info!("Found profile by direct match: {}", candidate.display());
             let contents = if candidate.extension().and_then(|s| s.to_str()) == Some("enc") {
                 let mut bytes = rustyjack_encryption::decrypt_file(candidate)
                     .with_context(|| format!("decrypting profile {}", candidate.display()))?;
@@ -2859,7 +2859,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
     }
 
     // Search all profiles for case-insensitive SSID match
-    log::info!("Direct match not found, searching all profiles...");
+    tracing::info!("Direct match not found, searching all profiles...");
     for entry in fs::read_dir(&dir)
         .with_context(|| format!("reading profiles directory {}", dir.display()))?
     {
@@ -2884,7 +2884,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
                             copy
                         }
                         Err(e) => {
-                            log::warn!("Could not parse profile file {}: {e}", path.display());
+                            tracing::warn!("Could not parse profile file {}: {e}", path.display());
                             bytes.zeroize();
                             continue;
                         }
@@ -2893,7 +2893,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
                     out
                 }
                 Err(e) => {
-                    log::warn!("Could not decrypt profile file {}: {e}", path.display());
+                    tracing::warn!("Could not decrypt profile file {}: {e}", path.display());
                     continue;
                 }
             }
@@ -2905,7 +2905,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
                     out
                 }
                 Err(e) => {
-                    log::warn!("Could not read profile file {}: {e}", path.display());
+                    tracing::warn!("Could not read profile file {}: {e}", path.display());
                     continue;
                 }
             }
@@ -2914,19 +2914,19 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
         let profile = match serde_json::from_str::<WifiProfile>(&contents) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("Could not parse profile file {}: {e}", path.display());
+                tracing::warn!("Could not parse profile file {}: {e}", path.display());
                 continue;
             }
         };
 
         // Case-insensitive comparison
         if profile.ssid.trim().to_lowercase() == identifier_lower {
-            log::info!("Found profile by SSID match: {}", path.display());
+            tracing::info!("Found profile by SSID match: {}", path.display());
             return Ok(Some(StoredWifiProfile { profile, path }));
         }
     }
 
-    log::info!("No matching profile found for: {identifier}");
+    tracing::info!("No matching profile found for: {identifier}");
     Ok(None)
 }
 
@@ -2942,7 +2942,7 @@ pub fn ensure_default_wifi_profiles(root: &Path) -> Result<usize> {
             Ok(Some(_)) => continue,
             Ok(None) => {}
             Err(err) => {
-                log::warn!("Failed to check WiFi profile {}: {}", ssid, err);
+                tracing::warn!("Failed to check WiFi profile {}: {}", ssid, err);
                 continue;
             }
         }
@@ -2960,11 +2960,11 @@ pub fn ensure_default_wifi_profiles(root: &Path) -> Result<usize> {
 
         match save_wifi_profile(root, &profile) {
             Ok(path) => {
-                log::info!("Seeded WiFi profile {} at {}", ssid, path.display());
+                tracing::info!("Seeded WiFi profile {} at {}", ssid, path.display());
                 created += 1;
             }
             Err(err) => {
-                log::warn!("Failed to seed WiFi profile {}: {}", ssid, err);
+                tracing::warn!("Failed to seed WiFi profile {}: {}", ssid, err);
             }
         }
     }
@@ -2993,7 +2993,7 @@ pub fn save_wifi_profile(root: &Path, profile: &WifiProfile) -> Result<PathBuf> 
         }
     }
 
-    log::info!("Saving WiFi profile for SSID: {}", profile.ssid);
+    tracing::info!("Saving WiFi profile for SSID: {}", profile.ssid);
 
     let dir = wifi_profiles_dir(root);
     fs::create_dir_all(&dir)
@@ -3030,23 +3030,23 @@ pub fn save_wifi_profile(root: &Path, profile: &WifiProfile) -> Result<PathBuf> 
         let _ = fs::remove_file(&legacy);
     }
 
-    log::info!("Writing profile to: {}", path.display());
+    tracing::info!("Writing profile to: {}", path.display());
     write_wifi_profile(&path, &to_save)
         .with_context(|| format!("writing WiFi profile to {}", path.display()))?;
 
-    log::info!("WiFi profile saved successfully");
+    tracing::info!("WiFi profile saved successfully");
     Ok(path)
 }
 
 pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
     let dir = wifi_profiles_dir(root);
     if !dir.exists() {
-        log::error!("Profile directory does not exist: {}", dir.display());
+        tracing::error!("Profile directory does not exist: {}", dir.display());
         bail!("Profile directory missing at {}", dir.display());
     }
 
     let identifier_lower = identifier.trim().to_lowercase();
-    log::info!("Attempting to delete WiFi profile: {identifier}");
+    tracing::info!("Attempting to delete WiFi profile: {identifier}");
 
     // Try direct filename match first (plain or encrypted)
     let sanitized = sanitize_profile_name(identifier);
@@ -3054,16 +3054,16 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
     let direct_enc = dir.join(format!("{sanitized}.json.enc"));
     for candidate in [&direct_plain, &direct_enc] {
         if candidate.exists() {
-            log::info!("Deleting profile by direct match: {}", candidate.display());
+            tracing::info!("Deleting profile by direct match: {}", candidate.display());
             fs::remove_file(candidate)
                 .with_context(|| format!("deleting profile at {}", candidate.display()))?;
-            log::info!("Profile deleted successfully");
+            tracing::info!("Profile deleted successfully");
             return Ok(());
         }
     }
 
     // Search for case-insensitive match
-    log::info!("Direct match not found, searching all profiles...");
+    tracing::info!("Direct match not found, searching all profiles...");
     for entry in fs::read_dir(&dir)
         .with_context(|| format!("reading profiles directory {}", dir.display()))?
     {
@@ -3088,7 +3088,7 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
                             copy
                         }
                         Err(e) => {
-                            log::warn!("Could not parse profile {}: {e}", path.display());
+                            tracing::warn!("Could not parse profile {}: {e}", path.display());
                             bytes.zeroize();
                             continue;
                         }
@@ -3097,7 +3097,7 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
                     out
                 }
                 Err(e) => {
-                    log::warn!("Could not decrypt profile {}: {e}", path.display());
+                    tracing::warn!("Could not decrypt profile {}: {e}", path.display());
                     continue;
                 }
             }
@@ -3109,7 +3109,7 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
                     out
                 }
                 Err(e) => {
-                    log::warn!("Could not read profile {}: {e}", path.display());
+                    tracing::warn!("Could not read profile {}: {e}", path.display());
                     continue;
                 }
             }
@@ -3118,21 +3118,21 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
         let profile = match serde_json::from_str::<WifiProfile>(&contents) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("Could not parse profile {}: {e}", path.display());
+                tracing::warn!("Could not parse profile {}: {e}", path.display());
                 continue;
             }
         };
 
         if profile.ssid.trim().to_lowercase() == identifier_lower {
-            log::info!("Deleting profile by SSID match: {}", path.display());
+            tracing::info!("Deleting profile by SSID match: {}", path.display());
             fs::remove_file(&path)
                 .with_context(|| format!("deleting profile at {}", path.display()))?;
-            log::info!("Profile deleted successfully");
+            tracing::info!("Profile deleted successfully");
             return Ok(());
         }
     }
 
-    log::error!("Profile not found: {identifier}");
+    tracing::error!("Profile not found: {identifier}");
     bail!("Profile '{identifier}' not found")
 }
 
@@ -3166,7 +3166,7 @@ fn wifi_backend_from_env() -> StationBackendKind {
         .as_deref()
     {
         Some("external") | Some("wpa") | Some("wpa_supplicant") => {
-            log::warn!(
+            tracing::warn!(
                 "[WIFI] External wpa_supplicant backend disabled; using RustWpa2 instead"
             );
             StationBackendKind::RustWpa2
@@ -3195,7 +3195,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         bail!("Interface {} is not a wireless device", interface);
     }
 
-    log::info!("Connecting to WiFi: ssid={ssid}, interface={interface}");
+    tracing::info!("Connecting to WiFi: ssid={ssid}, interface={interface}");
 
     log_wifi_preflight(interface);
 
@@ -3203,16 +3203,16 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         .with_context(|| "Failed to use tokio runtime for WiFi connect")?;
 
     let backend = wifi_backend_from_env();
-    log::info!("[WIFI] Station backend set to {:?}", backend);
+    tracing::info!("[WIFI] Station backend set to {:?}", backend);
 
     // Release DHCP lease
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(interface).await }) {
-        log::warn!("Failed to release DHCP lease for {}: {}", interface, e);
+        tracing::warn!("Failed to release DHCP lease for {}: {}", interface, e);
     }
     runtime_sleep(std::time::Duration::from_millis(100));
 
     // Reset interface: down, flush, set to station, then up
-    log::info!(
+    tracing::info!(
         "Resetting interface {} for WiFi connect (down/flush/station/up)",
         interface
     );
@@ -3220,13 +3220,13 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         .with_context(|| format!("bringing interface {interface} down"))?;
     runtime_sleep(std::time::Duration::from_millis(200));
     if let Err(e) = rt.block_on(async { rustyjack_netlink::flush_addresses(interface).await }) {
-        log::warn!("Failed to flush addresses on {}: {}", interface, e);
+        tracing::warn!("Failed to flush addresses on {}: {}", interface, e);
     }
     {
         let mut wm =
             WirelessManager::new().map_err(|e| anyhow!("Failed to open nl80211 socket: {}", e))?;
         if let Err(e) = wm.set_mode(interface, InterfaceMode::Station) {
-            log::warn!(
+            tracing::warn!(
                 "Failed to set {} to station mode via nl80211 (continuing): {}",
                 interface,
                 e
@@ -3255,7 +3255,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     let outcome = station
         .connect(&station_cfg)
         .with_context(|| format!("Failed to connect to {} via supplicant", ssid))?;
-    log::info!(
+    tracing::info!(
         "[WIFI] Station connection completed: state={:?} bssid={:?} freq={:?} attempts={} scan_ssid={}",
         outcome.final_state,
         outcome.selected_bssid,
@@ -3264,7 +3264,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         outcome.used_scan_ssid
     );
 
-    log::info!("[WIFI] WPA connection successful, requesting DHCP lease...");
+    tracing::info!("[WIFI] WPA connection successful, requesting DHCP lease...");
 
     // Request DHCP lease with retry
     let mut dhcp_success = false;
@@ -3273,7 +3273,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         match acquire_dhcp_lease(interface)? {
             DhcpAttemptResult::Lease(lease) => {
                 dhcp_success = true;
-                log::info!(
+                tracing::info!(
                     "DHCP lease acquired on attempt {}: {}/{}, gateway: {:?}",
                     attempt,
                     lease.ip,
@@ -3284,10 +3284,10 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
             }
             DhcpAttemptResult::Failed(err) => {
                 last_error = Some(err.clone());
-                log::warn!("DHCP attempt {} failed: {}", attempt, err);
+                tracing::warn!("DHCP attempt {} failed: {}", attempt, err);
             }
             DhcpAttemptResult::Busy => {
-                log::debug!("DHCP attempt {} skipped (lock busy)", attempt);
+                tracing::debug!("DHCP attempt {} skipped (lock busy)", attempt);
             }
         }
 
@@ -3303,7 +3303,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         bail!("DHCP lease acquisition failed: {}", reason);
     }
 
-    log::info!("WiFi connection process completed for {ssid}");
+    tracing::info!("WiFi connection process completed for {ssid}");
     Ok(())
 }
 
@@ -3314,28 +3314,28 @@ pub fn disconnect_wifi_interface(interface: Option<String>) -> Result<String> {
         iface
     } else {
         auto_detect_wifi_interface()?.ok_or_else(|| {
-            log::error!("No Wi-Fi interface found to disconnect");
+            tracing::error!("No Wi-Fi interface found to disconnect");
             anyhow!("No Wi-Fi interface to disconnect")
         })?
     };
 
-    log::info!("Disconnecting WiFi interface: {iface}");
+    tracing::info!("Disconnecting WiFi interface: {iface}");
 
     let _rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for disconnect")?;
     if let Err(e) = rustyjack_netlink::station_disconnect(&iface) {
-        log::error!("nl80211 disconnect failed for {iface}: {e}");
+        tracing::error!("nl80211 disconnect failed for {iface}: {e}");
         bail!("Failed to disconnect {iface}: {e}");
     }
 
-    log::info!("Releasing DHCP lease for {iface}");
+    tracing::info!("Releasing DHCP lease for {iface}");
     let rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for DHCP release")?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(&iface).await }) {
-        log::warn!("Failed to release DHCP lease for {}: {}", iface, e);
+        tracing::warn!("Failed to release DHCP lease for {}: {}", iface, e);
     }
 
-    log::info!("Interface {iface} disconnected successfully");
+    tracing::info!("Interface {iface} disconnected successfully");
     Ok(iface)
 }
 
@@ -3347,7 +3347,7 @@ fn check_network_permissions() -> Result<()> {
     {
         let euid = unsafe { libc::geteuid() };
         if euid != 0 {
-            log::error!("Network operations require root privileges (current euid: {euid})");
+            tracing::error!("Network operations require root privileges (current euid: {euid})");
             bail!("Network operations require root privileges. Please run as root or with sudo.");
         }
     }
@@ -3360,13 +3360,13 @@ fn check_network_permissions() -> Result<()> {
 /// Cleanup function for graceful WiFi operation failures
 /// Attempts to restore interface to a working state after errors
 pub fn cleanup_wifi_interface(interface: &str) -> Result<()> {
-    log::info!("Performing cleanup for interface: {interface}");
+    tracing::info!("Performing cleanup for interface: {interface}");
 
     // Release DHCP if any
     let rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for cleanup DHCP release")?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(interface).await }) {
-        log::warn!(
+        tracing::warn!(
             "Failed to release DHCP lease during cleanup for {}: {}",
             interface,
             e
@@ -3376,7 +3376,7 @@ pub fn cleanup_wifi_interface(interface: &str) -> Result<()> {
     // Ensure interface is up
     let _ = netlink_set_interface_up(interface);
 
-    log::info!("Cleanup completed for {interface}");
+    tracing::info!("Cleanup completed for {interface}");
     Ok(())
 }
 

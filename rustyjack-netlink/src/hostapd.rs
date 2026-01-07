@@ -391,7 +391,7 @@ impl AccessPoint {
     /// - `DeviceNotFound`: Interface doesn't exist
     /// - `PermissionDenied`: Need CAP_NET_ADMIN
     pub async fn start(&mut self) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Starting Access Point: SSID={}, channel={}, beacon={} TU, dtim={}",
             self.config.ssid,
             self.config.channel,
@@ -408,7 +408,7 @@ impl AccessPoint {
                 .supported_modes
                 .iter()
                 .any(|m| *m == InterfaceMode::AccessPoint);
-        log::info!(
+        tracing::info!(
             "Phy {} (wiphy {}) caps: supports_ap={} modes={:?}",
             phy_caps.name,
             phy_caps.wiphy,
@@ -437,7 +437,7 @@ impl AccessPoint {
                     self.config.interface, e
                 )))?;
         } else {
-            log::debug!(
+            tracing::debug!(
                 "Interface {} already in AP mode; skipping mode change",
                 self.config.interface
             );
@@ -448,7 +448,7 @@ impl AccessPoint {
             .wireless_mgr
             .set_channel(&self.config.interface, self.config.channel)
         {
-            log::warn!(
+            tracing::warn!(
                 "set_channel {} on {} via nl80211 failed (continuing, START_AP will set freq): {}",
                 self.config.channel,
                 self.config.interface,
@@ -458,7 +458,7 @@ impl AccessPoint {
 
         let ifindex = read_ifindex(&self.config.interface)?;
         let bssid = read_interface_mac(&self.config.interface)?;
-        log::info!(
+        tracing::info!(
             "AP context: iface={} ifindex={} bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} chan={} beacon_int={} dtim={} security={:?}",
             self.config.interface,
             ifindex,
@@ -480,14 +480,14 @@ impl AccessPoint {
                 .set_channel(&self.config.interface, ch)
             {
                 Ok(_) => {
-                    log::info!(
+                    tracing::info!(
                         "Channel {} (freq {:?}) accepted by driver (NoHT assumed)",
                         ch,
                         channel_to_frequency(ch)
                     );
                 }
                 Err(e) => {
-                    log::warn!(
+                    tracing::warn!(
                         "Channel {} set_channel failed (continuing with START_AP chandef): {}",
                         ch,
                         e
@@ -511,7 +511,7 @@ impl AccessPoint {
                     self.config.interface
                 )
             };
-            log::error!("{}", msg);
+            tracing::error!("{}", msg);
             record_ap_error(&msg);
             record_start_ap_error(&msg);
             return Err(NetlinkError::OperationFailed(msg));
@@ -535,7 +535,7 @@ impl AccessPoint {
 
         'channel_loop: for ch in attempt_channels.iter() {
             let frames = build_ap_frame_bundle(&self.config, bssid, *ch, Some(&phy_caps))?;
-            log::debug!(
+            tracing::debug!(
                 "Beacon built for channel {}: head_len={} tail_len={} ssid_len={} basic_rates={} hidden={}",
                 ch,
                 frames.beacon_head.len(),
@@ -544,13 +544,13 @@ impl AccessPoint {
                 frames.basic_rates.len(),
                 self.config.hidden
             );
-            log::info!(
+            tracing::info!(
                 "Attempting START_AP on validated channel {} (freq {:?}, width={})",
                 ch,
                 channel_to_frequency(*ch),
                 if frames.ht_enabled { "HT20" } else { "NOHT" }
             );
-            eprintln!(
+            tracing::debug!(
                 "[HOSTAPD] Trying START_AP on channel {} ({}MHz)",
                 ch,
                 channel_to_frequency(*ch).unwrap_or(0)
@@ -573,13 +573,12 @@ impl AccessPoint {
                     chosen_channel = *ch;
                     chosen_hw_mode = self.config.hw_mode;
                     last_err = None;
-                    eprintln!("[HOSTAPD] START_AP succeeded on channel {}", ch);
+                    tracing::debug!("[HOSTAPD] START_AP succeeded on channel {}", ch);
                     break 'channel_loop;
                 }
                 Err(e) => {
                     let msg = format!("START_AP failed on channel {}: {}", ch, e);
-                    log::warn!("{}", msg);
-                    eprintln!("[HOSTAPD] START_AP failed on channel {}: {}", ch, e);
+                    tracing::warn!("{}", msg);
                     last_err = Some(msg);
                 }
             }
@@ -593,11 +592,7 @@ impl AccessPoint {
                 };
                 let no_ht_frames =
                     build_ap_frame_bundle(&no_ht_config, bssid, *ch, Some(&phy_caps))?;
-                log::warn!("Retrying START_AP on channel {} with HT disabled", ch);
-                eprintln!(
-                    "[HOSTAPD] Retrying START_AP on channel {} with HT disabled",
-                    ch
-                );
+                tracing::warn!("Retrying START_AP on channel {} with HT disabled", ch);
                 match send_start_ap(
                     ifindex,
                     *ch,
@@ -616,13 +611,12 @@ impl AccessPoint {
                         chosen_channel = *ch;
                         chosen_hw_mode = no_ht_config.hw_mode;
                         last_err = None;
-                        eprintln!("[HOSTAPD] START_AP succeeded on channel {}", ch);
+                        tracing::debug!("[HOSTAPD] START_AP succeeded on channel {}", ch);
                         break 'channel_loop;
                     }
                     Err(e) => {
                         let msg = format!("START_AP failed on channel {}: {}", ch, e);
-                        log::warn!("{}", msg);
-                        eprintln!("[HOSTAPD] START_AP failed on channel {}: {}", ch, e);
+                        tracing::warn!("{}", msg);
                         last_err = Some(msg);
                     }
                 }
@@ -637,7 +631,7 @@ impl AccessPoint {
 
         self.config.channel = chosen_channel;
         self.config.hw_mode = chosen_hw_mode;
-        log::info!(
+        tracing::info!(
             "START_AP succeeded on channel {} (width={})",
             chosen_channel,
             if self.config.hw_mode == HardwareMode::N {
@@ -671,7 +665,7 @@ impl AccessPoint {
                     self.eapol_fd = Some(fd);
                 }
                 Err(e) => {
-                    log::warn!(
+                    tracing::warn!(
                         "Failed to open EAPOL socket on {}: {} (WPA handshake will not proceed)",
                         self.config.interface,
                         e
@@ -680,7 +674,7 @@ impl AccessPoint {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "Access Point started successfully on {} ({})",
             self.config.interface,
             match self.config.security {
@@ -693,7 +687,7 @@ impl AccessPoint {
 
     /// Stop the Access Point
     pub async fn stop(&mut self) -> Result<()> {
-        log::info!("Stopping Access Point");
+        tracing::info!("Stopping Access Point");
 
         *self.running.lock().await = false;
 
@@ -701,9 +695,9 @@ impl AccessPoint {
         if let Some(ifindex) = self.ifindex {
             self.disconnect_all_clients().await;
             if let Err(e) = send_stop_ap(ifindex) {
-                log::warn!("STOP_AP failed for ifindex {}: {}", ifindex, e);
+                tracing::warn!("STOP_AP failed for ifindex {}: {}", ifindex, e);
             } else {
-                log::info!("STOP_AP sent for ifindex {}", ifindex);
+                tracing::info!("STOP_AP sent for ifindex {}", ifindex);
             }
         }
         self.ifindex = None;
@@ -719,7 +713,7 @@ impl AccessPoint {
         // Disconnect all clients
         self.disconnect_all_clients().await;
 
-        log::info!("Access Point stopped");
+        tracing::info!("Access Point stopped");
         Ok(())
     }
 
@@ -748,7 +742,7 @@ impl AccessPoint {
             if let Some(ifindex) = self.ifindex {
                 let _ = deauth_station(ifindex, mac);
             }
-            log::info!(
+            tracing::info!(
                 "Disconnected client {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                 mac[0],
                 mac[1],
@@ -822,8 +816,7 @@ fn send_start_ap(
     }
     let mut last_err: Option<NetlinkError> = None;
     for attempt in attempts.iter() {
-        log::info!("START_AP attempt using {}", attempt.label);
-        eprintln!("[HOSTAPD] START_AP using {}", attempt.label);
+        tracing::info!("START_AP attempt using {}", attempt.label);
         match send_start_ap_inner(
             ifindex,
             channel,
@@ -846,8 +839,7 @@ fn send_start_ap(
             Ok(()) => return Ok(()),
             Err(err) => {
                 if is_retryable_start_ap(&err) {
-                    log::warn!("START_AP failed with {}; retrying", err);
-                    eprintln!("[HOSTAPD] START_AP failed with {}; retrying", err);
+                    tracing::warn!("START_AP failed with {}; retrying", err);
                     last_err = Some(err);
                     continue;
                 }
@@ -894,7 +886,7 @@ fn send_start_ap_inner(
     let freq = channel_to_frequency(channel)
         .ok_or_else(|| NetlinkError::InvalidInput(format!("Unsupported channel {}", channel)))?;
 
-    log::info!(
+    tracing::info!(
         "START_AP params: ifindex={} chan={} freq={} beacon_int={} dtim={} ssid_len={} head_len={} tail_len={} probe_len={} basic_rates_len={} channel_type={} channel_width={} basic_rates={} probe_resp={} beacon_tail={} wpa={}",
         ifindex,
         channel,
@@ -991,7 +983,7 @@ fn send_start_ap_inner(
     if include_basic_rates && !basic_rates.is_empty() {
         let basic_rates_bytes = basic_rates_to_bytes(basic_rates);
         if basic_rates_bytes.is_empty() {
-            log::warn!(
+            tracing::warn!(
                 "START_AP basic rates list empty after conversion (input={:?})",
                 basic_rates
             );
@@ -1086,9 +1078,9 @@ fn send_start_ap_inner(
         log_attr("BEACON_TAIL", beacon_tail.len(), None);
     } else {
         if !include_beacon_tail {
-            log::debug!("START_AP beacon tail omitted by attempt");
+            tracing::debug!("START_AP beacon tail omitted by attempt");
         } else {
-            log::debug!("START_AP beacon tail empty; skipping NL80211_ATTR_BEACON_TAIL");
+            tracing::debug!("START_AP beacon tail empty; skipping NL80211_ATTR_BEACON_TAIL");
         }
     }
     if include_probe_resp && !probe_resp.is_empty() {
@@ -1162,30 +1154,29 @@ fn send_start_ap_inner(
         }
     }
 
-    log::debug!(
+    tracing::debug!(
         "START_AP building nl80211 frame: ifindex={} attrs={}",
         ifindex,
         attrs.len()
     );
     if !attr_log.is_empty() {
-        log::debug!("START_AP attrs: {}", attr_log.join(", "));
+        tracing::debug!("START_AP attrs: {}", attr_log.join(", "));
     }
 
     let log_failure_details = || {
         if !attr_log.is_empty() {
             let attrs = attr_log.join(", ");
-            log::error!("START_AP attrs: {}", attrs);
-            eprintln!("[HOSTAPD] START_AP attrs: {}", attrs);
+            tracing::error!("START_AP attrs: {}", attrs);
         }
         log_ie_summary("BEACON_HEAD", beacon_head, 36);
         let head_ies = parse_ie_list(beacon_head, 36);
         if head_ies.is_empty() {
-            eprintln!(
+            tracing::debug!(
                 "[HOSTAPD] START_AP BEACON_HEAD IEs: none (len={})",
                 beacon_head.len()
             );
         } else {
-            eprintln!(
+            tracing::debug!(
                 "[HOSTAPD] START_AP BEACON_HEAD IEs (len={}): {}",
                 beacon_head.len(),
                 format_ie_list(&head_ies)
@@ -1195,29 +1186,27 @@ fn send_start_ap_inner(
             log_ie_summary("BEACON_TAIL", beacon_tail, 0);
             let tail_ies = parse_ie_list(beacon_tail, 0);
             if !tail_ies.is_empty() {
-                eprintln!(
+                tracing::debug!(
                     "[HOSTAPD] START_AP BEACON_TAIL IEs (len={}): {}",
                     beacon_tail.len(),
                     format_ie_list(&tail_ies)
                 );
             }
         } else {
-            log::error!("START_AP BEACON_TAIL len=0");
-            eprintln!("[HOSTAPD] START_AP BEACON_TAIL len=0");
+            tracing::error!("START_AP BEACON_TAIL len=0");
         }
         if !probe_resp.is_empty() {
             log_ie_summary("PROBE_RESP", probe_resp, 36);
             let probe_ies = parse_ie_list(probe_resp, 36);
             if !probe_ies.is_empty() {
-                eprintln!(
+                tracing::debug!(
                     "[HOSTAPD] START_AP PROBE_RESP IEs (len={}): {}",
                     probe_resp.len(),
                     format_ie_list(&probe_ies)
                 );
             }
         } else {
-            log::error!("START_AP PROBE_RESP len=0");
-            eprintln!("[HOSTAPD] START_AP PROBE_RESP len=0");
+            tracing::error!("START_AP PROBE_RESP len=0");
         }
     };
 
@@ -1250,17 +1239,17 @@ fn send_start_ap_inner(
     if resp.nl_type == neli::consts::nl::Nlmsg::Error.into() {
         match resp.nl_payload {
             NlPayload::Err(err) if err.error == 0 => {
-                log::debug!("START_AP acked by kernel");
+                tracing::debug!("START_AP acked by kernel");
                 return Ok(());
             }
             NlPayload::Ack(ack) if ack.error == 0 => {
-                log::debug!("START_AP ack payload received");
+                tracing::debug!("START_AP ack payload received");
                 return Ok(());
             }
             NlPayload::Err(err) => {
                 let errno = err.error.abs();
                 let io_err = std::io::Error::from_raw_os_error(errno);
-                log::error!(
+                tracing::error!(
                     "START_AP rejected: errno={} ({}) raw_err={:?}",
                     errno,
                     io_err,
@@ -1281,7 +1270,7 @@ fn send_start_ap_inner(
             NlPayload::Ack(ack) => {
                 let errno = ack.error.abs();
                 let io_err = std::io::Error::from_raw_os_error(errno);
-                log::error!(
+                tracing::error!(
                     "START_AP rejected (ack err): errno={} ({}) raw_ack={:?}",
                     errno,
                     io_err,
@@ -1294,7 +1283,7 @@ fn send_start_ap_inner(
                 )));
             }
             other => {
-                log::error!("START_AP rejected: unexpected payload {:?}", other);
+                tracing::error!("START_AP rejected: unexpected payload {:?}", other);
                 log_failure_details();
                 return Err(NetlinkError::OperationFailed(format!(
                     "Kernel rejected START_AP (unexpected payload {:?})",
@@ -1361,14 +1350,14 @@ fn build_ap_frame_bundle(
     let wmm_enabled = ht_info.is_some();
     let capab = build_capability_info(config, channel, &rate_sets, wmm_enabled);
 
-    log::debug!(
+    tracing::debug!(
         "AP rates channel {}: supported={:?} extended={:?} basic={:?}",
         channel,
         rate_sets.supported,
         rate_sets.extended,
         rate_sets.basic
     );
-    log::debug!(
+    tracing::debug!(
         "AP frame caps channel {}: capab=0x{:04x} wmm={} ht={}",
         channel,
         capab,
@@ -1610,7 +1599,7 @@ fn build_rate_sets(
         };
 
     if used_dynamic_rates {
-        log::debug!(
+        tracing::debug!(
             "Using wiphy rates for channel {}: supported={} extended={} basic_rates={}",
             channel,
             supported_rates.len(),
@@ -2215,10 +2204,10 @@ fn basic_rates_to_bytes(basic_rates_100kbps: &[u32]) -> Vec<u8> {
 fn log_ie_summary(label: &str, frame: &[u8], offset: usize) {
     let ies = parse_ie_list(frame, offset);
     if ies.is_empty() {
-        log::error!("START_AP {} IEs: none (len={})", label, frame.len());
+        tracing::error!("START_AP {} IEs: none (len={})", label, frame.len());
         return;
     }
-    log::error!(
+    tracing::error!(
         "START_AP {} IEs (len={}): {}",
         label,
         frame.len(),
@@ -2306,7 +2295,7 @@ fn derive_ptk(
         let mut hmac = match HmacSha1::new_from_slice(pmk) {
             Ok(h) => h,
             Err(e) => {
-                log::error!("[AP] HMAC init failed during PTK derivation: {}", e);
+                tracing::error!("[AP] HMAC init failed during PTK derivation: {}", e);
                 return ptk;
             }
         };
@@ -2321,7 +2310,7 @@ fn derive_ptk(
     if output.len() >= 64 {
         ptk.copy_from_slice(&output[..64]);
     } else {
-        log::error!("[AP] PTK derivation output too short ({} bytes)", output.len());
+        tracing::error!("[AP] PTK derivation output too short ({} bytes)", output.len());
     }
     ptk
 }
@@ -2330,7 +2319,7 @@ fn hmac_sha1(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut h = match HmacSha1::new_from_slice(key) {
         Ok(h) => h,
         Err(e) => {
-            log::error!("[AP] HMAC init failed: {}", e);
+            tracing::error!("[AP] HMAC init failed: {}", e);
             return Vec::new();
         }
     };
@@ -2443,7 +2432,7 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
         let _ = unsafe { libc::fcntl(sock_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
 
-    log::info!("EAPOL raw socket opened on ifindex {}", ifindex);
+    tracing::info!("EAPOL raw socket opened on ifindex {}", ifindex);
     Ok(sock_fd)
 }
 
@@ -2463,13 +2452,13 @@ fn spawn_eapol_task(
         let sta_state: StdMutex<StdHashMap<[u8; 6], StaHandshake>> =
             StdMutex::new(StdHashMap::new());
         if let Some(_pmk) = pmk {
-            log::info!(
+            tracing::info!(
                 "WPA2-PSK EAPOL handler active on {} (pmk set, bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
                 interface,
                 bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]
             );
         } else {
-            log::warn!(
+            tracing::warn!(
                 "EAPOL handler on {} has no PMK; WPA handshake will fail",
                 interface
             );
@@ -2527,7 +2516,7 @@ fn spawn_eapol_task(
             let replay = u64::from_be_bytes([
                 buf[23], buf[24], buf[25], buf[26], buf[27], buf[28], buf[29], buf[30],
             ]);
-            log::debug!(
+            tracing::debug!(
                 "EAPOL M2 received len={} replay={} key_data_len={} sta={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 len,
                 replay,
@@ -2549,7 +2538,7 @@ fn spawn_eapol_task(
                 let mut state_guard = sta_state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = state_guard.get_mut(&sta_mac) {
                     if replay != 0 && replay < entry.last_replay {
-                        log::warn!(
+                        tracing::warn!(
                             "M4 replay too old for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {} < {}",
                             sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5],
                             replay,
@@ -2565,18 +2554,18 @@ fn spawn_eapol_task(
                         }
                         let calc_mic = hmac_sha1(&ptk[..16], &frame[..(113 + key_data_len)]);
                         if calc_mic.len() < 16 {
-                            log::error!("[AP] Calculated MIC too short (len={})", calc_mic.len());
+                            tracing::error!("[AP] Calculated MIC too short (len={})", calc_mic.len());
                             record_ap_error("Calculated MIC too short".to_string());
                             drop(state_guard);
                             continue;
                         }
                         if &calc_mic[..16] != key_mic {
                             let msg = format!("EAPOL M4 MIC validation failed on {}", interface);
-                            log::warn!("{}", msg);
+                            tracing::warn!("{}", msg);
                             record_ap_error(msg);
                             drop(state_guard);
                             if let Err(e) = deauth_station(ifindex, &sta_mac) {
-                                log::warn!(
+                                tracing::warn!(
                                     "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {}",
                                     sta_mac[0],
                                     sta_mac[1],
@@ -2598,11 +2587,11 @@ fn spawn_eapol_task(
                                     "Key install/authorize failed on {} during M4: {}",
                                     interface, e
                                 );
-                                log::warn!("{}", msg);
+                                tracing::warn!("{}", msg);
                                 record_ap_error(msg);
                                 drop(state_guard);
                                 if let Err(deauth_err) = deauth_station(ifindex, &sta_mac) {
-                                    log::warn!(
+                                    tracing::warn!(
                                         "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} after key failure: {}",
                                         sta_mac[0],
                                         sta_mac[1],
@@ -2616,7 +2605,7 @@ fn spawn_eapol_task(
                                 continue;
                             }
                             entry.authorized = true;
-                            log::info!(
+                            tracing::info!(
                                 "Station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} authorized (M4 complete)",
                                 sta_mac[0],
                                 sta_mac[1],
@@ -2640,7 +2629,7 @@ fn spawn_eapol_task(
                                 });
                         }
                     } else {
-                        log::warn!(
+                        tracing::warn!(
                             "Received M4 without PTK for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                             sta_mac[0],
                             sta_mac[1],
@@ -2651,7 +2640,7 @@ fn spawn_eapol_task(
                         );
                     }
                 } else {
-                    log::warn!(
+                    tracing::warn!(
                         "Received M4 for unknown station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                         sta_mac[0],
                         sta_mac[1],
@@ -2667,7 +2656,7 @@ fn spawn_eapol_task(
 
             // Expected M2: MIC set, ACK clear, secure clear
             if !mic_set || ack_set || secure_set || install_set {
-                log::warn!(
+                tracing::warn!(
                     "Unexpected EAPOL-Key (key_info=0x{:04x}) from {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}; ignoring",
                     key_info,
                     sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]
@@ -2685,7 +2674,7 @@ fn spawn_eapol_task(
 
             // Drop MIC-only frames that reuse or decrease replay counter
             if replay != 0 && replay <= entry.last_replay {
-                log::warn!(
+                tracing::warn!(
                     "Replay counter not increasing for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {} <= {}",
                     sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5],
                     replay,
@@ -2708,16 +2697,16 @@ fn spawn_eapol_task(
             }
             let calc_mic = hmac_sha1(&ptk[..16], &frame[..(113 + key_data_len)]);
             if calc_mic.len() < 16 {
-                log::error!("[AP] Calculated MIC too short (len={})", calc_mic.len());
+                tracing::error!("[AP] Calculated MIC too short (len={})", calc_mic.len());
                 record_ap_error("Calculated MIC too short".to_string());
                 continue;
             }
             if &calc_mic[..16] != key_mic {
                 let msg = format!("EAPOL MIC validation failed on {}", interface);
-                log::warn!("{}", msg);
+                tracing::warn!("{}", msg);
                 record_ap_error(msg);
                 if let Err(e) = deauth_station(ifindex, &sta_mac) {
-                    log::warn!(
+                    tracing::warn!(
                         "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {}",
                         sta_mac[0],
                         sta_mac[1],
@@ -2730,7 +2719,7 @@ fn spawn_eapol_task(
                 }
                 continue;
             }
-            log::info!(
+            tracing::info!(
                 "EAPOL MIC validated for sta {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 sta_mac[0],
                 sta_mac[1],
@@ -2753,10 +2742,10 @@ fn spawn_eapol_task(
                     interface,
                     std::io::Error::last_os_error()
                 );
-                log::warn!("{}", msg);
+                tracing::warn!("{}", msg);
                 record_ap_error(msg);
                 if let Err(deauth_err) = deauth_station(ifindex, &sta_mac) {
-                    log::warn!(
+                    tracing::warn!(
                         "Failed to deauth station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} after send failure: {}",
                         sta_mac[0],
                         sta_mac[1],
@@ -2768,7 +2757,7 @@ fn spawn_eapol_task(
                     );
                 }
             } else {
-                log::info!(
+                tracing::info!(
                     "Sent EAPOL M3 to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} replay_counter={}",
                     buf[6],
                     buf[7],
@@ -2794,7 +2783,7 @@ fn spawn_eapol_task(
                 });
         }
         let _ = unsafe { libc::close(fd) };
-        log::info!("EAPOL listener stopped on {}", interface);
+        tracing::info!("EAPOL listener stopped on {}", interface);
     })
 }
 
@@ -2803,7 +2792,7 @@ impl Drop for AccessPoint {
         // Try to clean up, but don't block
         if let Ok(running) = self.running.try_lock() {
             if *running {
-                log::warn!("AccessPoint dropped while still running");
+                tracing::warn!("AccessPoint dropped while still running");
             }
         }
     }
@@ -2820,7 +2809,7 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
     // Pairwise key
     {
-        log::debug!(
+        tracing::debug!(
             "Installing PTK for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (len={}) ifindex={}",
             sta[0],
             sta[1],
@@ -2921,7 +2910,7 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
     // Group key
     {
-        log::debug!(
+        tracing::debug!(
             "Installing GTK (idx=1, len={}) on ifindex {}",
             gtk.len(),
             ifindex
@@ -3007,7 +2996,7 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
 
     // Authorize station
     {
-        log::debug!(
+        tracing::debug!(
             "Authorizing station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} on ifindex {}",
             sta[0],
             sta[1],

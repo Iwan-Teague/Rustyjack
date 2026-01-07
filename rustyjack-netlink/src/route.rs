@@ -118,7 +118,7 @@ impl RouteManager {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "Added default route via {} on {} (metric={:?})",
             gateway,
             interface,
@@ -142,7 +142,7 @@ impl RouteManager {
             .delete_conflicting_default_routes(gateway, index, metric)
             .await?;
         if has_match {
-            log::info!(
+            tracing::info!(
                 "Default route via {} on {} already present (metric={:?})",
                 gateway,
                 interface,
@@ -205,7 +205,7 @@ impl RouteManager {
                         reason: e.to_string(),
                     })?;
 
-                log::info!(
+                tracing::info!(
                     "Deleted default route via {:?} on interface {:?}",
                     gateway,
                     oif
@@ -383,7 +383,7 @@ impl RouteManager {
                     reason: e.to_string(),
                 })?;
 
-            log::info!(
+            tracing::info!(
                 "Deleted conflicting default route via {:?} on interface {:?}",
                 route_gateway,
                 oif

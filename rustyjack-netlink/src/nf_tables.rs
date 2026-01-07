@@ -5,7 +5,7 @@ use std::mem;
 use std::net::IpAddr;
 use std::os::unix::io::RawFd;
 
-use log::warn;
+use tracing::warn;
 use sha1::{Digest, Sha1};
 
 use crate::iptables::{Chain, IptablesError, Protocol, Rule, Table, Target};
@@ -355,7 +355,7 @@ impl NfTablesManager {
         let rules = match self.list_rules(Some(table_name), Some(chain_name)) {
             Ok(rules) => rules,
             Err(err) => {
-                log::warn!("Failed to list rules for {} {}: {}", table_name, chain_name, err);
+                tracing::warn!("Failed to list rules for {} {}: {}", table_name, chain_name, err);
                 return Ok(());
             }
         };
@@ -372,7 +372,7 @@ impl NfTablesManager {
         let rules = match self.list_rules(Some(table_name), None) {
             Ok(rules) => rules,
             Err(err) => {
-                log::warn!("Failed to list rules for {}: {}", table_name, err);
+                tracing::warn!("Failed to list rules for {}: {}", table_name, err);
                 return Ok(());
             }
         };

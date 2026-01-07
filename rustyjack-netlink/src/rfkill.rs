@@ -418,7 +418,7 @@ impl RfkillManager {
         file.write_all(&event.to_bytes())
             .map_err(|e| RfkillError::WriteEvent(e.to_string()))?;
 
-        log::info!(
+        tracing::info!(
             "rfkill device {} {}",
             idx,
             if block { "blocked" } else { "unblocked" }
@@ -442,7 +442,7 @@ impl RfkillManager {
         file.write_all(&event.to_bytes())
             .map_err(|e| RfkillError::WriteEvent(e.to_string()))?;
 
-        log::info!(
+        tracing::info!(
             "rfkill {} devices {}",
             type_.name(),
             if block { "blocked" } else { "unblocked" }

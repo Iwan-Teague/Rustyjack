@@ -17,9 +17,9 @@ pub fn init_journald_logger() {
             l.install()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
         }) {
-            eprintln!("failed to init journald logger: {}", e);
+            tracing::error!("failed to init journald logger: {}", e);
         } else {
-            log::info!("journald logger initialized for rustyjack-netlink");
+            tracing::info!("journald logger initialized for rustyjack-netlink");
         }
     }
 }

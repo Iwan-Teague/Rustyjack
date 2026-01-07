@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
@@ -550,7 +550,7 @@ pub fn clear_arp_cache() -> Result<()> {
                 if let Some(ip_str) = parts.next() {
                     if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
                         if let Err(err) = delete_arp_entry(ip) {
-                            log::debug!("Failed to delete ARP entry {}: {}", ip, err);
+                            tracing::debug!("Failed to delete ARP entry {}: {}", ip, err);
                         }
                     }
                 }

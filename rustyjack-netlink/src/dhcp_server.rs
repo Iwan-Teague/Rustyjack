@@ -302,7 +302,7 @@ impl DhcpServer {
                 Ok((size, src)) => {
                     if let Err(e) = self.handle_packet(&buf[..size], src) {
                         if self.config.log_packets {
-                            eprintln!("[DHCP] Error handling packet: {}", e);
+                            tracing::warn!("[DHCP] Error handling packet: {}", e);
                         }
                     }
                 }
@@ -359,7 +359,7 @@ impl DhcpServer {
 
         if self.is_denied(&mac_bytes) {
             if self.config.log_packets {
-                eprintln!(
+                tracing::debug!(
                     "[DHCP] Ignoring {} from blocked {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                     Self::message_type_name(msg_type),
                     mac_bytes[0],
@@ -374,7 +374,7 @@ impl DhcpServer {
         }
 
         if self.config.log_packets {
-            eprintln!(
+            tracing::debug!(
                 "[DHCP] Received {} from {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 Self::message_type_name(msg_type),
                 mac_bytes[0],
@@ -412,7 +412,7 @@ impl DhcpServer {
         self.send_packet(&response)?;
 
         if self.config.log_packets {
-            eprintln!(
+            tracing::debug!(
                 "[DHCP] Sent OFFER: {} -> {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 offered_ip,
                 client_mac[0],
@@ -472,7 +472,10 @@ impl DhcpServer {
         if let Ok(mut leases) = self.leases.lock() {
             leases.insert(client_mac, lease);
         } else {
-            eprintln!("[DHCP] Lease map poisoned; dropping ACK for {:02x?}", client_mac);
+            tracing::error!(
+                "[DHCP] Lease map poisoned; dropping ACK for {:02x?}",
+                client_mac
+            );
             return Err(DhcpError::InvalidConfig(
                 "lease map lock poisoned".to_string(),
             ));
@@ -482,7 +485,7 @@ impl DhcpServer {
         self.send_packet(&response)?;
 
         if self.config.log_packets {
-            eprintln!(
+            tracing::debug!(
                 "[DHCP] Sent ACK: {} -> {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 ip_to_ack,
                 client_mac[0],
@@ -502,7 +505,7 @@ impl DhcpServer {
         self.release_lease(&client_mac);
 
         if self.config.log_packets {
-            eprintln!(
+            tracing::debug!(
                 "[DHCP] Released lease for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 client_mac[0],
                 client_mac[1],
@@ -521,7 +524,7 @@ impl DhcpServer {
         self.release_lease(&client_mac);
 
         if self.config.log_packets {
-            eprintln!(
+            tracing::debug!(
                 "[DHCP] Client declined IP: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 client_mac[0],
                 client_mac[1],
@@ -539,7 +542,7 @@ impl DhcpServer {
         let leases = match self.leases.lock() {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[DHCP] Lease map poisoned: {}", e);
+                tracing::error!("[DHCP] Lease map poisoned: {}", e);
                 return Err(DhcpError::InvalidConfig(
                     "lease map lock poisoned".to_string(),
                 ));
@@ -605,7 +608,7 @@ impl DhcpServer {
                 }
             }
             Err(_) => {
-                eprintln!("[DHCP] Lease map poisoned while checking IP availability");
+                tracing::error!("[DHCP] Lease map poisoned while checking IP availability");
                 false
             }
         }
@@ -683,7 +686,7 @@ impl DhcpServer {
 
         if self.config.log_packets {
             let mac = &request.chaddr[..6];
-            eprintln!(
+            tracing::debug!(
                 "[DHCP] Sent NAK to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
             );

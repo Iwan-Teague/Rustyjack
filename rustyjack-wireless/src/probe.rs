@@ -172,7 +172,7 @@ impl ProbeSniffer {
 
     /// Sniff probe requests for a duration
     pub fn sniff(&mut self, duration: Duration) -> Result<SniffResult> {
-        log::info!("Starting probe sniffing for {:?}", duration);
+        tracing::info!("Starting probe sniffing for {:?}", duration);
 
         let mut capture = PacketCapture::new(&self.interface_name)?;
 
@@ -206,7 +206,7 @@ impl ProbeSniffer {
             active_clients: self.active_clients(10).into_iter().cloned().collect(),
         };
 
-        log::info!(
+        tracing::info!(
             "Probe sniffing complete: {} probes, {} clients, {} networks",
             total_probes,
             self.clients.len(),
@@ -224,7 +224,7 @@ impl ProbeSniffer {
         duration: Duration,
         hop_interval: Duration,
     ) -> Result<SniffResult> {
-        log::info!(
+        tracing::info!(
             "Starting probe sniffing with channel hopping ({} channels)",
             channels.len()
         );
@@ -247,7 +247,7 @@ impl ProbeSniffer {
             if last_hop.elapsed() >= hop_interval {
                 let channel = channels[channel_idx % channels.len()];
                 if let Err(e) = iface.set_channel(channel) {
-                    log::warn!("Failed to set channel {}: {}", channel, e);
+                    tracing::warn!("Failed to set channel {}: {}", channel, e);
                 }
                 channel_idx += 1;
                 last_hop = Instant::now();
@@ -493,7 +493,7 @@ pub fn execute_probe_sniff<F>(
 where
     F: Fn(f32, &str),
 {
-    log::info!("Starting probe sniff on interface {}", config.interface);
+    tracing::info!("Starting probe sniff on interface {}", config.interface);
     on_progress(0.05, "Initializing interface...");
 
     // Validate interface
@@ -561,7 +561,7 @@ where
         if channels.len() > 1 && last_channel_hop.elapsed() > channel_hop_interval {
             let ch = channels[channel_idx % channels.len()];
             if iface.set_channel(ch).is_ok() {
-                log::trace!("Hopped to channel {}", ch);
+                tracing::trace!("Hopped to channel {}", ch);
             }
             channel_idx += 1;
             last_channel_hop = Instant::now();
@@ -599,7 +599,7 @@ where
 
     // Restore managed mode
     if let Err(e) = iface.set_managed_mode() {
-        log::warn!("Failed to restore managed mode: {}", e);
+        tracing::warn!("Failed to restore managed mode: {}", e);
     }
 
     // Build results

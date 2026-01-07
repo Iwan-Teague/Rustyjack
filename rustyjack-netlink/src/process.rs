@@ -288,7 +288,7 @@ impl ProcessManager {
         for proc in processes {
             if self.signal_pid(proc.pid, signal).is_ok() {
                 killed += 1;
-                log::debug!("Signaled process {} ({}): {}", proc.pid, proc.name, pattern);
+                tracing::debug!("Signaled process {} ({}): {}", proc.pid, proc.name, pattern);
             }
         }
 
@@ -303,7 +303,7 @@ impl ProcessManager {
         for proc in processes {
             if self.signal_pid(proc.pid, signal).is_ok() {
                 killed += 1;
-                log::debug!("Signaled process {} ({})", proc.pid, proc.name);
+                tracing::debug!("Signaled process {} ({})", proc.pid, proc.name);
             }
         }
 

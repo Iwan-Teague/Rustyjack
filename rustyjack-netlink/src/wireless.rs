@@ -1,6 +1,6 @@
 #[allow(dead_code)]
 use crate::error::{NetlinkError, Result};
-use log::{debug, info};
+use tracing::{debug, info};
 use neli::{
     attr::Attribute,
     consts::nl::{NlmF, NlmFFlags},

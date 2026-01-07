@@ -5,7 +5,7 @@
 
 use crate::error::{NetlinkError, Result};
 use futures::stream::TryStreamExt;
-use log::debug;
+use tracing::debug;
 use netlink_packet_route::address::AddressAttribute;
 use netlink_packet_route::link::{LinkAttribute, LinkFlag};
 use rtnetlink::{new_connection, Handle};
@@ -135,7 +135,7 @@ impl InterfaceManager {
                 reason: e.to_string(),
             })?;
 
-        log::info!("Interface {} set to UP", name);
+        tracing::info!("Interface {} set to UP", name);
         Ok(())
     }
 
@@ -171,7 +171,7 @@ impl InterfaceManager {
                 reason: e.to_string(),
             })?;
 
-        log::info!("Interface {} set to DOWN", name);
+        tracing::info!("Interface {} set to DOWN", name);
         Ok(())
     }
 
@@ -240,7 +240,7 @@ impl InterfaceManager {
                 reason: e.to_string(),
             })?;
 
-        log::info!("Added address {}/{} to {}", addr, prefix_len, interface);
+        tracing::info!("Added address {}/{} to {}", addr, prefix_len, interface);
         Ok(())
     }
 
@@ -330,7 +330,7 @@ impl InterfaceManager {
                         interface: interface.to_string(),
                         reason: e.to_string(),
                     })?;
-                log::info!("Deleted address {}/{} from {}", addr, prefix_len, interface);
+                tracing::info!("Deleted address {}/{} from {}", addr, prefix_len, interface);
                 return Ok(());
             }
         }
@@ -383,7 +383,7 @@ impl InterfaceManager {
             let _ = self.handle.address().del(addr).execute().await;
         }
 
-        log::info!("Flushed all addresses from {}", interface);
+        tracing::info!("Flushed all addresses from {}", interface);
         Ok(())
     }
 

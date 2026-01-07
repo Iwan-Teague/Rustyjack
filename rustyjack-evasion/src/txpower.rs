@@ -231,7 +231,7 @@ impl TxPowerManager {
                 let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
                 mgr.set_tx_power(interface, power_setting)
                     .map_err(|e| EvasionError::TxPowerError(format!("{}", e)))?;
-                log::debug!("Set TX power on {} to {} dBm using netlink", interface, level.to_dbm());
+                tracing::debug!("Set TX power on {} to {} dBm using netlink", interface, level.to_dbm());
                 return Ok(());
             }
         }
@@ -278,7 +278,7 @@ impl TxPowerManager {
             if let Err(e) =
                 self.set_power(&state.interface, TxPowerLevel::Custom(state.original_dbm))
             {
-                log::warn!("Failed to restore TX power on {}: {}", state.interface, e);
+                tracing::warn!("Failed to restore TX power on {}: {}", state.interface, e);
                 if first_error.is_none() {
                     first_error = Some(e);
                 }
@@ -306,7 +306,7 @@ impl Drop for TxPowerManager {
     fn drop(&mut self) {
         if self.auto_restore && !self.states.is_empty() {
             if let Err(e) = self.restore_all() {
-                log::error!("Failed to restore TX power on drop: {}", e);
+                tracing::error!("Failed to restore TX power on drop: {}", e);
             }
         }
     }

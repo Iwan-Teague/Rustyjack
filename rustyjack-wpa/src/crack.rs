@@ -198,7 +198,7 @@ impl WpaCracker {
             .map_err(|e| WpaError::System(format!("Failed to open wordlist: {}", e)))?;
         let reader = BufReader::new(file);
 
-        log::info!("Starting wordlist attack with {:?}", wordlist_path);
+        tracing::info!("Starting wordlist attack with {:?}", wordlist_path);
 
         let start = Instant::now();
         let throttle = self.config.throttle_interval;
@@ -221,7 +221,7 @@ impl WpaCracker {
             }
 
             if self.try_password(&password) {
-                log::info!("Password found: {}", password);
+                tracing::info!("Password found: {}", password);
                 return Ok(CrackResult::Found(password));
             }
 
@@ -235,7 +235,7 @@ impl WpaCracker {
             if attempts % self.config.progress_interval == 0 {
                 let elapsed = start.elapsed();
                 let rate = attempts as f32 / elapsed.as_secs_f32();
-                log::info!(
+                tracing::info!(
                     "Progress: {} attempts, {:.1}/s, current: {}",
                     attempts,
                     rate,
@@ -255,7 +255,7 @@ impl WpaCracker {
 
     /// Crack using password list (in memory).
     pub fn crack_passwords(&mut self, passwords: &[String]) -> Result<CrackResult> {
-        log::info!("Starting attack with {} passwords", passwords.len());
+        tracing::info!("Starting attack with {} passwords", passwords.len());
 
         let start = Instant::now();
         let throttle = self.config.throttle_interval;
@@ -284,7 +284,7 @@ impl WpaCracker {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "Attack complete: {} attempts in {:.1}s",
             passwords.len(),
             start.elapsed().as_secs_f32()
@@ -297,7 +297,7 @@ impl WpaCracker {
 
     /// Try 8-digit PIN patterns.
     pub fn crack_pins(&mut self) -> Result<CrackResult> {
-        log::info!("Starting 8-digit PIN attack (0-99999999)");
+        tracing::info!("Starting 8-digit PIN attack (0-99999999)");
 
         let start = Instant::now();
         let throttle = self.config.throttle_interval;
@@ -326,7 +326,7 @@ impl WpaCracker {
                 let elapsed = start.elapsed();
                 let rate = attempts as f32 / elapsed.as_secs_f32();
                 let remaining = (100_000_000u64 - attempts) as f32 / rate;
-                log::info!(
+                tracing::info!(
                     "PIN Progress: {} / 100000000, {:.1}/s, ETA: {:.0}s, current: {}",
                     attempts,
                     rate,
@@ -374,7 +374,7 @@ impl WpaCracker {
             patterns.push(format!("0000{:04}", i)); // 00000000-00009999
         }
 
-        log::info!(
+        tracing::info!(
             "Starting common patterns attack ({} patterns)",
             patterns.len()
         );
@@ -529,7 +529,7 @@ pub fn generate_common_passwords() -> Vec<String> {
 /// Returns the password if found, None otherwise.
 /// This is called automatically when a handshake is captured.
 pub fn quick_crack(handshake: &HandshakeExport, ssid: &str) -> Option<String> {
-    log::info!("Starting quick crack attempt for SSID: {}", ssid);
+    tracing::info!("Starting quick crack attempt for SSID: {}", ssid);
 
     let mut cracker = WpaCracker::new(handshake.clone(), ssid);
     let passwords = generate_common_passwords();
@@ -543,16 +543,16 @@ pub fn quick_crack(handshake: &HandshakeExport, ssid: &str) -> Option<String> {
 
     match cracker.crack_passwords(&all_passwords) {
         Ok(CrackResult::Found(password)) => {
-            log::info!("Quick crack SUCCESS! Password: {}", password);
+            tracing::info!("Quick crack SUCCESS! Password: {}", password);
             Some(password)
         }
         Ok(CrackResult::Exhausted { attempts }) => {
-            log::info!("Quick crack exhausted {} passwords, no match", attempts);
+            tracing::info!("Quick crack exhausted {} passwords, no match", attempts);
             None
         }
         Ok(CrackResult::Stopped { .. }) => None,
         Err(e) => {
-            log::error!("Quick crack error: {}", e);
+            tracing::error!("Quick crack error: {}", e);
             None
         }
     }

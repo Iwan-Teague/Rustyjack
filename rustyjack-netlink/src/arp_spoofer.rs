@@ -98,7 +98,7 @@ impl ArpSpoofer {
         let running = Arc::clone(&self.running);
 
         let _handle = thread::spawn(move || {
-            log::info!(
+            tracing::info!(
                 "Starting ARP spoof: {} ({}) -> {} on {}",
                 config.spoof_ip,
                 format_mac_address(&config.attacker_mac),
@@ -114,7 +114,7 @@ impl ArpSpoofer {
                     config.attacker_mac,
                     &config.interface,
                 ) {
-                    log::error!("ARP spoof packet failed: {}", e);
+                    tracing::error!("ARP spoof packet failed: {}", e);
                 }
 
                 thread::sleep(Duration::from_millis(config.interval_ms));
@@ -122,7 +122,7 @@ impl ArpSpoofer {
 
             // Restore original ARP entry if requested
             if config.restore_on_stop {
-                log::info!("Restoring ARP table for {}", config.target_ip);
+                tracing::info!("Restoring ARP table for {}", config.target_ip);
                 // Get real gateway MAC
                 if let Ok(Some(real_mac)) = scanner.get_mac(config.spoof_ip, &config.interface) {
                     for _ in 0..5 {
@@ -138,7 +138,7 @@ impl ArpSpoofer {
                 }
             }
 
-            log::info!("ARP spoofing stopped");
+            tracing::info!("ARP spoofing stopped");
         });
 
         Ok(())
@@ -186,7 +186,7 @@ impl ArpSpoofer {
 
         let interface = interface.to_string();
         let _handle = thread::spawn(move || {
-            log::info!(
+            tracing::info!(
                 "Starting bidirectional MITM: {} <-> {} on {}",
                 target_ip,
                 gateway_ip,
@@ -205,7 +205,7 @@ impl ArpSpoofer {
                 thread::sleep(Duration::from_millis(1000));
             }
 
-            log::info!("MITM attack stopped");
+            tracing::info!("MITM attack stopped");
         });
 
         Ok(())

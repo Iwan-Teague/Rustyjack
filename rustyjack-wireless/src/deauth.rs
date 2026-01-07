@@ -157,7 +157,7 @@ impl DeauthAttacker {
         client: Option<MacAddress>,
         config: DeauthConfig,
     ) -> Result<DeauthStats> {
-        log::info!(
+        tracing::info!(
             "Starting deauth attack on BSSID {} (client: {})",
             bssid,
             client
@@ -188,7 +188,7 @@ impl DeauthAttacker {
             stats.bytes_sent += result.bytes;
             stats.bursts += 1;
 
-            log::debug!(
+            tracing::debug!(
                 "Burst {}: sent {} packets ({} failed)",
                 stats.bursts,
                 result.sent,
@@ -210,7 +210,7 @@ impl DeauthAttacker {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "Deauth attack complete: {} packets in {} bursts over {:.1}s (handshake: {})",
             stats.packets_sent,
             stats.bursts,
@@ -232,7 +232,7 @@ impl DeauthAttacker {
         client: Option<MacAddress>,
         config: DeauthConfig,
     ) -> Result<(DeauthStats, Vec<CapturedPacket>, Option<HandshakeExport>)> {
-        log::info!("Starting deauth attack with capture");
+        tracing::info!("Starting deauth attack with capture");
 
         let mut stats = DeauthStats::default();
         let mut captured_packets = Vec::new();
@@ -264,7 +264,7 @@ impl DeauthAttacker {
                         captured_packets.push(packet);
 
                         if handshake.is_complete() {
-                            log::info!("Handshake captured!");
+                            tracing::info!("Handshake captured!");
                             stats.handshake_captured = true;
                             if handshake_export.is_none() {
                                 handshake_export = handshake.export_for_cracking();

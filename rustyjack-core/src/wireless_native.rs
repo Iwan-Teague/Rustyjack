@@ -97,7 +97,7 @@ pub fn execute_deauth_attack(
         DeauthAttacker, DeauthConfig as NativeDeauthConfig, DeauthReason, WirelessInterface,
     };
 
-    log::info!(
+    tracing::info!(
         "Starting native Rust deauth attack on BSSID: {}",
         config.bssid
     );
@@ -208,7 +208,7 @@ pub fn execute_deauth_attack(
 
     // Cleanup - restore managed mode
     if let Err(e) = iface.set_managed_mode() {
-        log::warn!("Failed to restore managed mode: {}", e);
+        tracing::warn!("Failed to restore managed mode: {}", e);
     }
 
     // Write detailed log file when logging is enabled
@@ -423,7 +423,7 @@ pub fn execute_pmkid_capture(
 ) -> Result<PmkidResult> {
     use rustyjack_wireless::{execute_pmkid_capture as native_pmkid, PmkidConfig};
 
-    log::info!("Starting native PMKID capture on {}", config.interface);
+    tracing::info!("Starting native PMKID capture on {}", config.interface);
     on_progress(0.05, "Initializing PMKID capture...");
 
     // Validate interface
@@ -499,7 +499,7 @@ pub fn execute_probe_sniff(
         execute_probe_sniff as native_probe, ProbeSniffConfig as NativeProbeConfig,
     };
 
-    log::info!("Starting probe sniff on {}", config.interface);
+    tracing::info!("Starting probe sniff on {}", config.interface);
     on_progress(0.05, "Initializing probe sniffer...");
 
     if !is_wireless_interface(&config.interface) {
@@ -577,7 +577,7 @@ pub fn execute_evil_twin(
     use std::sync::Arc;
     use std::time::Duration;
 
-    log::info!("Starting Evil Twin attack for SSID: {}", config.ssid);
+    tracing::info!("Starting Evil Twin attack for SSID: {}", config.ssid);
 
     // Wrap on_progress in Arc for sharing
     let on_progress = Arc::new(on_progress);
@@ -678,7 +678,7 @@ pub fn execute_karma(
     use rustyjack_wireless::{execute_karma as native_karma, execute_karma_with_ap, KarmaConfig};
     use std::sync::Arc;
 
-    log::info!("Starting Karma attack on {}", config.interface);
+    tracing::info!("Starting Karma attack on {}", config.interface);
 
     // Wrap on_progress in Arc for sharing
     let on_progress = Arc::new(on_progress);

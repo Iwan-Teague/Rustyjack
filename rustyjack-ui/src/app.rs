@@ -130,7 +130,7 @@ impl App {
         if let Ok(key) = self.parse_key_file(&key_path) {
             clear_encryption_key();
             if set_encryption_key(&key).is_ok() {
-                log::info!(
+                tracing::info!(
                     "Loaded encryption key from saved path {}",
                     key_path.display()
                 );
@@ -800,7 +800,7 @@ impl App {
                         if !was_at_main && now_at_main {
                             // Returned to main menu - clear active interface (isolate all)
                             if let Err(e) = self.core.clear_active_interface() {
-                                log::warn!("Failed to clear active interface on return to main: {}", e);
+                                tracing::warn!("Failed to clear active interface on return to main: {}", e);
                             }
                         }
                     }
@@ -808,7 +808,7 @@ impl App {
                         if let Some(entry) = entries.get(self.menu_state.selection) {
                             let action = entry.action.clone();
                             if let Err(e) = self.execute_action(action) {
-                                log::error!("Menu action failed: {:#}", e);
+                                tracing::error!("Menu action failed: {:#}", e);
                                 let msg = shorten_for_display(&e.to_string(), 90);
                                 self.show_message("Error", ["Operation failed", &msg])?;
                             }
@@ -3354,7 +3354,7 @@ impl App {
                 let _ = dir.sync_all();
             }
         }
-        log::info!(
+        tracing::info!(
             "[LOG EXPORT] Wrote {} bytes to {}",
             contents.len(),
             dest.display()
@@ -3745,7 +3745,7 @@ impl App {
             if let Some(mounted_path) = self.try_auto_mount_usb(&usb_devices, req)? {
                 found_mounts.push(mounted_path);
             } else {
-                log::warn!(
+                tracing::warn!(
                     "USB device detected ({}) but could not mount. Check device filesystem.",
                     usb_devices.join(", ")
                 );
@@ -3864,7 +3864,7 @@ impl App {
                         }
                     }
                     Err(e) => {
-                        log::warn!(
+                        tracing::warn!(
                             "Mount failed for {} (device={}): {}",
                             dev_basename,
                             device,
@@ -3884,7 +3884,7 @@ impl App {
         match self.list_usb_devices() {
             Ok(devices) => devices.into_iter().map(|dev| dev.name).collect(),
             Err(e) => {
-                log::warn!("Failed to enumerate USB block devices: {}", e);
+                tracing::warn!("Failed to enumerate USB block devices: {}", e);
                 Vec::new()
             }
         }
@@ -8063,7 +8063,7 @@ impl App {
             let ssid = ssid.unwrap_or("").trim();
             if per_network_mac && !ssid.is_empty() {
                 if let Err(e) = self.apply_per_network_mac(&active_interface, ssid) {
-                    log::warn!(
+                    tracing::warn!(
                         "[MAC] per-network MAC failed on {}: {}",
                         active_interface,
                         e
@@ -8078,7 +8078,7 @@ impl App {
                         interface: active_interface.clone(),
                     },
                 ))) {
-                    log::warn!("[MAC] randomize failed on {}: {}", active_interface, e);
+                    tracing::warn!("[MAC] randomize failed on {}: {}", active_interface, e);
                 }
             }
         }
@@ -8106,7 +8106,7 @@ impl App {
             Some(mac_str) => match MacAddress::parse(mac_str) {
                 Ok(mac) => mac,
                 Err(e) => {
-                    log::warn!(
+                    tracing::warn!(
                         "[MAC] invalid stored per-network MAC for {} on {}: {} ({})",
                         ssid,
                         interface,
@@ -8214,7 +8214,7 @@ impl App {
             .insert(ssid.to_string(), applied_mac.clone());
         let _ = self.config.save(&self.root.join("gui_conf.json"));
 
-        log::info!(
+        tracing::info!(
             "[MAC] per-network MAC set on {} for {}: {} -> {} (vendor_reused={}, reconnect_ok={})",
             interface,
             ssid,
@@ -8544,7 +8544,7 @@ impl App {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
-                    log::info!(
+                    tracing::info!(
                         "[MAC] vendor set on {}: {} -> {} (vendor={}, reconnect_ok={})",
                         interface,
                         orig_mac,
@@ -11809,7 +11809,7 @@ impl App {
         match self.core.wifi_capabilities(interface) {
             Ok(caps) => caps.supports_monitor_mode,
             Err(err) => {
-                log::warn!("Failed to read capabilities for {}: {}", interface, err);
+                tracing::warn!("Failed to read capabilities for {}: {}", interface, err);
                 false
             }
         }
@@ -12402,7 +12402,7 @@ impl App {
             .core
             .dispatch(Commands::Hotspot(HotspotCommand::DisconnectClient(args)))
         {
-            log::warn!("Hotspot disconnect failed for {}: {}", mac, err);
+            tracing::warn!("Hotspot disconnect failed for {}: {}", mac, err);
             return self.show_message(
                 "Disconnect Failed",
                 ["Could not disconnect", "device. Check logs."],

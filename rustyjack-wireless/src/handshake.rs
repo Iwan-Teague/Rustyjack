@@ -282,7 +282,7 @@ impl HandshakeCapture {
 
         // Parse handshake message
         if let Some(msg) = HandshakeMessage::parse(&eapol_data, ap_mac, client_mac) {
-            log::info!(
+            tracing::info!(
                 "Captured handshake message {} (AP: {}, Client: {})",
                 msg.message_num,
                 ap_mac,

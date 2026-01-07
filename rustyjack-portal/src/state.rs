@@ -62,7 +62,7 @@ pub fn start_portal(cfg: PortalConfig) -> Result<()> {
     let app = build_router(&cfg, state);
 
     let listener_addr = SocketAddr::new(IpAddr::V4(cfg.listen_ip), cfg.listen_port);
-    log::info!("Starting portal server on {listener_addr}");
+    tracing::info!("Starting portal server on {listener_addr}");
 
     let thread = match std::thread::Builder::new()
         .name("rustyjack-portal".to_string())
@@ -74,14 +74,14 @@ pub fn start_portal(cfg: PortalConfig) -> Result<()> {
             {
                 Ok(runtime) => runtime,
                 Err(err) => {
-                    log::error!("failed to build portal runtime: {err}");
+                    tracing::error!("failed to build portal runtime: {err}");
                     return;
                 }
             };
 
             let result = runtime.block_on(run_server(listener, app, shutdown_rx));
             if let Err(err) = result {
-                log::error!("portal server exited with error: {err:#}");
+                tracing::error!("portal server exited with error: {err:#}");
             }
         }) {
         Ok(thread) => thread,

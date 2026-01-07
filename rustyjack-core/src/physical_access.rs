@@ -1,7 +1,7 @@
 use std::{fs, path::Path, process::Command, thread, time::Duration};
 
 use anyhow::{anyhow, Result};
-use log::{debug, info};
+use tracing::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 

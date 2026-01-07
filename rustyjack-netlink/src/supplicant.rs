@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use log::{info, warn};
+use tracing::{info, warn};
 
 use crate::error::{NetlinkError, Result};
 use crate::station::backend::{ScanOutcome, StationBackend, StationBackendKind};

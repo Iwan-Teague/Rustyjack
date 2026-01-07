@@ -161,7 +161,7 @@ impl MacPolicyEngine {
         }
 
         if self.is_exception(interface, ssid) {
-            log::info!(
+            tracing::info!(
                 "[MAC_POLICY] Skipping randomization for {} (exception match)",
                 interface
             );
@@ -185,7 +185,7 @@ impl MacPolicyEngine {
         }
 
         let state = self.manager.set_mac(interface, &target)?;
-        log::info!(
+        tracing::info!(
             "[MAC_POLICY] {} {}: {} -> {}",
             match stage {
                 MacStage::PreAssoc => "preassoc",

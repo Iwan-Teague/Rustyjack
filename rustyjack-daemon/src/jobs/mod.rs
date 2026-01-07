@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use log::{debug, info};
+use tracing::{debug, info};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 

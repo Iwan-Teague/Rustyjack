@@ -1,7 +1,7 @@
 use std::{fs, path::Path, process::Command, thread, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use rustyjack_evasion::{MacAddress, MacManager};

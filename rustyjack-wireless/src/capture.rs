@@ -93,7 +93,7 @@ impl PacketCapture {
             );
         }
 
-        log::debug!("Created capture socket on interface index {}", ifindex);
+        tracing::debug!("Created capture socket on interface index {}", ifindex);
 
         Ok(Self {
             fd,
@@ -145,7 +145,7 @@ impl PacketCapture {
         let (radiotap, rt_len) = match RadiotapHeader::parse(data) {
             Ok(r) => r,
             Err(e) => {
-                log::trace!("Failed to parse radiotap: {}", e);
+                tracing::trace!("Failed to parse radiotap: {}", e);
                 return Ok(None);
             }
         };
@@ -159,7 +159,7 @@ impl PacketCapture {
         let frame = match Ieee80211Frame::parse(frame_data) {
             Ok(f) => f,
             Err(e) => {
-                log::trace!("Failed to parse frame: {}", e);
+                tracing::trace!("Failed to parse frame: {}", e);
                 return Ok(None);
             }
         };

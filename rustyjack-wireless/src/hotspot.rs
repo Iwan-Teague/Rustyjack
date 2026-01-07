@@ -24,6 +24,7 @@ use crate::netlink_helpers::{
 use crate::nl80211::{set_interface_type_netlink, Nl80211IfType};
 use crate::process_helpers::pkill_pattern;
 use crate::rfkill_helpers::{rfkill_list, rfkill_unblock, rfkill_unblock_all};
+use tracing::{debug, error, info, warn};
 
 // Global lock to prevent concurrent hotspot operations
 static HOTSPOT_LOCK: Mutex<()> = Mutex::new(());
@@ -161,7 +162,7 @@ fn stop_access_point_global() {
         if let Ok(mut guard) = ap_mutex.lock() {
             if let Some(mut ap) = guard.take() {
                 stop_ap_best_effort(&mut ap);
-                log::info!("Access Point stopped");
+                info!("Access Point stopped");
             }
         }
     }
@@ -172,7 +173,7 @@ fn stop_dns_server_global() {
         if let Ok(mut guard) = dns_mutex.lock() {
             if let Some(mut server) = guard.take() {
                 let _ = server.stop();
-                log::info!("DNS server stopped");
+                info!("DNS server stopped");
             }
         }
     }
@@ -188,7 +189,7 @@ fn stop_dhcp_server_global() {
                 if let Some(handle) = dhcp.handle.take() {
                     let _ = handle.join();
                 }
-                log::info!("DHCP server stopped");
+                info!("DHCP server stopped");
             }
         }
     }
@@ -273,77 +274,62 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     })?;
     let _start_time = Instant::now();
 
-    eprintln!("[HOTSPOT] ========== HOTSPOT START ATTEMPT ==========");
-    eprintln!(
+    info!("[HOTSPOT] ========== HOTSPOT START ATTEMPT ==========");
+    info!(
         "[HOTSPOT] Starting hotspot: AP={}, upstream={}, SSID={}, channel={}",
         config.ap_interface, config.upstream_interface, config.ssid, config.channel
     );
-    log::info!(
-        "Starting hotspot: AP={}, upstream={}, SSID={}, channel={}",
-        config.ap_interface,
-        config.upstream_interface,
-        config.ssid,
-        config.channel
-    );
 
-    eprintln!("[HOTSPOT] Checking AP interface {}...", config.ap_interface);
+    debug!("[HOTSPOT] Checking AP interface {}...", config.ap_interface);
     ensure_interface_exists(&config.ap_interface)?;
-    eprintln!("[HOTSPOT] AP interface {} exists", config.ap_interface);
-    log::debug!("AP interface {} exists", config.ap_interface);
+    debug!("[HOTSPOT] AP interface {} exists", config.ap_interface);
 
     if !config.upstream_interface.is_empty() {
-        eprintln!(
+        debug!(
             "[HOTSPOT] Checking upstream interface {}...",
             config.upstream_interface
         );
         ensure_interface_exists(&config.upstream_interface)?;
-        eprintln!(
+        debug!(
             "[HOTSPOT] Upstream interface {} exists",
             config.upstream_interface
         );
-        log::debug!("Upstream interface {} exists", config.upstream_interface);
     }
 
-    eprintln!(
+    debug!(
         "[HOTSPOT] Checking AP capability for {}...",
         config.ap_interface
     );
     ensure_ap_capability(&config.ap_interface)?;
-    eprintln!("[HOTSPOT] AP capability check passed");
-    log::debug!("AP capability check passed for {}", config.ap_interface);
+    debug!("[HOTSPOT] AP capability check passed");
 
     let mut upstream_ready = false;
     if !config.upstream_interface.is_empty() {
-        eprintln!(
+        debug!(
             "[HOTSPOT] Checking if upstream {} is ready...",
             config.upstream_interface
         );
         match ensure_upstream_ready(&config.upstream_interface) {
             Ok(_) => {
                 upstream_ready = true;
-                eprintln!(
+                info!(
                     "[HOTSPOT] Upstream {} is ready with IP",
                     config.upstream_interface
                 );
-                log::info!("Upstream {} is ready with IP", config.upstream_interface);
             }
             Err(err) => {
-                eprintln!(
-                    "[HOTSPOT] ERROR: Upstream check failed: {}",
-                    err
-                );
+                error!("[HOTSPOT] Upstream check failed: {}", err);
                 return Err(err);
             }
         }
     } else {
-        eprintln!("[HOTSPOT] No upstream interface specified; running in local-only mode");
-        log::info!("No upstream interface specified; running in local-only mode");
+        info!("[HOTSPOT] No upstream interface specified; running in local-only mode");
     }
 
     let mut cleanup = HotspotCleanup::new(&config);
     cleanup.upstream_ready = upstream_ready;
 
-    eprintln!("[HOTSPOT] Creating config directory...");
+    debug!("[HOTSPOT] Creating config directory...");
     fs::create_dir_all(CONF_DIR).map_err(|e| WirelessError::System(format!("mkdir: {e}")))?;
     #[cfg(unix)]
     {
@@ -351,14 +337,13 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     }
 
     // Clean up any existing AP/DHCP/DNS from previous run
-    eprintln!("[HOTSPOT] Cleaning up any existing hotspot services...");
-    log::debug!("Cleaning up any existing hotspot services");
+    debug!("[HOTSPOT] Cleaning up any existing hotspot services...");
     
     // Stop any existing Access Point in our global
     if let Some(ap_mutex) = ACCESS_POINT.get() {
         if let Ok(mut guard) = ap_mutex.lock() {
             if let Some(mut old_ap) = guard.take() {
-                eprintln!("[HOTSPOT] Stopping previous Access Point instance...");
+                debug!("[HOTSPOT] Stopping previous Access Point instance...");
                 let _ = tokio::runtime::Runtime::new().and_then(|rt| {
                     let _ = rt.block_on(async { old_ap.stop().await });
                     Ok(())
@@ -373,23 +358,23 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Rust-only mode: skip wpa_supplicant and NetworkManager integration.
-    eprintln!("[HOTSPOT] Rust-only mode: skipping external wpa_supplicant/NetworkManager");
+    info!("[HOTSPOT] Rust-only mode: skipping external wpa_supplicant/NetworkManager");
     let nm_error: Option<String> = None;
 
     // Unblock rfkill for all wireless devices - AGGRESSIVELY
-    eprintln!("[HOTSPOT] Unblocking rfkill for all wireless devices...");
+    info!("[HOTSPOT] Unblocking rfkill for all wireless devices...");
 
     // Try multiple times because something keeps re-blocking it
     for attempt in 1..=3 {
-        eprintln!("[HOTSPOT] RF-kill unblock attempt {}...", attempt);
+        debug!("[HOTSPOT] RF-kill unblock attempt {}...", attempt);
         let rfkill_result = rfkill_unblock_all();
 
         match rfkill_result {
             Ok(_) => {
-                eprintln!("[HOTSPOT] rfkill unblocked successfully");
+                debug!("[HOTSPOT] rfkill unblocked successfully");
             }
             Err(e) => {
-                eprintln!("[HOTSPOT] WARNING: rfkill unblock failed: {}", e);
+                warn!("[HOTSPOT] rfkill unblock failed: {}", e);
             }
         }
 
@@ -397,16 +382,16 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     }
 
     // Give rfkill unblock time to take effect
-    eprintln!("[HOTSPOT] Waiting for rfkill to stabilize...");
+    debug!("[HOTSPOT] Waiting for rfkill to stabilize...");
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     // Verify rfkill status
-    eprintln!("[HOTSPOT] Verifying rfkill status...");
+    debug!("[HOTSPOT] Verifying rfkill status...");
     let mut is_blocked = false;
     if let Ok(devices) = rfkill_list() {
         for dev in &devices {
             let state = dev.state_string();
-            eprintln!(
+            debug!(
                 "[HOTSPOT] rfkill{}: {} - {}",
                 dev.idx,
                 dev.type_.name(),
@@ -417,15 +402,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             }
         }
         if is_blocked {
-            eprintln!("[HOTSPOT] WARNING: Wireless is still blocked by rfkill!");
-            eprintln!("[HOTSPOT] Attempting aggressive unblock...");
-            log::warn!("Wireless still blocked after rfkill unblock attempt");
+            warn!("[HOTSPOT] Wireless is still blocked by rfkill");
+            warn!("[HOTSPOT] Attempting aggressive unblock...");
         }
     }
 
     // If still blocked, try more aggressive unblocking
     if is_blocked {
-        eprintln!("[HOTSPOT] Performing aggressive RF-kill unblock...");
+        warn!("[HOTSPOT] Performing aggressive RF-kill unblock...");
         // Unblock by device ID specifically
         for id in 0..10 {
             let _ = rfkill_unblock(id);
@@ -438,9 +422,9 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
 
         // Check again
         if let Ok(devices) = rfkill_list() {
-            eprintln!("[HOTSPOT] rfkill status after aggressive unblock:");
+            debug!("[HOTSPOT] rfkill status after aggressive unblock:");
             for dev in &devices {
-                eprintln!(
+                debug!(
                     "[HOTSPOT]   rfkill{}: {} - {}",
                     dev.idx,
                     dev.type_.name(),
@@ -448,7 +432,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
                 );
             }
             if devices.iter().any(|d| d.is_blocked()) {
-                log::error!("[HOTSPOT] RF-kill still blocking wireless after aggressive unblock");
+                error!("[HOTSPOT] RF-kill still blocking wireless after aggressive unblock");
                 return Err(WirelessError::System(
                     "RF-kill still blocking wireless devices; check hardware switch or BIOS setting"
                         .to_string(),
@@ -463,53 +447,43 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             Some(raw) => format!("Regdom unset/invalid ({}); set a country code", raw),
             None => "Regdom unset/invalid; set a country code".to_string(),
         };
-        eprintln!("[HOTSPOT] WARNING: {}", note);
-        log::warn!("{}", note);
+        warn!("[HOTSPOT] {}", note);
         record_hotspot_warning(note);
     }
 
     // Now configure AP interface with static IP
-    eprintln!(
+    info!(
         "[HOTSPOT] Configuring AP interface {} with IP {}",
         config.ap_interface, AP_GATEWAY
-    );
-    log::debug!(
-        "Configuring AP interface {} with IP {}",
-        config.ap_interface,
-        AP_GATEWAY
     );
 
     let gateway_ip: Ipv4Addr = AP_GATEWAY
         .parse()
         .map_err(|e| WirelessError::System(format!("Invalid AP gateway {}: {}", AP_GATEWAY, e)))?;
 
-    eprintln!("[HOTSPOT] Bringing interface down via netlink...");
+    debug!("[HOTSPOT] Bringing interface down via netlink...");
     netlink_set_interface_down(&config.ap_interface)?;
-    log::info!("Hotspot: {} set down via netlink", config.ap_interface);
+    info!("Hotspot: {} set down via netlink", config.ap_interface);
     cleanup.interface_configured = true;
 
-    eprintln!("[HOTSPOT] Flushing addresses via netlink...");
+    debug!("[HOTSPOT] Flushing addresses via netlink...");
     netlink_flush_addresses(&config.ap_interface)?;
-    log::info!("Hotspot: flushed addresses on {}", config.ap_interface);
+    info!("Hotspot: flushed addresses on {}", config.ap_interface);
 
     // Ensure interface is in AP mode before setting channel to avoid EBUSY from nl80211
-    eprintln!(
+    info!(
         "[HOTSPOT] Setting interface {} to AP mode via nl80211...",
         config.ap_interface
     );
     match set_interface_type_netlink(&config.ap_interface, Nl80211IfType::Ap) {
         Ok(_) => {
-            eprintln!(
+            info!(
                 "[HOTSPOT] Interface {} set to AP mode (netlink)",
-                config.ap_interface
-            );
-            log::info!(
-                "Hotspot: {} set to AP mode via nl80211",
                 config.ap_interface
             );
         }
         Err(e) => {
-            eprintln!("[HOTSPOT] ERROR: Failed to set interface to AP mode: {}", e);
+            error!("[HOTSPOT] Failed to set interface to AP mode: {}", e);
             return Err(WirelessError::System(format!(
                 "Failed to set {} to AP mode via nl80211: {}",
                 config.ap_interface, e
@@ -517,73 +491,53 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         }
     }
 
-    eprintln!(
-        "[HOTSPOT] Adding IP address {}/24 via netlink...",
-        AP_GATEWAY
-    );
+    info!("[HOTSPOT] Adding IP address {}/24 via netlink...", AP_GATEWAY);
     netlink_add_address(&config.ap_interface, IpAddr::V4(gateway_ip), 24)?;
-    log::info!(
-        "Hotspot: assigned {} to {} via netlink",
-        AP_GATEWAY,
-        config.ap_interface
-    );
 
-    eprintln!("[HOTSPOT] Bringing interface up via netlink...");
+    info!("[HOTSPOT] Bringing interface up via netlink...");
     netlink_set_interface_up(&config.ap_interface)?;
-    log::info!("Hotspot: {} brought up via netlink", config.ap_interface);
     cleanup.interface_configured = true;
 
-    eprintln!("[HOTSPOT] AP interface {} is up", config.ap_interface);
-    log::debug!("AP interface {} is up", config.ap_interface);
+    debug!("[HOTSPOT] AP interface {} is up", config.ap_interface);
 
     // Give interface time to fully initialize with its IP
-    eprintln!("[HOTSPOT] Waiting 2 seconds for interface to stabilize...");
+    debug!("[HOTSPOT] Waiting 2 seconds for interface to stabilize...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Enable forwarding without sysctl binary
     enable_ip_forwarding()
         .map_err(|e| WirelessError::System(format!("Failed to enable IPv4 forwarding: {}", e)))?;
-    log::info!("Hotspot: IPv4 forwarding enabled");
+    info!("[HOTSPOT] IPv4 forwarding enabled");
 
     // NAT rules (only if upstream is present and ready)
     if upstream_ready && !config.upstream_interface.is_empty() {
-        log::debug!(
-            "Setting up NAT rules for upstream {}",
-            config.upstream_interface
-        );
-        eprintln!("[HOTSPOT] Configuring NAT forwarding via Rust iptables...");
+        info!("[HOTSPOT] Configuring NAT forwarding via Rust iptables...");
 
         match IptablesManager::new() {
             Ok(ipt) => {
                 if let Err(e) =
                     ipt.setup_nat_forwarding(&config.ap_interface, &config.upstream_interface)
                 {
-                    log::error!("Failed to setup NAT forwarding: {}", e);
-                    eprintln!("[HOTSPOT] Warning: NAT setup failed: {}", e);
+                    error!("Failed to setup NAT forwarding: {}", e);
+                    warn!("[HOTSPOT] NAT setup failed: {}", e);
                 } else {
-                    log::debug!("NAT rules configured successfully");
+                    debug!("NAT rules configured successfully");
                     cleanup.nat_configured = true;
                 }
             }
             Err(e) => {
-                log::error!("Failed to create iptables manager: {}", e);
-                eprintln!("[HOTSPOT] Warning: Could not initialize iptables: {}", e);
+                error!("Failed to create iptables manager: {}", e);
+                warn!("[HOTSPOT] Could not initialize iptables: {}", e);
             }
         }
     } else {
-        log::info!("Skipping NAT setup (local-only mode)");
+        info!("Skipping NAT setup (local-only mode)");
     }
 
     // Use Rust-native AccessPoint instead of external hostapd
-    eprintln!(
+    info!(
         "[HOTSPOT] Creating Rust-native Access Point on {} (SSID: {})",
         config.ap_interface, config.ssid
-    );
-    log::info!(
-        "Creating Rust-native AP: interface={}, SSID={}, channel={}",
-        config.ap_interface,
-        config.ssid,
-        config.channel
     );
 
     let ap_security = if config.password.is_empty() {
@@ -595,7 +549,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     };
 
     let hw_mode = select_hw_mode(&config.ap_interface, config.channel);
-    log::info!(
+    info!(
         "Hotspot hardware mode selected: iface={} channel={} hw_mode={:?}",
         config.ap_interface,
         config.channel,
@@ -615,14 +569,14 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     };
 
     // Double-check rfkill is still unblocked right before starting AP
-    eprintln!("[HOTSPOT] Final rfkill unblock before starting Access Point...");
+    debug!("[HOTSPOT] Final rfkill unblock before starting Access Point...");
     let _ = rfkill_unblock_all();
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Create and start the Access Point in a blocking context
-    eprintln!("[HOTSPOT] Starting Rust Access Point...");
+    info!("[HOTSPOT] Starting Rust Access Point...");
     let ap = AccessPoint::new(ap_config).map_err(|e| {
-        eprintln!("[HOTSPOT] ERROR: Failed to create Access Point: {}", e);
+        error!("[HOTSPOT] Failed to create Access Point: {}", e);
         WirelessError::System(format!("Failed to create AP: {}", e))
     })?;
     cleanup.ap = Some(ap);
@@ -661,52 +615,47 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         });
 
     if let Err(e) = ap_start_result {
-        eprintln!("[HOTSPOT] ERROR: Failed to start Access Point: {}", e);
-        log::error!("Access Point startup failed: {}", e);
+        error!("[HOTSPOT] Failed to start Access Point: {}", e);
+        error!("Access Point startup failed: {}", e);
         return Err(WirelessError::System(format!("Failed to start Access Point: {}. \
             The interface may not support AP mode, may be managed by NetworkManager, or RF-kill may be blocking it.", e)));
     }
 
-    eprintln!("[HOTSPOT] Access Point started successfully");
-    log::info!(
-        "Rust-native Access Point is running on {}",
-        config.ap_interface
-    );
-
+    info!("[HOTSPOT] Access Point started successfully");
     // Give AP time to fully initialize before starting DHCP/DNS
-    eprintln!("[HOTSPOT] Waiting for AP to stabilize before starting DHCP/DNS servers...");
+    debug!("[HOTSPOT] Waiting for AP to stabilize before starting DHCP/DNS servers...");
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Start DHCP server
-    eprintln!(
+    info!(
         "[HOTSPOT] Starting Rust DHCP server on {}...",
         config.ap_interface
     );
     start_dhcp_server(&config.ap_interface, gateway_ip).map_err(|e| {
-        log::error!("[HOTSPOT] DHCP server failed to start: {}", e);
+        error!("[HOTSPOT] DHCP server failed to start: {}", e);
         e
     })?;
-    eprintln!("[HOTSPOT] DHCP server started successfully");
-    log::info!("DHCP server running on {}", config.ap_interface);
+    info!("[HOTSPOT] DHCP server started successfully");
+    info!("DHCP server running on {}", config.ap_interface);
 
     // Start DNS server
-    eprintln!(
+    info!(
         "[HOTSPOT] Starting Rust DNS server on {}...",
         config.ap_interface
     );
     start_dns_server(&config.ap_interface, gateway_ip).map_err(|e| {
-        log::error!("[HOTSPOT] DNS server failed to start: {}", e);
+        error!("[HOTSPOT] DNS server failed to start: {}", e);
         e
     })?;
-    eprintln!("[HOTSPOT] DNS server started successfully");
-    log::info!("DNS server running on {}", config.ap_interface);
+    info!("[HOTSPOT] DNS server started successfully");
+    info!("DNS server running on {}", config.ap_interface);
 
-    eprintln!("[HOTSPOT] Hotspot started successfully!");
-    eprintln!("[HOTSPOT]   Access Point: Rust-native (no external hostapd)");
-    eprintln!("[HOTSPOT]   DHCP/DNS: Rust servers running");
-    eprintln!("[HOTSPOT]   SSID: {}", config.ssid);
-    eprintln!("[HOTSPOT]   Password: {}", config.password);
-    log::info!("Hotspot started successfully with Rust-native AP, DHCP, and DNS servers");
+    info!("[HOTSPOT] Hotspot started successfully!");
+    info!("[HOTSPOT]   Access Point: Rust-native (no external hostapd)");
+    info!("[HOTSPOT]   DHCP/DNS: Rust servers running");
+    info!("[HOTSPOT]   SSID: {}", config.ssid);
+    info!("[HOTSPOT]   Password: {}", config.password);
+    info!("Hotspot started successfully with Rust-native AP, DHCP, and DNS servers");
 
     let state = HotspotState {
         ssid: config.ssid,
@@ -746,37 +695,28 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
 
 /// Stop a running hotspot and clean up.
 pub fn stop_hotspot() -> Result<()> {
-    eprintln!("[HOTSPOT] ========== HOTSPOT STOP ATTEMPT ==========");
-    log::info!("Stopping hotspot");
+    info!("[HOTSPOT] ========== HOTSPOT STOP ATTEMPT ==========");
 
     let state = status_hotspot();
 
-    eprintln!("[HOTSPOT] Stopping hotspot services...");
+    info!("[HOTSPOT] Stopping hotspot services...");
     stop_access_point_global();
     stop_dns_server_global();
     stop_dhcp_server_global();
-    eprintln!("[HOTSPOT] Rust AP/DHCP/DNS servers cleaned up");
-    log::info!("Rust AP/DHCP/DNS servers stopped");
+    info!("[HOTSPOT] Rust AP/DHCP/DNS servers cleaned up");
 
     if let Some(s) = state {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Remove iptables rules (ignore errors if not present)
         if s.upstream_ready && !s.upstream_interface.is_empty() {
-            eprintln!("[HOTSPOT] Removing NAT rules via Rust iptables...");
+            info!("[HOTSPOT] Removing NAT rules via Rust iptables...");
             if let Ok(ipt) = IptablesManager::new() {
                 let _ = ipt.teardown_nat_forwarding(&s.ap_interface, &s.upstream_interface);
             }
         }
 
-        eprintln!(
-            "[HOTSPOT] Cleaning up interface {}...",
-            s.ap_interface
-        );
-        log::info!(
-            "Cleaning up interface {} after hotspot stop",
-            s.ap_interface
-        );
+        info!("[HOTSPOT] Cleaning up interface {}...", s.ap_interface);
 
         // Bring interface down to clean state
         let _ = netlink_set_interface_down(&s.ap_interface);
@@ -785,27 +725,25 @@ pub fn stop_hotspot() -> Result<()> {
         let _ = netlink_flush_addresses(&s.ap_interface);
 
         if s.restore_nm_on_stop {
-            eprintln!(
+            info!(
                 "[HOTSPOT] Skipping NetworkManager restore for {} (rust-only mode)",
                 s.ap_interface
             );
         }
 
         // Ensure RF-kill stays unblocked
-        eprintln!("[HOTSPOT] Ensuring RF-kill stays unblocked...");
+        debug!("[HOTSPOT] Ensuring RF-kill stays unblocked...");
         let _ = rfkill_unblock_all();
         std::thread::sleep(std::time::Duration::from_millis(500));
     } else {
-        eprintln!("[HOTSPOT] No hotspot state found, performing general cleanup...");
-        log::info!("No hotspot state found during stop");
+        info!("[HOTSPOT] No hotspot state found, performing general cleanup...");
     }
 
     // Remove state file
-    eprintln!("[HOTSPOT] Removing state file...");
+    debug!("[HOTSPOT] Removing state file...");
     let _ = fs::remove_file(STATE_PATH);
 
-    eprintln!("[HOTSPOT] Hotspot stopped successfully");
-    log::info!("Hotspot stopped successfully");
+    info!("[HOTSPOT] Hotspot stopped successfully");
 
     Ok(())
 }
@@ -868,7 +806,7 @@ pub fn hotspot_disconnect_client(mac: &str) -> Result<()> {
         if let Ok(guard) = ap_mutex.lock() {
             if let Some(ap) = guard.as_ref() {
                 if let Err(err) = deauth_client(ap, mac_bytes) {
-                    log::warn!("Failed to deauth hotspot client {}: {}", mac, err);
+                    warn!("Failed to deauth hotspot client {}: {}", mac, err);
                 } else {
                     did_action = true;
                 }
@@ -898,7 +836,7 @@ pub fn hotspot_set_blacklist(macs: &[String]) -> Result<()> {
                 parsed.insert(bytes);
             }
             Err(err) => {
-                log::warn!("Skipping invalid blacklist MAC {}: {}", mac, err);
+                warn!("Skipping invalid blacklist MAC {}: {}", mac, err);
             }
         }
     }
@@ -926,7 +864,7 @@ pub fn hotspot_set_blacklist(macs: &[String]) -> Result<()> {
             if let Some(ap) = guard.as_ref() {
                 for mac in to_disconnect {
                     if let Err(err) = deauth_client(ap, mac) {
-                        log::warn!(
+                        warn!(
                             "Failed to deauth blacklisted client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {}",
                             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], err
                         );
@@ -1030,7 +968,7 @@ fn start_dhcp_server(interface: &str, gateway_ip: Ipv4Addr) -> Result<()> {
     server
         .start()
         .map_err(|e| WirelessError::System(format!("Failed to start DHCP server: {}", e)))?;
-    log::info!(
+    info!(
         "DHCP server bound on {} offering {}-{}",
         interface,
         dhcp_cfg.range_start,
@@ -1039,7 +977,7 @@ fn start_dhcp_server(interface: &str, gateway_ip: Ipv4Addr) -> Result<()> {
 
     let handle = std::thread::spawn(move || {
         if let Err(e) = server.serve() {
-            log::error!("DHCP server exited with error: {}", e);
+            error!("DHCP server exited with error: {}", e);
         }
     });
 
@@ -1077,7 +1015,7 @@ fn start_dns_server(interface: &str, gateway_ip: Ipv4Addr) -> Result<()> {
     server
         .start()
         .map_err(|e| WirelessError::System(format!("Failed to start DNS server: {}", e)))?;
-    log::info!("DNS server bound on {} ({})", interface, gateway_ip);
+    info!("DNS server bound on {} ({})", interface, gateway_ip);
 
     *guard = Some(server);
     Ok(())
@@ -1113,23 +1051,17 @@ fn ensure_ap_capability(interface: &str) -> Result<()> {
             .any(|m| *m == InterfaceMode::AccessPoint);
 
     if supports_ap {
-        eprintln!(
-            "[HOTSPOT] ✓ Interface {} ({}) reports AP capability via nl80211",
+        debug!(
+            "[HOTSPOT] Interface {} ({}) reports AP capability via nl80211",
             interface, caps.name
         );
         Ok(())
     } else {
-        eprintln!(
-            "[HOTSPOT] WARNING: {} does not report AP mode support (nl80211 modes: {:?})",
+        warn!(
+            "[HOTSPOT] {} does not report AP mode support (nl80211 modes: {:?})",
             interface, caps.supported_modes
         );
-        eprintln!(
-            "[HOTSPOT] Will attempt to start Rust AP anyway - driver may still reject AP mode"
-        );
-        log::warn!(
-            "Interface {} lacks reported AP support; attempting AP start anyway",
-            interface
-        );
+        warn!("[HOTSPOT] Will attempt to start Rust AP anyway; driver may still reject AP mode");
         Ok(())
     }
 }
@@ -1171,13 +1103,13 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
     if !has_ipv4 {
         if !interface_is_wireless(interface) {
             if !interface_has_carrier(interface) {
-                eprintln!(
-                    "[HOTSPOT] WARNING: upstream {} has no carrier; DHCP may fail",
+                warn!(
+                    "[HOTSPOT] Upstream {} has no carrier; DHCP may fail",
                     interface
                 );
             }
 
-            eprintln!(
+            info!(
                 "[HOTSPOT] Upstream {} missing IPv4; attempting DHCP",
                 interface
             );
@@ -1213,7 +1145,7 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
 
             match dhcp_result {
                 Ok(lease) => {
-                    log::info!(
+                    info!(
                         "Upstream {} DHCP lease: {}/{} gateway={:?}",
                         interface,
                         lease.address,
@@ -1223,7 +1155,7 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
                     has_ipv4 = true;
                 }
                 Err(err) => {
-                    log::warn!("Upstream DHCP failed for {}: {}", interface, err);
+                    warn!("Upstream DHCP failed for {}: {}", interface, err);
                 }
             }
         }

@@ -215,7 +215,7 @@ impl StateManager {
 
         for interface in interfaces {
             if let Err(e) = self.restore(&interface) {
-                log::warn!("Failed to restore {}: {}", interface, e);
+                tracing::warn!("Failed to restore {}: {}", interface, e);
                 if first_error.is_none() {
                     first_error = Some(e);
                 }
@@ -351,7 +351,7 @@ impl Drop for StateManager {
     fn drop(&mut self) {
         if self.auto_restore && !self.states.is_empty() {
             if let Err(e) = self.restore_all() {
-                log::error!("Failed to restore interface states on drop: {}", e);
+                tracing::error!("Failed to restore interface states on drop: {}", e);
             }
         }
     }

@@ -20,11 +20,12 @@ SupplementaryGroups=rustyjack
 Environment=RUSTYJACK_PORTAL_PORT=3000
 Environment=RUSTYJACK_PORTAL_BIND=0.0.0.0
 Environment=RUSTYJACK_DAEMON_SOCKET=/run/rustyjack/rustyjackd.sock
+Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
 
 # Filesystem access restrictions
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/rustyjack/portal
+ReadWritePaths=/var/lib/rustyjack/portal /var/lib/rustyjack/logs
 PrivateTmp=true
 
 # Kernel hardening

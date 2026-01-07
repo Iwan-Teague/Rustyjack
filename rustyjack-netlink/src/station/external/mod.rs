@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::{NetlinkError, Result};
 use crate::station::backend::{ScanOutcome, StationBackend};

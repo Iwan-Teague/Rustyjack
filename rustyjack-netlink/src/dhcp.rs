@@ -177,10 +177,10 @@ impl DhcpClient {
     /// * `InterfaceNotFound` - Interface does not exist
     /// * logs warning if address flush fails but does not error
     pub async fn release(&self, interface: &str) -> Result<()> {
-        log::info!("Releasing DHCP lease for interface {}", interface);
+        tracing::info!("Releasing DHCP lease for interface {}", interface);
 
         if let Err(e) = self.interface_mgr.flush_addresses(interface).await {
-            log::warn!("Failed to flush addresses on {}: {}", interface, e);
+            tracing::warn!("Failed to flush addresses on {}: {}", interface, e);
         }
 
         Ok(())
@@ -218,14 +218,14 @@ impl DhcpClient {
     /// # }
     /// ```
     pub async fn acquire(&self, interface: &str, hostname: Option<&str>) -> Result<DhcpLease> {
-        log::info!("Acquiring DHCP lease for interface {}", interface);
+        tracing::info!("Acquiring DHCP lease for interface {}", interface);
 
         let (lease, _transport) = self
             .acquire_with_transport(interface, hostname)
             .await
             .map_err(|(_transport, err)| err)?;
 
-        log::info!(
+        tracing::info!(
             "Successfully acquired DHCP lease for {}: {}/{}, gateway: {:?}, DNS: {:?}",
             interface,
             lease.address,
@@ -267,7 +267,7 @@ impl DhcpClient {
     ///
     /// Same as `acquire()` and `release()`
     pub async fn renew(&self, interface: &str, hostname: Option<&str>) -> Result<DhcpLease> {
-        log::info!("Renewing DHCP lease for interface {}", interface);
+        tracing::info!("Renewing DHCP lease for interface {}", interface);
 
         let (lease, _transport) = self
             .acquire_with_transport(interface, hostname)
@@ -354,14 +354,14 @@ impl DhcpClient {
                 return Ok((lease, DhcpTransport::Raw));
             }
             Ok(Err(err)) => {
-                log::warn!(
+                tracing::warn!(
                     "Raw DHCP attempt failed on {}: {}. Falling back to UDP",
                     interface,
                     err
                 );
             }
             Err(err) => {
-                log::warn!(
+                tracing::warn!(
                     "Raw DHCP attempt failed on {}: {}. Falling back to UDP",
                     interface,
                     err
@@ -522,7 +522,7 @@ impl DhcpClient {
         let (fd, ifindex) = open_raw_socket(interface)?;
 
         for attempt in 1..=3 {
-            log::info!(
+            tracing::info!(
                 "Sending DHCP DISCOVER (raw) on {} (attempt {})",
                 interface,
                 attempt
@@ -549,7 +549,7 @@ impl DhcpClient {
                 }
                 Err(e) => {
                     if attempt < 3 {
-                        log::warn!(
+                        tracing::warn!(
                             "DHCP offer timeout (raw) on {} (attempt {}), retrying...",
                             interface,
                             attempt
@@ -585,7 +585,7 @@ impl DhcpClient {
     ) -> Result<DhcpLease> {
         let (fd, ifindex) = open_raw_socket(interface)?;
 
-        log::info!(
+        tracing::info!(
             "Sending DHCP REQUEST (raw) for {} on {}",
             offer.offered_ip,
             interface
@@ -619,7 +619,7 @@ impl DhcpClient {
         hostname: Option<&str>,
     ) -> Result<DhcpOffer> {
         for attempt in 1..=3 {
-            log::info!(
+            tracing::info!(
                 "Sending DHCP DISCOVER on {} (attempt {})",
                 interface,
                 attempt
@@ -639,7 +639,7 @@ impl DhcpClient {
 
             match self.wait_for_offer(socket, interface, xid) {
                 Ok(offer) => {
-                    log::info!(
+                    tracing::info!(
                         "Received DHCP offer from {} on {} (offered_ip={})",
                         offer.server_id,
                         interface,
@@ -649,7 +649,7 @@ impl DhcpClient {
                 }
                 Err(e) => {
                     if attempt < 3 {
-                        log::warn!(
+                        tracing::warn!(
                             "DHCP offer timeout on {} (attempt {}), retrying...",
                             interface,
                             attempt
@@ -704,7 +704,7 @@ impl DhcpClient {
         offer: &DhcpOffer,
         hostname: Option<&str>,
     ) -> Result<DhcpLease> {
-        log::info!(
+        tracing::info!(
             "Sending DHCP REQUEST for {} on {}",
             offer.offered_ip,
             interface
@@ -757,7 +757,7 @@ impl DhcpClient {
             // Basic source validation: accept only replies from the server that issued the OFFER
             if let std::net::SocketAddr::V4(src_v4) = src {
                 if src_v4.ip() != &offer.server_id && !src_v4.ip().is_broadcast() {
-                    log::debug!(
+                    tracing::debug!(
                         "Ignoring DHCP response from unexpected server {} (expected {})",
                         src_v4.ip(),
                         offer.server_id
@@ -768,7 +768,7 @@ impl DhcpClient {
 
             match self.parse_ack_packet(&buf[..len], interface, xid, offer) {
                 Ok(lease) => {
-                    log::info!(
+                    tracing::info!(
                         "Received DHCP ACK on {}: {}/{}, gateway={:?}",
                         interface,
                         lease.address,
@@ -780,7 +780,7 @@ impl DhcpClient {
                 Err(NetlinkError::DhcpClient(DhcpClientError::InvalidPacket {
                     reason, ..
                 })) => {
-                    log::debug!("Ignoring invalid DHCP packet: {}", reason);
+                    tracing::debug!("Ignoring invalid DHCP packet: {}", reason);
                 }
                 Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak { reason, .. })) => {
                     return Err(NetlinkError::DhcpClient(DhcpClientError::ServerNak {
@@ -1148,10 +1148,10 @@ impl DhcpClient {
     }
 
     async fn configurefinterface(&self, interface: &str, lease: &DhcpLease) -> Result<()> {
-        log::debug!("Cfnfiguring interface {} with lease", interface);
+        tracing::debug!("Cfnfiguring interface {} with lease", interface);
 
         if let Err(err) = self.interface_mgr.flush_addresses(interface).await {
-            log::warn!("Failed to flush addresses on {}: {}", interface, err);
+            tracing::warn!("Failed to flush addresses on {}: {}", interface, err);
         }
 
         self.interface_mgr

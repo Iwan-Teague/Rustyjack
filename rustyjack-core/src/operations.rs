@@ -585,7 +585,7 @@ fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<Hand
 fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerResult> {
     use crate::system::apply_interface_isolation;
 
-    log::info!(
+    tracing::info!(
         "[CORE] Hotspot start requested ap_interface={} upstream_interface={} ssid={} channel={}",
         args.ap_interface,
         args.upstream_interface,
@@ -623,10 +623,10 @@ fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerRe
 
     // Best-effort isolation - don't fail hotspot if isolation fails
     if let Err(e) = apply_interface_isolation(&allowed_interfaces) {
-        log::warn!("Interface isolation failed: {}", e);
+        tracing::warn!("Interface isolation failed: {}", e);
     }
 
-    log::info!(
+    tracing::info!(
         "[CORE] Hotspot start completed running=true ap={} upstream={}",
         state.ap_interface,
         state.upstream_interface
@@ -650,15 +650,15 @@ fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerRe
 }
 
 fn handle_hotspot_stop() -> Result<HandlerResult> {
-    log::info!("[CORE] Hotspot stop requested");
+    tracing::info!("[CORE] Hotspot stop requested");
     stop_hotspot().context("stopping hotspot")?;
     let data = json!({ "running": false });
-    log::info!("[CORE] Hotspot stop completed");
+    tracing::info!("[CORE] Hotspot stop completed");
     Ok(("Hotspot stopped".to_string(), data))
 }
 
 fn handle_hotspot_status() -> Result<HandlerResult> {
-    log::debug!("[CORE] Hotspot status requested");
+    tracing::debug!("[CORE] Hotspot status requested");
     if let Some(HotspotState {
         ssid,
         password,
@@ -672,7 +672,7 @@ fn handle_hotspot_status() -> Result<HandlerResult> {
         ..
     }) = status_hotspot()
     {
-        log::debug!(
+        tracing::debug!(
             "[CORE] Hotspot status running ap={} upstream={}",
             ap_interface,
             upstream_interface
@@ -691,7 +691,7 @@ fn handle_hotspot_status() -> Result<HandlerResult> {
         });
         Ok(("Hotspot running".to_string(), data))
     } else {
-        log::debug!("[CORE] Hotspot status not running");
+        tracing::debug!("[CORE] Hotspot status not running");
         let data = json!({ "running": false });
         Ok(("Hotspot not running".to_string(), data))
     }
@@ -2016,7 +2016,7 @@ fn handle_dnsspoof_stop() -> Result<HandlerResult> {
 }
 
 fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult> {
-    log::info!("Discovering gateway information");
+    tracing::info!("Discovering gateway information");
 
     let interface = match args.interface {
         Some(iface) => iface,
@@ -2050,7 +2050,7 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
 }
 
 fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResult> {
-    log::info!("Scanning local network via ARP on {}", args.interface);
+    tracing::info!("Scanning local network via ARP on {}", args.interface);
 
     enforce_single_interface(&args.interface)?;
 
@@ -2081,7 +2081,7 @@ fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResul
 }
 
 fn handle_wifi_recon_service_scan(args: WifiReconServiceScanArgs) -> Result<HandlerResult> {
-    log::info!("Scanning network services on {}", args.interface);
+    tracing::info!("Scanning network services on {}", args.interface);
 
     let devices = arp_scan(&args.interface)?;
     let services = scan_network_services(&devices)?;
@@ -2114,7 +2114,7 @@ fn handle_wifi_recon_service_scan(args: WifiReconServiceScanArgs) -> Result<Hand
 }
 
 fn handle_wifi_recon_mdns_scan(args: WifiReconMdnsScanArgs) -> Result<HandlerResult> {
-    log::info!("Discovering mDNS devices for {} seconds", args.duration);
+    tracing::info!("Discovering mDNS devices for {} seconds", args.duration);
 
     let devices = discover_mdns_devices(args.duration)?;
 
@@ -2142,7 +2142,7 @@ fn handle_wifi_recon_mdns_scan(args: WifiReconMdnsScanArgs) -> Result<HandlerRes
 }
 
 fn handle_wifi_recon_bandwidth(args: WifiReconBandwidthArgs) -> Result<HandlerResult> {
-    log::info!(
+    tracing::info!(
         "Monitoring bandwidth on {} for {} seconds",
         args.interface,
         args.duration
@@ -2172,7 +2172,7 @@ fn handle_wifi_recon_bandwidth(args: WifiReconBandwidthArgs) -> Result<HandlerRe
 }
 
 fn handle_wifi_recon_dns_capture(args: WifiReconDnsCaptureArgs) -> Result<HandlerResult> {
-    log::info!(
+    tracing::info!(
         "Capturing DNS queries on {} for {} seconds",
         args.interface,
         args.duration
@@ -2577,27 +2577,27 @@ fn handle_wifi_list() -> Result<HandlerResult> {
 }
 
 fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult> {
-    log::info!("Collecting WiFi status information");
+    tracing::info!("Collecting WiFi status information");
 
     let interface_name = args.interface.clone();
     let info = if let Some(name) = interface_name.clone() {
-        log::info!("Getting status for specified interface: {name}");
+        tracing::info!("Getting status for specified interface: {name}");
         match detect_interface(Some(name.clone())) {
             Ok(i) => i,
             Err(e) => {
-                log::error!("Failed to detect interface {name}: {e}");
+                tracing::error!("Failed to detect interface {name}: {e}");
                 bail!("Failed to get interface info for {name}: {e}");
             }
         }
     } else {
-        log::info!("Auto-detecting default interface");
+        tracing::info!("Auto-detecting default interface");
         match detect_interface(None) {
             Ok(i) => {
-                log::info!("Detected default interface: {}", i.name);
+                tracing::info!("Detected default interface: {}", i.name);
                 i
             }
             Err(e) => {
-                log::error!("Failed to detect default interface: {e}");
+                tracing::error!("Failed to detect default interface: {e}");
                 bail!("Failed to detect default interface: {e}");
             }
         }
@@ -2630,7 +2630,7 @@ fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult
         .map(|iface| iface == &info.name)
         .unwrap_or(false);
 
-    log::info!(
+    tracing::info!(
         "Interface {} status: active={}, connected={}",
         info.name,
         is_active,
@@ -2776,7 +2776,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
                     iface = summaries.iter().find(|s| s.name == target_interface);
                     // Update preference to the renamed interface
                     write_interface_preference(root, "system_preferred", &target_interface)?;
-                    log::info!(
+                    tracing::info!(
                         "Recovered renamed interface: {} -> {}",
                         stored_iface,
                         target_interface
@@ -2803,7 +2803,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
             #[cfg(target_os = "linux")]
             let _ = netlink_set_interface_up(&target_interface);
             if !interface_has_carrier(&target_interface) {
-                log::warn!(
+                tracing::warn!(
                     "[ROUTE] No carrier detected on {}; attempting DHCP anyway",
                     target_interface
                 );
@@ -2813,7 +2813,7 @@ fn handle_wifi_route_ensure(root: &Path, args: WifiRouteEnsureArgs) -> Result<Ha
             if wpa_ready_for_dhcp(&target_interface) {
                 let _ = acquire_dhcp_lease(&target_interface)?;
             } else {
-                log::info!(
+                tracing::info!(
                     "[ROUTE] Skipping DHCP on {} (wireless not associated yet)",
                     target_interface
                 );
@@ -3181,7 +3181,7 @@ fn handle_bridge_stop(root: &Path, args: BridgeStopArgs) -> Result<HandlerResult
     let _ = stop_pcap_capture();
     stop_bridge_pair(&args.interface_a, &args.interface_b)?;
     if let Err(err) = restore_routing_state(root) {
-        log::warn!("bridge stop: failed to restore routing: {err}");
+        tracing::warn!("bridge stop: failed to restore routing: {err}");
     }
     let _ = append_payload_log(
         root,
@@ -3201,14 +3201,14 @@ fn handle_bridge_stop(root: &Path, args: BridgeStopArgs) -> Result<HandlerResult
 }
 
 fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
-    log::info!("Starting WiFi scan");
+    tracing::info!("Starting WiFi scan");
 
     let interface = match args.interface {
         Some(iface) => iface,
         None => {
             // Try to get active interface from config first
             if let Ok(Some(active)) = get_active_interface(root) {
-                log::info!("Using active interface from config: {}", active);
+                tracing::info!("Using active interface from config: {}", active);
                 active
             } else {
                 // Fall back to auto-detection
@@ -3223,11 +3223,11 @@ fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
 
     let networks = match scan_wifi_networks(&interface) {
         Ok(nets) => {
-            log::info!("Scan completed, found {} network(s)", nets.len());
+            tracing::info!("Scan completed, found {} network(s)", nets.len());
             nets
         }
         Err(e) => {
-            log::error!("WiFi scan failed on {interface}: {e}");
+            tracing::error!("WiFi scan failed on {interface}: {e}");
             bail!("WiFi scan failed: {e}");
         }
     };
@@ -3256,7 +3256,7 @@ fn try_apply_mac_policy(root: &Path, stage: MacStage, interface: &str, ssid: Opt
                         if let Ok(current) = manager.get_mac(interface) {
                             if current != parsed {
                                 if manager.set_mac(interface, &parsed).is_ok() {
-                                    log::info!(
+                                    tracing::info!(
                                         "[MAC_POLICY] override {} {} -> {} (per-network)",
                                         interface,
                                         current,
@@ -3275,7 +3275,7 @@ fn try_apply_mac_policy(root: &Path, stage: MacStage, interface: &str, ssid: Opt
     match MacPolicyEngine::new(root, config) {
         Ok(mut engine) => {
             if let Err(e) = engine.apply(stage, interface, ssid) {
-                log::warn!(
+                tracing::warn!(
                     "[MAC_POLICY] apply failed on {} (stage={:?}): {}",
                     interface,
                     stage,
@@ -3284,7 +3284,7 @@ fn try_apply_mac_policy(root: &Path, stage: MacStage, interface: &str, ssid: Opt
             }
         }
         Err(e) => {
-            log::warn!("[MAC_POLICY] initialization failed: {}", e);
+            tracing::warn!("[MAC_POLICY] initialization failed: {}", e);
         }
     }
 }
@@ -3294,7 +3294,7 @@ fn load_mac_policy_config(root: &Path) -> MacPolicyConfig {
     if policy_path.exists() {
         match MacPolicyConfig::load(&policy_path) {
             Ok(cfg) => return cfg,
-            Err(e) => log::warn!(
+            Err(e) => tracing::warn!(
                 "[MAC_POLICY] Failed to load {}: {}. Falling back to gui_conf.json",
                 policy_path.display(),
                 e
@@ -3543,15 +3543,15 @@ fn renew_dhcp_and_reconnect(interface: &str) -> bool {
     let dhcp_success = match crate::runtime::shared_runtime() {
         Ok(rt) => rt.block_on(async {
             if let Err(e) = rustyjack_netlink::dhcp_renew(interface, None).await {
-                log::warn!("DHCP renew failed for {}: {}", interface, e);
+                tracing::warn!("DHCP renew failed for {}: {}", interface, e);
                 false
             } else {
-                log::info!("DHCP lease renewed for {}", interface);
+                tracing::info!("DHCP lease renewed for {}", interface);
                 true
             }
         }),
         Err(e) => {
-            log::warn!("DHCP runtime unavailable: {}", e);
+            tracing::warn!("DHCP runtime unavailable: {}", e);
             false
         }
     };
@@ -3568,7 +3568,7 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
     use crate::wireless_native::{self, DeauthConfig};
 
     let ssid_display = args.ssid.clone().unwrap_or_else(|| args.bssid.clone());
-    log::info!(
+    tracing::info!(
         "Starting native Rust deauth attack on BSSID: {} (SSID: {})",
         args.bssid,
         ssid_display
@@ -3653,11 +3653,11 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
         continuous: args.continuous,
     };
 
-    log::info!("Executing native Rust deauth attack (rustyjack-wireless)");
+    tracing::info!("Executing native Rust deauth attack (rustyjack-wireless)");
 
     // Execute the native deauth attack
     let result = wireless_native::execute_deauth_attack(&loot_dir, &config, |progress, status| {
-        log::debug!("Deauth progress: {:.0}% - {}", progress * 100.0, status);
+        tracing::debug!("Deauth progress: {:.0}% - {}", progress * 100.0, status);
     })?;
 
     let target_label = args.ssid.clone().unwrap_or_else(|| args.bssid.clone());
@@ -3735,7 +3735,7 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
     use rustyjack_wireless::evil_twin::{execute_evil_twin, EvilTwin, EvilTwinConfig};
     use std::time::Duration;
 
-    log::info!("Starting Evil Twin attack on SSID: {}", args.ssid);
+    tracing::info!("Starting Evil Twin attack on SSID: {}", args.ssid);
 
     // Check if we have root privileges
     if !wireless_native::native_available() {
@@ -3802,7 +3802,7 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
 
     // Execute the attack with progress callback
     let result = execute_evil_twin(config, Some(&loot_dir.to_string_lossy()), |msg| {
-        log::info!("Evil Twin: {}", msg);
+        tracing::info!("Evil Twin: {}", msg);
     })
     .map_err(|e| anyhow::anyhow!("Evil Twin attack failed: {}", e))?;
 
@@ -3872,7 +3872,7 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
 fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> {
     use crate::wireless_native::{self, PmkidCaptureConfig};
 
-    log::info!("Starting PMKID capture on interface: {}", args.interface);
+    tracing::info!("Starting PMKID capture on interface: {}", args.interface);
 
     // Check privileges
     if !wireless_native::native_available() {
@@ -3913,7 +3913,7 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
 
     // Execute the native PMKID capture
     let result = wireless_native::execute_pmkid_capture(&loot_dir, &config, |progress, status| {
-        log::debug!("PMKID progress: {:.0}% - {}", progress * 100.0, status);
+        tracing::debug!("PMKID progress: {:.0}% - {}", progress * 100.0, status);
     })?;
 
     let target_label = args
@@ -3975,7 +3975,7 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
 fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<HandlerResult> {
     use crate::wireless_native::{self, ProbeSniffConfig as NativeProbeConfig};
 
-    log::info!(
+    tracing::info!(
         "Starting probe request sniff on interface: {}",
         args.interface
     );
@@ -4017,7 +4017,7 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
 
     // Execute the native probe sniff
     let result = wireless_native::execute_probe_sniff(&loot_dir, &config, |progress, status| {
-        log::debug!(
+        tracing::debug!(
             "Probe sniff progress: {:.0}% - {}",
             progress * 100.0,
             status
@@ -4064,7 +4064,7 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
 fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> {
     use crate::wireless_native::{self, KarmaAttackConfig};
 
-    log::info!("Starting Karma attack on interface: {}", args.interface);
+    tracing::info!("Starting Karma attack on interface: {}", args.interface);
 
     // Check privileges
     if !wireless_native::native_available() {
@@ -4118,7 +4118,7 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
 
     // Execute the Karma attack
     let result = wireless_native::execute_karma(&loot_dir, &config, |progress, status| {
-        log::debug!("Karma progress: {:.0}% - {}", progress * 100.0, status);
+        tracing::debug!("Karma progress: {:.0}% - {}", progress * 100.0, status);
     })?;
 
     let log_file = write_scoped_log(
@@ -4170,7 +4170,7 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
     use rustyjack_wpa::handshake::HandshakeExport;
     use std::path::PathBuf;
 
-    log::info!("Starting handshake crack on file: {}", args.file);
+    tracing::info!("Starting handshake crack on file: {}", args.file);
 
     #[derive(serde::Deserialize)]
     struct HandshakeBundle {
@@ -4304,15 +4304,15 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
 }
 
 fn handle_wifi_profile_list(root: &Path) -> Result<HandlerResult> {
-    log::info!("Listing WiFi profiles");
+    tracing::info!("Listing WiFi profiles");
 
     let profiles = match list_wifi_profiles(root) {
         Ok(p) => {
-            log::info!("Found {} profile(s)", p.len());
+            tracing::info!("Found {} profile(s)", p.len());
             p
         }
         Err(e) => {
-            log::error!("Failed to list WiFi profiles: {e}");
+            tracing::error!("Failed to list WiFi profiles: {e}");
             bail!("Failed to list WiFi profiles: {e}");
         }
     };
@@ -4354,7 +4354,7 @@ fn handle_wifi_profile_save(root: &Path, args: WifiProfileSaveArgs) -> Result<Ha
         auto_connect,
     } = args;
 
-    log::info!(
+    tracing::info!(
         "[CORE] Saving WiFi profile for SSID: {ssid} iface={}",
         interface
     );
@@ -4372,11 +4372,11 @@ fn handle_wifi_profile_save(root: &Path, args: WifiProfileSaveArgs) -> Result<Ha
 
     let path = match save_wifi_profile(root, &profile) {
         Ok(p) => {
-            log::info!("[CORE] Profile saved successfully to: {}", p.display());
+            tracing::info!("[CORE] Profile saved successfully to: {}", p.display());
             p
         }
         Err(e) => {
-            log::error!("[CORE] Failed to save WiFi profile for {ssid}: {e}");
+            tracing::error!("[CORE] Failed to save WiFi profile for {ssid}: {e}");
             bail!("Failed to save WiFi profile: {e}");
         }
     };
@@ -4389,7 +4389,7 @@ fn handle_wifi_profile_save(root: &Path, args: WifiProfileSaveArgs) -> Result<Ha
 }
 
 fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Result<HandlerResult> {
-    log::info!(
+    tracing::info!(
         "[CORE] WiFi connect requested profile={:?} ssid={:?} iface={:?} remember={}",
         args.profile,
         args.ssid,
@@ -4399,30 +4399,30 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
 
     let interface = match select_wifi_interface(args.interface.clone()) {
         Ok(iface) => {
-            log::info!("Selected interface: {iface}");
+            tracing::info!("Selected interface: {iface}");
             iface
         }
         Err(e) => {
-            log::error!("Failed to select interface: {e}");
+            tracing::error!("Failed to select interface: {e}");
             bail!("Failed to select interface: {e}");
         }
     };
 
     let stored = if let Some(ref profile_name) = args.profile {
-        log::info!("Loading profile: {profile_name}");
+        tracing::info!("Loading profile: {profile_name}");
         match load_wifi_profile(root, profile_name) {
             Ok(p) => p,
             Err(e) => {
-                log::error!("Failed to load profile '{profile_name}': {e}");
+                tracing::error!("Failed to load profile '{profile_name}': {e}");
                 bail!("Failed to load profile: {e}");
             }
         }
     } else if let Some(ref ssid) = args.ssid {
-        log::info!("Loading profile by SSID: {ssid}");
+        tracing::info!("Loading profile by SSID: {ssid}");
         match load_wifi_profile(root, ssid) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("Could not load profile for SSID '{ssid}': {e}");
+                tracing::warn!("Could not load profile for SSID '{ssid}': {e}");
                 None
             }
         }
@@ -4435,7 +4435,7 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
         .clone()
         .or_else(|| stored.as_ref().map(|p| p.profile.ssid.clone()))
         .ok_or_else(|| {
-            log::error!("[CORE] WiFi connect failed: no SSID provided/profile not found");
+            tracing::error!("[CORE] WiFi connect failed: no SSID provided/profile not found");
             anyhow!("Provide --ssid or --profile when connecting to Wi-Fi")
         })?;
 
@@ -4444,28 +4444,28 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
         .clone()
         .or_else(|| stored.as_ref().and_then(|p| p.profile.password.clone()));
 
-    log::info!("[CORE] Connecting to SSID: {ssid} on interface: {interface}");
+    tracing::info!("[CORE] Connecting to SSID: {ssid} on interface: {interface}");
 
     try_apply_mac_policy(root, MacStage::Assoc, &interface, Some(&ssid));
 
     if let Err(e) = connect_wifi_network(&interface, &ssid, password.as_deref()) {
-        log::error!("[CORE] Failed to connect to {ssid}: {e}");
+        tracing::error!("[CORE] Failed to connect to {ssid}: {e}");
         bail!("WiFi connection failed: {e}");
     }
 
-    log::info!("[CORE] WiFi connection successful ssid={ssid} iface={interface}");
+    tracing::info!("[CORE] WiFi connection successful ssid={ssid} iface={interface}");
 
     let (route_msg, route_data) =
         handle_wifi_route_ensure(root, WifiRouteEnsureArgs { interface: interface.clone() })?;
-    log::info!("[CORE] Route ensure after WiFi connect: {}", route_msg);
+    tracing::info!("[CORE] Route ensure after WiFi connect: {}", route_msg);
     if let Some(false) = route_data.get("route_set").and_then(|v| v.as_bool()) {
-        log::warn!(
+        tracing::warn!(
             "[CORE] No gateway detected after WiFi connect on {}",
             interface
         );
     }
     if let Some(false) = route_data.get("ping_success").and_then(|v| v.as_bool()) {
-        log::warn!(
+        tracing::warn!(
             "[CORE] Ping test failed after WiFi connect on {}",
             interface
         );
@@ -4477,16 +4477,16 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
         if args.remember {
             if let Some(pass) = password.clone() {
                 stored_profile.profile.password = Some(pass);
-                log::info!("Updating stored profile with new password");
+                tracing::info!("Updating stored profile with new password");
             } else {
-                log::warn!("--remember flag set but no password available to store");
+                tracing::warn!("--remember flag set but no password available to store");
             }
         }
         if let Err(e) = write_wifi_profile(&stored_profile.path, &stored_profile.profile) {
-            log::error!("Failed to update profile: {e}");
+            tracing::error!("Failed to update profile: {e}");
         } else {
             remembered = true;
-            log::info!("Profile updated successfully");
+            tracing::info!("Profile updated successfully");
         }
     } else if args.remember {
         if let Some(pass) = password.clone() {
@@ -4503,14 +4503,14 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
             match save_wifi_profile(root, &profile) {
                 Ok(_) => {
                     remembered = true;
-                    log::info!("New profile created and saved");
+                    tracing::info!("New profile created and saved");
                 }
                 Err(e) => {
-                    log::error!("Failed to save new profile: {e}");
+                    tracing::error!("Failed to save new profile: {e}");
                 }
             }
         } else {
-            log::warn!("--remember flag ignored because no password was supplied");
+            tracing::warn!("--remember flag ignored because no password was supplied");
         }
     }
 
@@ -4523,34 +4523,34 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
 }
 
 fn handle_wifi_profile_delete(root: &Path, args: WifiProfileDeleteArgs) -> Result<HandlerResult> {
-    log::info!("[CORE] Attempting to delete WiFi profile: {}", args.ssid);
+    tracing::info!("[CORE] Attempting to delete WiFi profile: {}", args.ssid);
 
     match delete_wifi_profile(root, &args.ssid) {
         Ok(()) => {
-            log::info!("[CORE] Profile deleted successfully: {}", args.ssid);
+            tracing::info!("[CORE] Profile deleted successfully: {}", args.ssid);
             let data = json!({ "ssid": args.ssid });
             Ok(("Wi-Fi profile deleted".to_string(), data))
         }
         Err(e) => {
-            log::error!("[CORE] Failed to delete profile '{}': {e}", args.ssid);
+            tracing::error!("[CORE] Failed to delete profile '{}': {e}", args.ssid);
             bail!("Failed to delete profile: {e}");
         }
     }
 }
 
 fn handle_wifi_disconnect(args: WifiDisconnectArgs) -> Result<HandlerResult> {
-    log::info!(
+    tracing::info!(
         "[CORE] Attempting WiFi disconnect iface={:?}",
         args.interface
     );
 
     let interface = match disconnect_wifi_interface(args.interface.clone()) {
         Ok(iface) => {
-            log::info!("[CORE] Successfully disconnected interface: {iface}");
+            tracing::info!("[CORE] Successfully disconnected interface: {iface}");
             iface
         }
         Err(e) => {
-            log::error!("[CORE] Failed to disconnect WiFi: {e}");
+            tracing::error!("[CORE] Failed to disconnect WiFi: {e}");
             bail!("WiFi disconnect failed: {e}");
         }
     };
@@ -4726,14 +4726,14 @@ fn resolve_loot_path(root: &Path, path: &Path) -> Result<PathBuf> {
 }
 
 fn handle_hardware_detect() -> Result<HandlerResult> {
-    log::info!("Scanning hardware interfaces");
+    tracing::info!("Scanning hardware interfaces");
 
     let interfaces = list_interface_summaries()?;
     for iface in &interfaces {
         if iface.name == "lo" {
             continue;
         }
-        log::info!(
+        tracing::info!(
             "[HW] iface={} kind={} state={} ip={:?}",
             iface.name,
             iface.kind,
@@ -4784,6 +4784,6 @@ fn handle_hardware_detect() -> Result<HandlerResult> {
         other_interfaces.len()
     );
 
-    log::info!("Hardware scan complete: {summary}");
+    tracing::info!("Hardware scan complete: {summary}");
     Ok((summary, data))
 }

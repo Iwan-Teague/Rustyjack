@@ -274,7 +274,7 @@ impl DnsServer {
                                 .map(|s| s.config.interface.clone())
                                 .unwrap_or_else(|_| "unknown".to_string())
                         };
-                        eprintln!("DNS error on {}: {}", interface, e);
+                        tracing::warn!("DNS error on {}: {}", interface, e);
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -285,7 +285,7 @@ impl DnsServer {
                         .lock()
                         .map(|s| s.config.interface.clone())
                         .unwrap_or_else(|_| "unknown".to_string());
-                    eprintln!(
+                    tracing::error!(
                         "{}",
                         DnsError::ReceiveFailed {
                             interface,
@@ -333,9 +333,9 @@ impl DnsServer {
                 .lock()
                 .map_err(|e| DnsError::InvalidConfig(format!("State lock poisoned: {e}")))?;
             s.query_count += 1;
-            if s.config.log_queries {
-                println!("[DNS] Query from {}: {} (type {})", client, qname, qtype);
-            }
+                if s.config.log_queries {
+                    tracing::debug!("[DNS] Query from {}: {} (type {})", client, qname, qtype);
+                }
         }
 
         let upstream_dns = state
@@ -367,10 +367,10 @@ impl DnsServer {
             if let Ok(mut s) = state.lock() {
                 s.spoof_count += 1;
                 if s.config.log_queries {
-                    println!("[DNS] Spoofing {} -> {}", qname, ip);
+                    tracing::debug!("[DNS] Spoofing {} -> {}", qname, ip);
                 }
             } else {
-                eprintln!("[DNS] State lock poisoned while updating spoof count");
+                tracing::error!("[DNS] State lock poisoned while updating spoof count");
             }
 
             Self::send_response(

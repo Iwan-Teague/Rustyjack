@@ -17,7 +17,7 @@ where
     }
 
     if std::env::var("RUSTYJACK_PORTAL_MODE").as_deref() == Ok("external") {
-        log::warn!("External portal mode is not supported; using embedded portal");
+        tracing::warn!("External portal mode is not supported; using embedded portal");
     }
 
     run_embedded_portal(req, cancel, progress).await

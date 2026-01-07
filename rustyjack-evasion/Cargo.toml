@@ -32,8 +32,7 @@ anyhow = "1.0"
 libc = "0.2"
 
 # Logging
-log = "0.4"
-tracing = { version = "0.1", optional = true }
+tracing = "0.1"
 
 # Serialization for state persistence
 serde = { version = "1.0", features = ["derive"] }
@@ -56,8 +55,8 @@ tempfile = "3.8"
 
 [features]
 default = []
-# Enable tracing integration
-tracing = ["dep:tracing"]
+# Tracing is always enabled; keep flag for compatibility.
+tracing = []
 # Enable advanced parsing features
 advanced = ["regex"]
 # Enable all features

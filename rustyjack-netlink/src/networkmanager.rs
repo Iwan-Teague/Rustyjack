@@ -166,7 +166,7 @@ impl NetworkManagerClient {
                 )
             })?;
 
-        log::info!(
+        tracing::info!(
             "Interface '{}' set to {} by NetworkManager",
             interface,
             if managed { "managed" } else { "unmanaged" }
@@ -215,7 +215,7 @@ impl NetworkManagerClient {
             .await
             .with_context(|| format!("Failed to disconnect interface '{}' - device may already be disconnected or in invalid state", interface))?;
 
-        log::info!("Interface '{}' disconnected via NetworkManager", interface);
+        tracing::info!("Interface '{}' disconnected via NetworkManager", interface);
         Ok(())
     }
 
@@ -223,7 +223,7 @@ impl NetworkManagerClient {
     pub async fn reconnect_device(&self, interface: &str) -> Result<()> {
         // First disconnect
         if let Err(e) = self.disconnect_device(interface).await {
-            log::warn!(
+            tracing::warn!(
                 "Disconnect before reconnect failed (may already be disconnected): {}",
                 e
             );
@@ -286,7 +286,7 @@ impl NetworkManagerClient {
             .await
             .with_context(|| format!("Failed to activate connection on interface '{}' - no saved connection profile or authentication required", interface))?;
 
-        log::info!(
+        tracing::info!(
             "Interface '{}' reconnection initiated via NetworkManager",
             interface
         );
@@ -427,7 +427,7 @@ impl NetworkManagerClient {
 
         match result {
             Ok((conn_path, _active_conn_path)) => {
-                log::info!(
+                tracing::info!(
                     "Connection to '{}' on interface '{}' initiated (connection: {})",
                     ssid,
                     interface,
@@ -461,7 +461,7 @@ impl NetworkManagerClient {
             let state = self.get_device_state(interface).await?;
             match state {
                 NmDeviceState::Activated => {
-                    log::info!(
+                    tracing::info!(
                         "Successfully connected to '{}' on interface '{}'",
                         ssid,
                         interface
@@ -483,7 +483,7 @@ impl NetworkManagerClient {
                     );
                 }
                 _ => {
-                    log::debug!(
+                    tracing::debug!(
                         "Waiting for connection (current state: {})...",
                         state.as_str()
                     );

@@ -260,13 +260,13 @@ impl PassiveManager {
 
             // Set TX power to minimum for passive mode
             if let Err(e) = self.tx_manager.set_power(&mon_name, TxPowerLevel::Stealth) {
-                log::warn!("Could not set stealth TX power: {}", e);
+                tracing::warn!("Could not set stealth TX power: {}", e);
                 // Not fatal - continue without stealth power
             }
 
             self.active_monitors.push(mon_name.clone());
 
-            log::info!(
+            tracing::info!(
                 "Enabled passive monitor mode on {} -> {}",
                 interface,
                 mon_name
@@ -305,7 +305,7 @@ impl PassiveManager {
             // Remove from active list
             self.active_monitors.retain(|m| m != monitor_interface);
 
-            log::info!("Disabled monitor mode on {}", monitor_interface);
+            tracing::info!("Disabled monitor mode on {}", monitor_interface);
             Ok(())
         }
     }
@@ -371,7 +371,7 @@ impl PassiveManager {
 
         for mon in monitors {
             if let Err(e) = self.disable(&mon) {
-                log::warn!("Failed to disable {}: {}", mon, e);
+                tracing::warn!("Failed to disable {}: {}", mon, e);
                 if first_error.is_none() {
                     first_error = Some(e);
                 }
@@ -412,7 +412,7 @@ impl Drop for PassiveManager {
     fn drop(&mut self) {
         if !self.active_monitors.is_empty() {
             if let Err(e) = self.cleanup_all() {
-                log::error!("Failed to cleanup monitors on drop: {}", e);
+                tracing::error!("Failed to cleanup monitors on drop: {}", e);
             }
         }
     }

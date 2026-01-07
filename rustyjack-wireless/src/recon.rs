@@ -341,11 +341,11 @@ fn perform_active_arp_scan(subnet: &str, interface: &str) -> Result<()> {
 
     let timeout = Duration::from_secs(1);
     if let Err(err) = rustyjack_ethernet::discover_hosts(network, timeout) {
-        log::warn!("ICMP sweep failed on {}: {}", subnet, err);
+        tracing::warn!("ICMP sweep failed on {}: {}", subnet, err);
     }
 
     if let Err(err) = run_arp_discovery(interface, network, timeout) {
-        log::warn!("ARP sweep failed on {} ({}): {}", interface, subnet, err);
+        tracing::warn!("ARP sweep failed on {} ({}): {}", interface, subnet, err);
     }
 
     Ok(())
