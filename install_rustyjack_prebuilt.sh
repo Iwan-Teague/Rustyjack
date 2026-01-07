@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Installer that uses prebuilt binaries instead of building on-device
 # Usage: sudo PREBUILT_DIR=prebuilt/arm32 ./install_rustyjack_prebuilt.sh
+# Environment overrides:
+#   PREBUILT_DIR=prebuilt/arm32   # relative to project root or absolute path
+#   USB_MOUNT_POINT=/mnt/usb      # where to mount removable media
+#   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
 set -euo pipefail
 
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
@@ -208,6 +212,129 @@ disable_conflicting_services() {
   fi
 }
 
+is_mountpoint() {
+  local path="$1"
+  if cmd mountpoint; then
+    if mountpoint -q "$path"; then
+      return 0
+    fi
+    return 1
+  else
+    if grep -qs " $path " /proc/mounts; then
+      return 0
+    fi
+    return 1
+  fi
+}
+
+find_usb_partition() {
+  if [ -n "${USB_DEVICE:-}" ]; then
+    echo "$USB_DEVICE"
+    return 0
+  fi
+  if cmd lsblk; then
+    local dev=""
+    dev=$(lsblk -rno NAME,RM,FSTYPE,MOUNTPOINT 2>/dev/null | awk '$2==1 && $3 != "" && $4 == "" {print $1; exit}' || true)
+    if [ -n "$dev" ]; then
+      echo "/dev/$dev"
+      return 0
+    fi
+  fi
+  if [ -d /dev/disk/by-id ]; then
+    local byid=""
+    byid=$(ls -1 /dev/disk/by-id/usb-*part* 2>/dev/null | head -n 1 || true)
+    if [ -n "$byid" ]; then
+      local resolved=""
+      resolved=$(readlink -f "$byid" 2>/dev/null || true)
+      if [ -n "$resolved" ]; then
+        echo "$resolved"
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+
+mount_usb_if_needed() {
+  local mount_point="${USB_MOUNT_POINT:-/mnt/usb}"
+  if is_mountpoint "$mount_point"; then
+    return 0
+  fi
+  local dev=""
+  dev="$(find_usb_partition || true)"
+  if [ -z "$dev" ]; then
+    return 1
+  fi
+  info "Mounting USB device $dev at $mount_point..."
+  sudo mkdir -p "$mount_point"
+  if sudo mount "$dev" "$mount_point"; then
+    return 0
+  fi
+  warn "Failed to mount $dev at $mount_point"
+  return 1
+}
+
+find_prebuilt_dir_on_mounts() {
+  local base=""
+  for base in "${USB_MOUNT_POINT:-/mnt/usb}" /media /mnt /run/media; do
+    [ -d "$base" ] || continue
+    local candidate=""
+    for candidate in \
+      "$base"/Rustyjack/Prebuilt/arm32 \
+      "$base"/Rustyjack/prebuilt/arm32 \
+      "$base"/rustyjack/Prebuilt/arm32 \
+      "$base"/rustyjack/prebuilt/arm32; do
+      if [ -f "$candidate/$BINARY_NAME" ]; then
+        echo "$candidate"
+        return 0
+      fi
+    done
+
+    local hit=""
+    hit=$(find "$base" -maxdepth 6 -type f \( -path "*/prebuilt/arm32/$BINARY_NAME" -o -path "*/Prebuilt/arm32/$BINARY_NAME" \) 2>/dev/null | head -n 1 || true)
+    if [ -n "$hit" ]; then
+      echo "${hit%/$BINARY_NAME}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+copy_prebuilt_from_usb() {
+  local dest_dir="$PROJECT_ROOT/prebuilt/arm32"
+  local src_dir=""
+
+  src_dir="$(find_prebuilt_dir_on_mounts || true)"
+  if [ -z "$src_dir" ]; then
+    if mount_usb_if_needed; then
+      src_dir="$(find_prebuilt_dir_on_mounts || true)"
+    fi
+  fi
+  if [ -z "$src_dir" ]; then
+    return 1
+  fi
+
+  info "Found prebuilt binaries on USB: $src_dir"
+  sudo mkdir -p "$dest_dir"
+
+  local copied=0
+  local bin=""
+  for bin in "$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME"; do
+    if [ -f "$src_dir/$bin" ]; then
+      sudo install -Dm755 "$src_dir/$bin" "$dest_dir/$bin"
+      copied=1
+    else
+      warn "Missing $bin in $src_dir"
+    fi
+  done
+
+  if [ "$copied" -eq 1 ]; then
+    info "Copied prebuilt binaries into $dest_dir"
+    return 0
+  fi
+  return 1
+}
+
 # ---- 1: locate active config.txt ----------------------------
 CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
 if [ ! -f "$CFG" ]; then
@@ -327,15 +454,36 @@ info "Using project root: $PROJECT_ROOT"
 RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/rustyjack}"
 info "Using runtime root: $RUNTIME_ROOT"
 
-PREBUILT_DIR="${PREBUILT_DIR:-prebuilt/arm32}"
+DEFAULT_PREBUILT_DIR="prebuilt/arm32"
+PREBUILT_DIR="${PREBUILT_DIR:-$DEFAULT_PREBUILT_DIR}"
 BINARY_NAME="rustyjack-ui"
-PREBUILT_BIN="$PROJECT_ROOT/$PREBUILT_DIR/$BINARY_NAME"
 CLI_NAME="rustyjack"
-PREBUILT_CLI="$PROJECT_ROOT/$PREBUILT_DIR/$CLI_NAME"
 DAEMON_NAME="rustyjackd"
-PREBUILT_DAEMON="$PROJECT_ROOT/$PREBUILT_DIR/$DAEMON_NAME"
 PORTAL_NAME="rustyjack-portal"
-PREBUILT_PORTAL="$PROJECT_ROOT/$PREBUILT_DIR/$PORTAL_NAME"
+resolve_prebuilt_root() {
+  local dir="$1"
+  case "$dir" in
+    /*) printf "%s" "$dir" ;;
+    *) printf "%s/%s" "$PROJECT_ROOT" "$dir" ;;
+  esac
+}
+set_prebuilt_paths() {
+  PREBUILT_ROOT="$(resolve_prebuilt_root "$PREBUILT_DIR")"
+  PREBUILT_BIN="$PREBUILT_ROOT/$BINARY_NAME"
+  PREBUILT_CLI="$PREBUILT_ROOT/$CLI_NAME"
+  PREBUILT_DAEMON="$PREBUILT_ROOT/$DAEMON_NAME"
+  PREBUILT_PORTAL="$PREBUILT_ROOT/$PORTAL_NAME"
+}
+
+set_prebuilt_paths
+
+if [ ! -f "$PREBUILT_BIN" ] || [ ! -f "$PREBUILT_CLI" ] || [ ! -f "$PREBUILT_DAEMON" ] || [ ! -f "$PREBUILT_PORTAL" ]; then
+  if copy_prebuilt_from_usb; then
+    PREBUILT_DIR="$DEFAULT_PREBUILT_DIR"
+    set_prebuilt_paths
+    info "Using prebuilt binaries from $PREBUILT_ROOT"
+  fi
+fi
 
 if [ ! -f "$PREBUILT_BIN" ]; then
   fail "Prebuilt binary not found: $PREBUILT_BIN\nPlace your arm32 binary at $PREBUILT_BIN or set PREBUILT_DIR to its location."
@@ -585,6 +733,12 @@ claim_resolv_conf
 check_resolv_conf
 
 step "Validating network status..."
+if cmd rustyjack; then
+  info "Ensuring active uplink via rustyjack ensure-route..."
+  RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack ensure-route >/dev/null 2>&1 || warn "ensure-route failed; continuing to validation"
+else
+  warn "rustyjack CLI not found; skipping ensure-route"
+fi
 validate_network_status || fail "Network validation failed"
 
 # Health-check: binary
