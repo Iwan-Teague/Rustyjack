@@ -92,28 +92,28 @@ struct LoggingGuards {
 fn init_tracing(config: &DaemonConfig) -> LoggingGuards {
     use tracing_log::LogTracer;
     use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-    
-    let _ = LogTracer::init();
 
     let filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
-    
+
     let stdout_layer = fmt::layer()
         .with_target(true)
         .with_level(true)
         .with_thread_ids(true)
         .with_line_number(true)
         .compact();
-    
+
     let log_dir = config.root_path.join("logs");
     let mut warn_msg = None;
     if let Err(err) = std::fs::create_dir_all(&log_dir) {
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)
-            .init();
+            .try_init()
+            .ok();
         tracing::warn!("File logging disabled ({}): {}", log_dir.display(), err);
+        let _ = LogTracer::init();
         return LoggingGuards { _file_guard: None };
     }
 
@@ -145,7 +145,10 @@ fn init_tracing(config: &DaemonConfig) -> LoggingGuards {
         .with(filter)
         .with(stdout_layer)
         .with(file_layer)
-        .init();
+        .try_init()
+        .ok();
+
+    let _ = LogTracer::init();
 
     if let Some(message) = warn_msg {
         tracing::warn!("{message}");
