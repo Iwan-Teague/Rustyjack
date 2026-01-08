@@ -307,10 +307,27 @@ pub async fn handle_request(
             }
         }
         RequestBody::SystemReboot => {
+            use rustyjack_core::audit::{AuditEvent, operations};
+
+            let root = state.config.root_path.clone();
+            let uid = peer.uid;
+            let pid = peer.pid;
+
             let result = run_blocking("system_reboot", || {
                 rustyjack_core::services::system::reboot()
             })
             .await;
+
+            // Audit the operation
+            let event = match &result {
+                Ok(()) => AuditEvent::new(operations::SYSTEM_REBOOT)
+                    .with_actor(uid, pid)
+                    .success(),
+                Err(err) => AuditEvent::new(operations::SYSTEM_REBOOT)
+                    .with_actor(uid, pid)
+                    .failure(err.message.clone()),
+            };
+            let _ = event.log(&root);
 
             match result {
                 Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
@@ -320,10 +337,27 @@ pub async fn handle_request(
             }
         }
         RequestBody::SystemShutdown => {
+            use rustyjack_core::audit::{AuditEvent, operations};
+
+            let root = state.config.root_path.clone();
+            let uid = peer.uid;
+            let pid = peer.pid;
+
             let result = run_blocking("system_shutdown", || {
                 rustyjack_core::services::system::shutdown()
             })
             .await;
+
+            // Audit the operation
+            let event = match &result {
+                Ok(()) => AuditEvent::new(operations::SYSTEM_SHUTDOWN)
+                    .with_actor(uid, pid)
+                    .success(),
+                Err(err) => AuditEvent::new(operations::SYSTEM_SHUTDOWN)
+                    .with_actor(uid, pid)
+                    .failure(err.message.clone()),
+            };
+            let _ = event.log(&root);
 
             match result {
                 Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
@@ -1047,10 +1081,10 @@ pub async fn handle_request(
                 tokio::task::spawn_blocking(move || {
                     use rustyjack_core::system::{IsolationEngine, RealNetOps};
                     use std::sync::Arc;
-                    
+
                     let ops = Arc::new(RealNetOps);
                     let engine = IsolationEngine::new(ops, root);
-                    
+
                     match engine.enforce() {
                         Ok(outcome) => {
                             tracing::info!(
@@ -1074,6 +1108,116 @@ pub async fn handle_request(
                     acknowledged: true,
                 },
             ))
+        }
+        RequestBody::LogTailGet(rustyjack_ipc::LogTailRequest { component, max_lines }) => {
+            use rustyjack_ipc::{LogTailResponse};
+
+            let root = state.config.root_path.clone();
+            let max_lines = max_lines.unwrap_or(500);
+            let component_clone = component.clone();
+
+            let result = run_blocking("log_tail", move || {
+                use std::fs::File;
+                use std::io::{BufRead, BufReader};
+
+                let log_path = root.join("logs").join(format!("{}.log", component_clone));
+
+                if !log_path.exists() {
+                    return Ok((Vec::new(), false));
+                }
+
+                let file = File::open(&log_path).map_err(|e| {
+                    DaemonError::new(ErrorCode::Io, "failed to open log file", false)
+                        .with_detail(e.to_string())
+                })?;
+
+                let reader = BufReader::new(file);
+                let mut all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+
+                let truncated = all_lines.len() > max_lines;
+                if truncated {
+                    let start = all_lines.len() - max_lines;
+                    all_lines = all_lines.into_iter().skip(start).collect();
+                }
+
+                Ok::<(Vec<String>, bool), DaemonError>((all_lines, truncated))
+            })
+            .await;
+
+            match result {
+                Ok((lines, truncated)) => ResponseBody::Ok(ResponseOk::LogTail(LogTailResponse {
+                    component,
+                    lines,
+                    truncated,
+                })),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::LoggingConfigGet => {
+            use rustyjack_ipc::LoggingConfigResponse;
+
+            // Read current logging configuration
+            let enabled = std::env::var("RUSTYJACK_LOGS_DISABLED").is_err();
+            let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+            let components = vec![
+                "rustyjackd".to_string(),
+                "rustyjack-ui".to_string(),
+                "portal".to_string(),
+            ];
+
+            ResponseBody::Ok(ResponseOk::LoggingConfig(LoggingConfigResponse {
+                enabled,
+                level,
+                components,
+            }))
+        }
+        RequestBody::LoggingConfigSet(rustyjack_ipc::LoggingConfigSetRequest { enabled, level }) => {
+            use rustyjack_ipc::LoggingConfigSetResponse;
+            use rustyjack_core::audit::{AuditEvent, operations};
+
+            let root = state.config.root_path.clone();
+            let uid = peer.uid;
+            let pid = peer.pid;
+
+            // Update logging configuration
+            if enabled {
+                std::env::remove_var("RUSTYJACK_LOGS_DISABLED");
+            } else {
+                std::env::set_var("RUSTYJACK_LOGS_DISABLED", "1");
+            }
+
+            let final_level = level.unwrap_or_else(|| "info".to_string());
+            std::env::set_var("RUST_LOG", &final_level);
+
+            // Audit the configuration change
+            let context = serde_json::json!({
+                "enabled": enabled,
+                "level": &final_level
+            });
+
+            let event = AuditEvent::new(operations::LOGGING_CONFIG_CHANGE)
+                .with_actor(uid, pid)
+                .with_context(context)
+                .success();
+
+            let _ = event.log(&root);
+
+            // Note: This only affects child processes and the environment
+            // The actual tracing subscriber cannot be dynamically reconfigured without reload
+            // For now, we mark it as applied but note that existing processes need restart
+
+            tracing::info!(
+                operation = "logging_config_set",
+                enabled = enabled,
+                level = %final_level,
+                "Logging configuration updated (requires process restart for full effect)"
+            );
+
+            ResponseBody::Ok(ResponseOk::LoggingConfigSet(LoggingConfigSetResponse {
+                enabled,
+                level: final_level,
+                applied: true,
+            }))
         }
         RequestBody::CoreDispatch(CoreDispatchRequest { legacy, args }) => {
             if !state.config.allow_core_dispatch {
