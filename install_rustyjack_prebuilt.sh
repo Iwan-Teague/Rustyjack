@@ -563,14 +563,14 @@ sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Fail
 
 # Verify binaries can execute (check for missing libraries)
 info "Verifying binary compatibility..."
-if ! /usr/local/bin/$DAEMON_NAME --version >/dev/null 2>&1; then
-  warn "Daemon binary may have issues (testing --version failed)"
-  warn "Testing with ldd:"
-  ldd /usr/local/bin/$DAEMON_NAME 2>&1 | head -n 10 | while IFS= read -r line; do
+if ldd /usr/local/bin/$DAEMON_NAME 2>&1 | grep -q "not found"; then
+  warn "Daemon binary has missing library dependencies:"
+  ldd /usr/local/bin/$DAEMON_NAME 2>&1 | grep "not found" | while IFS= read -r line; do
     warn "  $line"
   done
+  fail "Cannot proceed with missing libraries"
 else
-  info "[OK] Daemon binary is executable"
+  info "[OK] All daemon binary dependencies satisfied"
 fi
 
 # Create necessary directories
@@ -715,7 +715,7 @@ StateDirectoryMode=0770
 ConfigurationDirectory=rustyjack
 ConfigurationDirectoryMode=0770
 Group=rustyjack
-Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+Environment=RUSTYJACK_ROOT=${RUNTIME_ROOT}
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
 WatchdogSec=20s
 NotifyAccess=main
@@ -723,6 +723,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ReadWritePaths=${RUNTIME_ROOT}
 RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
@@ -799,6 +800,18 @@ WantedBy=multi-user.target
 UNIT
 
 sudo systemctl daemon-reload
+
+# Verify service file has correct environment variables
+info "Verifying service file environment:"
+if grep -q "Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT" "$DAEMON_SERVICE"; then
+  info "  RUSTYJACK_ROOT is set to: $RUNTIME_ROOT"
+else
+  warn "  RUSTYJACK_ROOT may not be set correctly in service file"
+  grep "RUSTYJACK_ROOT" "$DAEMON_SERVICE" | while IFS= read -r line; do
+    warn "  Found: $line"
+  done
+fi
+
 sudo systemctl enable rustyjackd.socket
 if sudo systemctl start rustyjackd.socket 2>/dev/null; then
   info "Daemon socket started successfully"
@@ -818,10 +831,17 @@ else
   done
   if cmd journalctl; then
     warn "Recent daemon logs:"
-    journalctl -u rustyjackd.service -n 20 --no-pager 2>/dev/null | while IFS= read -r line; do
+    journalctl -u rustyjackd.service -n 30 --no-pager 2>/dev/null | while IFS= read -r line; do
       warn "  $line"
     done
   fi
+
+  warn "Attempting manual daemon test with environment:"
+  warn "  RUSTYJACK_ROOT=$RUNTIME_ROOT"
+  warn "  (testing for 2 seconds...)"
+  timeout 2 sudo RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 20 | while IFS= read -r line; do
+    warn "  $line"
+  done || warn "  (manual test timed out or exited)"
 fi
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service
