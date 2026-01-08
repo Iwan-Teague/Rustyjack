@@ -769,6 +769,40 @@ impl DaemonClient {
             _ => Err(anyhow!("unexpected response body")),
         }
     }
+
+    // Logging and configuration endpoints (Phase 4)
+    pub async fn log_tail(&mut self, component: &str, max_lines: Option<usize>) -> Result<rustyjack_ipc::LogTailResponse> {
+        let body = RequestBody::LogTailGet(rustyjack_ipc::LogTailRequest {
+            component: component.to_string(),
+            max_lines,
+        });
+        match self.request(body).await? {
+            ResponseBody::Ok(ResponseOk::LogTail(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn logging_config_get(&mut self) -> Result<rustyjack_ipc::LoggingConfigResponse> {
+        let body = RequestBody::LoggingConfigGet;
+        match self.request(body).await? {
+            ResponseBody::Ok(ResponseOk::LoggingConfig(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn logging_config_set(&mut self, enabled: bool, level: Option<String>) -> Result<rustyjack_ipc::LoggingConfigSetResponse> {
+        let body = RequestBody::LoggingConfigSet(rustyjack_ipc::LoggingConfigSetRequest {
+            enabled,
+            level,
+        });
+        match self.request(body).await? {
+            ResponseBody::Ok(ResponseOk::LoggingConfigSet(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
 }
 
 fn enhance_socket_connection_error(err: std::io::Error, socket_path: &Path) -> anyhow::Error {

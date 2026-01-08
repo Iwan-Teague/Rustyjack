@@ -1,7 +1,7 @@
 # Logging Report Progress
 
 Source: Rustyjack_Logging_Report.md
-Last updated: 2026-01-07
+Last updated: 2026-01-08
 
 Status legend:
 - [ ] Not started
@@ -27,18 +27,18 @@ Status legend:
 - [x] Replace GPIO diagnostics shell-outs with Rust (`gpiod` + `/proc`).
 
 ## Phase 4 - UI log access via daemon
-- [ ] Add daemon endpoints for log tail and export bundle.
-- [ ] Update UI to fetch logs from daemon instead of local files.
+- [x] Add daemon endpoints for log tail and export bundle.
+- [x] Update UI to fetch logs from daemon instead of local files.
 
 ## Phase 5 - Optional systemd reduction
 - [ ] Add Rust supervisor service to manage Rustyjack processes.
 - [ ] Evaluate init replacement scope (likely defer).
 
 ## Cross-cutting fixes from the report
-- [ ] Fix logs toggle propagation (daemon IPC + config).
-- [ ] Add audit trail for privileged operations and auth decisions.
-- [ ] Define logging policy boundaries (operational vs audit vs loot vs trace).
-- [ ] Add redaction helpers and `#[instrument(skip(...))]` patterns.
+- [x] Fix logs toggle propagation (daemon IPC + config).
+- [x] Add audit trail for privileged operations and auth decisions.
+- [x] Define logging policy boundaries (operational vs audit vs loot vs trace).
+- [x] Add redaction helpers and `#[instrument(skip(...))]` patterns.
 
 ## Completed items (2026-01-08)
 
@@ -65,3 +65,53 @@ Status legend:
   - `ls -l` → `append_device_file_info()` using `std::fs::metadata` with Unix extensions
 - External system logs (NetworkManager, wpa_supplicant) fall back to journalctl if available.
 - Fixed pre-existing compilation error in `rustyjack-wireless/src/recon.rs` (getnameinfo pointer cast).
+
+### Phase 4 - UI log access via daemon
+- Added three new daemon IPC endpoints:
+  - `LogTailGet`: Retrieves last N lines from component log files (default 500, max configurable).
+  - `LoggingConfigGet`: Returns current logging configuration (enabled state, log level, components).
+  - `LoggingConfigSet`: Allows runtime configuration of logging via `RUSTYJACK_LOGS_DISABLED` and `RUST_LOG` environment variables.
+- Added corresponding client methods in `rustyjack-client/src/client.rs`:
+  - `log_tail(component, max_lines)`
+  - `logging_config_get()`
+  - `logging_config_set(enabled, level)`
+- Defined authorization tiers:
+  - `LogTailGet`: Operator
+  - `LoggingConfigGet`: ReadOnly
+  - `LoggingConfigSet`: Admin
+- Log tail handler uses blocking I/O to read from `/var/lib/rustyjack/logs/{component}.log` files.
+
+### Cross-cutting fixes
+- **Audit trail system** (`rustyjack-core/src/audit.rs`):
+  - `AuditEvent` struct with timestamp, operation, actor (uid/pid/group), result, and optional context.
+  - `AuditResult` enum: Success, Failure, Denied.
+  - Builder pattern for event construction (`with_actor()`, `with_result()`, `with_context()`).
+  - Logs to `/var/lib/rustyjack/logs/audit/audit.log` as JSON lines (append-only).
+  - Also logs to tracing for visibility in operational logs.
+  - Predefined operation constants (`SYSTEM_REBOOT`, `SYSTEM_SHUTDOWN`, `MAC_RANDOMIZE`, `LOGS_CLEAR`, etc.).
+  - `audit!` macro for common audit patterns.
+  - Integrated audit events into `SystemReboot`, `SystemShutdown`, and `LoggingConfigSet` handlers.
+
+- **Logging policy boundaries** (`LOGGING_POLICY.md`):
+  - Comprehensive 232-line policy document defining:
+    - Four log categories: Operational, Audit, Loot, High-Volume Trace.
+    - Retention policies and access control for each category.
+    - Redaction guidelines with automatic and manual patterns.
+    - File permissions and IPC access control.
+    - Anti-forensics integration (what stays enabled when logs are disabled).
+    - Three levels of log clearing operations.
+    - Best practices for developers and operators.
+
+- **Redaction helpers** (`rustyjack-core/src/redact.rs`):
+  - `Redacted<T>` wrapper type that displays as "[REDACTED]" (implements Display, Debug).
+  - `redact!` macro for quick redaction: `redact!(password)`.
+  - `is_sensitive_field(name)` function checking common patterns (password, psk, key, secret, token, *_pass, *_key, etc.).
+  - `redact_json(value)` for recursive JSON redaction based on field names.
+  - `redact_if_sensitive(name, value)` for conditional redaction.
+  - Implemented Serialize/Deserialize to prevent accidental logging of redacted values.
+
+- **Logs toggle propagation**:
+  - `LoggingConfigSet` endpoint allows runtime control of `RUSTYJACK_LOGS_DISABLED` and `RUST_LOG`.
+  - Changes apply to daemon environment (affects current process).
+  - Audits all logging configuration changes with actor identity.
+  - As per `LOGGING_POLICY.md`, audit logs remain active even when operational logs are disabled.
