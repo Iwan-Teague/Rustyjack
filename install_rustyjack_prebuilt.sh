@@ -561,6 +561,18 @@ sudo install -Dm755 "$PREBUILT_CLI" /usr/local/bin/$CLI_NAME || fail "Failed to 
 sudo install -Dm755 "$PREBUILT_DAEMON" /usr/local/bin/$DAEMON_NAME || fail "Failed to install daemon binary"
 sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Failed to install portal binary"
 
+# Verify binaries can execute (check for missing libraries)
+info "Verifying binary compatibility..."
+if ! /usr/local/bin/$DAEMON_NAME --version >/dev/null 2>&1; then
+  warn "Daemon binary may have issues (testing --version failed)"
+  warn "Testing with ldd:"
+  ldd /usr/local/bin/$DAEMON_NAME 2>&1 | head -n 10 | while IFS= read -r line; do
+    warn "  $line"
+  done
+else
+  info "[OK] Daemon binary is executable"
+fi
+
 # Create necessary directories
 step "Creating runtime directories"
 sudo mkdir -p "$RUNTIME_ROOT"
@@ -677,6 +689,8 @@ SocketMode=0660
 SocketUser=root
 SocketGroup=rustyjack
 RemoveOnStop=true
+RuntimeDirectory=rustyjack
+RuntimeDirectoryMode=0770
 
 [Install]
 WantedBy=sockets.target
@@ -786,9 +800,29 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable rustyjackd.socket
-sudo systemctl start rustyjackd.socket 2>/dev/null || true
+if sudo systemctl start rustyjackd.socket 2>/dev/null; then
+  info "Daemon socket started successfully"
+else
+  warn "Failed to start rustyjackd.socket"
+  warn "Socket status: $(systemctl status rustyjackd.socket 2>&1 | head -n 5)"
+fi
+
 sudo systemctl enable rustyjackd.service
-sudo systemctl start rustyjackd.service 2>/dev/null || warn "Failed to start rustyjackd.service - check journalctl -u rustyjackd"
+if sudo systemctl start rustyjackd.service 2>/dev/null; then
+  info "Daemon service started successfully"
+else
+  warn "Failed to start rustyjackd.service"
+  warn "Service status:"
+  systemctl status rustyjackd.service 2>&1 | head -n 10 | while IFS= read -r line; do
+    warn "  $line"
+  done
+  if cmd journalctl; then
+    warn "Recent daemon logs:"
+    journalctl -u rustyjackd.service -n 20 --no-pager 2>/dev/null | while IFS= read -r line; do
+      warn "  $line"
+    done
+  fi
+fi
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service
 info "Rustyjack services enabled"
@@ -844,6 +878,45 @@ else
   warn "Portal binary $PORTAL_NAME not executable or missing (optional)."
 fi
 
+# Health-check: service files
+if [ -f "$DAEMON_SOCKET" ]; then
+  info "[OK] Socket unit file installed: $DAEMON_SOCKET"
+else
+  fail "[X] Socket unit file missing at $DAEMON_SOCKET"
+fi
+if [ -f "$DAEMON_SERVICE" ]; then
+  info "[OK] Daemon service file installed: $DAEMON_SERVICE"
+else
+  fail "[X] Daemon service file missing at $DAEMON_SERVICE"
+fi
+if [ -f "$SERVICE_FILE" ]; then
+  info "[OK] UI service file installed: $SERVICE_FILE"
+else
+  fail "[X] UI service file missing at $SERVICE_FILE"
+fi
+if [ -f "$PORTAL_SERVICE_FILE" ]; then
+  info "[OK] Portal service file installed: $PORTAL_SERVICE_FILE"
+else
+  fail "[X] Portal service file missing at $PORTAL_SERVICE_FILE"
+fi
+
+# Health-check: groups and directories
+if getent group rustyjack >/dev/null 2>&1; then
+  info "[OK] System group 'rustyjack' exists"
+else
+  fail "[X] System group 'rustyjack' does not exist"
+fi
+if [ -d "$RUNTIME_ROOT" ]; then
+  info "[OK] Runtime directory exists: $RUNTIME_ROOT"
+else
+  fail "[X] Runtime directory missing: $RUNTIME_ROOT"
+fi
+if [ -d "/run/rustyjack" ]; then
+  info "[OK] Socket directory exists: /run/rustyjack"
+else
+  warn "[NOTE] Socket directory /run/rustyjack will be created by systemd on first start"
+fi
+
 # Health-check: hardware
 step "Running post install checks..."
 
@@ -869,10 +942,35 @@ info "     nf_tables (netfilter via nf_tables netlink)"
 info "     DHCP + DNS services (native Rust)"
 info "     ARP operations (raw sockets)"
 
-if systemctl is-active --quiet rustyjack-ui.service; then
-  info "[OK] Rustyjack service is running"
+# Health-check: service status
+if systemctl is-active --quiet rustyjackd.socket; then
+  info "[OK] Daemon socket is active"
+  if [ -S /run/rustyjack/rustyjackd.sock ]; then
+    info "[OK] Socket file exists: /run/rustyjack/rustyjackd.sock"
+  else
+    warn "[X] Socket file missing at /run/rustyjack/rustyjackd.sock"
+  fi
 else
-  warn "[X] Rustyjack service is not running"
+  warn "[X] Daemon socket is not active - run: systemctl status rustyjackd.socket"
+fi
+
+if systemctl is-active --quiet rustyjackd.service; then
+  info "[OK] Daemon service is running"
+else
+  warn "[X] Daemon service is not running - run: systemctl status rustyjackd.service"
+  warn "    Check logs with: journalctl -u rustyjackd.service -n 50"
+fi
+
+if systemctl is-active --quiet rustyjack-ui.service; then
+  info "[OK] UI service is running"
+else
+  warn "[X] UI service is not running - run: systemctl status rustyjack-ui.service"
+fi
+
+if systemctl is-active --quiet rustyjack-portal.service; then
+  info "[OK] Portal service is running"
+else
+  warn "[NOTE] Portal service is not running (may be optional depending on configuration)"
 fi
 
 info "Prebuilt installation finished. Reboot is recommended."
