@@ -204,8 +204,7 @@ pub fn fetch_gpio_diagnostics() -> Result<String> {
             "rustyjack-ui",
             env!("CARGO_PKG_VERSION"),
         )
-        .await
-        .with_context(|| format!("connecting to {}", socket_path.display()))?;
+        .await?;
         let response = client.gpio_diagnostics().await?;
         Ok(response.content)
     })

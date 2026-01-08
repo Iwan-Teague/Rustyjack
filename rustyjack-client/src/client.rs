@@ -125,9 +125,12 @@ impl DaemonClient {
 
     #[cfg(unix)]
     async fn reconnect(&mut self) -> Result<()> {
-        let mut stream = UnixStream::connect(&self.config.socket_path)
-            .await
-            .with_context(|| format!("connecting to {}", self.config.socket_path.display()))?;
+        let mut stream = match UnixStream::connect(&self.config.socket_path).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                return Err(enhance_socket_connection_error(err, &self.config.socket_path));
+            }
+        };
         
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
@@ -766,6 +769,137 @@ impl DaemonClient {
             _ => Err(anyhow!("unexpected response body")),
         }
     }
+}
+
+fn enhance_socket_connection_error(err: std::io::Error, socket_path: &Path) -> anyhow::Error {
+    use std::io::ErrorKind;
+
+    let socket_exists = socket_path.exists();
+    let socket_display = socket_path.display();
+
+    let detailed_message = match err.kind() {
+        ErrorKind::NotFound => {
+            format!(
+                "Failed to connect to daemon socket at {}\n\
+                 \n\
+                 The socket file does not exist.\n\
+                 \n\
+                 Possible causes:\n\
+                 • The rustyjackd daemon is not running\n\
+                 • The daemon failed to start properly\n\
+                 • The socket path is incorrect\n\
+                 \n\
+                 To fix:\n\
+                 1. Check if daemon is running: systemctl status rustyjackd\n\
+                 2. Start the daemon: systemctl start rustyjackd\n\
+                 3. Check daemon logs: journalctl -u rustyjackd -n 50",
+                socket_display
+            )
+        }
+        ErrorKind::ConnectionRefused => {
+            if socket_exists {
+                format!(
+                    "Failed to connect to daemon socket at {}\n\
+                     \n\
+                     The socket file exists but connection was refused.\n\
+                     \n\
+                     Possible causes:\n\
+                     • The daemon is not running or crashed\n\
+                     • The socket file is stale (leftover from previous daemon)\n\
+                     \n\
+                     To fix:\n\
+                     1. Check if daemon is running: systemctl status rustyjackd\n\
+                     2. Restart the daemon: systemctl restart rustyjackd\n\
+                     3. Check daemon logs: journalctl -u rustyjackd -n 50\n\
+                     4. If issue persists, remove stale socket: rm {} && systemctl restart rustyjackd",
+                    socket_display, socket_display
+                )
+            } else {
+                format!(
+                    "Failed to connect to daemon socket at {}\n\
+                     \n\
+                     Connection refused - daemon is not running.\n\
+                     \n\
+                     To fix:\n\
+                     1. Start the daemon: systemctl start rustyjackd\n\
+                     2. Check daemon logs: journalctl -u rustyjackd -n 50",
+                    socket_display
+                )
+            }
+        }
+        ErrorKind::PermissionDenied => {
+            format!(
+                "Failed to connect to daemon socket at {}\n\
+                 \n\
+                 Permission denied - you don't have access to the socket.\n\
+                 \n\
+                 Possible causes:\n\
+                 • Your user is not in the 'rustyjack' group\n\
+                 • Socket permissions are too restrictive\n\
+                 \n\
+                 To fix:\n\
+                 1. Add your user to rustyjack group: sudo usermod -a -G rustyjack $USER\n\
+                 2. Log out and back in for group changes to take effect\n\
+                 3. Or run as root: sudo <your command>\n\
+                 4. Check socket permissions: ls -l {}",
+                socket_display, socket_display
+            )
+        }
+        ErrorKind::TimedOut => {
+            format!(
+                "Failed to connect to daemon socket at {}\n\
+                 \n\
+                 Connection timed out.\n\
+                 \n\
+                 Possible causes:\n\
+                 • The daemon is unresponsive or heavily loaded\n\
+                 • System is under heavy load\n\
+                 \n\
+                 To fix:\n\
+                 1. Check daemon status: systemctl status rustyjackd\n\
+                 2. Check system load: uptime\n\
+                 3. Restart daemon if needed: systemctl restart rustyjackd\n\
+                 4. Check daemon logs: journalctl -u rustyjackd -n 50",
+                socket_display
+            )
+        }
+        _ => {
+            let base_msg = format!(
+                "Failed to connect to daemon socket at {}\n\
+                 \n\
+                 Error: {} ({})\n",
+                socket_display, err, err.kind()
+            );
+
+            if socket_exists {
+                format!(
+                    "{}\
+                     \n\
+                     The socket file exists but connection failed.\n\
+                     \n\
+                     To diagnose:\n\
+                     1. Check daemon status: systemctl status rustyjackd\n\
+                     2. Check daemon logs: journalctl -u rustyjackd -n 50\n\
+                     3. Check socket: ls -l {}\n\
+                     4. Try restarting: systemctl restart rustyjackd",
+                    base_msg, socket_display
+                )
+            } else {
+                format!(
+                    "{}\
+                     \n\
+                     The socket file does not exist - daemon is likely not running.\n\
+                     \n\
+                     To fix:\n\
+                     1. Start the daemon: systemctl start rustyjackd\n\
+                     2. Check daemon logs: journalctl -u rustyjackd -n 50",
+                    base_msg
+                )
+            }
+        }
+    };
+
+    anyhow!(detailed_message)
 }
 
 fn daemon_error(err: DaemonError) -> anyhow::Error {
