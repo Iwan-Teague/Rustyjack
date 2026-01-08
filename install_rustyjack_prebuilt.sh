@@ -328,32 +328,79 @@ copy_prebuilt_from_usb() {
   local dest_dir="$PROJECT_ROOT/prebuilt/arm32"
   local src_dir=""
 
+  info "Searching for prebuilt binaries on mounted devices..."
+
+  # First check if binaries already exist on mounted filesystems
   src_dir="$(find_prebuilt_dir_on_mounts || true)"
+
   if [ -z "$src_dir" ]; then
+    info "No binaries found on current mounts, attempting to mount USB..."
     if mount_usb_if_needed; then
+      info "USB mount successful, searching again..."
       src_dir="$(find_prebuilt_dir_on_mounts || true)"
+    else
+      warn "USB mounting failed or no USB device detected"
     fi
   fi
+
   if [ -z "$src_dir" ]; then
+    warn "=========================================="
+    warn "BINARIES NOT FOUND ON USB"
+    warn "=========================================="
+    warn "Searched locations:"
+    warn "  - /mnt/usb/Rustyjack/Prebuilt/arm32"
+    warn "  - /mnt/usb/Rustyjack/prebuilt/arm32"
+    warn "  - /mnt/usb/rustyjack/Prebuilt/arm32"
+    warn "  - /mnt/usb/rustyjack/prebuilt/arm32"
+    warn "  - Deep search in /mnt/usb, /media, /mnt, /run/media"
+    warn ""
+    warn "Will attempt to use binaries from: $dest_dir"
+    warn "If that directory is empty or has old binaries, installation will fail."
+    warn "=========================================="
     return 1
   fi
 
-  info "Found prebuilt binaries on USB: $src_dir"
+  info "=========================================="
+  info "BINARIES FOUND ON USB"
+  info "=========================================="
+  info "Source directory: $src_dir"
+  info ""
+  info "Verifying binaries before copy..."
+
+  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
+  local all_found=1
+
+  for bin in "${bins[@]}"; do
+    if [ -f "$src_dir/$bin" ]; then
+      local size=$(ls -lh "$src_dir/$bin" | awk '{print $5}')
+      local buildid=$(file "$src_dir/$bin" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
+      info "  ✓ $bin ($size) - $buildid"
+    else
+      warn "  ✗ $bin - MISSING"
+      all_found=0
+    fi
+  done
+
+  if [ "$all_found" -eq 0 ]; then
+    fail "Not all binaries found in $src_dir"
+  fi
+
+  info ""
+  info "Creating destination directory: $dest_dir"
   sudo mkdir -p "$dest_dir"
-  info "Copying prebuilt binaries to $dest_dir"
+
+  info "Copying binaries to $dest_dir"
+  info ""
 
   local copied=0
-  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
   local total="${#bins[@]}"
   local current=0
   progress_bar 0 "$total"
-  local bin=""
+
   for bin in "${bins[@]}"; do
     if [ -f "$src_dir/$bin" ]; then
       sudo install -Dm755 "$src_dir/$bin" "$dest_dir/$bin"
       copied=1
-    else
-      warn "Missing $bin in $src_dir"
     fi
     current=$((current + 1))
     progress_bar "$current" "$total"
@@ -361,9 +408,27 @@ copy_prebuilt_from_usb() {
   printf "\n"
 
   if [ "$copied" -eq 1 ]; then
-    info "Copied prebuilt binaries into $dest_dir"
+    info ""
+    info "=========================================="
+    info "BINARIES COPIED SUCCESSFULLY"
+    info "=========================================="
+    info "Destination: $dest_dir"
+    info ""
+    info "Verifying copied binaries..."
+
+    for bin in "${bins[@]}"; do
+      if [ -f "$dest_dir/$bin" ]; then
+        local size=$(ls -lh "$dest_dir/$bin" | awk '{print $5}')
+        local buildid=$(file "$dest_dir/$bin" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
+        info "  ✓ $bin ($size) - $buildid"
+      else
+        warn "  ✗ $bin - COPY FAILED"
+      fi
+    done
+    info "=========================================="
     return 0
   fi
+
   return 1
 }
 
@@ -556,10 +621,35 @@ step "Removing old binaries (if present)..."
 sudo rm -f /usr/local/bin/$BINARY_NAME /usr/local/bin/$CLI_NAME /usr/local/bin/$DAEMON_NAME /usr/local/bin/$PORTAL_NAME
 
 step "Installing prebuilt binaries to /usr/local/bin/"
+info "Source binaries:"
+for bin_var in PREBUILT_BIN PREBUILT_CLI PREBUILT_DAEMON PREBUILT_PORTAL; do
+  bin_path="${!bin_var}"
+  if [ -f "$bin_path" ]; then
+    local size=$(ls -lh "$bin_path" | awk '{print $5}')
+    local buildid=$(file "$bin_path" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
+    info "  $(basename "$bin_path"): $size - $buildid"
+  else
+    warn "  $(basename "$bin_path"): NOT FOUND at $bin_path"
+  fi
+done
+info ""
+
 sudo install -Dm755 "$PREBUILT_BIN" /usr/local/bin/$BINARY_NAME || fail "Failed to install binary"
 sudo install -Dm755 "$PREBUILT_CLI" /usr/local/bin/$CLI_NAME || fail "Failed to install CLI binary"
 sudo install -Dm755 "$PREBUILT_DAEMON" /usr/local/bin/$DAEMON_NAME || fail "Failed to install daemon binary"
 sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Failed to install portal binary"
+
+info "Installed binaries to /usr/local/bin:"
+for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
+  if [ -f "/usr/local/bin/$bin_name" ]; then
+    local size=$(ls -lh "/usr/local/bin/$bin_name" | awk '{print $5}')
+    local buildid=$(file "/usr/local/bin/$bin_name" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
+    info "  ✓ $bin_name: $size - $buildid"
+  else
+    warn "  ✗ $bin_name: INSTALLATION FAILED"
+  fi
+done
+info ""
 
 # Verify binaries can execute (check for missing libraries)
 info "Verifying binary compatibility..."
