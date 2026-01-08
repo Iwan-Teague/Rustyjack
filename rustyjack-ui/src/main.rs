@@ -25,6 +25,11 @@ use crate::core::CoreBridge;
 fn main() -> Result<()> {
     let root = CoreBridge::with_root(None)?.root().to_path_buf();
     let _logging_guards = init_logging(&root);
+
+    // Wrap entire UI execution in a component span for log identity
+    let span = tracing::info_span!("rustyjack-ui", component = "rustyjack-ui");
+    let _span_guard = span.enter();
+
     App::new()?.run()
 }
 

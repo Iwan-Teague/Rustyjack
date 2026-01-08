@@ -90,6 +90,9 @@ pub enum Endpoint {
     UnmountStart,
     SetActiveInterface,
     HotplugNotify,
+    LogTailGet,
+    LoggingConfigGet,
+    LoggingConfigSet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +164,9 @@ pub enum RequestBody {
     UnmountStart(UnmountStartRequest),
     SetActiveInterface(SetActiveInterfaceRequest),
     HotplugNotify,
+    LogTailGet(LogTailRequest),
+    LoggingConfigGet,
+    LoggingConfigSet(LoggingConfigSetRequest),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +223,9 @@ pub enum ResponseOk {
     MountList(MountListResponse),
     SetActiveInterface(SetActiveInterfaceResponse),
     HotplugNotify(HotplugNotifyResponse),
+    LogTail(LogTailResponse),
+    LoggingConfig(LoggingConfigResponse),
+    LoggingConfigSet(LoggingConfigSetResponse),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -505,6 +514,39 @@ pub struct HotplugNotifyResponse {
     pub acknowledged: bool,
 }
 
+// Logging and audit endpoints (Phase 4)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogTailRequest {
+    pub component: String,
+    pub max_lines: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogTailResponse {
+    pub component: String,
+    pub lines: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfigResponse {
+    pub enabled: bool,
+    pub level: String,
+    pub components: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfigSetRequest {
+    pub enabled: bool,
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfigSetResponse {
+    pub enabled: bool,
+    pub level: String,
+    pub applied: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -618,6 +660,9 @@ pub enum DaemonEvent {
         RequestBody::UnmountStart(_) => Endpoint::UnmountStart,
         RequestBody::SetActiveInterface(_) => Endpoint::SetActiveInterface,
         RequestBody::HotplugNotify => Endpoint::HotplugNotify,
+        RequestBody::LogTailGet(_) => Endpoint::LogTailGet,
+        RequestBody::LoggingConfigGet => Endpoint::LoggingConfigGet,
+        RequestBody::LoggingConfigSet(_) => Endpoint::LoggingConfigSet,
     }
 }
 

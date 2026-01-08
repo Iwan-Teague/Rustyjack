@@ -205,6 +205,9 @@ pub fn required_tier(endpoint: Endpoint) -> AuthorizationTier {
         Endpoint::UnmountStart => AuthorizationTier::Operator,
         Endpoint::SetActiveInterface => AuthorizationTier::Operator,
         Endpoint::HotplugNotify => AuthorizationTier::Operator,
+        Endpoint::LogTailGet => AuthorizationTier::Operator,
+        Endpoint::LoggingConfigGet => AuthorizationTier::ReadOnly,
+        Endpoint::LoggingConfigSet => AuthorizationTier::Admin,
     }
 }
 

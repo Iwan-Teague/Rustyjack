@@ -24,6 +24,10 @@ async fn main() -> Result<()> {
     let config = DaemonConfig::from_env();
     let _logging_guards = init_tracing(&config);
 
+    // Wrap entire daemon execution in a component span for log identity
+    let span = tracing::info_span!("rustyjackd", component = "rustyjackd");
+    let _span_guard = span.enter();
+
     let state = Arc::new(DaemonState::new(config.clone()));
     let listener = systemd::listener_or_bind(&config)?;
 
@@ -32,7 +36,7 @@ async fn main() -> Result<()> {
     systemd::spawn_watchdog_task();
 
     let shutdown = Arc::new(Notify::new());
-    
+
     let watcher_state = Arc::clone(&state);
     let watcher_shutdown = Arc::clone(&shutdown);
     tokio::spawn(async move {

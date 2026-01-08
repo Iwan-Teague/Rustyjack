@@ -395,7 +395,7 @@ fn resolve_hostname(ip: Ipv4Addr) -> Option<String> {
         libc::getnameinfo(
             &sockaddr as *const _ as *const libc::sockaddr,
             mem::size_of::<libc::sockaddr_in>() as u32,
-            host.as_mut_ptr(),
+            host.as_mut_ptr() as *mut i8,
             host.len() as u32,
             ptr::null_mut(),
             0,

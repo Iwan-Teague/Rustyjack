@@ -11,11 +11,13 @@ pub mod anti_forensics;
 pub mod mount;
 
 pub mod arp_helpers;
+pub mod audit;
 pub mod cli;
 pub mod dhcp_helpers;
 pub mod dns_helpers;
 pub mod netlink_helpers;
 pub mod operations;
+pub mod redact;
 pub mod runtime;
 pub mod system;
 pub mod services;
