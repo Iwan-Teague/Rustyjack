@@ -105,6 +105,28 @@ if ($changed.Count -eq 0) {
     }
 }
 
+# Run the build if needed
+if ($BuildParts.Count -gt 0) {
+    Write-Host "Running build in Docker container..." -ForegroundColor Cyan
+    Write-Host "Building: $($BuildParts.Count) package(s)" -ForegroundColor Yellow
+
+    docker run --rm `
+        --platform linux/arm/v7 `
+        -v "${RepoRoot}:/work" `
+        -v "${HostTargetDir}:${TargetDir}" `
+        $ImageName `
+        /bin/bash -c $BuildCmd
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Build failed" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "Build completed successfully" -ForegroundColor Green
+} else {
+    Write-Host "Skipping build - no changes detected" -ForegroundColor Green
+}
+
 # Copy binaries to prebuilt directory
 $DestDir = Join-Path $RepoRoot "prebuilt\arm32"
 if (-not (Test-Path $DestDir)) {
