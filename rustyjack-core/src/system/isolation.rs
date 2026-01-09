@@ -29,7 +29,8 @@ pub struct IsolationEngine {
 impl IsolationEngine {
     pub fn new(ops: Arc<dyn NetOps>, root: PathBuf) -> Self {
         let routes = RouteManager::new(Arc::clone(&ops));
-        let dns = DnsManager::new(root.join("etc").join("resolv.conf"));
+        // Always use system resolv.conf - installer ensures it's writable
+        let dns = DnsManager::new(PathBuf::from("/etc/resolv.conf"));
         let prefs = PreferenceManager::new(root);
 
         Self {
