@@ -9,3 +9,6 @@
 target-check/
 prebuilt/
 .DS_Store
+
+# Claude Code - local settings (personal, not shared)
+.claude/settings.local.json
