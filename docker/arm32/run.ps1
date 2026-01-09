@@ -1,5 +1,7 @@
+#!/usr/bin/env pwsh
 # PowerShell wrapper for running Docker container for ARM32 cross-compilation
-# Requires Docker Desktop with binfmt/qemu enabled for ARM emulation
+# Usage: ./run.ps1 [command args...]
+# If no args, starts interactive bash shell
 
 $ErrorActionPreference = "Stop"
 
@@ -7,37 +9,9 @@ $ImageName = "rustyjack/arm32-dev"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..\..") | Select-Object -ExpandProperty Path
 
-# Check if Docker is accessible (with timeout)
-Write-Host "Checking Docker availability..." -ForegroundColor Cyan
-$dockerJob = Start-Job -ScriptBlock { docker version --format '{{.Server.Version}}' 2>&1 }
-$result = Wait-Job $dockerJob -Timeout 5
-if ($null -eq $result) {
-    Stop-Job $dockerJob
-    Remove-Job $dockerJob
-    Write-Host "`nWARNING: Docker is not responding quickly." -ForegroundColor Yellow
-    Write-Host "Proceeding anyway - Docker build may fail if Docker isn't ready." -ForegroundColor Yellow
-} else {
-    $output = Receive-Job $dockerJob
-    Remove-Job $dockerJob
-    if (-not [string]::IsNullOrWhiteSpace($output)) {
-        Write-Host "Docker is running (version: $output)" -ForegroundColor Green
-    }
-}
-
-# Default to bash if no arguments provided
-if ($args.Count -eq 0) {
-    $ContainerArgs = @("bash")
-} else {
-    $ContainerArgs = $args
-}
-
-Write-Host "Building Docker image: $ImageName" -ForegroundColor Cyan
+# Build the docker image
 docker build --pull --platform linux/arm/v7 -t $ImageName $ScriptDir
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Docker build failed with exit code $LASTEXITCODE" -ForegroundColor Red
-    exit $LASTEXITCODE
-}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Ensure tmp directory exists
 $TmpDir = Join-Path $RepoRoot "tmp"
@@ -45,11 +19,19 @@ if (-not (Test-Path $TmpDir)) {
     New-Item -ItemType Directory -Path $TmpDir | Out-Null
 }
 
-Write-Host "Running Docker container..." -ForegroundColor Cyan
-docker run --rm -it --platform linux/arm/v7 `
-    -v "${RepoRoot}:/work" -w /work `
-    -e TMPDIR=/work/tmp `
-    $ImageName `
-    $ContainerArgs
+# Run docker with provided args or default to bash
+if ($args.Count -eq 0) {
+    docker run --rm -it --platform linux/arm/v7 `
+        -v "${RepoRoot}:/work" -w /work `
+        -e TMPDIR=/work/tmp `
+        $ImageName `
+        bash
+} else {
+    docker run --rm -it --platform linux/arm/v7 `
+        -v "${RepoRoot}:/work" -w /work `
+        -e TMPDIR=/work/tmp `
+        $ImageName `
+        @args
+}
 
 exit $LASTEXITCODE

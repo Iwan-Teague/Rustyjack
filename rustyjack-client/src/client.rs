@@ -937,32 +937,18 @@ fn enhance_socket_connection_error(err: std::io::Error, socket_path: &Path) -> a
 }
 
 fn daemon_error(err: DaemonError) -> anyhow::Error {
-    let mut message = format!("{}", err.message);
-    if let Some(detail) = err.detail {
-        message.push_str(": ");
-        message.push_str(&detail);
-    }
-    if err.retryable {
-        message.push_str(" (retryable)");
-    }
-    anyhow!(message).context(match err.code {
-        ErrorCode::Unauthorized => "unauthorized",
-        ErrorCode::Forbidden => "forbidden",
-        ErrorCode::NotFound => "not found",
-        ErrorCode::Busy => "busy",
-        ErrorCode::Timeout => "timeout",
-        ErrorCode::Cancelled => "cancelled",
-        ErrorCode::BadRequest => "bad request",
-        ErrorCode::IncompatibleProtocol => "protocol",
-        ErrorCode::Io => "io",
-        ErrorCode::Netlink => "netlink",
-        ErrorCode::MountFailed => "mount",
-        ErrorCode::WifiFailed => "wifi",
-        ErrorCode::UpdateFailed => "update",
-        ErrorCode::CleanupFailed => "cleanup",
-        ErrorCode::NotImplemented => "not implemented",
-        ErrorCode::Internal => "internal",
-    })
+    // Use the DaemonError's Display impl which shows message + detail
+    let message = err.to_string();
+
+    // Add retryable hint if applicable
+    let final_message = if err.retryable {
+        format!("{} (retryable)", message)
+    } else {
+        message
+    };
+
+    // Use ErrorCode's Display impl for the context
+    anyhow!(final_message).context(err.code.to_string())
 }
 
 fn is_retryable_error(err: &anyhow::Error) -> bool {

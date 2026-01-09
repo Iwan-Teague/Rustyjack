@@ -1081,7 +1081,7 @@ impl App {
     #[allow(dead_code)]
     fn simple_command(&mut self, command: Commands, success: &str) -> Result<()> {
         if let Err(err) = self.core.dispatch(command) {
-            self.show_message("Error", [format!("{err}")])?;
+            self.show_message("Error", [format!("{:#}", err)])?;
         } else {
             self.show_message("Success", [success.to_string()])?;
         }
@@ -4274,7 +4274,9 @@ impl App {
                                             )?;
                                         }
                                         Err(e) => {
-                                            self.show_message("Error", [format!("Failed: {}", e)])?;
+                                            // Show full error chain for better debugging
+                                            let error_msg = format!("{:#}", e);
+                                            self.show_message("Interface Error", [error_msg])?;
                                         }
                                     }
                                     // Refresh the labels to show new active indicator
@@ -12532,7 +12534,7 @@ impl App {
 
                     self.show_message("Interface Set", lines.iter().map(|s| s.as_str()))
                 }
-                Err(e) => self.show_message("Error", [format!("Failed: {}", e)]),
+                Err(e) => self.show_message("Interface Error", [format!("{:#}", e)]),
             }
         } else {
             Ok(())
