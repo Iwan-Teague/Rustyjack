@@ -923,9 +923,28 @@ else
   warn "Attempting manual daemon test with environment:"
   warn "  RUSTYJACK_ROOT=$RUNTIME_ROOT"
   warn "  (testing for 2 seconds...)"
-  timeout 5 sudo RUST_BACKTRACE=1 RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 20 | while IFS= read -r line; do
+  timeout 5 sudo RUST_BACKTRACE=1 RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 40 | while IFS= read -r line; do
     warn "  $line"
   done || warn "  (manual test timed out or exited)"
+
+  # Fallback: if the prebuilt daemon still panics (common for mismatched prebuilt), try rebuilding from source
+  if command -v cargo >/dev/null 2>&1; then
+    warn "Prebuilt daemon failed; attempting to rebuild rustyjackd from source as a fallback (this may take a while)..."
+    if (cd "$PROJECT_ROOT" && cargo build --release -p rustyjack-daemon); then
+      warn "Build succeeded - installing rebuilt daemon binary"
+      sudo install -Dm755 "$PROJECT_ROOT/target/release/rustyjackd" /usr/local/bin/rustyjackd || warn "Failed to install rebuilt binary"
+      sudo systemctl daemon-reload || true
+      if sudo systemctl restart rustyjackd.service 2>/dev/null; then
+        info "Rebuilt rustyjackd and restarted service successfully"
+      else
+        warn "Rebuilt daemon installed but failed to start via systemd; start manually to inspect errors"
+      fi
+    else
+      warn "Rebuild failed - check cargo output above for details"
+    fi
+  else
+    warn "cargo not available; cannot rebuild daemon on-device"
+  fi
 fi
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service
