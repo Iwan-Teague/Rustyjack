@@ -625,8 +625,8 @@ info "Source binaries:"
 for bin_var in PREBUILT_BIN PREBUILT_CLI PREBUILT_DAEMON PREBUILT_PORTAL; do
   bin_path="${!bin_var}"
   if [ -f "$bin_path" ]; then
-    local size=$(ls -lh "$bin_path" | awk '{print $5}')
-    local buildid=$(file "$bin_path" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
+    size=$(ls -lh "$bin_path" | awk '{print $5}')
+    buildid=$(file "$bin_path" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
     info "  $(basename "$bin_path"): $size - $buildid"
   else
     warn "  $(basename "$bin_path"): NOT FOUND at $bin_path"
@@ -642,8 +642,8 @@ sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Fail
 info "Installed binaries to /usr/local/bin:"
 for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
   if [ -f "/usr/local/bin/$bin_name" ]; then
-    local size=$(ls -lh "/usr/local/bin/$bin_name" | awk '{print $5}')
-    local buildid=$(file "/usr/local/bin/$bin_name" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
+    size=$(ls -lh "/usr/local/bin/$bin_name" | awk '{print $5}')
+    buildid=$(file "/usr/local/bin/$bin_name" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
     info "  ✓ $bin_name: $size - $buildid"
   else
     warn "  ✗ $bin_name: INSTALLATION FAILED"
