@@ -772,6 +772,9 @@ step "Installing rustyjackd socket/service..."
 # Socket activation is not used on dedicated devices; ensure any existing socket unit is disabled/masked
 sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
 sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+# Remove any lingering socket unit file and runtime socket to prevent accidental socket activation
+sudo rm -f "$DAEMON_SOCKET" 2>/dev/null || true
+sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
 
 sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
@@ -791,6 +794,7 @@ StateDirectoryMode=0770
 ConfigurationDirectory=rustyjack
 ConfigurationDirectoryMode=0770
 Group=rustyjack
+Environment=RUST_BACKTRACE=1
 Environment=RUSTYJACK_ROOT=${RUNTIME_ROOT}
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
 WatchdogSec=20s
@@ -891,6 +895,9 @@ fi
 # Disable socket activation and prefer always-on service
 sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
 sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+# Remove any lingering socket unit file and runtime socket to prevent accidental socket activation
+sudo rm -f "$DAEMON_SOCKET" 2>/dev/null || true
+sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
 
 sudo systemctl enable rustyjackd.service
 if sudo systemctl start rustyjackd.service 2>/dev/null; then
@@ -911,7 +918,7 @@ else
   warn "Attempting manual daemon test with environment:"
   warn "  RUSTYJACK_ROOT=$RUNTIME_ROOT"
   warn "  (testing for 2 seconds...)"
-  timeout 2 sudo RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 20 | while IFS= read -r line; do
+  timeout 5 sudo RUST_BACKTRACE=1 RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 20 | while IFS= read -r line; do
     warn "  $line"
   done || warn "  (manual test timed out or exited)"
 fi
