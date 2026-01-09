@@ -656,6 +656,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ReadWritePaths=$RUNTIME_ROOT /etc
 RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true

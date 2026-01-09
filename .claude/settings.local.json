@@ -14,7 +14,9 @@
       "Bash(powershell.exe -ExecutionPolicy Bypass -File \"scripts\\\\build_arm32.ps1\")",
       "Bash(powershell.exe:*)",
       "Bash(ls:*)",
-      "Bash(docker run:*)"
+      "Bash(docker run:*)",
+      "Bash(pwsh -File testscompilebuild_arm32.ps1)",
+      "Bash(pwsh:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

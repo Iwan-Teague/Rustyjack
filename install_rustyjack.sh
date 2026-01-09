@@ -665,7 +665,7 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 # Filesystem access restrictions
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack
+ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack /etc
 ReadOnlyPaths=/etc/NetworkManager /etc/wpa_supplicant
 PrivateTmp=true
 
