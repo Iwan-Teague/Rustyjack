@@ -631,28 +631,16 @@ DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
 step "Installing rustyjackd socket/service..."
 
-sudo tee "$DAEMON_SOCKET" >/dev/null <<UNIT
-[Unit]
-Description=Rustyjack daemon socket
-
-[Socket]
-ListenStream=/run/rustyjack/rustyjackd.sock
-SocketMode=0660
-SocketUser=root
-SocketGroup=rustyjack
-RemoveOnStop=true
-
-[Install]
-WantedBy=sockets.target
-UNIT
+# Socket activation is not used on dedicated devices; ensure any existing socket unit is disabled/masked
+sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
+sudo systemctl mask rustyjackd.socket 2>/dev/null || true
 
 
 sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack Daemon (Hardened)
 Documentation=https://github.com/yourusername/rustyjack
-Requires=rustyjackd.socket
-After=local-fs.target network.target rustyjackd.socket
+After=local-fs.target network.target
 Wants=network.target
 
 [Service]
@@ -802,10 +790,10 @@ if command -v systemd-analyze >/dev/null 2>&1; then
     warn "systemd-analyze verify reported issues for rustyjackd.service; check 'systemctl status' and 'journalctl -u rustyjackd'"
   fi
 fi
-sudo systemctl enable rustyjackd.socket
-sudo systemctl start rustyjackd.socket 2>/dev/null || true
-sudo systemctl enable rustyjackd.service
-sudo systemctl start rustyjackd.service 2>/dev/null || warn "Failed to start rustyjackd.service - check journalctl -u rustyjackd"
+# Disable socket activation and prefer always-on service on dedicated devices
+sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
+sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+sudo systemctl enable --now rustyjackd.service 2>/dev/null || warn "Failed to enable/start rustyjackd.service - check journalctl -u rustyjackd"
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service
 info "Rustyjack services enabled - will start on next boot"

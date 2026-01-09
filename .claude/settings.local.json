@@ -4,7 +4,12 @@
       "Bash(grep:*)",
       "Bash(cargo check:*)",
       "Bash(if not exist \".claude\" mkdir \".claude\")",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(findstr:*)",
+      "Bash(claude mcp --help:*)",
+      "WebSearch",
+      "Bash(claude mcp add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

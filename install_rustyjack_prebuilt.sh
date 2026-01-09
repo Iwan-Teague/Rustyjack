@@ -769,28 +769,14 @@ DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
 step "Installing rustyjackd socket/service..."
 
-sudo tee "$DAEMON_SOCKET" >/dev/null <<UNIT
-[Unit]
-Description=Rustyjack daemon socket
-
-[Socket]
-ListenStream=/run/rustyjack/rustyjackd.sock
-SocketMode=0660
-SocketUser=root
-SocketGroup=rustyjack
-RemoveOnStop=true
-RuntimeDirectory=rustyjack
-RuntimeDirectoryMode=0770
-
-[Install]
-WantedBy=sockets.target
-UNIT
+# Socket activation is not used on dedicated devices; ensure any existing socket unit is disabled/masked
+sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
+sudo systemctl mask rustyjackd.socket 2>/dev/null || true
 
 sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack privileged daemon
-Requires=rustyjackd.socket
-After=local-fs.target network.target rustyjackd.socket
+After=local-fs.target network.target
 Wants=network.target
 
 [Service]
@@ -902,13 +888,9 @@ else
   done
 fi
 
-sudo systemctl enable rustyjackd.socket
-if sudo systemctl start rustyjackd.socket 2>/dev/null; then
-  info "Daemon socket started successfully"
-else
-  warn "Failed to start rustyjackd.socket"
-  warn "Socket status: $(systemctl status rustyjackd.socket 2>&1 | head -n 5)"
-fi
+# Disable socket activation and prefer always-on service
+sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
+sudo systemctl mask rustyjackd.socket 2>/dev/null || true
 
 sudo systemctl enable rustyjackd.service
 if sudo systemctl start rustyjackd.service 2>/dev/null; then
@@ -992,7 +974,7 @@ fi
 if [ -f "$DAEMON_SOCKET" ]; then
   info "[OK] Socket unit file installed: $DAEMON_SOCKET"
 else
-  fail "[X] Socket unit file missing at $DAEMON_SOCKET"
+  warn "[NOTE] Socket unit file not present; socket activation disabled for always-on service"
 fi
 if [ -f "$DAEMON_SERVICE" ]; then
   info "[OK] Daemon service file installed: $DAEMON_SERVICE"
