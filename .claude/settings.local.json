@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cargo check:*)",
+      "Bash(if not exist \".claude\" mkdir \".claude\")",
+      "Bash(git add:*)"
     ]
   }
 }

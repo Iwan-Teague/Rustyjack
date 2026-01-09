@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonError {
@@ -9,6 +10,24 @@ pub struct DaemonError {
     pub retryable: bool,
     pub source: Option<String>,
 }
+
+impl fmt::Display for DaemonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Primary message
+        write!(f, "{}", self.message)?;
+
+        // Add detail if present (for verbose output)
+        if let Some(ref detail) = self.detail {
+            if !detail.is_empty() && detail != &self.message {
+                write!(f, " ({})", detail)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl std::error::Error for DaemonError {}
 
 #[derive(Debug, Clone, Copy, Serialize_repr, Deserialize_repr, PartialEq, Eq)]
 #[repr(u16)]
@@ -29,6 +48,30 @@ pub enum ErrorCode {
     CleanupFailed = 14,
     NotImplemented = 15,
     Internal = 16,
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            ErrorCode::BadRequest => "bad request",
+            ErrorCode::IncompatibleProtocol => "protocol error",
+            ErrorCode::Unauthorized => "unauthorized",
+            ErrorCode::Forbidden => "forbidden",
+            ErrorCode::NotFound => "not found",
+            ErrorCode::Busy => "busy",
+            ErrorCode::Timeout => "timeout",
+            ErrorCode::Cancelled => "cancelled",
+            ErrorCode::Io => "I/O error",
+            ErrorCode::Netlink => "netlink error",
+            ErrorCode::MountFailed => "mount failed",
+            ErrorCode::WifiFailed => "wifi failed",
+            ErrorCode::UpdateFailed => "update failed",
+            ErrorCode::CleanupFailed => "cleanup failed",
+            ErrorCode::NotImplemented => "not implemented",
+            ErrorCode::Internal => "internal error",
+        };
+        write!(f, "{}", label)
+    }
 }
 
 impl DaemonError {

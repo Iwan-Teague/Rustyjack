@@ -1043,11 +1043,16 @@ pub async fn handle_request(
             let result = run_blocking("set_active_interface", move || {
                 rustyjack_core::operations::set_active_interface(&root, &iface)
                     .map_err(|e| {
+                        // Extract the root cause for a clean user-facing message
+                        let root_cause = e.root_cause().to_string();
+                        let full_chain = format!("{:#}", e);
                         DaemonError::new(
                             ErrorCode::Internal,
-                            format!("Failed to set active interface: {}", e),
+                            format!("Failed to set interface '{}': {}", iface, root_cause),
                             false,
                         )
+                        .with_detail(full_chain)
+                        .with_source("set_active_interface")
                     })
             })
             .await;
@@ -1066,11 +1071,7 @@ pub async fn handle_request(
                         },
                     ))
                 }
-                Err(err) => ResponseBody::Err(
-                    DaemonError::new(ErrorCode::Internal, "set active interface failed", false)
-                        .with_detail(format!("{:?}", err))
-                        .with_source("daemon.dispatch.set_active_interface"),
-                ),
+                Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::HotplugNotify => {
