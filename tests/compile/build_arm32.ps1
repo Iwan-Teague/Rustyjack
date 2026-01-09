@@ -49,9 +49,9 @@ if ($LASTEXITCODE -eq 0 -and $por) {
 }
 
 # include committed diffs against upstream if available, otherwise last commit
-$upstream = git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>$null
-if ($LASTEXITCODE -eq 0) {
-    $diff = git diff --name-only $upstream...HEAD 2>$null
+$upstream = git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>$null
+if ($LASTEXITCODE -eq 0 -and $upstream) {
+    $diff = git diff --name-only "$upstream...HEAD" 2>$null
 } else {
     $diff = git diff --name-only HEAD~1..HEAD 2>$null
 }
