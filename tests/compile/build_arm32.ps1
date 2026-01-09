@@ -26,20 +26,83 @@ if (-not (Test-Path $TmpDir)) {
     New-Item -ItemType Directory -Path $TmpDir | Out-Null
 }
 
-# Build command - single line to avoid Windows CRLF issues
-$BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; cargo build --target $Target -p rustyjack-ui; cargo build --target $Target -p rustyjack-daemon; cargo build --target $Target -p rustyjack-portal; cargo build --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"
+# Determine packages to build by detecting changed files via git (includes staged/uncommitted and recent commits)
+$Packages = @(
+    @{name="rustyjack-ui"; cmd="cargo build --target $Target -p rustyjack-ui"; dir="rustyjack-ui"},
+    @{name="rustyjackd"; cmd="cargo build --target $Target -p rustyjack-daemon"; dir="rustyjack-daemon"},
+    @{name="rustyjack-portal"; cmd="cargo build --target $Target -p rustyjack-portal"; dir="rustyjack-portal"},
+    @{name="rustyjack"; cmd="cargo build --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"; dir="rustyjack-core"}
+)
 
-Write-Host "Running cargo build in Docker..." -ForegroundColor Cyan
-# Note: No -it flag for non-interactive build
-docker run --rm --platform linux/arm/v7 `
-    -v "${RepoRoot}:/work" -w /work `
-    -e TMPDIR=/work/tmp `
-    $ImageName `
-    bash -c $BuildCmd
+$changed = @()
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build failed" -ForegroundColor Red
-    exit $LASTEXITCODE
+# include working-tree changes (staged/unstaged)
+$por = git status --porcelain 2>$null
+if ($LASTEXITCODE -eq 0 -and $por) {
+    $por -split "`n" | ForEach-Object {
+        $line = $_.Trim()
+        if ($line.Length -gt 3) {
+            $f = $line.Substring(3)
+            $changed += $f
+        }
+    }
+}
+
+# include committed diffs against upstream if available, otherwise last commit
+$upstream = git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $diff = git diff --name-only $upstream...HEAD 2>$null
+} else {
+    $diff = git diff --name-only HEAD~1..HEAD 2>$null
+}
+if ($diff) {
+    $diff -split "`n" | ForEach-Object { $changed += $_.Trim() }
+}
+
+$changed = $changed | Where-Object { $_ -ne "" } | Select-Object -Unique
+
+$BuildParts = @()
+
+if ($changed.Count -eq 0) {
+    Write-Host "No changed files detected via git; falling back to artifact existence check." -ForegroundColor Yellow
+    foreach ($entry in $Packages) {
+        $bin = $entry.name
+        $srcPath = Join-Path $HostTargetDir "$Target\debug\$bin"
+        if (Test-Path $srcPath) {
+            Write-Host "Found existing target binary for $bin at $srcPath - skipping rebuild" -ForegroundColor Yellow
+        } else {
+            $BuildParts += $entry.cmd
+        }
+    }
+    if ($BuildParts.Count -eq 0) {
+        Write-Host "All target binaries exist - skipping docker build." -ForegroundColor Green
+    } else {
+        $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; " + ($BuildParts -join "; ")
+    }
+} else {
+    # If workspace-level files changed, rebuild everything
+    $workspaceChanged = $changed | Where-Object { $_ -match '(^|/)(Cargo.lock|Cargo.toml)$' }
+    if ($workspaceChanged) {
+        Write-Host "Workspace Cargo files changed; rebuilding all packages" -ForegroundColor Yellow
+        $BuildParts = $Packages | ForEach-Object { $_.cmd }
+        $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; " + ($BuildParts -join "; ")
+    } else {
+        foreach ($entry in $Packages) {
+            $dir = $entry.dir
+            foreach ($f in $changed) {
+                if ($f -like "$dir/*" -or $f -like "$dir\*" -or $f -like "$dir/*" -or $f -like "*/$dir/*") {
+                    $BuildParts += $entry.cmd
+                    break
+                }
+            }
+        }
+        $BuildParts = $BuildParts | Select-Object -Unique
+        if ($BuildParts.Count -eq 0) {
+            Write-Host "No package-specific changes detected; skipping docker build." -ForegroundColor Green
+        } else {
+            $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; " + ($BuildParts -join "; ")
+        }
+    }
 }
 
 # Copy binaries to prebuilt directory

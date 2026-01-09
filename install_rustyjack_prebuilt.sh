@@ -816,6 +816,7 @@ WantedBy=multi-user.target
 UNIT
 
 SERVICE=/etc/systemd/system/rustyjack-ui.service
+SERVICE_FILE=$SERVICE
 step "Installing systemd service $SERVICE..."
 
 sudo tee "$SERVICE" >/dev/null <<UNIT
@@ -844,6 +845,7 @@ Alias=rustyjack.service
 UNIT
 
 PORTAL_SERVICE=/etc/systemd/system/rustyjack-portal.service
+PORTAL_SERVICE_FILE=$PORTAL_SERVICE
 step "Installing portal service $PORTAL_SERVICE..."
 
 sudo tee "$PORTAL_SERVICE" >/dev/null <<UNIT
