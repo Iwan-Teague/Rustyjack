@@ -95,9 +95,10 @@ pub fn set_active_interface(root: &Path, iface: &str) -> Result<crate::system::o
     
     let prefs = PreferenceManager::new(root.to_path_buf());
     prefs.set_preferred(iface)?;
+    write_interface_preference(root, "system_preferred", iface)?;
     
     let engine = IsolationEngine::new(ops, root.to_path_buf());
-    engine.enforce()
+    engine.enforce_passive()
 }
 
 #[allow(dead_code)]

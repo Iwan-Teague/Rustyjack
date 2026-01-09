@@ -27,6 +27,12 @@ pub struct IsolationEngine {
     root: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnforcementMode {
+    Connectivity,
+    Passive,
+}
+
 impl IsolationEngine {
     pub fn new(ops: Arc<dyn NetOps>, root: PathBuf) -> Self {
         let routes = RouteManager::new(Arc::clone(&ops));
@@ -44,6 +50,14 @@ impl IsolationEngine {
     }
 
     pub fn enforce(&self) -> Result<IsolationOutcome> {
+        self.enforce_with_mode(EnforcementMode::Connectivity)
+    }
+
+    pub fn enforce_passive(&self) -> Result<IsolationOutcome> {
+        self.enforce_with_mode(EnforcementMode::Passive)
+    }
+
+    fn enforce_with_mode(&self, mode: EnforcementMode) -> Result<IsolationOutcome> {
         // Acquire global lock to prevent concurrent enforcement
         let lock = ENFORCEMENT_LOCK.get_or_init(|| StdMutex::new(()));
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -106,7 +120,7 @@ impl IsolationEngine {
         }
 
         if let Some(ref iface) = active {
-            match self.activate_interface(iface) {
+            match self.activate_interface(iface, mode) {
                 Ok(()) => {
                     info!("Successfully activated interface: {}", iface);
                 }
@@ -120,7 +134,7 @@ impl IsolationEngine {
             }
         }
 
-        self.verify_enforcement(active.as_deref())?;
+        self.verify_enforcement(active.as_deref(), mode)?;
 
         info!(
             "Enforcement complete: allowed={:?}, blocked={:?}, errors={}",
@@ -181,7 +195,7 @@ impl IsolationEngine {
 
         // Activate upstream interface (normal DHCP + routing)
         info!("Activating upstream interface: {}", exc.upstream_interface);
-        match self.activate_interface(&exc.upstream_interface) {
+        match self.activate_interface(&exc.upstream_interface, EnforcementMode::Connectivity) {
             Ok(()) => {
                 info!("Successfully activated upstream: {}", exc.upstream_interface);
                 outcome.allowed.push(exc.upstream_interface.clone());
@@ -284,8 +298,8 @@ impl IsolationEngine {
         Ok(None)
     }
 
-    fn activate_interface(&self, iface: &str) -> Result<()> {
-        info!("Activating interface: {}", iface);
+    fn activate_interface(&self, iface: &str, mode: EnforcementMode) -> Result<()> {
+        info!("Activating interface: {} ({:?})", iface, mode);
 
         // Check interface exists before starting
         if !self.ops.interface_exists(iface) {
@@ -304,6 +318,14 @@ impl IsolationEngine {
             self.ops
                 .set_rfkill_block(iface, false)
                 .context("failed to unblock rfkill")?;
+
+            if mode == EnforcementMode::Passive {
+                self.ops
+                    .apply_nm_managed(iface, false)
+                    .context("failed to set NM unmanaged")?;
+                info!("Interface {} activated (passive, no DHCP)", iface);
+                return Ok(());
+            }
 
             // For wireless interfaces, check if we're connected to an AP
             // If not, try to auto-connect using a saved profile
@@ -330,6 +352,11 @@ impl IsolationEngine {
         self.ops
             .apply_nm_managed(iface, false)
             .context("failed to set NM unmanaged")?;
+
+        if mode == EnforcementMode::Passive {
+            info!("Interface {} activated (passive, no DHCP)", iface);
+            return Ok(());
+        }
 
         // Try DHCP with graceful fallback
         match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
@@ -475,7 +502,7 @@ impl IsolationEngine {
         Ok(())
     }
 
-    fn verify_enforcement(&self, expected_active: Option<&str>) -> Result<()> {
+    fn verify_enforcement(&self, expected_active: Option<&str>, mode: EnforcementMode) -> Result<()> {
         debug!("Verifying enforcement state");
 
         let current_route = self.routes.get_default_route()?;
@@ -492,10 +519,13 @@ impl IsolationEngine {
                 debug!("Verified: default route via {}", expected);
             }
             (Some(expected), None) => {
-                bail!(
-                    "Verification failed: expected {} but no default route",
-                    expected
-                );
+                if mode == EnforcementMode::Connectivity {
+                    bail!(
+                        "Verification failed: expected {} but no default route",
+                        expected
+                    );
+                }
+                debug!("Verified: no default route for {} (passive mode)", expected);
             }
             (None, Some(route)) => {
                 bail!(
@@ -632,6 +662,21 @@ mod tests {
         // Should fail because DHCP failed
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("DHCP"));
+    }
+
+    #[test]
+    fn test_enforce_passive_skips_dhcp() {
+        let mock = Arc::new(MockNetOps::new());
+        mock.add_interface("eth0", false, "up");
+        mock.set_dhcp_result("eth0", Err(anyhow::anyhow!("DHCP timeout")));
+
+        let temp_dir = TempDir::new().unwrap();
+        let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
+
+        let outcome = engine.enforce_passive().unwrap();
+
+        assert_eq!(outcome.allowed, vec!["eth0".to_string()]);
+        assert!(mock.get_routes().is_empty());
     }
     
     #[test]

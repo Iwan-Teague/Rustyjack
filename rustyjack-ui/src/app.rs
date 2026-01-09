@@ -4261,12 +4261,7 @@ impl App {
                                                     blocked.join(", ")
                                                 ));
                                             }
-
-                                            if let Some(route_msg) =
-                                                self.ensure_route_for_interface(&interface_name)?
-                                            {
-                                                lines.push(route_msg);
-                                            }
+                                            lines.push("Connect via Saved Networks".to_string());
 
                                             self.show_message(
                                                 "Active Interface",
