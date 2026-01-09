@@ -769,12 +769,14 @@ DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
 step "Installing rustyjackd socket/service..."
 
-# Socket activation is not used on dedicated devices; ensure any existing socket unit is disabled/masked
-sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
+# Ensure rustyjackd.socket/service are stopped and socket unit removed to avoid socket-activation races
+sudo systemctl stop rustyjackd.socket rustyjackd.service 2>/dev/null || true
+sudo systemctl disable --now rustyjackd.socket rustyjackd.service 2>/dev/null || true
 sudo systemctl mask rustyjackd.socket 2>/dev/null || true
-# Remove any lingering socket unit file and runtime socket to prevent accidental socket activation
-sudo rm -f "$DAEMON_SOCKET" 2>/dev/null || true
+sudo rm -f "$DAEMON_SOCKET" /etc/systemd/system/rustyjackd.socket 2>/dev/null || true
 sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
+sudo systemctl daemon-reload 2>/dev/null || true
+sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
 
 sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
@@ -893,11 +895,14 @@ else
 fi
 
 # Disable socket activation and prefer always-on service
-sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
+sudo systemctl stop rustyjackd.socket rustyjackd.service 2>/dev/null || true
+sudo systemctl disable --now rustyjackd.socket rustyjackd.service 2>/dev/null || true
 sudo systemctl mask rustyjackd.socket 2>/dev/null || true
 # Remove any lingering socket unit file and runtime socket to prevent accidental socket activation
-sudo rm -f "$DAEMON_SOCKET" 2>/dev/null || true
+sudo rm -f "$DAEMON_SOCKET" /etc/systemd/system/rustyjackd.socket 2>/dev/null || true
 sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
+sudo systemctl daemon-reload 2>/dev/null || true
+sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
 
 sudo systemctl enable rustyjackd.service
 if sudo systemctl start rustyjackd.service 2>/dev/null; then
