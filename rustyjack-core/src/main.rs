@@ -2,12 +2,14 @@ use anyhow::Result;
 use clap::Parser;
 use rustyjack_core::{dispatch_command, logs_enabled, resolve_root, Cli, OutputFormat};
 use serde_json::{json, Value};
+use tracing_subscriber::util::SubscriberInitExt;
 
 fn main() {
     if logs_enabled() {
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        // Avoid panic if a global subscriber is already set (e.g., accidental double-start).
+        tracing_subscriber::fmt().with_env_filter(filter).try_init().ok();
     }
     let cli = Cli::parse();
     let format = if cli.json {

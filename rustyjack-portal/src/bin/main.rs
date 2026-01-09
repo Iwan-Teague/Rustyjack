@@ -134,12 +134,14 @@ fn init_logging(root: &Path) -> LoggingGuards {
             .with(filter)
             .with(stdout_layer)
             .with(layer)
-            .init();
+            .try_init()
+            .ok();
     } else {
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)
-            .init();
+            .try_init()
+            .ok();
     }
 
     if let Some(message) = warn_msg {
