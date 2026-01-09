@@ -9,7 +9,18 @@
       "Bash(claude mcp --help:*)",
       "WebSearch",
       "Bash(claude mcp add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File .scriptsbuild_arm32.ps1)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"scripts\\\\build_arm32.ps1\")",
+      "Bash(powershell.exe:*)",
+      "Bash(ls:*)",
+      "Bash(docker run:*)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "sequential-thinking",
+    "memory",
+    "docker"
+  ]
 }
