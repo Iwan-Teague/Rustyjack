@@ -24,6 +24,7 @@ pub struct IsolationEngine {
     routes: RouteManager,
     dns: DnsManager,
     prefs: PreferenceManager,
+    root: PathBuf,
 }
 
 impl IsolationEngine {
@@ -31,13 +32,14 @@ impl IsolationEngine {
         let routes = RouteManager::new(Arc::clone(&ops));
         // Always use system resolv.conf - installer ensures it's writable
         let dns = DnsManager::new(PathBuf::from("/etc/resolv.conf"));
-        let prefs = PreferenceManager::new(root);
+        let prefs = PreferenceManager::new(root.clone());
 
         Self {
             ops,
             routes,
             dns,
             prefs,
+            root,
         }
     }
 
@@ -284,7 +286,7 @@ impl IsolationEngine {
 
     fn activate_interface(&self, iface: &str) -> Result<()> {
         info!("Activating interface: {}", iface);
-        
+
         // Check interface exists before starting
         if !self.ops.interface_exists(iface) {
             bail!("Interface {} does not exist", iface);
@@ -302,6 +304,27 @@ impl IsolationEngine {
             self.ops
                 .set_rfkill_block(iface, false)
                 .context("failed to unblock rfkill")?;
+
+            // For wireless interfaces, check if we're connected to an AP
+            // If not, try to auto-connect using a saved profile
+            if self.ops.get_ipv4_address(iface).ok().flatten().is_none() {
+                info!("Wireless interface {} has no IP - checking for auto-connect profiles", iface);
+
+                match self.try_auto_connect_wifi(iface) {
+                    Ok(true) => {
+                        info!("Auto-connected to WiFi network on {}", iface);
+                        // WiFi connection includes DHCP, so we're done
+                        return Ok(());
+                    }
+                    Ok(false) => {
+                        info!("No auto-connect profile found for {}, will try DHCP anyway", iface);
+                    }
+                    Err(e) => {
+                        warn!("Auto-connect failed for {}: {}", iface, e);
+                        info!("Attempting DHCP anyway (may fail if not connected to AP)");
+                    }
+                }
+            }
         }
 
         self.ops
@@ -356,6 +379,70 @@ impl IsolationEngine {
 
         info!("Interface {} fully activated", iface);
         Ok(())
+    }
+
+    fn try_auto_connect_wifi(&self, iface: &str) -> Result<bool> {
+        use crate::system::{list_wifi_profiles, load_wifi_profile, connect_wifi_network};
+
+        // Load all profile records
+        let profile_records = match list_wifi_profiles(&self.root) {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("Failed to list WiFi profiles: {}", e);
+                return Ok(false);
+            }
+        };
+
+        if profile_records.is_empty() {
+            debug!("No WiFi profiles found");
+            return Ok(false);
+        }
+
+        // Filter to auto-connect profiles matching this interface
+        let mut candidates: Vec<_> = profile_records
+            .into_iter()
+            .filter(|p| {
+                p.auto_connect && (p.interface == iface || p.interface == "auto")
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            info!("No auto-connect WiFi profiles found for {}", iface);
+            return Ok(false);
+        }
+
+        // Sort by priority (highest first)
+        candidates.sort_by(|a, b| b.priority.cmp(&a.priority));
+
+        info!("Found {} auto-connect profile(s) for {}", candidates.len(), iface);
+
+        // Try to connect to the highest priority profile
+        let record = &candidates[0];
+        info!("Attempting auto-connect to {} (priority {})", record.ssid, record.priority);
+
+        // Load full profile to get password
+        let full_profile = match load_wifi_profile(&self.root, &record.ssid) {
+            Ok(Some(p)) => p.profile,
+            Ok(None) => {
+                warn!("Profile {} not found (may have been deleted)", record.ssid);
+                return Ok(false);
+            }
+            Err(e) => {
+                warn!("Failed to load profile {}: {}", record.ssid, e);
+                return Err(e);
+            }
+        };
+
+        match connect_wifi_network(iface, &full_profile.ssid, full_profile.password.as_deref()) {
+            Ok(()) => {
+                info!("Successfully auto-connected to {}", full_profile.ssid);
+                Ok(true)
+            }
+            Err(e) => {
+                warn!("Failed to auto-connect to {}: {}", full_profile.ssid, e);
+                Err(e)
+            }
+        }
     }
 
     fn block_interface(&self, iface: &str) -> Result<()> {
