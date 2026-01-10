@@ -359,16 +359,55 @@ impl App {
             .map(|mac| mac.trim().to_uppercase())
     }
 
+    fn interface_oper_state(&self, interface: &str) -> String {
+        if interface.is_empty() {
+            return "unknown".to_string();
+        }
+        let oper_path = format!("/sys/class/net/{}/operstate", interface);
+        fs::read_to_string(&oper_path)
+            .unwrap_or_else(|_| "unknown".to_string())
+            .trim()
+            .to_string()
+    }
+
+    fn interface_admin_up(&self, interface: &str) -> bool {
+        if interface.is_empty() {
+            return false;
+        }
+        let flags_path = format!("/sys/class/net/{}/flags", interface);
+        let flags = match fs::read_to_string(&flags_path) {
+            Ok(val) => val.trim().to_string(),
+            Err(_) => return false,
+        };
+        let hex = flags.trim_start_matches("0x");
+        let parsed = u32::from_str_radix(hex, 16).or_else(|_| flags.parse::<u32>());
+        match parsed {
+            Ok(value) => value & 0x1 != 0,
+            Err(_) => false,
+        }
+    }
+
+    fn interface_is_up(&self, interface: &str) -> bool {
+        self.interface_admin_up(interface)
+    }
+
+    fn wait_for_interface_up(&self, interface: &str, timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if self.interface_is_up(interface) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        self.interface_is_up(interface)
+    }
+
     fn interface_has_carrier(&self, interface: &str) -> bool {
         if interface.is_empty() {
             return false;
         }
         let carrier_path = format!("/sys/class/net/{}/carrier", interface);
-        let oper_path = format!("/sys/class/net/{}/operstate", interface);
-        let oper_state = fs::read_to_string(&oper_path)
-            .unwrap_or_else(|_| "unknown".to_string())
-            .trim()
-            .to_string();
+        let oper_state = self.interface_oper_state(interface);
         let oper_ready = matches!(oper_state.as_str(), "up" | "unknown");
         match fs::read_to_string(&carrier_path) {
             Ok(val) => val.trim() == "1" || oper_ready,
@@ -4244,29 +4283,79 @@ impl App {
                                             self.config.settings.active_network_interface =
                                                 interface_name.clone();
                                             let config_path = self.root.join("gui_conf.json");
-                                            if let Err(e) = self.config.save(&config_path) {
-                                                lines.push(format!("Config save failed: {}", e));
-                                            } else {
-                                                lines.push("Config saved".to_string());
-                                            }
+                                            let config_msg = match self.config.save(&config_path) {
+                                                Ok(()) => Some("Config saved".to_string()),
+                                                Err(e) => {
+                                                    Some(format!("Config save failed: {}", e))
+                                                }
+                                            };
 
-                                            if allowed.is_empty() {
-                                                lines.push(format!("Active: {}", interface_name));
-                                            } else {
-                                                lines.push(format!("Active: {}", allowed.join(", ")));
-                                            }
-                                            if !blocked.is_empty() {
-                                                lines.push(format!(
-                                                    "Blocked: {}",
-                                                    blocked.join(", ")
-                                                ));
-                                            }
-                                            lines.push("Connect via Saved Networks".to_string());
-
-                                            self.show_message(
-                                                "Active Interface",
-                                                lines.iter().map(|s| s.as_str()),
+                                            self.show_progress(
+                                                "Confirming Interface",
+                                                [
+                                                    format!("Waiting for {}", interface_name),
+                                                    "State: up".to_string(),
+                                                ],
                                             )?;
+                                            let is_up = self.wait_for_interface_up(
+                                                &interface_name,
+                                                Duration::from_secs(5),
+                                            );
+                                            if !is_up {
+                                                let state = if self.interface_admin_up(&interface_name)
+                                                {
+                                                    "up"
+                                                } else {
+                                                    "down"
+                                                };
+                                                let mut err_lines = Vec::new();
+                                                err_lines.push(format!(
+                                                    "Interface: {}",
+                                                    interface_name
+                                                ));
+                                                err_lines.push(format!("State: {}", state));
+                                                err_lines.push(format!(
+                                                    "Oper: {}",
+                                                    self.interface_oper_state(&interface_name)
+                                                ));
+                                                err_lines.push("Expected: up".to_string());
+                                                if let Some(msg) = config_msg.clone() {
+                                                    err_lines.push(msg);
+                                                }
+                                                self.show_message(
+                                                    "Interface Error",
+                                                    err_lines.iter().map(|s| s.as_str()),
+                                                )?;
+                                            } else {
+                                                if let Some(msg) = config_msg {
+                                                    lines.push(msg);
+                                                }
+                                                if allowed.is_empty() {
+                                                    lines.push(format!(
+                                                        "Active: {}",
+                                                        interface_name
+                                                    ));
+                                                } else {
+                                                    lines.push(format!(
+                                                        "Active: {}",
+                                                        allowed.join(", ")
+                                                    ));
+                                                }
+                                                if !blocked.is_empty() {
+                                                    lines.push(format!(
+                                                        "Blocked: {}",
+                                                        blocked.join(", ")
+                                                    ));
+                                                }
+                                                lines.push(
+                                                    "Connect via Saved Networks".to_string(),
+                                                );
+
+                                                self.show_message(
+                                                    "Active Interface",
+                                                    lines.iter().map(|s| s.as_str()),
+                                                )?;
+                                            }
                                         }
                                         Err(e) => {
                                             // Show full error chain for better debugging
@@ -12511,23 +12600,58 @@ impl App {
                     let config_path = self.root.join("gui_conf.json");
 
                     let mut lines = Vec::new();
-                    if allowed.is_empty() {
-                        lines.push(format!("Active: {}", selected_name));
-                    } else {
-                        lines.push(format!("Active: {}", allowed.join(", ")));
-                    }
-                    if !blocked.is_empty() {
-                        lines.push(format!("Blocked: {}", blocked.join(", ")));
-                    }
-                    lines.push("".to_string());
-                    if let Err(e) = self.config.save(&config_path) {
-                        lines.push(format!("Config save failed: {}", e));
-                    } else {
-                        lines.push("Config saved".to_string());
-                    }
-                    lines.push("Enforcement complete".to_string());
+                    let config_msg = match self.config.save(&config_path) {
+                        Ok(()) => Some("Config saved".to_string()),
+                        Err(e) => Some(format!("Config save failed: {}", e)),
+                    };
 
-                    self.show_message("Interface Set", lines.iter().map(|s| s.as_str()))
+                    self.show_progress(
+                        "Confirming Interface",
+                        [
+                            format!("Waiting for {}", selected_name),
+                            "State: up".to_string(),
+                        ],
+                    )?;
+                    let is_up =
+                        self.wait_for_interface_up(selected_name, Duration::from_secs(5));
+                    if !is_up {
+                        let state = if self.interface_admin_up(selected_name) {
+                            "up"
+                        } else {
+                            "down"
+                        };
+                        let mut err_lines = Vec::new();
+                        err_lines.push(format!("Interface: {}", selected_name));
+                        err_lines.push(format!("State: {}", state));
+                        err_lines.push(format!(
+                            "Oper: {}",
+                            self.interface_oper_state(selected_name)
+                        ));
+                        err_lines.push("Expected: up".to_string());
+                        if let Some(msg) = config_msg.clone() {
+                            err_lines.push(msg);
+                        }
+                        self.show_message(
+                            "Interface Error",
+                            err_lines.iter().map(|s| s.as_str()),
+                        )
+                    } else {
+                        if allowed.is_empty() {
+                            lines.push(format!("Active: {}", selected_name));
+                        } else {
+                            lines.push(format!("Active: {}", allowed.join(", ")));
+                        }
+                        if !blocked.is_empty() {
+                            lines.push(format!("Blocked: {}", blocked.join(", ")));
+                        }
+                        lines.push("".to_string());
+                        if let Some(msg) = config_msg {
+                            lines.push(msg);
+                        }
+                        lines.push("Enforcement complete".to_string());
+
+                        self.show_message("Interface Set", lines.iter().map(|s| s.as_str()))
+                    }
                 }
                 Err(e) => self.show_message("Interface Error", [format!("{:#}", e)]),
             }
