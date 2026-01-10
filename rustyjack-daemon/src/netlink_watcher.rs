@@ -45,20 +45,16 @@ async fn watch_netlink_events(
     use futures::stream::StreamExt;
     use rtnetlink::new_connection;
 
-    // RC6: Subscribe to RTNLGRP_LINK for real-time link state notifications
+    // RC6: Subscribe to netlink events for real-time link state notifications
     // This allows daemon to detect carrier up/down events automatically
     let (connection, handle, _messages) = new_connection()?;
 
-    // Subscribe to link change events (carrier, admin-state, etc.)
-    // Using socket_ref().add_membership() to subscribe to link group
-    // This enables receiving RTM_NEWLINK messages when interface state changes
-    if let Err(e) = connection.socket_ref().add_membership(1) {  // RTNLGRP_LINK = 1
-        warn!("Failed to subscribe to link change events: {}", e);
-    }
+    // Keep the connection alive in the background
+    // This enables receiving RTM_NEWLINK/RTM_NEWADDR messages from kernel
+    tokio::spawn(connection);
 
-    tokio::spawn(connection.run());
-
-    // Initial dump to get current state
+    // Get streams for link and address changes
+    // These will be triggered when interface state changes occur
     let mut link_stream = handle.link().get().execute();
     let mut address_stream = handle.address().get().execute();
 
