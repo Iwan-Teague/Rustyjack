@@ -402,6 +402,36 @@ impl App {
         self.interface_is_up(interface)
     }
 
+    fn wait_for_interface_up_with_ip(&self, interface: &str, timeout: Duration) -> bool {
+        let start = Instant::now();
+
+        // Wait for interface to be administratively UP (not just existence)
+        // For ethernet:
+        // - No carrier: fails immediately at daemon (~1 second)
+        // - Has carrier, DHCP works: succeeds in 5-10 seconds
+        // - Has carrier, slow DHCP: succeeds within 15 seconds (3 retries × 5s)
+        // - No DHCP server: fails after ~15 seconds
+        while start.elapsed() < timeout {
+            if self.interface_is_up(interface) {
+                // Interface is up - wait a bit more to ensure DHCP fully completes
+                let remaining = timeout.saturating_sub(start.elapsed());
+                if remaining > Duration::from_millis(500) {
+                    thread::sleep(Duration::from_millis(500));
+                    // Check one more time to ensure it stays up
+                    if self.interface_is_up(interface) {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+
+        // Final check: interface is up
+        self.interface_is_up(interface)
+    }
+
     fn interface_has_carrier(&self, interface: &str) -> bool {
         if interface.is_empty() {
             return false;
@@ -4294,12 +4324,12 @@ impl App {
                                                 "Confirming Interface",
                                                 [
                                                     format!("Waiting for {}", interface_name),
-                                                    "State: up".to_string(),
+                                                    "Acquiring DHCP...".to_string(),
                                                 ],
                                             )?;
-                                            let is_up = self.wait_for_interface_up(
+                                            let is_up = self.wait_for_interface_up_with_ip(
                                                 &interface_name,
-                                                Duration::from_secs(5),
+                                                Duration::from_secs(30),  // Carrier check fails fast; ~15s for DHCP retries
                                             );
                                             if !is_up {
                                                 let state = if self.interface_admin_up(&interface_name)
@@ -4308,22 +4338,34 @@ impl App {
                                                 } else {
                                                     "down"
                                                 };
+                                                let oper_state = self.interface_oper_state(&interface_name);
                                                 let mut err_lines = Vec::new();
                                                 err_lines.push(format!(
                                                     "Interface: {}",
                                                     interface_name
                                                 ));
-                                                err_lines.push(format!("State: {}", state));
+                                                err_lines.push(format!("Admin State: {}", state));
                                                 err_lines.push(format!(
-                                                    "Oper: {}",
-                                                    self.interface_oper_state(&interface_name)
+                                                    "Operational: {}",
+                                                    oper_state
                                                 ));
-                                                err_lines.push("Expected: up".to_string());
+
+                                                // Provide helpful error context
+                                                if state == "down" {
+                                                    err_lines.push("Interface did not come UP".to_string());
+                                                    err_lines.push("Check hardware/cable".to_string());
+                                                } else if oper_state == "down" {
+                                                    err_lines.push("Interface UP but DHCP failed".to_string());
+                                                    err_lines.push("or no carrier detected".to_string());
+                                                } else {
+                                                    err_lines.push("Timeout waiting for full setup".to_string());
+                                                }
+
                                                 if let Some(msg) = config_msg.clone() {
-                                                    err_lines.push(msg);
+                                                    err_lines.push(format!("Note: {}", msg));
                                                 }
                                                 self.show_message(
-                                                    "Interface Error",
+                                                    "Interface Setup Failed",
                                                     err_lines.iter().map(|s| s.as_str()),
                                                 )?;
                                             } else {

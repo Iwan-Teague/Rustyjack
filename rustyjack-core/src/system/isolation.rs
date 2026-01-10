@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
+use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::dns::DnsManager;
 use super::ops::{ErrorEntry, IsolationOutcome, NetOps};
@@ -357,40 +358,87 @@ impl IsolationEngine {
 
         if mode == EnforcementMode::Passive {
             if !is_wireless {
-                match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
-                    Ok(lease) => {
-                        info!(
-                            "DHCP lease acquired: ip={}, gateway={:?}",
-                            lease.ip, lease.gateway
-                        );
+                // Ethernet interface - retry DHCP acquisition with carrier detection
+                // Carrier check first to fail fast if no cable (~1s vs 15-25s)
 
-                        if let Some(gw) = lease.gateway {
-                            let metric = if is_wireless { 200 } else { 100 };
-                            self.routes
-                                .set_default_route(iface, gw, metric)
-                                .context("failed to set default route")?;
-                        } else {
-                            warn!("No gateway in DHCP lease - link-local only");
+                // Pre-check: verify physical link/carrier is detected
+                let carrier_detected = self.interface_has_carrier(iface);
+                if !carrier_detected {
+                    error!("No carrier detected on {} - cable not plugged in?", iface);
+                    bail!("No carrier detected on {} - check cable connection", iface);
+                }
+
+                // Cable is plugged in - now retry DHCP in case of transient issues
+                // (slow DHCP server, switch STP delays, etc.)
+                const MAX_RETRIES: usize = 3;  // 3 retries × 5s = 15s total max
+                const RETRY_DELAY_SECS: u64 = 5;
+
+                let mut last_error = None;
+                let mut lease_acquired = false;
+
+                for attempt in 1..=MAX_RETRIES {
+                    info!("Attempting DHCP for {} (attempt {}/{})", iface, attempt, MAX_RETRIES);
+
+                    match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
+                        Ok(lease) => {
+                            info!(
+                                "DHCP successful for {} on attempt {}: ip={}, gateway={:?}",
+                                iface, attempt, lease.ip, lease.gateway
+                            );
+
+                            if let Some(gw) = lease.gateway {
+                                let metric = if is_wireless { 200 } else { 100 };
+                                self.routes
+                                    .set_default_route(iface, gw, metric)
+                                    .context("failed to set default route")?;
+                            } else {
+                                warn!("No gateway in DHCP lease - link-local only");
+                            }
+
+                            if !lease.dns_servers.is_empty() {
+                                self.dns
+                                    .set_dns(&lease.dns_servers)
+                                    .context("failed to set DNS")?;
+                            } else {
+                                warn!("No DNS in DHCP lease, using fallback");
+                                self.dns
+                                    .set_dns(&[
+                                        Ipv4Addr::new(1, 1, 1, 1),
+                                        Ipv4Addr::new(9, 9, 9, 9),
+                                    ])
+                                    .context("failed to set fallback DNS")?;
+                            }
+
+                            lease_acquired = true;
+                            break;
                         }
+                        Err(e) => {
+                            last_error = Some(e);
 
-                        if !lease.dns_servers.is_empty() {
-                            self.dns
-                                .set_dns(&lease.dns_servers)
-                                .context("failed to set DNS")?;
-                        } else {
-                            warn!("No DNS in DHCP lease, using fallback");
-                            self.dns
-                                .set_dns(&[
-                                    Ipv4Addr::new(1, 1, 1, 1),
-                                    Ipv4Addr::new(9, 9, 9, 9),
-                                ])
-                                .context("failed to set fallback DNS")?;
+                            if attempt < MAX_RETRIES {
+                                warn!(
+                                    "DHCP attempt {}/{} failed for {}: {}. Retrying in {}s...",
+                                    attempt, MAX_RETRIES, iface, last_error.as_ref().unwrap(), RETRY_DELAY_SECS
+                                );
+                                std::thread::sleep(Duration::from_secs(RETRY_DELAY_SECS));
+                            } else {
+                                // All retries exhausted
+                                error!(
+                                    "DHCP failed for {} after {} attempts: {}",
+                                    iface, MAX_RETRIES, last_error.as_ref().unwrap()
+                                );
+                            }
                         }
                     }
-                    Err(e) => {
-                        warn!("DHCP failed for {}: {}", iface, e);
-                        warn!("Continuing without DHCP (passive wired)");
-                    }
+                }
+
+                if !lease_acquired {
+                    bail!(
+                        "Failed to acquire DHCP lease for {} after {} attempts: {}",
+                        iface,
+                        MAX_RETRIES,
+                        last_error.unwrap()
+                    );
                 }
             }
             info!("Interface {} activated (passive)", iface);
@@ -507,6 +555,23 @@ impl IsolationEngine {
             Err(e) => {
                 warn!("Failed to auto-connect to {}: {}", full_profile.ssid, e);
                 Err(e)
+            }
+        }
+    }
+
+    fn interface_has_carrier(&self, iface: &str) -> bool {
+        // Check if physical link/carrier is detected on the interface
+        // Returns true if carrier = 1 (cable plugged in) or if carrier file doesn't exist
+        let carrier_path = format!("/sys/class/net/{}/carrier", iface);
+        match fs::read_to_string(&carrier_path) {
+            Ok(val) => {
+                let carrier = val.trim();
+                carrier == "1"  // 1 = carrier detected (cable plugged in)
+            }
+            Err(_) => {
+                // If carrier file doesn't exist, assume interface might work
+                // (some virtual/wireless interfaces don't have carrier detection)
+                true
             }
         }
     }
