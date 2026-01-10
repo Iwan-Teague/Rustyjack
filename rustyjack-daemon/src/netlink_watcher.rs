@@ -47,7 +47,7 @@ async fn watch_netlink_events(
 
     // RC6: Subscribe to RTNLGRP_LINK for real-time link state notifications
     // This allows daemon to detect carrier up/down events automatically
-    let (connection, handle) = new_connection()?;
+    let (connection, handle, _messages) = new_connection()?;
 
     // Subscribe to link change events (carrier, admin-state, etc.)
     // Using socket_ref().add_membership() to subscribe to link group
