@@ -246,7 +246,7 @@ pub fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>> {
         let removable = read_sysfs_flag(entry.path().join("removable")).unwrap_or(false);
         let is_usb = sysfs_path_contains_usb(entry.path().join("device")).unwrap_or(false);
 
-        if !removable || !is_usb {
+        if !is_usb && !removable {
             continue;
         }
 
@@ -375,14 +375,14 @@ fn ensure_block_device(path: &Path) -> Result<()> {
 
 fn ensure_usb_removable(dev_name: &str) -> Result<()> {
     let base = base_device_name(dev_name)?;
+    if !is_allowed_device(&base) {
+        bail!("device type not allowed");
+    }
     let sys_base = Path::new("/sys/class/block").join(&base);
     let removable = read_sysfs_flag(sys_base.join("removable")).unwrap_or(false);
-    if !removable {
-        bail!("device not marked removable");
-    }
     let is_usb = sysfs_path_contains_usb(sys_base.join("device")).unwrap_or(false);
-    if !is_usb {
-        bail!("device not on USB path");
+    if !is_usb && !removable {
+        bail!("device not marked removable or on USB path");
     }
     Ok(())
 }

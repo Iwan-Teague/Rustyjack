@@ -314,7 +314,9 @@ impl IsolationEngine {
             warn!("Interface {} may already be up: {}", iface, e);
         }
 
-        if self.ops.is_wireless(iface) {
+        let is_wireless = self.ops.is_wireless(iface);
+
+        if is_wireless {
             self.ops
                 .set_rfkill_block(iface, false)
                 .context("failed to unblock rfkill")?;
@@ -354,7 +356,44 @@ impl IsolationEngine {
             .context("failed to set NM unmanaged")?;
 
         if mode == EnforcementMode::Passive {
-            info!("Interface {} activated (passive, no DHCP)", iface);
+            if !is_wireless {
+                match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
+                    Ok(lease) => {
+                        info!(
+                            "DHCP lease acquired: ip={}, gateway={:?}",
+                            lease.ip, lease.gateway
+                        );
+
+                        if let Some(gw) = lease.gateway {
+                            let metric = if is_wireless { 200 } else { 100 };
+                            self.routes
+                                .set_default_route(iface, gw, metric)
+                                .context("failed to set default route")?;
+                        } else {
+                            warn!("No gateway in DHCP lease - link-local only");
+                        }
+
+                        if !lease.dns_servers.is_empty() {
+                            self.dns
+                                .set_dns(&lease.dns_servers)
+                                .context("failed to set DNS")?;
+                        } else {
+                            warn!("No DNS in DHCP lease, using fallback");
+                            self.dns
+                                .set_dns(&[
+                                    Ipv4Addr::new(1, 1, 1, 1),
+                                    Ipv4Addr::new(9, 9, 9, 9),
+                                ])
+                                .context("failed to set fallback DNS")?;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("DHCP failed for {}: {}", iface, e);
+                        warn!("Continuing without DHCP (passive wired)");
+                    }
+                }
+            }
+            info!("Interface {} activated (passive)", iface);
             return Ok(());
         }
 
@@ -665,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enforce_passive_skips_dhcp() {
+    fn test_enforce_passive_ignores_dhcp_failure() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("eth0", false, "up");
         mock.set_dhcp_result("eth0", Err(anyhow::anyhow!("DHCP timeout")));
