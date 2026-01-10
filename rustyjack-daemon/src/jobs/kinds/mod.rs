@@ -1,4 +1,5 @@
 mod hotspot_start;
+mod interface_select;
 mod mount_start;
 mod noop;
 mod portal_start;
@@ -12,12 +13,15 @@ mod wifi_scan;
 use std::future::Future;
 
 use tokio_util::sync::CancellationToken;
+use std::sync::Arc;
 
 use rustyjack_ipc::{DaemonError, JobKind};
+use crate::state::DaemonState;
 
 pub async fn execute<F, Fut>(
     kind: &JobKind,
     cancel: &CancellationToken,
+    state: &Arc<DaemonState>,
     mut progress: F,
 ) -> Result<serde_json::Value, DaemonError>
 where
@@ -35,5 +39,6 @@ where
         JobKind::PortalStart { req } => portal_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::MountStart { req } => mount_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::UnmountStart { req } => unmount_start::run(req.clone(), cancel, &mut progress).await,
+        JobKind::InterfaceSelect { interface } => interface_select::run(interface.clone(), Arc::clone(state), cancel, &mut progress).await,
     }
 }

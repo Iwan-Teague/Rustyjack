@@ -37,6 +37,11 @@ rustyjack-wireless = { path = "../rustyjack-wireless" }
 rustyjack-netlink = { path = "../rustyjack-netlink" }
 tokio = { version = "1.0", features = ["rt", "macros"] }
 zbus = { version = "4.0", default-features = false }
+bytes = "1.11"
+nix = { version = "0.27", default-features = false, features = ["poll"] }
+netlink-packet-core = "0.7"
+netlink-packet-route = "0.19"
+netlink-sys = { version = "0.8", features = ["tokio_socket"] }
 
 [[bin]]
 name = "rustyjack"

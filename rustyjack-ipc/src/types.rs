@@ -669,6 +669,10 @@ pub enum DaemonEvent {
 pub fn is_dangerous_job(kind: &JobKind) -> bool {
     !matches!(
         kind,
-        JobKind::Noop | JobKind::Sleep { .. } | JobKind::ScanRun { .. } | JobKind::WifiScan { .. }
+        JobKind::Noop
+            | JobKind::Sleep { .. }
+            | JobKind::ScanRun { .. }
+            | JobKind::WifiScan { .. }
+            | JobKind::InterfaceSelect { .. }
     )
 }

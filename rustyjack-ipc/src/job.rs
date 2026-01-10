@@ -32,6 +32,7 @@ pub enum JobKind {
     PortalStart { req: PortalStartRequestIpc },
     MountStart { req: MountStartRequestIpc },
     UnmountStart { req: UnmountStartRequestIpc },
+    InterfaceSelect { interface: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -131,4 +132,21 @@ pub struct MountStartRequestIpc {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnmountStartRequestIpc {
     pub device: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceSelectJobResult {
+    pub interface: String,
+    pub allowed: Vec<String>,
+    pub blocked: Vec<String>,
+    pub carrier: Option<bool>,
+    pub dhcp: Option<InterfaceSelectDhcpResult>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceSelectDhcpResult {
+    pub ip: Option<String>,
+    pub gateway: Option<String>,
+    pub dns_servers: Vec<String>,
 }

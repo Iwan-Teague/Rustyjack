@@ -31,6 +31,7 @@ pub mod preference;
 pub mod dns;
 pub mod routing;
 pub mod isolation;
+pub mod interface_selection;
 
 pub use ops::{
     ErrorEntry, IsolationOutcome, NetOps, RealNetOps, RouteOutcome, RouteEntry,
@@ -41,6 +42,7 @@ pub use preference::PreferenceManager;
 pub use dns::DnsManager;
 pub use routing::RouteManager;
 pub use isolation::{IsolationEngine, set_hotspot_exception, clear_hotspot_exception};
+pub use interface_selection::{InterfaceSelectionOutcome, SelectionDhcpInfo};
 
 use std::{
     collections::HashMap,

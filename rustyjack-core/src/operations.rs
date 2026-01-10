@@ -85,20 +85,19 @@ fn get_active_interface(root: &Path) -> Result<Option<String>> {
 }
 
 pub fn set_active_interface(root: &Path, iface: &str) -> Result<crate::system::ops::IsolationOutcome> {
-    use crate::system::{IsolationEngine, PreferenceManager, RealNetOps, NetOps};
-    use std::sync::Arc;
-    
-    let ops = Arc::new(RealNetOps);
-    if !ops.interface_exists(iface) {
-        bail!("Interface '{}' does not exist", iface);
-    }
-    
-    let prefs = PreferenceManager::new(root.to_path_buf());
-    prefs.set_preferred(iface)?;
-    write_interface_preference(root, "system_preferred", iface)?;
-    
-    let engine = IsolationEngine::new(ops, root.to_path_buf());
-    engine.enforce_passive()
+    use crate::system::interface_selection::select_interface;
+
+    let selection = select_interface(
+        root.to_path_buf(),
+        iface,
+        None::<&mut fn(&str, u8, &str)>,
+    )?;
+
+    Ok(crate::system::ops::IsolationOutcome {
+        allowed: selection.allowed,
+        blocked: selection.blocked,
+        errors: selection.errors,
+    })
 }
 
 #[allow(dead_code)]

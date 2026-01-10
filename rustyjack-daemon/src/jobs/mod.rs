@@ -97,7 +97,7 @@ impl JobManager {
 
         let _lock_set = state.locks.acquire(&required_locks(&spec.kind)).await;
 
-        let result = kinds::execute(&spec.kind, &cancel, |phase, percent, message| {
+        let result = kinds::execute(&spec.kind, &cancel, &state, |phase, percent, message| {
             let phase = phase.to_string();
             let message = message.to_string();
             self.update_progress(job_id, phase, percent, message)
@@ -273,6 +273,7 @@ fn required_locks(kind: &JobKind) -> Vec<LockKind> {
         JobKind::PortalStart { .. } => vec![LockKind::Portal],
         JobKind::MountStart { .. } => vec![LockKind::Mount],
         JobKind::UnmountStart { .. } => vec![LockKind::Mount],
+        JobKind::InterfaceSelect { .. } => vec![LockKind::Uplink],
     }
 }
 
@@ -288,6 +289,7 @@ fn job_kind_name(kind: &JobKind) -> &'static str {
         JobKind::PortalStart { .. } => "portal_start",
         JobKind::MountStart { .. } => "mount_start",
         JobKind::UnmountStart { .. } => "unmount_start",
+        JobKind::InterfaceSelect { .. } => "interface_select",
     }
 }
 

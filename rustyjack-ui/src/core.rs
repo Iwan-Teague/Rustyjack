@@ -8,7 +8,7 @@ use rustyjack_client::{ClientConfig, DaemonClient};
 use rustyjack_commands::Commands;
 use rustyjack_ipc::{
     BlockDeviceInfo, HotspotClient, HotspotDiagnosticsResponse, HotspotWarningsResponse,
-    WifiCapabilitiesResponse, InterfaceStatusResponse, JobState, JobId,
+    InterfaceStatusResponse, JobId, JobInfo, JobKind, JobState, WifiCapabilitiesResponse,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -183,6 +183,25 @@ impl CoreBridge {
         self.block_on(async move {
             let mut client = self.create_client().await?;
             self.poll_job_until_complete(&mut client, job_id).await
+        })
+    }
+
+    pub fn job_status(&self, job_id: JobId) -> Result<JobInfo> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            let status = client.job_status(job_id).await?;
+            Ok(status.job)
+        })
+    }
+
+    pub fn start_interface_select(&self, interface: &str) -> Result<JobId> {
+        let interface = interface.to_string();
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            let job = client
+                .job_start(JobKind::InterfaceSelect { interface })
+                .await?;
+            Ok(job.job_id)
         })
     }
 

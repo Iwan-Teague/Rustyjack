@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -37,7 +37,7 @@ pub struct IsolationOutcome {
     pub errors: Vec<ErrorEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorEntry {
     pub interface: String,
     pub message: String,
@@ -82,9 +82,12 @@ pub trait NetOps: Send + Sync {
     
     fn acquire_dhcp(&self, iface: &str, timeout: Duration) -> Result<DhcpLease>;
     fn release_dhcp(&self, iface: &str) -> Result<()>;
+    fn flush_addresses(&self, interface: &str) -> Result<()>;
     
     fn get_ipv4_address(&self, iface: &str) -> Result<Option<Ipv4Addr>>;
     fn get_interface_capabilities(&self, iface: &str) -> Result<InterfaceCapabilities>;
+    fn admin_is_up(&self, interface: &str) -> Result<bool>;
+    fn has_carrier(&self, interface: &str) -> Result<Option<bool>>;
 }
 
 pub struct RealNetOps;
@@ -212,7 +215,19 @@ impl NetOps for RealNetOps {
     }
 
     fn apply_nm_managed(&self, interface: &str, managed: bool) -> Result<()> {
-        let _ = (interface, managed);
+        if !crate::system::NetworkManagerClient::is_available() {
+            return Ok(());
+        }
+
+        let client = crate::system::NetworkManagerClient::new(true);
+        client
+            .set_device_managed(interface, managed)
+            .with_context(|| {
+                format!(
+                    "NetworkManager failed to set managed={} for {}",
+                    managed, interface
+                )
+            })?;
         Ok(())
     }
     
@@ -286,6 +301,10 @@ impl NetOps for RealNetOps {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(client.release(iface))
             .map_err(|e| anyhow::anyhow!("Failed to release DHCP: {}", e))
+    }
+
+    fn flush_addresses(&self, interface: &str) -> Result<()> {
+        crate::netlink_helpers::netlink_flush_addresses(interface)
     }
     
     fn get_ipv4_address(&self, iface: &str) -> Result<Option<Ipv4Addr>> {
@@ -369,6 +388,39 @@ impl NetOps for RealNetOps {
             anyhow::bail!("Interface capabilities only supported on Linux")
         }
     }
+
+    fn admin_is_up(&self, interface: &str) -> Result<bool> {
+        use std::fs;
+        let flags_path = format!("/sys/class/net/{}/flags", interface);
+        let raw = fs::read_to_string(&flags_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read flags for {}: {}", interface, e))?;
+        let trimmed = raw.trim().trim_start_matches("0x");
+        let flags = u32::from_str_radix(trimmed, 16)
+            .map_err(|e| anyhow::anyhow!("Failed to parse flags for {}: {}", interface, e))?;
+        Ok((flags & libc::IFF_UP as u32) != 0)
+    }
+
+    fn has_carrier(&self, interface: &str) -> Result<Option<bool>> {
+        use std::fs;
+        let carrier_path = format!("/sys/class/net/{}/carrier", interface);
+        match fs::read_to_string(&carrier_path) {
+            Ok(contents) => {
+                let val = contents.trim();
+                match val {
+                    "1" => Ok(Some(true)),
+                    "0" => Ok(Some(false)),
+                    _ => Ok(None),
+                }
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(None)
+                } else {
+                    Err(anyhow::anyhow!("Failed to read carrier for {}: {}", interface, e))
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -384,6 +436,9 @@ mod tests {
         up_interfaces: Arc<Mutex<Vec<String>>>,
         down_interfaces: Arc<Mutex<Vec<String>>>,
         dhcp_results: Arc<Mutex<HashMap<String, Result<DhcpLease>>>>,
+        admin_state: Arc<Mutex<HashMap<String, bool>>>,
+        carrier_state: Arc<Mutex<HashMap<String, bool>>>,
+        flushed: Arc<Mutex<Vec<String>>>,
     }
     
     impl MockNetOps {
@@ -394,6 +449,9 @@ mod tests {
                 up_interfaces: Arc::new(Mutex::new(Vec::new())),
                 down_interfaces: Arc::new(Mutex::new(Vec::new())),
                 dhcp_results: Arc::new(Mutex::new(HashMap::new())),
+                admin_state: Arc::new(Mutex::new(HashMap::new())),
+                carrier_state: Arc::new(Mutex::new(HashMap::new())),
+                flushed: Arc::new(Mutex::new(Vec::new())),
             }
         }
         
@@ -407,11 +465,27 @@ mod tests {
                 is_wireless,
                 capabilities: None,
             });
+            self.admin_state.lock().unwrap().insert(
+                name.to_string(),
+                oper_state == "up",
+            );
+            // Default carrier true for wired, false for wireless to allow explicit control
+            self.carrier_state
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), !is_wireless);
         }
         
         pub fn set_dhcp_result(&self, iface: &str, result: Result<DhcpLease>) {
             let mut results = self.dhcp_results.lock().unwrap();
             results.insert(iface.to_string(), result);
+        }
+        
+        pub fn set_carrier_state(&self, iface: &str, carrier: bool) {
+            self.carrier_state
+                .lock()
+                .unwrap()
+                .insert(iface.to_string(), carrier);
         }
         
         pub fn was_brought_up(&self, iface: &str) -> bool {
@@ -425,6 +499,10 @@ mod tests {
         pub fn get_routes(&self) -> Vec<RouteEntry> {
             self.routes.lock().unwrap().clone()
         }
+        
+        pub fn flushed_interfaces(&self) -> Vec<String> {
+            self.flushed.lock().unwrap().clone()
+        }
     }
     
     impl NetOps for MockNetOps {
@@ -434,11 +512,19 @@ mod tests {
         
         fn bring_up(&self, interface: &str) -> Result<()> {
             self.up_interfaces.lock().unwrap().push(interface.to_string());
+            self.admin_state
+                .lock()
+                .unwrap()
+                .insert(interface.to_string(), true);
             Ok(())
         }
         
         fn bring_down(&self, interface: &str) -> Result<()> {
             self.down_interfaces.lock().unwrap().push(interface.to_string());
+            self.admin_state
+                .lock()
+                .unwrap()
+                .insert(interface.to_string(), false);
             Ok(())
         }
         
@@ -521,6 +607,24 @@ mod tests {
                 driver: Some("mock_driver".to_string()),
                 chipset: Some("Mock Chipset".to_string()),
             })
+        }
+
+        fn flush_addresses(&self, interface: &str) -> Result<()> {
+            self.flushed.lock().unwrap().push(interface.to_string());
+            Ok(())
+        }
+
+        fn admin_is_up(&self, interface: &str) -> Result<bool> {
+            Ok(*self
+                .admin_state
+                .lock()
+                .unwrap()
+                .get(interface)
+                .unwrap_or(&false))
+        }
+
+        fn has_carrier(&self, interface: &str) -> Result<Option<bool>> {
+            Ok(self.carrier_state.lock().unwrap().get(interface).copied())
         }
     }
     

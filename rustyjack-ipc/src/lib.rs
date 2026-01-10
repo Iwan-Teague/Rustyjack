@@ -18,6 +18,7 @@ pub use job::{
     HotspotStartRequestIpc, JobEvent, JobId, JobInfo, JobKind, JobSpec, JobStarted, JobState,
     MountStartRequestIpc, PortalStartRequestIpc, Progress, ScanModeIpc, ScanRequestIpc,
     UnmountStartRequestIpc, UpdateRequestIpc, WifiConnectRequestIpc, WifiScanRequestIpc,
+    InterfaceSelectDhcpResult, InterfaceSelectJobResult,
 };
 pub use types::{
     endpoint_for_body, is_dangerous_job, BlockDeviceInfo, BlockDevicesResponse, ClientHello,
