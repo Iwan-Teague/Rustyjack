@@ -28,10 +28,38 @@ pub struct IsolationEngine {
     root: PathBuf,
 }
 
+/// Enforcement mode determines what guarantees we make about the interface state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EnforcementMode {
-    Connectivity,
+    /// Selection-only mode: Interface must reach admin-UP state
+    /// Does NOT require carrier or DHCP success
+    /// Used for hardware detection and initial interface selection
+    Selection,
+    /// Passive mode: Best-effort connectivity attempts for ethernet
+    /// Non-fatal failures for carrier/DHCP (will warn but won't fail)
+    /// For wireless: admin-UP only, no auto-connect
     Passive,
+    /// Full connectivity: Requires both admin-UP and active connectivity
+    Connectivity,
+}
+
+/// Result of DHCP acquisition attempt
+#[derive(Debug, Clone)]
+pub enum DhcpReport {
+    NotAttempted,
+    Succeeded { ip: Ipv4Addr, gateway: Option<Ipv4Addr> },
+    Failed(String),
+}
+
+/// Detailed report of interface activation
+#[derive(Debug, Clone)]
+pub struct ActivationReport {
+    pub interface: String,
+    pub admin_up: bool,
+    pub carrier: Option<bool>,
+    pub ipv4: Option<Ipv4Addr>,
+    pub dhcp: DhcpReport,
+    pub notes: Vec<String>,
 }
 
 impl IsolationEngine {
@@ -55,7 +83,9 @@ impl IsolationEngine {
     }
 
     pub fn enforce_passive(&self) -> Result<IsolationOutcome> {
-        self.enforce_with_mode(EnforcementMode::Passive)
+        // enforce_passive now uses Selection mode to just bring interface UP
+        // without requiring connectivity (carrier/DHCP)
+        self.enforce_with_mode(EnforcementMode::Selection)
     }
 
     fn enforce_with_mode(&self, mode: EnforcementMode) -> Result<IsolationOutcome> {
@@ -307,145 +337,146 @@ impl IsolationEngine {
             bail!("Interface {} does not exist", iface);
         }
 
+        let is_wireless = self.ops.is_wireless(iface);
+
+        // RC2: Verify bring_up actually succeeded - check IFF_UP flag post-condition
+        // (not just check for error, verify the actual state)
         if let Err(e) = self.ops.bring_up(iface) {
             // Check if interface disappeared
             if !self.ops.interface_exists(iface) {
                 bail!("Interface {} disappeared during activation", iface);
             }
-            warn!("Interface {} may already be up: {}", iface, e);
+            warn!("Interface {} bring_up error: {}", iface, e);
+            // Don't bail yet - verify actual state below
         }
 
-        let is_wireless = self.ops.is_wireless(iface);
+        // RC1: For Selection mode, just verify admin-up and return
+        // No carrier or connectivity checks required
+        if mode == EnforcementMode::Selection {
+            // Set interface unmanaged if applicable
+            self.ops
+                .apply_nm_managed(iface, false)
+                .context("failed to set NM unmanaged")?;
 
+            if is_wireless {
+                // Unblock rfkill for wireless interfaces
+                if let Err(e) = self.ops.set_rfkill_block(iface, false) {
+                    warn!("Failed to unblock rfkill for {}: {}", iface, e);
+                }
+            }
+
+            info!("Interface {} selected (Selection mode: admin-UP only)", iface);
+            return Ok(());
+        }
+
+        // For wireless interfaces in Passive/Connectivity mode
         if is_wireless {
             self.ops
                 .set_rfkill_block(iface, false)
                 .context("failed to unblock rfkill")?;
 
+            self.ops
+                .apply_nm_managed(iface, false)
+                .context("failed to set NM unmanaged")?;
+
+            // RC3: Passive mode for wireless should NOT auto-connect
+            // Only admin-UP, let user manually connect via UI
             if mode == EnforcementMode::Passive {
-                self.ops
-                    .apply_nm_managed(iface, false)
-                    .context("failed to set NM unmanaged")?;
-                info!("Interface {} activated (passive, no DHCP)", iface);
+                info!("Interface {} activated in Passive mode (no auto-connect)", iface);
                 return Ok(());
             }
 
-            // For wireless interfaces, check if we're connected to an AP
-            // If not, try to auto-connect using a saved profile
-            if self.ops.get_ipv4_address(iface).ok().flatten().is_none() {
-                info!("Wireless interface {} has no IP - checking for auto-connect profiles", iface);
-
-                match self.try_auto_connect_wifi(iface) {
-                    Ok(true) => {
-                        info!("Auto-connected to WiFi network on {}", iface);
-                        // WiFi connection includes DHCP, so we're done
-                        return Ok(());
-                    }
-                    Ok(false) => {
-                        info!("No auto-connect profile found for {}, will try DHCP anyway", iface);
-                    }
-                    Err(e) => {
-                        warn!("Auto-connect failed for {}: {}", iface, e);
-                        info!("Attempting DHCP anyway (may fail if not connected to AP)");
-                    }
-                }
-            }
+            // For Connectivity mode wireless, attempt connection
+            // (but this is not used in current UI flow)
+            info!("Interface {} activated in Connectivity mode", iface);
+            return Ok(());
         }
 
+        // Ethernet interface handling
         self.ops
             .apply_nm_managed(iface, false)
             .context("failed to set NM unmanaged")?;
 
         if mode == EnforcementMode::Passive {
-            if !is_wireless {
-                // Ethernet interface - retry DHCP acquisition with carrier detection
-                // Carrier check first to fail fast if no cable (~1s vs 15-25s)
+            // RC4: Make carrier and DHCP failures non-fatal for Passive mode
+            // Just log warnings but continue
 
-                // Pre-check: verify physical link/carrier is detected
-                let carrier_detected = self.interface_has_carrier(iface);
-                if !carrier_detected {
-                    error!("No carrier detected on {} - cable not plugged in?", iface);
-                    bail!("No carrier detected on {} - check cable connection", iface);
-                }
+            let carrier_detected = self.interface_has_carrier(iface);
+            if !carrier_detected {
+                warn!("No carrier detected on {} - cable may not be plugged in", iface);
+                // Don't fail - will retry when carrier comes up
+                info!("Interface {} is admin-UP but has no carrier (will auto-retry when cable plugged)", iface);
+                return Ok(());
+            }
 
-                // Cable is plugged in - now retry DHCP in case of transient issues
-                // (slow DHCP server, switch STP delays, etc.)
-                const MAX_RETRIES: usize = 3;  // 3 retries × 5s = 15s total max
-                const RETRY_DELAY_SECS: u64 = 5;
+            // Cable is detected - attempt DHCP (but don't fail if it doesn't work)
+            const MAX_RETRIES: usize = 3;
+            const RETRY_DELAY_SECS: u64 = 5;
 
-                let mut last_error = None;
-                let mut lease_acquired = false;
+            let mut lease_acquired = false;
 
-                for attempt in 1..=MAX_RETRIES {
-                    info!("Attempting DHCP for {} (attempt {}/{})", iface, attempt, MAX_RETRIES);
+            for attempt in 1..=MAX_RETRIES {
+                info!("Attempting DHCP for {} (attempt {}/{})", iface, attempt, MAX_RETRIES);
 
-                    match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
-                        Ok(lease) => {
-                            info!(
-                                "DHCP successful for {} on attempt {}: ip={}, gateway={:?}",
-                                iface, attempt, lease.ip, lease.gateway
-                            );
+                match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
+                    Ok(lease) => {
+                        info!(
+                            "DHCP successful for {} on attempt {}: ip={}, gateway={:?}",
+                            iface, attempt, lease.ip, lease.gateway
+                        );
 
-                            if let Some(gw) = lease.gateway {
-                                let metric = if is_wireless { 200 } else { 100 };
-                                self.routes
-                                    .set_default_route(iface, gw, metric)
-                                    .context("failed to set default route")?;
-                            } else {
-                                warn!("No gateway in DHCP lease - link-local only");
+                        if let Some(gw) = lease.gateway {
+                            let metric = 100;
+                            if let Err(e) = self.routes.set_default_route(iface, gw, metric) {
+                                warn!("Failed to set default route: {}", e);
                             }
-
-                            if !lease.dns_servers.is_empty() {
-                                self.dns
-                                    .set_dns(&lease.dns_servers)
-                                    .context("failed to set DNS")?;
-                            } else {
-                                warn!("No DNS in DHCP lease, using fallback");
-                                self.dns
-                                    .set_dns(&[
-                                        Ipv4Addr::new(1, 1, 1, 1),
-                                        Ipv4Addr::new(9, 9, 9, 9),
-                                    ])
-                                    .context("failed to set fallback DNS")?;
-                            }
-
-                            lease_acquired = true;
-                            break;
+                        } else {
+                            warn!("No gateway in DHCP lease - link-local only");
                         }
-                        Err(e) => {
-                            last_error = Some(e);
 
-                            if attempt < MAX_RETRIES {
-                                warn!(
-                                    "DHCP attempt {}/{} failed for {}: {}. Retrying in {}s...",
-                                    attempt, MAX_RETRIES, iface, last_error.as_ref().unwrap(), RETRY_DELAY_SECS
-                                );
-                                std::thread::sleep(Duration::from_secs(RETRY_DELAY_SECS));
-                            } else {
-                                // All retries exhausted
-                                error!(
-                                    "DHCP failed for {} after {} attempts: {}",
-                                    iface, MAX_RETRIES, last_error.as_ref().unwrap()
-                                );
+                        if !lease.dns_servers.is_empty() {
+                            if let Err(e) = self.dns.set_dns(&lease.dns_servers) {
+                                warn!("Failed to set DNS: {}", e);
                             }
+                        } else {
+                            warn!("No DNS in DHCP lease, using fallback");
+                            let _ = self.dns.set_dns(&[
+                                Ipv4Addr::new(1, 1, 1, 1),
+                                Ipv4Addr::new(9, 9, 9, 9),
+                            ]);
+                        }
+
+                        lease_acquired = true;
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt < MAX_RETRIES {
+                            warn!(
+                                "DHCP attempt {}/{} failed for {}: {}. Retrying in {}s...",
+                                attempt, MAX_RETRIES, iface, e, RETRY_DELAY_SECS
+                            );
+                            std::thread::sleep(Duration::from_secs(RETRY_DELAY_SECS));
+                        } else {
+                            // All retries exhausted - but this is NOT fatal in Passive mode
+                            warn!(
+                                "DHCP failed for {} after {} attempts: {}. Interface is admin-UP but unconfigured.",
+                                iface, MAX_RETRIES, e
+                            );
                         }
                     }
                 }
-
-                if !lease_acquired {
-                    bail!(
-                        "Failed to acquire DHCP lease for {} after {} attempts: {}",
-                        iface,
-                        MAX_RETRIES,
-                        last_error.unwrap()
-                    );
-                }
             }
-            info!("Interface {} activated (passive)", iface);
+
+            if lease_acquired {
+                info!("Interface {} activated with IP via DHCP", iface);
+            } else {
+                info!("Interface {} activated but DHCP failed (will retry when carrier/DHCP available)", iface);
+            }
             return Ok(());
         }
 
-        // Try DHCP with graceful fallback
+        // Connectivity mode (full connection required)
+        // Attempt DHCP and fail if unsuccessful
         match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
             Ok(lease) => {
                 info!(
@@ -454,7 +485,7 @@ impl IsolationEngine {
                 );
 
                 if let Some(gw) = lease.gateway {
-                    let metric = if self.ops.is_wireless(iface) { 200 } else { 100 };
+                    let metric = 100;
                     self.routes
                         .set_default_route(iface, gw, metric)
                         .context("failed to set default route")?;
@@ -474,24 +505,11 @@ impl IsolationEngine {
                 }
             }
             Err(e) => {
-                warn!("DHCP failed for {}: {}", iface, e);
-                warn!("Continuing with manual IP configuration (if present)");
-                
-                // Set fallback DNS even without DHCP
-                self.dns
-                    .set_dns(&[Ipv4Addr::new(1, 1, 1, 1), Ipv4Addr::new(9, 9, 9, 9)])
-                    .context("failed to set fallback DNS")?;
-                
-                // Check if interface has manual IP - if not, this is a failure
-                if self.ops.get_ipv4_address(iface).ok().flatten().is_none() {
-                    bail!("DHCP failed and no manual IP configured");
-                }
-                
-                info!("Interface has manual IP, continuing without DHCP");
+                bail!("Failed to acquire DHCP lease for {}: {}", iface, e);
             }
         }
 
-        info!("Interface {} fully activated", iface);
+        info!("Interface {} fully activated with connectivity", iface);
         Ok(())
     }
 

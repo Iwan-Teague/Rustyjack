@@ -6,8 +6,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TARGET="aarch64-unknown-linux-gnu"
 TARGET_DIR="/work/target-64"
 HOST_TARGET_DIR="$REPO_ROOT/target-64"
+DOCKER_RUN_SCRIPT="$REPO_ROOT/docker/arm64/run.sh"
 DEFAULT_BUILD=0
 CMD=()
+
+# Ensure target directory exists on host (for docker volume mount)
+mkdir -p "$HOST_TARGET_DIR"
 
 if [ "$#" -gt 0 ]; then
     CMD=("$@")
@@ -129,16 +133,48 @@ else
 fi
 
 if [ "$DEFAULT_BUILD" -eq 0 ]; then
-    bash "$REPO_ROOT/docker/arm64/run.sh" "${CMD[@]}"
+    # Custom command mode - pass through to docker run script with volume mount
+    export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
+    bash "$DOCKER_RUN_SCRIPT" "${CMD[@]}"
 elif [ "${#CMD[@]}" -gt 0 ]; then
     echo "Running build in Docker container..."
     echo "Building: ${#BUILD_PARTS[@]} package(s)"
-    bash "$REPO_ROOT/docker/arm64/run.sh" "${CMD[@]}"
+    # Pass cargo target cache volume to docker run script
+    export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
+    bash "$DOCKER_RUN_SCRIPT" "${CMD[@]}"
 else
     echo "Skipping build - no changes detected"
 fi
 
 if [ "$DEFAULT_BUILD" -eq 1 ]; then
+    # Check if binaries exist; if not and we skipped the build, rebuild them now
+    missing_binaries=0
+    for bin in rustyjack-ui rustyjackd rustyjack-portal rustyjack; do
+        src="$HOST_TARGET_DIR/$TARGET/debug/$bin"
+        if [ ! -f "$src" ]; then
+            missing_binaries=1
+            break
+        fi
+    done
+
+    if [ "$missing_binaries" -eq 1 ] && [ "${#BUILD_PARTS[@]}" -eq 0 ]; then
+        echo "WARNING: Expected binaries missing but no build was triggered" >&2
+        echo "Building all packages as fallback..." >&2
+
+        BUILD_CMD="set -euo pipefail; export PATH=/usr/local/cargo/bin:\$PATH; export CARGO_TARGET_DIR=$TARGET_DIR; cargo build --target $TARGET -p rustyjack-ui; cargo build --target $TARGET -p rustyjack-daemon; cargo build --target $TARGET -p rustyjack-portal; cargo build --target $TARGET -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"
+
+        # Pass cargo target cache volume to docker run script
+        export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
+        bash "$DOCKER_RUN_SCRIPT" bash -c "$BUILD_CMD"
+
+        if [ $? -ne 0 ]; then
+            echo "Fallback build failed" >&2
+            exit 1
+        fi
+
+        echo "Fallback build completed successfully"
+    fi
+
     DEST_DIR="$REPO_ROOT/prebuilt/arm64"
     mkdir -p "$DEST_DIR"
     for bin in rustyjack-ui rustyjackd rustyjack-portal rustyjack; do

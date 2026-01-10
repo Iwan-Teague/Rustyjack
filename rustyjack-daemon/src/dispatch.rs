@@ -515,7 +515,19 @@ pub async fn handle_request(
                     .unwrap_or_else(|_| "unknown".to_string())
                     .trim()
                     .to_string();
-                let is_up = oper_state == "up";
+
+                // RC5: Report admin-up (IFF_UP flag) instead of operstate
+                // Admin-up is what we set with netlink, operstate is derived policy
+                // An interface can be admin-UP but operstate "down" when disconnected
+                let is_up = if let Ok(flags_hex) = fs::read_to_string(sys_path.join("flags")) {
+                    if let Ok(flags) = u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16) {
+                        (flags & 0x1) != 0  // IFF_UP is bit 0
+                    } else {
+                        oper_state == "up"  // fallback to operstate
+                    }
+                } else {
+                    oper_state == "up"  // fallback to operstate
+                };
                 let carrier = fs::read_to_string(sys_path.join("carrier"))
                     .ok()
                     .and_then(|val| match val.trim() {

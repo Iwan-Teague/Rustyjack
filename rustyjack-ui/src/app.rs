@@ -4320,46 +4320,64 @@ impl App {
                                                 }
                                             };
 
-                                            self.show_progress(
-                                                "Confirming Interface",
-                                                [
-                                                    format!("Waiting for {}", interface_name),
-                                                    "Acquiring DHCP...".to_string(),
-                                                ],
-                                            )?;
-                                            let is_up = self.wait_for_interface_up_with_ip(
-                                                &interface_name,
-                                                Duration::from_secs(30),  // Carrier check fails fast; ~15s for DHCP retries
-                                            );
-                                            if !is_up {
-                                                let state = if self.interface_admin_up(&interface_name)
-                                                {
-                                                    "up"
-                                                } else {
-                                                    "down"
-                                                };
+                                            // RC7: Check admin-up status (not connectivity)
+                                            // Selection is successful if interface is admin-UP
+                                            // Connectivity (carrier, DHCP) are non-fatal status indicators
+
+                                            // For ethernet: show "Acquiring DHCP..."
+                                            // For wireless: show "Bringing interface UP..." (no DHCP attempt)
+                                            let is_ethernet = info
+                                                .get("kind")
+                                                .and_then(|v| v.as_str())
+                                                .map(|k| k != "wifi" && k != "wireless")
+                                                .unwrap_or(true);
+
+                                            if is_ethernet {
+                                                self.show_progress(
+                                                    "Confirming Interface",
+                                                    [
+                                                        format!("Waiting for {}", interface_name),
+                                                        "Acquiring DHCP...".to_string(),
+                                                    ],
+                                                )?;
+                                            } else {
+                                                self.show_progress(
+                                                    "Confirming Interface",
+                                                    [
+                                                        format!("Bringing {} UP", interface_name),
+                                                        "Ready to connect".to_string(),
+                                                    ],
+                                                )?;
+                                            }
+
+                                            // Wait for admin-UP (max 15 seconds)
+                                            let wait_timeout = Duration::from_secs(15);
+                                            let start = Instant::now();
+                                            let mut admin_up = false;
+
+                                            while start.elapsed() < wait_timeout {
+                                                if self.interface_admin_up(&interface_name) {
+                                                    admin_up = true;
+                                                    break;
+                                                }
+                                                thread::sleep(Duration::from_millis(200));
+                                            }
+
+                                            if !admin_up {
+                                                // Failed to bring interface admin-UP - this is a real error
                                                 let oper_state = self.interface_oper_state(&interface_name);
                                                 let mut err_lines = Vec::new();
                                                 err_lines.push(format!(
                                                     "Interface: {}",
                                                     interface_name
                                                 ));
-                                                err_lines.push(format!("Admin State: {}", state));
+                                                err_lines.push("Admin state: DOWN".to_string());
                                                 err_lines.push(format!(
                                                     "Operational: {}",
                                                     oper_state
                                                 ));
-
-                                                // Provide helpful error context
-                                                if state == "down" {
-                                                    err_lines.push("Interface did not come UP".to_string());
-                                                    err_lines.push("Check hardware/cable".to_string());
-                                                } else if oper_state == "down" {
-                                                    err_lines.push("Interface UP but DHCP failed".to_string());
-                                                    err_lines.push("or no carrier detected".to_string());
-                                                } else {
-                                                    err_lines.push("Timeout waiting for full setup".to_string());
-                                                }
+                                                err_lines.push("Interface did not come UP".to_string());
+                                                err_lines.push("Check hardware/cable".to_string());
 
                                                 if let Some(msg) = config_msg.clone() {
                                                     err_lines.push(format!("Note: {}", msg));
@@ -4369,6 +4387,8 @@ impl App {
                                                     err_lines.iter().map(|s| s.as_str()),
                                                 )?;
                                             } else {
+                                                // Admin-UP succeeded! Show status
+                                                // (Connectivity is non-fatal and can be checked separately)
                                                 if let Some(msg) = config_msg {
                                                     lines.push(msg);
                                                 }

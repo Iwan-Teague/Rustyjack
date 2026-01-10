@@ -17,7 +17,8 @@
       "Bash(docker run:*)",
       "Bash(pwsh -File testscompilebuild_arm32.ps1)",
       "Bash(pwsh:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(powershell -NoProfile -Command:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

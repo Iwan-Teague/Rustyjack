@@ -12,12 +12,46 @@ $TargetDir = "/work/target-32"
 $HostTargetDir = Join-Path $RepoRoot "target-32"
 $ImageName = "rustyjack/arm32-dev"
 
-# Build docker image
-Write-Host "Building Docker image..." -ForegroundColor Cyan
-docker build --pull --platform linux/arm/v7 -t $ImageName $DockerDir
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Docker build failed" -ForegroundColor Red
-    exit $LASTEXITCODE
+# Smart docker image build: only rebuild if Dockerfile changed or image doesn't exist
+Write-Host "Checking Docker image status..." -ForegroundColor Cyan
+
+$DockerfileChanged = $false
+$ImageExists = $false
+
+# Check if image exists
+docker image inspect $ImageName >$null 2>&1
+if ($LASTEXITCODE -eq 0) {
+    $ImageExists = $true
+
+    # Check if Dockerfile was modified since image was created
+    $ImageCreatedRaw = docker inspect $ImageName --format='{{.Created}}'
+    $DockerfilePath = Join-Path $DockerDir "Dockerfile"
+    $FileLastWrite = (Get-Item $DockerfilePath).LastWriteTime
+
+    try {
+        $ImageCreated = [DateTime]::Parse($ImageCreatedRaw)
+        if ($FileLastWrite -gt $ImageCreated) {
+            $DockerfileChanged = $true
+            Write-Host "Dockerfile has been modified since image was created" -ForegroundColor Yellow
+        } else {
+            Write-Host "Docker image is up-to-date (no rebuild needed)" -ForegroundColor Green
+        }
+    } catch {
+        # If datetime parsing fails, rebuild to be safe
+        $DockerfileChanged = $true
+    }
+} else {
+    Write-Host "Docker image doesn't exist - building..." -ForegroundColor Yellow
+}
+
+# Rebuild only if necessary
+if (-not $ImageExists -or $DockerfileChanged) {
+    Write-Host "Building Docker image..." -ForegroundColor Cyan
+    docker build --platform linux/arm/v7 -t $ImageName $DockerDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Docker build failed" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
 }
 
 # Ensure tmp directory exists
@@ -110,12 +144,9 @@ if ($BuildParts.Count -gt 0) {
     Write-Host "Running build in Docker container..." -ForegroundColor Cyan
     Write-Host "Building: $($BuildParts.Count) package(s)" -ForegroundColor Yellow
 
-    docker run --rm `
-        --platform linux/arm/v7 `
-        -v "${RepoRoot}:/work" `
-        -v "${HostTargetDir}:${TargetDir}" `
-        $ImageName `
-        /bin/bash -c $BuildCmd
+    # Pass cargo target cache volume to docker run script
+    $env:DOCKER_VOLUMES_EXTRA = "$HostTargetDir`:$TargetDir"
+    & "$RepoRoot\docker\arm32\run.ps1" bash -c $BuildCmd
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Build failed" -ForegroundColor Red
@@ -127,13 +158,41 @@ if ($BuildParts.Count -gt 0) {
     Write-Host "Skipping build - no changes detected" -ForegroundColor Green
 }
 
+# Check if binaries exist; if not and we skipped the build, rebuild them now
+$Bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
+$MissingBinaries = @()
+foreach ($bin in $Bins) {
+    $Src = Join-Path $HostTargetDir "$Target\debug\$bin"
+    if (-not (Test-Path $Src)) {
+        $MissingBinaries += $bin
+    }
+}
+
+if ($MissingBinaries.Count -gt 0 -and $BuildParts.Count -eq 0) {
+    Write-Host "WARNING: Expected binaries missing but no build was triggered" -ForegroundColor Yellow
+    Write-Host "Building all packages as fallback..." -ForegroundColor Yellow
+
+    $AllPackageCmds = $Packages | ForEach-Object { $_.cmd }
+    $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; " + ($AllPackageCmds -join "; ")
+
+    # Pass cargo target cache volume to docker run script
+    $env:DOCKER_VOLUMES_EXTRA = "$HostTargetDir`:$TargetDir"
+    & "$RepoRoot\docker\arm32\run.ps1" bash -c $BuildCmd
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Fallback build failed" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "Fallback build completed successfully" -ForegroundColor Green
+}
+
 # Copy binaries to prebuilt directory
 $DestDir = Join-Path $RepoRoot "prebuilt\arm32"
 if (-not (Test-Path $DestDir)) {
     New-Item -ItemType Directory -Path $DestDir | Out-Null
 }
 
-$Bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
 foreach ($bin in $Bins) {
     $Src = Join-Path $HostTargetDir "$Target\debug\$bin"
     if (-not (Test-Path $Src)) {
