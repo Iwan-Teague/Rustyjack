@@ -1,0 +1,7 @@
+{
+  "enabledMcpjsonServers": [
+    "sequential-thinking",
+    "memory",
+    "docker"
+  ]
+}
