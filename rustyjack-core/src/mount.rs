@@ -243,6 +243,13 @@ pub fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>> {
             continue;
         }
 
+        // Verify the device node actually exists in /dev
+        // sysfs may have stale entries that don't correspond to actual devices
+        let devnode = PathBuf::from("/dev").join(&name);
+        if !devnode.exists() {
+            continue;
+        }
+
         let removable = read_sysfs_flag(entry.path().join("removable")).unwrap_or(false);
         let is_usb = sysfs_path_contains_usb(entry.path().join("device")).unwrap_or(false);
 
@@ -252,7 +259,7 @@ pub fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>> {
 
         let mut dev = BlockDevice {
             name: name.clone(),
-            devnode: PathBuf::from("/dev").join(&name),
+            devnode,
             removable,
             is_usb,
             partitions: Vec::new(),
@@ -280,10 +287,15 @@ pub fn enumerate_partitions(dev: &BlockDevice) -> Result<Vec<Partition>> {
             if !name.starts_with(&dev.name) {
                 continue;
             }
+            // Verify the partition device node actually exists
+            let devnode = PathBuf::from("/dev").join(&name);
+            if !devnode.exists() {
+                continue;
+            }
             let size_bytes = read_block_size_bytes(&name).ok();
             partitions.push(Partition {
                 name: name.clone(),
-                devnode: PathBuf::from("/dev").join(&name),
+                devnode,
                 size_bytes,
             });
         }

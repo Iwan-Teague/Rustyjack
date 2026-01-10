@@ -339,46 +339,72 @@ impl IsolationEngine {
 
         let is_wireless = self.ops.is_wireless(iface);
 
-        // RC2: Verify bring_up actually succeeded - check IFF_UP flag post-condition
-        // (not just check for error, verify the actual state)
+        // For wireless interfaces, unblock rfkill FIRST before bring_up
+        // If rfkill is blocked, bring_up will fail silently
+        if is_wireless {
+            if let Err(e) = self.ops.set_rfkill_block(iface, false) {
+                warn!("Failed to unblock rfkill for {}: {}", iface, e);
+            }
+            // Small delay to let rfkill state settle
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Set interface unmanaged BEFORE bring_up to prevent NM interference
+        if let Err(e) = self.ops.apply_nm_managed(iface, false) {
+            warn!("Failed to set {} unmanaged: {}", iface, e);
+        }
+
+        // Now bring the interface UP
         if let Err(e) = self.ops.bring_up(iface) {
             // Check if interface disappeared
             if !self.ops.interface_exists(iface) {
                 bail!("Interface {} disappeared during activation", iface);
             }
             warn!("Interface {} bring_up error: {}", iface, e);
-            // Don't bail yet - verify actual state below
         }
 
-        // RC1: For Selection mode, just verify admin-up and return
-        // No carrier or connectivity checks required
-        if mode == EnforcementMode::Selection {
-            // Set interface unmanaged if applicable
-            self.ops
-                .apply_nm_managed(iface, false)
-                .context("failed to set NM unmanaged")?;
-
-            if is_wireless {
-                // Unblock rfkill for wireless interfaces
-                if let Err(e) = self.ops.set_rfkill_block(iface, false) {
-                    warn!("Failed to unblock rfkill for {}: {}", iface, e);
-                }
+        // Verify the interface is actually admin-UP by checking IFF_UP flag
+        // Wait up to 2 seconds for interface to come UP
+        let mut admin_up = false;
+        for _ in 0..20 {
+            if self.interface_is_admin_up(iface) {
+                admin_up = true;
+                break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
 
+        if !admin_up {
+            // Try one more time to bring it up
+            warn!("Interface {} not UP after first attempt, retrying...", iface);
+            if let Err(e) = self.ops.bring_up(iface) {
+                error!("Second bring_up attempt failed for {}: {}", iface, e);
+            }
+            // Wait again
+            for _ in 0..10 {
+                if self.interface_is_admin_up(iface) {
+                    admin_up = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+
+        if !admin_up {
+            bail!("Interface {} failed to come UP after multiple attempts", iface);
+        }
+
+        info!("Interface {} is now admin-UP", iface);
+
+        // RC1: For Selection mode, we're done - interface is UP
+        if mode == EnforcementMode::Selection {
             info!("Interface {} selected (Selection mode: admin-UP only)", iface);
             return Ok(());
         }
 
         // For wireless interfaces in Passive/Connectivity mode
+        // (rfkill and NM already handled above)
         if is_wireless {
-            self.ops
-                .set_rfkill_block(iface, false)
-                .context("failed to unblock rfkill")?;
-
-            self.ops
-                .apply_nm_managed(iface, false)
-                .context("failed to set NM unmanaged")?;
-
             // RC3: Passive mode for wireless should NOT auto-connect
             // Only admin-UP, let user manually connect via UI
             if mode == EnforcementMode::Passive {
@@ -392,10 +418,7 @@ impl IsolationEngine {
             return Ok(());
         }
 
-        // Ethernet interface handling
-        self.ops
-            .apply_nm_managed(iface, false)
-            .context("failed to set NM unmanaged")?;
+        // Ethernet interface handling (NM already handled above)
 
         if mode == EnforcementMode::Passive {
             // RC4: Make carrier and DHCP failures non-fatal for Passive mode
@@ -574,6 +597,23 @@ impl IsolationEngine {
                 warn!("Failed to auto-connect to {}: {}", full_profile.ssid, e);
                 Err(e)
             }
+        }
+    }
+
+    fn interface_is_admin_up(&self, iface: &str) -> bool {
+        // Check if interface is administratively UP (IFF_UP flag set)
+        // This is different from operstate which is the derived operational state
+        let flags_path = format!("/sys/class/net/{}/flags", iface);
+        match fs::read_to_string(&flags_path) {
+            Ok(val) => {
+                let flags_str = val.trim().trim_start_matches("0x");
+                if let Ok(flags) = u32::from_str_radix(flags_str, 16) {
+                    (flags & 0x1) != 0  // IFF_UP is bit 0
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
         }
     }
 
