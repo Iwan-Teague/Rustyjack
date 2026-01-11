@@ -250,8 +250,29 @@ pub fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>> {
             continue;
         }
 
+        // Verify the device is actually present by checking if the "device" symlink exists
+        // This symlink points to the actual hardware device and won't exist for stale entries
+        let device_symlink = entry.path().join("device");
+        if !device_symlink.exists() {
+            continue;
+        }
+
+        // Additional check: verify we can read the device size (0 means no media)
+        let size_path = entry.path().join("size");
+        if let Ok(size_str) = fs::read_to_string(&size_path) {
+            if let Ok(size) = size_str.trim().parse::<u64>() {
+                // Size of 0 means no media present (empty card reader, etc.)
+                if size == 0 {
+                    continue;
+                }
+            }
+        } else {
+            // Can't read size - device might not be valid
+            continue;
+        }
+
         let removable = read_sysfs_flag(entry.path().join("removable")).unwrap_or(false);
-        let is_usb = sysfs_path_contains_usb(entry.path().join("device")).unwrap_or(false);
+        let is_usb = sysfs_path_contains_usb(device_symlink).unwrap_or(false);
 
         if !is_usb && !removable {
             continue;
@@ -292,7 +313,11 @@ pub fn enumerate_partitions(dev: &BlockDevice) -> Result<Vec<Partition>> {
             if !devnode.exists() {
                 continue;
             }
+            // Verify partition has non-zero size
             let size_bytes = read_block_size_bytes(&name).ok();
+            if size_bytes == Some(0) {
+                continue;
+            }
             partitions.push(Partition {
                 name: name.clone(),
                 devnode,

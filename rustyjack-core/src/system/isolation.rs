@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -83,9 +82,10 @@ impl IsolationEngine {
     }
 
     pub fn enforce_passive(&self) -> Result<IsolationOutcome> {
-        // enforce_passive now uses Selection mode to just bring interface UP
-        // without requiring connectivity (carrier/DHCP)
-        self.enforce_with_mode(EnforcementMode::Selection)
+        // enforce_passive uses Passive mode:
+        // - For ethernet: attempts DHCP but failures are non-fatal
+        // - For wireless: brings UP without auto-connect (user connects manually)
+        self.enforce_with_mode(EnforcementMode::Passive)
     }
 
     fn enforce_with_mode(&self, mode: EnforcementMode) -> Result<IsolationOutcome> {
@@ -329,72 +329,134 @@ impl IsolationEngine {
         Ok(None)
     }
 
+    /// Activate an interface using a step-by-step pipeline.
+    /// Each step is verified before proceeding to the next.
+    /// Returns detailed error at the exact point of failure.
     fn activate_interface(&self, iface: &str, mode: EnforcementMode) -> Result<()> {
-        info!("Activating interface: {} ({:?})", iface, mode);
+        info!("=== ACTIVATION PIPELINE START: {} ({:?}) ===", iface, mode);
 
-        // Check interface exists before starting
+        // ============================================================
+        // STEP 1: Verify interface exists
+        // ============================================================
+        info!("[Step 1/7] Checking interface {} exists...", iface);
         if !self.ops.interface_exists(iface) {
-            bail!("Interface {} does not exist", iface);
+            error!("[Step 1/7] FAILED: Interface {} does not exist in /sys/class/net", iface);
+            bail!("Step 1 failed: Interface '{}' does not exist", iface);
         }
+        info!("[Step 1/7] PASSED: Interface {} exists", iface);
 
         let is_wireless = self.ops.is_wireless(iface);
+        info!("Interface type: {}", if is_wireless { "wireless" } else { "ethernet" });
 
-        // For wireless interfaces, unblock rfkill FIRST before bring_up
-        // If rfkill is blocked, bring_up will fail silently
-        if is_wireless {
-            if let Err(e) = self.ops.set_rfkill_block(iface, false) {
-                warn!("Failed to unblock rfkill for {}: {}", iface, e);
-            }
-            // Small delay to let rfkill state settle
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        // Set interface unmanaged BEFORE bring_up to prevent NM interference
+        // ============================================================
+        // STEP 2: Set NetworkManager unmanaged
+        // ============================================================
+        info!("[Step 2/7] Setting {} as unmanaged by NetworkManager...", iface);
         if let Err(e) = self.ops.apply_nm_managed(iface, false) {
-            warn!("Failed to set {} unmanaged: {}", iface, e);
+            // NM might not be running - warn but continue
+            warn!("[Step 2/7] WARNING: Could not set {} unmanaged: {} (continuing anyway)", iface, e);
+        } else {
+            info!("[Step 2/7] PASSED: {} set as unmanaged", iface);
         }
 
-        // Now bring the interface UP
-        if let Err(e) = self.ops.bring_up(iface) {
-            // Check if interface disappeared
-            if !self.ops.interface_exists(iface) {
-                bail!("Interface {} disappeared during activation", iface);
-            }
-            warn!("Interface {} bring_up error: {}", iface, e);
-        }
-
-        // Verify the interface is actually admin-UP by checking IFF_UP flag
-        // Wait up to 2 seconds for interface to come UP
-        let mut admin_up = false;
-        for _ in 0..20 {
-            if self.interface_is_admin_up(iface) {
-                admin_up = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        if !admin_up {
-            // Try one more time to bring it up
-            warn!("Interface {} not UP after first attempt, retrying...", iface);
-            if let Err(e) = self.ops.bring_up(iface) {
-                error!("Second bring_up attempt failed for {}: {}", iface, e);
-            }
-            // Wait again
-            for _ in 0..10 {
-                if self.interface_is_admin_up(iface) {
-                    admin_up = true;
-                    break;
+        // ============================================================
+        // STEP 3 (wireless only): Check if hardware rfkill blocked
+        // ============================================================
+        if is_wireless {
+            info!("[Step 3/7] Checking if {} is hardware-blocked (rfkill)...", iface);
+            match self.ops.is_rfkill_hard_blocked(iface) {
+                Ok(true) => {
+                    error!("[Step 3/7] FAILED: {} is HARDWARE blocked (physical switch)", iface);
+                    error!("The wireless adapter has a physical kill switch that is ON.");
+                    error!("This cannot be fixed via software. Check for a physical WiFi switch on the device.");
+                    bail!("Step 3 failed: Interface '{}' is hardware-blocked by rfkill. Check physical WiFi switch.", iface);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                Ok(false) => {
+                    info!("[Step 3/7] PASSED: {} is not hardware-blocked", iface);
+                }
+                Err(e) => {
+                    warn!("[Step 3/7] WARNING: Could not check rfkill status: {} (continuing)", e);
+                }
+            }
+        } else {
+            info!("[Step 3/7] SKIPPED: Not a wireless interface");
+        }
+
+        // ============================================================
+        // STEP 4 (wireless only): Unblock rfkill and verify
+        // ============================================================
+        if is_wireless {
+            info!("[Step 4/7] Unblocking rfkill for {}...", iface);
+
+            // Execute unblock
+            if let Err(e) = self.ops.set_rfkill_block(iface, false) {
+                error!("[Step 4/7] FAILED: Could not unblock rfkill for {}: {}", iface, e);
+                bail!("Step 4 failed: Cannot unblock rfkill for '{}': {}", iface, e);
+            }
+
+            // Verify unblock succeeded by checking state
+            match self.ops.is_rfkill_blocked(iface) {
+                Ok(true) => {
+                    error!("[Step 4/7] FAILED: rfkill unblock command succeeded but {} is still blocked", iface);
+                    error!("This usually means the device has a hardware kill switch that is ON.");
+                    bail!("Step 4 failed: Interface '{}' is still rfkill-blocked after unblock command", iface);
+                }
+                Ok(false) => {
+                    info!("[Step 4/7] PASSED: {} rfkill unblocked and verified", iface);
+                }
+                Err(e) => {
+                    warn!("[Step 4/7] WARNING: Could not verify rfkill state: {} (continuing)", e);
+                }
+            }
+        } else {
+            info!("[Step 4/7] SKIPPED: Not a wireless interface");
+        }
+
+        // ============================================================
+        // STEP 5: Execute bring_up command
+        // ============================================================
+        info!("[Step 5/7] Executing 'ip link set {} up'...", iface);
+        if let Err(e) = self.ops.bring_up(iface) {
+            // Check if interface still exists
+            if !self.ops.interface_exists(iface) {
+                error!("[Step 5/7] FAILED: Interface {} disappeared during bring_up", iface);
+                bail!("Step 5 failed: Interface '{}' disappeared during activation", iface);
+            }
+            error!("[Step 5/7] FAILED: bring_up command failed for {}: {}", iface, e);
+            bail!("Step 5 failed: Could not bring up '{}': {}", iface, e);
+        }
+        info!("[Step 5/7] PASSED: bring_up command executed", );
+
+        // ============================================================
+        // STEP 6: Verify interface is admin-UP (IFF_UP flag)
+        // ============================================================
+        info!("[Step 6/7] Verifying {} has IFF_UP flag set...", iface);
+        match self.ops.admin_is_up(iface) {
+            Ok(true) => {
+                info!("[Step 6/7] PASSED: {} is admin-UP (IFF_UP=1)", iface);
+            }
+            Ok(false) => {
+                error!("[Step 6/7] FAILED: {} is NOT admin-UP after bring_up command", iface);
+                error!("The bring_up command succeeded but the interface did not come UP.");
+                if is_wireless {
+                    error!("For wireless: this usually means rfkill is still blocking.");
+                    // Double-check rfkill
+                    if let Ok(blocked) = self.ops.is_rfkill_blocked(iface) {
+                        if blocked {
+                            error!("CONFIRMED: rfkill is still blocking {}!", iface);
+                        }
+                    }
+                }
+                bail!("Step 6 failed: Interface '{}' did not come UP. IFF_UP flag is not set.", iface);
+            }
+            Err(e) => {
+                error!("[Step 6/7] FAILED: Could not read interface flags for {}: {}", iface, e);
+                bail!("Step 6 failed: Cannot verify interface '{}' state: {}", iface, e);
             }
         }
 
-        if !admin_up {
-            bail!("Interface {} failed to come UP after multiple attempts", iface);
-        }
-
-        info!("Interface {} is now admin-UP", iface);
+        info!("[Step 7/7] Interface {} is now admin-UP", iface);
+        info!("=== ACTIVATION PIPELINE COMPLETE: {} ===", iface);
 
         // RC1: For Selection mode, we're done - interface is UP
         if mode == EnforcementMode::Selection {
@@ -418,84 +480,80 @@ impl IsolationEngine {
             return Ok(());
         }
 
-        // Ethernet interface handling (NM already handled above)
-
+        // ============================================================
+        // ETHERNET PASSIVE MODE: Check carrier and attempt DHCP
+        // ============================================================
         if mode == EnforcementMode::Passive {
-            // RC4: Make carrier and DHCP failures non-fatal for Passive mode
-            // Just log warnings but continue
+            info!("=== ETHERNET DHCP PIPELINE: {} ===", iface);
 
-            let carrier_detected = self.interface_has_carrier(iface);
-            if !carrier_detected {
-                warn!("No carrier detected on {} - cable may not be plugged in", iface);
-                // Don't fail - will retry when carrier comes up
-                info!("Interface {} is admin-UP but has no carrier (will auto-retry when cable plugged)", iface);
-                return Ok(());
-            }
-
-            // Cable is detected - attempt DHCP (but don't fail if it doesn't work)
-            const MAX_RETRIES: usize = 3;
-            const RETRY_DELAY_SECS: u64 = 5;
-
-            let mut lease_acquired = false;
-
-            for attempt in 1..=MAX_RETRIES {
-                info!("Attempting DHCP for {} (attempt {}/{})", iface, attempt, MAX_RETRIES);
-
-                match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
-                    Ok(lease) => {
-                        info!(
-                            "DHCP successful for {} on attempt {}: ip={}, gateway={:?}",
-                            iface, attempt, lease.ip, lease.gateway
-                        );
-
-                        if let Some(gw) = lease.gateway {
-                            let metric = 100;
-                            if let Err(e) = self.routes.set_default_route(iface, gw, metric) {
-                                warn!("Failed to set default route: {}", e);
-                            }
-                        } else {
-                            warn!("No gateway in DHCP lease - link-local only");
-                        }
-
-                        if !lease.dns_servers.is_empty() {
-                            if let Err(e) = self.dns.set_dns(&lease.dns_servers) {
-                                warn!("Failed to set DNS: {}", e);
-                            }
-                        } else {
-                            warn!("No DNS in DHCP lease, using fallback");
-                            let _ = self.dns.set_dns(&[
-                                Ipv4Addr::new(1, 1, 1, 1),
-                                Ipv4Addr::new(9, 9, 9, 9),
-                            ]);
-                        }
-
-                        lease_acquired = true;
-                        break;
-                    }
-                    Err(e) => {
-                        if attempt < MAX_RETRIES {
-                            warn!(
-                                "DHCP attempt {}/{} failed for {}: {}. Retrying in {}s...",
-                                attempt, MAX_RETRIES, iface, e, RETRY_DELAY_SECS
-                            );
-                            std::thread::sleep(Duration::from_secs(RETRY_DELAY_SECS));
-                        } else {
-                            // All retries exhausted - but this is NOT fatal in Passive mode
-                            warn!(
-                                "DHCP failed for {} after {} attempts: {}. Interface is admin-UP but unconfigured.",
-                                iface, MAX_RETRIES, e
-                            );
-                        }
-                    }
+            // Step E1: Check carrier (cable plugged in)
+            info!("[Ethernet Step 1/3] Checking carrier on {}...", iface);
+            match self.ops.has_carrier(iface) {
+                Ok(Some(true)) => {
+                    info!("[Ethernet Step 1/3] PASSED: Carrier detected (cable connected)");
+                }
+                Ok(Some(false)) => {
+                    warn!("[Ethernet Step 1/3] NO CARRIER: Ethernet cable not plugged in");
+                    info!("Interface {} is UP but no cable detected. Plug in ethernet cable.", iface);
+                    info!("=== ETHERNET PIPELINE COMPLETE (no carrier) ===");
+                    return Ok(());
+                }
+                Ok(None) => {
+                    warn!("[Ethernet Step 1/3] WARNING: Cannot determine carrier state (continuing)");
+                }
+                Err(e) => {
+                    warn!("[Ethernet Step 1/3] WARNING: Error checking carrier: {} (continuing)", e);
                 }
             }
 
-            if lease_acquired {
-                info!("Interface {} activated with IP via DHCP", iface);
-            } else {
-                info!("Interface {} activated but DHCP failed (will retry when carrier/DHCP available)", iface);
+            // Step E2: Attempt DHCP (single attempt, with timeout)
+            info!("[Ethernet Step 2/3] Attempting DHCP on {}...", iface);
+            match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
+                Ok(lease) => {
+                    info!("[Ethernet Step 2/3] PASSED: DHCP lease acquired");
+                    info!("  IP Address: {}/{}", lease.ip, lease.prefix_len);
+                    info!("  Gateway: {:?}", lease.gateway);
+                    info!("  DNS: {:?}", lease.dns_servers);
+
+                    // Step E3: Configure routes and DNS
+                    info!("[Ethernet Step 3/3] Configuring routes and DNS...");
+
+                    if let Some(gw) = lease.gateway {
+                        let metric = 100;
+                        match self.routes.set_default_route(iface, gw, metric) {
+                            Ok(_) => info!("  Default route set via {}", gw),
+                            Err(e) => warn!("  Failed to set default route: {}", e),
+                        }
+                    } else {
+                        warn!("  No gateway in DHCP lease - link-local only");
+                    }
+
+                    if !lease.dns_servers.is_empty() {
+                        match self.dns.set_dns(&lease.dns_servers) {
+                            Ok(_) => info!("  DNS configured: {:?}", lease.dns_servers),
+                            Err(e) => warn!("  Failed to set DNS: {}", e),
+                        }
+                    } else {
+                        warn!("  No DNS in DHCP lease, using fallback 1.1.1.1, 9.9.9.9");
+                        let _ = self.dns.set_dns(&[
+                            Ipv4Addr::new(1, 1, 1, 1),
+                            Ipv4Addr::new(9, 9, 9, 9),
+                        ]);
+                    }
+
+                    info!("[Ethernet Step 3/3] PASSED: Network configured");
+                    info!("=== ETHERNET PIPELINE COMPLETE (connected) ===");
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("[Ethernet Step 2/3] DHCP FAILED: {}", e);
+                    info!("Interface {} is UP but DHCP failed. No network connectivity.", iface);
+                    info!("Possible causes: No DHCP server, network issue, or cable problem.");
+                    info!("=== ETHERNET PIPELINE COMPLETE (no DHCP) ===");
+                    // In Passive mode, DHCP failure is not fatal - interface is still UP
+                    return Ok(());
+                }
             }
-            return Ok(());
         }
 
         // Connectivity mode (full connection required)
@@ -600,39 +658,6 @@ impl IsolationEngine {
         }
     }
 
-    fn interface_is_admin_up(&self, iface: &str) -> bool {
-        // Check if interface is administratively UP (IFF_UP flag set)
-        // This is different from operstate which is the derived operational state
-        let flags_path = format!("/sys/class/net/{}/flags", iface);
-        match fs::read_to_string(&flags_path) {
-            Ok(val) => {
-                let flags_str = val.trim().trim_start_matches("0x");
-                if let Ok(flags) = u32::from_str_radix(flags_str, 16) {
-                    (flags & 0x1) != 0  // IFF_UP is bit 0
-                } else {
-                    false
-                }
-            }
-            Err(_) => false,
-        }
-    }
-
-    fn interface_has_carrier(&self, iface: &str) -> bool {
-        // Check if physical link/carrier is detected on the interface
-        // Returns true if carrier = 1 (cable plugged in) or if carrier file doesn't exist
-        let carrier_path = format!("/sys/class/net/{}/carrier", iface);
-        match fs::read_to_string(&carrier_path) {
-            Ok(val) => {
-                let carrier = val.trim();
-                carrier == "1"  // 1 = carrier detected (cable plugged in)
-            }
-            Err(_) => {
-                // If carrier file doesn't exist, assume interface might work
-                // (some virtual/wireless interfaces don't have carrier detection)
-                true
-            }
-        }
-    }
 
     fn block_interface(&self, iface: &str) -> Result<()> {
         debug!("Blocking interface: {}", iface);

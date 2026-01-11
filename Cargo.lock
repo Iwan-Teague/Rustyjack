@@ -2246,11 +2246,16 @@ name = "rustyjack-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "filetime",
  "ipnet",
  "libc",
+ "netlink-packet-core 0.7.0",
+ "netlink-packet-route",
+ "netlink-sys",
+ "nix 0.27.1",
  "rand 0.8.5",
  "regex",
  "reqwest",

@@ -88,6 +88,12 @@ pub trait NetOps: Send + Sync {
     fn get_interface_capabilities(&self, iface: &str) -> Result<InterfaceCapabilities>;
     fn admin_is_up(&self, interface: &str) -> Result<bool>;
     fn has_carrier(&self, interface: &str) -> Result<Option<bool>>;
+
+    /// Check if rfkill is blocking this interface (soft or hard blocked)
+    fn is_rfkill_blocked(&self, interface: &str) -> Result<bool>;
+
+    /// Check if rfkill is HARD blocked (physical switch - cannot be unblocked via software)
+    fn is_rfkill_hard_blocked(&self, interface: &str) -> Result<bool>;
 }
 
 pub struct RealNetOps;
@@ -421,6 +427,24 @@ impl NetOps for RealNetOps {
             }
         }
     }
+
+    fn is_rfkill_blocked(&self, interface: &str) -> Result<bool> {
+        use crate::netlink_helpers::{rfkill_find_index, rfkill_is_blocked};
+
+        match rfkill_find_index(interface)? {
+            Some(idx) => rfkill_is_blocked(idx),
+            None => Ok(false), // No rfkill device = not blocked
+        }
+    }
+
+    fn is_rfkill_hard_blocked(&self, interface: &str) -> Result<bool> {
+        use crate::netlink_helpers::{rfkill_find_index, rfkill_is_hard_blocked};
+
+        match rfkill_find_index(interface)? {
+            Some(idx) => rfkill_is_hard_blocked(idx),
+            None => Ok(false), // No rfkill device = not blocked
+        }
+    }
 }
 
 #[cfg(test)]
@@ -626,8 +650,16 @@ mod tests {
         fn has_carrier(&self, interface: &str) -> Result<Option<bool>> {
             Ok(self.carrier_state.lock().unwrap().get(interface).copied())
         }
+
+        fn is_rfkill_blocked(&self, _interface: &str) -> Result<bool> {
+            Ok(false) // Mock: never blocked
+        }
+
+        fn is_rfkill_hard_blocked(&self, _interface: &str) -> Result<bool> {
+            Ok(false) // Mock: never hard blocked
+        }
     }
-    
+
     #[test]
     fn test_mock_netops_basic() {
         let mock = MockNetOps::new();

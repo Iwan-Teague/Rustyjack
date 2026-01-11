@@ -12613,6 +12613,7 @@ impl App {
             {
                 self.render_interface_selection_success(result)?;
             }
+            Ok(())
         } else {
             Ok(())
         }

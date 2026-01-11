@@ -429,6 +429,36 @@ pub fn rfkill_find_index(interface: &str) -> Result<Option<u32>> {
         .map_err(|e| anyhow::anyhow!("Failed to find rfkill index for {}: {}", interface, e))
 }
 
+/// Check if an rfkill device is blocked (soft or hard)
+#[cfg(target_os = "linux")]
+pub fn rfkill_is_blocked(idx: u32) -> Result<bool> {
+    use rustyjack_netlink::RfkillManager;
+    let mgr = RfkillManager::new();
+    let device = mgr.get_state(idx)
+        .map_err(|e| anyhow::anyhow!("Failed to get rfkill state for {}: {}", idx, e))?;
+    Ok(device.is_blocked())
+}
+
+/// Check if an rfkill device is hard blocked (physical switch)
+#[cfg(target_os = "linux")]
+pub fn rfkill_is_hard_blocked(idx: u32) -> Result<bool> {
+    use rustyjack_netlink::RfkillManager;
+    let mgr = RfkillManager::new();
+    let device = mgr.get_state(idx)
+        .map_err(|e| anyhow::anyhow!("Failed to get rfkill state for {}: {}", idx, e))?;
+    Ok(device.hard_blocked)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn rfkill_is_blocked(_idx: u32) -> Result<bool> {
+    anyhow::bail!("rfkill operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn rfkill_is_hard_blocked(_idx: u32) -> Result<bool> {
+    anyhow::bail!("rfkill operations only supported on Linux")
+}
+
 #[cfg(target_os = "linux")]
 pub fn process_kill_pattern(pattern: &str) -> Result<usize> {
     use rustyjack_netlink::process;

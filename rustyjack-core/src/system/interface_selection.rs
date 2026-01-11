@@ -365,7 +365,7 @@ fn wait_for_admin_state(
                 .saturating_sub(start.elapsed())
                 .as_millis()
                 .clamp(1, i32::MAX as u128) as i32;
-            let mut fds = [PollFd::new(w.fd(), PollFlags::POLLIN)];
+            let mut fds = [PollFd::new(&w.socket, PollFlags::POLLIN)];
             match poll(&mut fds, remaining) {
                 Ok(ready) if ready > 0 => {
                     let messages = w.recv(&mut buf)?;
@@ -395,17 +395,16 @@ struct LinkState {
 }
 
 fn parse_link_state(
-    msg: &netlink_packet_core::NetlinkMessage<netlink_packet_route::RtnlMessage>,
+    msg: &netlink_packet_core::NetlinkMessage<netlink_packet_route::RouteNetlinkMessage>,
     target_iface: &str,
 ) -> Option<LinkState> {
-    use netlink_packet_route::link::nlas::LinkAttribute;
-    use netlink_packet_route::link::state::State;
-    use netlink_packet_route::RtnlMessage;
+    use netlink_packet_route::link::LinkAttribute;
+    use netlink_packet_route::RouteNetlinkMessage;
     use netlink_packet_core::NetlinkPayload;
 
     match &msg.payload {
-        NetlinkPayload::InnerMessage(RtnlMessage::NewLink(link)) => {
-            let name = link.nlas.iter().find_map(|nla| {
+        NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewLink(link)) => {
+            let name = link.attributes.iter().find_map(|nla| {
                 if let LinkAttribute::IfName(name) = nla {
                     Some(name.clone())
                 } else {
@@ -419,12 +418,12 @@ fn parse_link_state(
 
             let admin_up = (link.header.flags & libc::IFF_UP as u32) != 0;
 
-            let carrier = link.nlas.iter().find_map(|nla| match nla {
+            let carrier = link.attributes.iter().find_map(|nla| match nla {
                 LinkAttribute::Carrier(v) => Some(*v != 0),
-                LinkAttribute::OperState(state) => match state {
-                    State::Up => Some(true),
-                    State::Down | State::Dormant | State::NotPresent => Some(false),
-                    _ => None,
+                LinkAttribute::OperState(state) => {
+                    // OperState is u8 in newer netlink_packet_route
+                    // 6 = IF_OPER_UP
+                    Some(*state == 6)
                 },
                 _ => None,
             });
@@ -460,11 +459,11 @@ impl LinkEventWatcher {
     fn recv(
         &mut self,
         buf: &mut BytesMut,
-    ) -> Result<Vec<netlink_packet_core::NetlinkMessage<netlink_packet_route::RtnlMessage>>> {
+    ) -> Result<Vec<netlink_packet_core::NetlinkMessage<netlink_packet_route::RouteNetlinkMessage>>> {
         use netlink_packet_core::NetlinkMessage;
         use netlink_packet_core::NetlinkPayload;
         use netlink_packet_core::NetlinkBuffer;
-        use netlink_packet_route::RtnlMessage;
+        use netlink_packet_route::RouteNetlinkMessage;
 
         buf.clear();
         buf.reserve(4096);
