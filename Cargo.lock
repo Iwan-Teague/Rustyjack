@@ -2275,7 +2275,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
- "zbus",
  "zeroize",
 ]
 

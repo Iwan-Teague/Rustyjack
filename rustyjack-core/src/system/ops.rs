@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -74,7 +74,6 @@ pub trait NetOps: Send + Sync {
     fn set_rfkill_block(&self, interface: &str, blocked: bool) -> Result<()>;
     fn is_wireless(&self, interface: &str) -> bool;
     fn interface_exists(&self, interface: &str) -> bool;
-    fn apply_nm_managed(&self, interface: &str, managed: bool) -> Result<()>;
     
     fn add_default_route(&self, iface: &str, gateway: Ipv4Addr, metric: u32) -> Result<()>;
     fn delete_default_route(&self, iface: &str) -> Result<()>;
@@ -218,23 +217,6 @@ impl NetOps for RealNetOps {
     fn interface_exists(&self, interface: &str) -> bool {
         use std::path::Path;
         Path::new("/sys/class/net").join(interface).exists()
-    }
-
-    fn apply_nm_managed(&self, interface: &str, managed: bool) -> Result<()> {
-        if !crate::system::NetworkManagerClient::is_available() {
-            return Ok(());
-        }
-
-        let client = crate::system::NetworkManagerClient::new(true);
-        client
-            .set_device_managed(interface, managed)
-            .with_context(|| {
-                format!(
-                    "NetworkManager failed to set managed={} for {}",
-                    managed, interface
-                )
-            })?;
-        Ok(())
     }
     
     fn add_default_route(&self, iface: &str, gateway: Ipv4Addr, metric: u32) -> Result<()> {
@@ -568,10 +550,6 @@ mod tests {
             self.interfaces.lock().unwrap()
                 .iter()
                 .any(|i| i.name == interface)
-        }
-        
-        fn apply_nm_managed(&self, _interface: &str, _managed: bool) -> Result<()> {
-            Ok(())
         }
         
         fn add_default_route(&self, iface: &str, gateway: Ipv4Addr, metric: u32) -> Result<()> {

@@ -36,7 +36,6 @@ rustyjack-encryption = { path = "../rustyjack-encryption" }
 rustyjack-wireless = { path = "../rustyjack-wireless" }
 rustyjack-netlink = { path = "../rustyjack-netlink" }
 tokio = { version = "1.0", features = ["rt", "macros"] }
-zbus = { version = "4.0", default-features = false }
 bytes = "1.11"
 nix = { version = "0.27", default-features = false, features = ["poll"] }
 netlink-packet-core = "0.7"

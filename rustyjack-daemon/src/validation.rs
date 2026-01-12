@@ -480,6 +480,10 @@ pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
             validate_mount_device_hint(&req.device)?;
             Ok(())
         }
+        JobKind::InterfaceSelect { interface } => {
+            validate_interface_name(interface)?;
+            Ok(())
+        }
     }
 }
 

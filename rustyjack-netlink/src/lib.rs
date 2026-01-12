@@ -63,8 +63,6 @@ pub mod interface;
 pub mod iptables;
 pub mod logging;
 #[cfg(target_os = "linux")]
-pub mod networkmanager;
-#[cfg(target_os = "linux")]
 pub mod process;
 #[cfg(target_os = "linux")]
 pub mod rfkill;
@@ -112,7 +110,6 @@ pub use interface::{AddressInfo, InterfaceInfo, InterfaceManager};
 pub use iptables::{Chain, IptablesError, IptablesManager, Protocol, Rule, Table, Target};
 pub use logging::init_journald_logger;
 #[cfg(target_os = "linux")]
-pub use networkmanager::{AccessPoint as NmAccessPoint, NetworkManagerClient, NmDeviceState};
 #[cfg(target_os = "linux")]
 pub use process::{ProcessError, ProcessInfo, ProcessManager};
 #[cfg(target_os = "linux")]

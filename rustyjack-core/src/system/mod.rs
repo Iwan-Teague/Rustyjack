@@ -26,7 +26,6 @@
 //! explicit error messages if not run as root.
 
 pub mod ops;
-pub mod nm;
 pub mod preference;
 pub mod dns;
 pub mod routing;
@@ -37,7 +36,6 @@ pub use ops::{
     ErrorEntry, IsolationOutcome, NetOps, RealNetOps, RouteOutcome, RouteEntry,
     InterfaceSummary, DhcpLease as OpsDhcpLease,
 };
-pub use nm::NetworkManagerClient;
 pub use preference::PreferenceManager;
 pub use dns::DnsManager;
 pub use routing::RouteManager;
@@ -1369,7 +1367,13 @@ fn icmp_checksum(data: &[u8]) -> u16 {
 }
 
 pub fn read_dns_servers() -> Result<Vec<String>> {
-    let contents = fs::read_to_string("/etc/resolv.conf").context("reading resolv.conf")?;
+    let resolv_path = resolve_root(None)
+        .ok()
+        .map(|root| root.join("resolv.conf"))
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("/etc/resolv.conf"));
+    let contents = fs::read_to_string(&resolv_path)
+        .with_context(|| format!("reading {}", resolv_path.display()))?;
     let mut servers = Vec::new();
     for line in contents.lines() {
         let trimmed = line.trim();
@@ -2096,21 +2100,12 @@ pub fn apply_interface_isolation_with_ops(
                 }
             }
             
-            if let Err(e) = ops.apply_nm_managed(&iface_info.name, true) {
-                debug!("[NET] NetworkManager set managed=true failed for {}: {}", iface_info.name, e);
-            }
-            
             allowed_vec.push(iface_info.name);
         } else {
             let _ = ops.bring_down(&iface_info.name);
             if iface_info.is_wireless {
                 let _ = ops.set_rfkill_block(&iface_info.name, true);
             }
-            
-            if let Err(e) = ops.apply_nm_managed(&iface_info.name, false) {
-                debug!("[NET] NetworkManager set managed=false failed for {}: {}", iface_info.name, e);
-            }
-            
             blocked_vec.push(iface_info.name);
         }
     }
@@ -2183,13 +2178,19 @@ pub fn rewrite_dns_servers(interface: &str, dns_servers: &[Ipv4Addr]) -> Result<
         content.push_str(&format!("nameserver {}\n", server));
     }
 
-    let tmp_path = "/etc/.resolv.conf.rustyjack.tmp";
-    let mut file = fs::File::create(tmp_path).context("creating resolv.conf temp file")?;
+    let root = resolve_root(None)?;
+    let resolv_path = root.join("resolv.conf");
+    if let Some(parent) = resolv_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let tmp_path = resolv_path.with_file_name(".resolv.conf.rustyjack.tmp");
+    let mut file = fs::File::create(&tmp_path).context("creating resolv.conf temp file")?;
     file.write_all(content.as_bytes())
         .context("writing resolv.conf temp file")?;
     file.sync_all().ok();
-    fs::rename(tmp_path, "/etc/resolv.conf").context("renaming resolv.conf")?;
-    if let Ok(dir) = fs::File::open("/etc") {
+    fs::rename(&tmp_path, &resolv_path).context("renaming resolv.conf")?;
+    if let Ok(dir) = fs::File::open(&root) {
         let _ = dir.sync_all();
     }
     Ok(())

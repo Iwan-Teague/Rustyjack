@@ -94,11 +94,13 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
     let _lock = MountLock::acquire(policy.lock_timeout)?;
     ensure_mount_root(policy)?;
 
-    let device = canonical_device_path(&req.device)?;
-    let dev_name = device
+    let mut device = canonical_device_path(&req.device)?;
+    let mut dev_name = device
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| anyhow!("invalid device path"))?;
+    let mut preferred_name = req.preferred_name.clone();
+    let mut fs_type_override = None;
 
     if !is_allowed_device(dev_name) {
         bail!("device not allowed: {}", dev_name);
@@ -108,10 +110,27 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
     ensure_usb_removable(dev_name)?;
 
     if is_whole_disk(dev_name)? && has_partitions(dev_name)? {
-        bail!("refusing to mount whole disk {} with partitions", dev_name);
+        let parts = enumerate_partitions_for_name(dev_name)?;
+        let (chosen, fs_type) = choose_mountable_partition(policy, &parts, dev_name)?;
+        info!(
+            "Whole disk {} requested; mounting partition {}",
+            dev_name,
+            chosen.devnode.display()
+        );
+        device = canonical_device_path(&chosen.devnode)?;
+        dev_name = device
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow!("invalid device path"))?;
+        preferred_name = preferred_name.or_else(|| Some(chosen.name.clone()));
+        fs_type_override = Some(fs_type);
+        ensure_block_device(&device)?;
     }
 
-    let fs_type = detect_fs_type(&device)?;
+    let fs_type = match fs_type_override {
+        Some(fs_type) => fs_type,
+        None => detect_fs_type(&device)?,
+    };
     if !policy.allowed_fs.contains(&fs_type) {
         bail!("filesystem not allowed: {:?}", fs_type);
     }
@@ -132,7 +151,7 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
         policy.default_mode
     };
 
-    let mount_name = sanitize_mount_name(req.preferred_name.as_deref(), dev_name);
+    let mount_name = sanitize_mount_name(preferred_name.as_deref(), dev_name);
     let mountpoint = policy.mount_root.join(&mount_name);
 
     if let Some(existing) = find_mount(&device, &mountpoint)? {
@@ -328,6 +347,47 @@ pub fn enumerate_partitions(dev: &BlockDevice) -> Result<Vec<Partition>> {
 
     partitions.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(partitions)
+}
+
+fn enumerate_partitions_for_name(dev_name: &str) -> Result<Vec<Partition>> {
+    let dev = BlockDevice {
+        name: dev_name.to_string(),
+        devnode: PathBuf::from("/dev").join(dev_name),
+        removable: false,
+        is_usb: false,
+        partitions: Vec::new(),
+    };
+    enumerate_partitions(&dev)
+}
+
+fn choose_mountable_partition(
+    policy: &MountPolicy,
+    partitions: &[Partition],
+    dev_name: &str,
+) -> Result<(Partition, FsType)> {
+    let mut best: Option<(Partition, FsType, u64)> = None;
+
+    for part in partitions {
+        let fs_type = match detect_fs_type(&part.devnode) {
+            Ok(fs_type) => fs_type,
+            Err(_) => continue,
+        };
+        if !policy.allowed_fs.contains(&fs_type) {
+            continue;
+        }
+
+        let size = part.size_bytes.unwrap_or(0);
+        match &best {
+            Some((_, _, best_size)) if *best_size >= size => {}
+            _ => best = Some((part.clone(), fs_type, size)),
+        }
+    }
+
+    if let Some((part, fs_type, _)) = best {
+        Ok((part, fs_type))
+    } else {
+        bail!("no mountable partitions found on {}", dev_name);
+    }
 }
 
 pub fn is_allowed_device(name: &str) -> bool {

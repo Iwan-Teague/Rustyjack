@@ -14,7 +14,6 @@
 #   PREBUILT_DIR=prebuilt/arm32      # relative to project root
 #   RUNTIME_ROOT=/var/lib/rustyjack  # runtime root
 #   RUSTYJACK_OVERWRITE=1            # overwrite DEST_ROOT if it exists
-#   RUSTYJACK_PURGE_NM=1             # purge NetworkManager instead of dns=none
 #   RUSTYJACK_USB_DEBUG=0            # disable verbose RUST_LOG in UI service (default is enabled)
 #   SKIP_REBOOT=1                    # do not reboot after install
 #   NO_REBOOT=1                      # do not reboot after install
@@ -90,6 +89,7 @@ check_resolv_conf() {
 
 claim_resolv_conf() {
   local resolv="/etc/resolv.conf"
+  local target="${RUNTIME_ROOT:-/var/lib/rustyjack}/resolv.conf"
   info "Claiming $resolv for Rustyjack (dedicated device)..."
   if command -v lsattr >/dev/null 2>&1; then
     if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
@@ -97,19 +97,19 @@ claim_resolv_conf() {
     fi
   fi
   if [ -L "$resolv" ]; then
-    local target
-    target=$(readlink -f "$resolv" 2>/dev/null || true)
-    warn "Replacing symlinked $resolv (was -> ${target:-unknown}) with Rustyjack-managed file"
-    sudo rm -f "$resolv"
-  else
-    if [ -f "$resolv" ]; then
-      sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
-    fi
+    local old_target
+    old_target=$(readlink -f "$resolv" 2>/dev/null || true)
+    warn "Replacing symlinked $resolv (was -> ${old_target:-unknown}) with Rustyjack-managed symlink"
+  elif [ -f "$resolv" ]; then
+    sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
   fi
-  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > $resolv"
-  sudo chmod 644 "$resolv"
-  sudo chown root:root "$resolv"
-  info "[OK] $resolv now owned by Rustyjack (plain file, root-writable)"
+  sudo rm -f "$resolv"
+  sudo mkdir -p "$(dirname "$target")"
+  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > $target"
+  sudo chmod 644 "$target"
+  sudo chown root:root "$target"
+  sudo ln -sf "$target" "$resolv"
+  info "[OK] $resolv now symlinked to $target"
 }
 
 validate_network_status() {
@@ -208,33 +208,6 @@ purge_network_manager() {
   sudo systemctl mask NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
 }
 
-configure_network_manager() {
-  if ! systemctl list-unit-files | grep -q '^NetworkManager'; then
-    warn "NetworkManager not installed; skipping dns=none configuration"
-    return 0
-  fi
-
-  local nm_conf="/etc/NetworkManager/NetworkManager.conf"
-  info "Configuring NetworkManager to leave resolv.conf alone (dns=none)..."
-  sudo mkdir -p "$(dirname "$nm_conf")"
-  if [ ! -f "$nm_conf" ]; then
-    cat > "$nm_conf" <<'EOF'
-[main]
-dns=none
-EOF
-  else
-    if ! grep -q "^\[main\]" "$nm_conf"; then
-      printf "\n[main]\n" | sudo tee -a "$nm_conf" >/dev/null
-    fi
-    if grep -q "^dns=" "$nm_conf"; then
-      sudo sed -Ei 's/^dns=.*/dns=none/' "$nm_conf"
-    else
-      sudo sed -Ei '/^\[main\]/a dns=none' "$nm_conf"
-    fi
-  fi
-  sudo systemctl restart NetworkManager.service 2>/dev/null || true
-}
-
 disable_conflicting_services() {
   if systemctl list-unit-files | grep -q '^systemd-resolved'; then
     warn "Disabling systemd-resolved to prevent resolv.conf rewrites"
@@ -250,6 +223,23 @@ disable_conflicting_services() {
     warn "Disabling resolvconf to avoid resolv.conf churn"
     sudo systemctl disable --now resolvconf.service 2>/dev/null || true
     sudo systemctl mask resolvconf.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^wpa_supplicant@'; then
+    warn "Disabling wpa_supplicant@*.service to avoid competing WiFi ownership"
+    for unit in $(systemctl list-units 'wpa_supplicant@*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}'); do
+      sudo systemctl disable --now "$unit" 2>/dev/null || true
+    done
+    sudo systemctl mask wpa_supplicant@.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^wpa_supplicant'; then
+    warn "Disabling wpa_supplicant.service to avoid competing WiFi ownership"
+    sudo systemctl disable --now wpa_supplicant.service 2>/dev/null || true
+    sudo systemctl mask wpa_supplicant.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^systemd-networkd'; then
+    warn "Disabling systemd-networkd to avoid competing network ownership"
+    sudo systemctl disable --now systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
+    sudo systemctl mask systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
   fi
 }
 
@@ -369,8 +359,8 @@ add_dtparam() {
 PACKAGES=(
   # build tools (keep parity with dev installer)
   build-essential pkg-config libssl-dev
-  # network manager + WiFi tools
-  network-manager wpasupplicant
+  # WiFi tools
+  wpasupplicant
   # misc
   git i2c-tools curl
 )
@@ -782,11 +772,7 @@ info "Rustyjack services enabled"
 # Finalize network ownership after installs are complete
 step "Finalizing network ownership..."
 preserve_default_route_interface
-if [ "${RUSTYJACK_PURGE_NM:-0}" = "1" ]; then
-  purge_network_manager
-else
-  configure_network_manager
-fi
+purge_network_manager
 disable_conflicting_services
 
 # Start the services now

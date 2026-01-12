@@ -64,8 +64,7 @@ pub struct ActivationReport {
 impl IsolationEngine {
     pub fn new(ops: Arc<dyn NetOps>, root: PathBuf) -> Self {
         let routes = RouteManager::new(Arc::clone(&ops));
-        // Always use system resolv.conf - installer ensures it's writable
-        let dns = DnsManager::new(PathBuf::from("/etc/resolv.conf"));
+        let dns = DnsManager::new(root.join("resolv.conf"));
         let prefs = PreferenceManager::new(root.clone());
 
         Self {
@@ -289,11 +288,6 @@ impl IsolationEngine {
                 .context("failed to unblock rfkill for AP")?;
         }
 
-        // Set NetworkManager unmanaged
-        self.ops
-            .apply_nm_managed(iface, false)
-            .context("failed to set NM unmanaged for AP")?;
-
         // Do NOT run DHCP - AP interface gets manual IP from hotspot service (10.20.30.1/24)
         info!("AP interface {} activated (manual IP, no DHCP)", iface);
         Ok(())
@@ -338,105 +332,94 @@ impl IsolationEngine {
         // ============================================================
         // STEP 1: Verify interface exists
         // ============================================================
-        info!("[Step 1/7] Checking interface {} exists...", iface);
+        info!("[Step 1/6] Checking interface {} exists...", iface);
         if !self.ops.interface_exists(iface) {
-            error!("[Step 1/7] FAILED: Interface {} does not exist in /sys/class/net", iface);
+            error!("[Step 1/6] FAILED: Interface {} does not exist in /sys/class/net", iface);
             bail!("Step 1 failed: Interface '{}' does not exist", iface);
         }
-        info!("[Step 1/7] PASSED: Interface {} exists", iface);
+        info!("[Step 1/6] PASSED: Interface {} exists", iface);
 
         let is_wireless = self.ops.is_wireless(iface);
         info!("Interface type: {}", if is_wireless { "wireless" } else { "ethernet" });
 
         // ============================================================
-        // STEP 2: Set NetworkManager unmanaged
-        // ============================================================
-        info!("[Step 2/7] Setting {} as unmanaged by NetworkManager...", iface);
-        if let Err(e) = self.ops.apply_nm_managed(iface, false) {
-            // NM might not be running - warn but continue
-            warn!("[Step 2/7] WARNING: Could not set {} unmanaged: {} (continuing anyway)", iface, e);
-        } else {
-            info!("[Step 2/7] PASSED: {} set as unmanaged", iface);
-        }
-
-        // ============================================================
         // STEP 3 (wireless only): Check if hardware rfkill blocked
         // ============================================================
         if is_wireless {
-            info!("[Step 3/7] Checking if {} is hardware-blocked (rfkill)...", iface);
+            info!("[Step 2/6] Checking if {} is hardware-blocked (rfkill)...", iface);
             match self.ops.is_rfkill_hard_blocked(iface) {
                 Ok(true) => {
-                    error!("[Step 3/7] FAILED: {} is HARDWARE blocked (physical switch)", iface);
+                    error!("[Step 2/6] FAILED: {} is HARDWARE blocked (physical switch)", iface);
                     error!("The wireless adapter has a physical kill switch that is ON.");
                     error!("This cannot be fixed via software. Check for a physical WiFi switch on the device.");
-                    bail!("Step 3 failed: Interface '{}' is hardware-blocked by rfkill. Check physical WiFi switch.", iface);
+                    bail!("Step 2 failed: Interface '{}' is hardware-blocked by rfkill. Check physical WiFi switch.", iface);
                 }
                 Ok(false) => {
-                    info!("[Step 3/7] PASSED: {} is not hardware-blocked", iface);
+                    info!("[Step 2/6] PASSED: {} is not hardware-blocked", iface);
                 }
                 Err(e) => {
-                    warn!("[Step 3/7] WARNING: Could not check rfkill status: {} (continuing)", e);
+                    warn!("[Step 2/6] WARNING: Could not check rfkill status: {} (continuing)", e);
                 }
             }
         } else {
-            info!("[Step 3/7] SKIPPED: Not a wireless interface");
+            info!("[Step 2/6] SKIPPED: Not a wireless interface");
         }
 
         // ============================================================
         // STEP 4 (wireless only): Unblock rfkill and verify
         // ============================================================
         if is_wireless {
-            info!("[Step 4/7] Unblocking rfkill for {}...", iface);
+            info!("[Step 3/6] Unblocking rfkill for {}...", iface);
 
             // Execute unblock
             if let Err(e) = self.ops.set_rfkill_block(iface, false) {
-                error!("[Step 4/7] FAILED: Could not unblock rfkill for {}: {}", iface, e);
-                bail!("Step 4 failed: Cannot unblock rfkill for '{}': {}", iface, e);
+                error!("[Step 3/6] FAILED: Could not unblock rfkill for {}: {}", iface, e);
+                bail!("Step 3 failed: Cannot unblock rfkill for '{}': {}", iface, e);
             }
 
             // Verify unblock succeeded by checking state
             match self.ops.is_rfkill_blocked(iface) {
                 Ok(true) => {
-                    error!("[Step 4/7] FAILED: rfkill unblock command succeeded but {} is still blocked", iface);
+                    error!("[Step 3/6] FAILED: rfkill unblock command succeeded but {} is still blocked", iface);
                     error!("This usually means the device has a hardware kill switch that is ON.");
-                    bail!("Step 4 failed: Interface '{}' is still rfkill-blocked after unblock command", iface);
+                    bail!("Step 3 failed: Interface '{}' is still rfkill-blocked after unblock command", iface);
                 }
                 Ok(false) => {
-                    info!("[Step 4/7] PASSED: {} rfkill unblocked and verified", iface);
+                    info!("[Step 3/6] PASSED: {} rfkill unblocked and verified", iface);
                 }
                 Err(e) => {
-                    warn!("[Step 4/7] WARNING: Could not verify rfkill state: {} (continuing)", e);
+                    warn!("[Step 3/6] WARNING: Could not verify rfkill state: {} (continuing)", e);
                 }
             }
         } else {
-            info!("[Step 4/7] SKIPPED: Not a wireless interface");
+            info!("[Step 3/6] SKIPPED: Not a wireless interface");
         }
 
         // ============================================================
         // STEP 5: Execute bring_up command
         // ============================================================
-        info!("[Step 5/7] Executing 'ip link set {} up'...", iface);
+        info!("[Step 4/6] Executing 'ip link set {} up'...", iface);
         if let Err(e) = self.ops.bring_up(iface) {
             // Check if interface still exists
             if !self.ops.interface_exists(iface) {
-                error!("[Step 5/7] FAILED: Interface {} disappeared during bring_up", iface);
-                bail!("Step 5 failed: Interface '{}' disappeared during activation", iface);
+                error!("[Step 4/6] FAILED: Interface {} disappeared during bring_up", iface);
+                bail!("Step 4 failed: Interface '{}' disappeared during activation", iface);
             }
-            error!("[Step 5/7] FAILED: bring_up command failed for {}: {}", iface, e);
-            bail!("Step 5 failed: Could not bring up '{}': {}", iface, e);
+            error!("[Step 4/6] FAILED: bring_up command failed for {}: {}", iface, e);
+            bail!("Step 4 failed: Could not bring up '{}': {}", iface, e);
         }
-        info!("[Step 5/7] PASSED: bring_up command executed", );
+        info!("[Step 4/6] PASSED: bring_up command executed", );
 
         // ============================================================
         // STEP 6: Verify interface is admin-UP (IFF_UP flag)
         // ============================================================
-        info!("[Step 6/7] Verifying {} has IFF_UP flag set...", iface);
+        info!("[Step 5/6] Verifying {} has IFF_UP flag set...", iface);
         match self.ops.admin_is_up(iface) {
             Ok(true) => {
-                info!("[Step 6/7] PASSED: {} is admin-UP (IFF_UP=1)", iface);
+                info!("[Step 5/6] PASSED: {} is admin-UP (IFF_UP=1)", iface);
             }
             Ok(false) => {
-                error!("[Step 6/7] FAILED: {} is NOT admin-UP after bring_up command", iface);
+                error!("[Step 5/6] FAILED: {} is NOT admin-UP after bring_up command", iface);
                 error!("The bring_up command succeeded but the interface did not come UP.");
                 if is_wireless {
                     error!("For wireless: this usually means rfkill is still blocking.");
@@ -447,15 +430,15 @@ impl IsolationEngine {
                         }
                     }
                 }
-                bail!("Step 6 failed: Interface '{}' did not come UP. IFF_UP flag is not set.", iface);
+                bail!("Step 5 failed: Interface '{}' did not come UP. IFF_UP flag is not set.", iface);
             }
             Err(e) => {
-                error!("[Step 6/7] FAILED: Could not read interface flags for {}: {}", iface, e);
-                bail!("Step 6 failed: Cannot verify interface '{}' state: {}", iface, e);
+                error!("[Step 5/6] FAILED: Could not read interface flags for {}: {}", iface, e);
+                bail!("Step 5 failed: Cannot verify interface '{}' state: {}", iface, e);
             }
         }
 
-        info!("[Step 7/7] Interface {} is now admin-UP", iface);
+        info!("[Step 6/6] Interface {} is now admin-UP", iface);
         info!("=== ACTIVATION PIPELINE COMPLETE: {} ===", iface);
 
         // RC1: For Selection mode, we're done - interface is UP
@@ -465,7 +448,7 @@ impl IsolationEngine {
         }
 
         // For wireless interfaces in Passive/Connectivity mode
-        // (rfkill and NM already handled above)
+        // (rfkill already handled above)
         if is_wireless {
             // RC3: Passive mode for wireless should NOT auto-connect
             // Only admin-UP, let user manually connect via UI
@@ -670,9 +653,6 @@ impl IsolationEngine {
         // Release DHCP lease if any
         self.ops.release_dhcp(iface).ok();
         
-        // Set NetworkManager unmanaged
-        self.ops.apply_nm_managed(iface, false).ok();
-
         // CRITICAL: Bring interface DOWN to prevent any communication
         if let Err(e) = self.ops.bring_down(iface) {
             warn!("Failed to bring down {}: {}", iface, e);

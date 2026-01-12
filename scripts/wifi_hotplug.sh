@@ -5,7 +5,7 @@
 set -e
 
 RUSTYJACK_ROOT="${RUSTYJACK_ROOT:-/opt/rustyjack}"
-DAEMON_SOCKET="/run/rustyjackd.socket"
+DAEMON_SOCKET="/run/rustyjack/rustyjackd.sock"
 LOG_FILE="/var/log/rustyjack_wifi_hotplug.log"
 
 # Logging function

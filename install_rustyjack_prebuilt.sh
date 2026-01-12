@@ -151,6 +151,7 @@ EOF
 
 claim_resolv_conf() {
   local resolv="/etc/resolv.conf"
+  local target="${RUNTIME_ROOT:-/var/lib/rustyjack}/resolv.conf"
   info "Claiming $resolv for Rustyjack (dedicated device)..."
   if command -v lsattr >/dev/null 2>&1; then
     if lsattr -d "$resolv" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
@@ -158,19 +159,19 @@ claim_resolv_conf() {
     fi
   fi
   if [ -L "$resolv" ]; then
-    local target
-    target=$(readlink -f "$resolv" 2>/dev/null || true)
-    warn "Replacing symlinked $resolv (was -> ${target:-unknown}) with Rustyjack-managed file"
-    sudo rm -f "$resolv"
-  else
-    if [ -f "$resolv" ]; then
-      sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
-    fi
+    local old_target
+    old_target=$(readlink -f "$resolv" 2>/dev/null || true)
+    warn "Replacing symlinked $resolv (was -> ${old_target:-unknown}) with Rustyjack-managed symlink"
+  elif [ -f "$resolv" ]; then
+    sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
   fi
-  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > $resolv"
-  sudo chmod 644 "$resolv"
-  sudo chown root:root "$resolv"
-  info "[OK] $resolv now owned by Rustyjack (plain file, root-writable)"
+  sudo rm -f "$resolv"
+  sudo mkdir -p "$(dirname "$target")"
+  sudo sh -c "printf '# Managed by Rustyjack\n# Updated by ensure-route\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > $target"
+  sudo chmod 644 "$target"
+  sudo chown root:root "$target"
+  sudo ln -sf "$target" "$resolv"
+  info "[OK] $resolv now symlinked to $target"
 }
 
 purge_network_manager() {
@@ -200,6 +201,23 @@ disable_conflicting_services() {
     warn "Disabling resolvconf to avoid resolv.conf churn"
     sudo systemctl disable --now resolvconf.service 2>/dev/null || true
     sudo systemctl mask resolvconf.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^wpa_supplicant@'; then
+    warn "Disabling wpa_supplicant@*.service to avoid competing WiFi ownership"
+    for unit in $(systemctl list-units 'wpa_supplicant@*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}'); do
+      sudo systemctl disable --now "$unit" 2>/dev/null || true
+    done
+    sudo systemctl mask wpa_supplicant@.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^wpa_supplicant'; then
+    warn "Disabling wpa_supplicant.service to avoid competing WiFi ownership"
+    sudo systemctl disable --now wpa_supplicant.service 2>/dev/null || true
+    sudo systemctl mask wpa_supplicant.service 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q '^systemd-networkd'; then
+    warn "Disabling systemd-networkd to avoid competing network ownership"
+    sudo systemctl disable --now systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
+    sudo systemctl mask systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
   fi
 }
 

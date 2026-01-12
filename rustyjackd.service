@@ -1,7 +1,8 @@
 [Unit]
 Description=Rustyjack Daemon (Hardened)
 Documentation=https://github.com/yourusername/rustyjack
-After=local-fs.target network.target
+Requires=rustyjackd.socket
+After=local-fs.target network.target rustyjackd.socket
 Wants=network.target
 
 [Service]
@@ -38,7 +39,7 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack
-ReadOnlyPaths=/etc/NetworkManager /etc/wpa_supplicant
+ReadOnlyPaths=/etc/wpa_supplicant
 PrivateTmp=true
 
 # Kernel hardening

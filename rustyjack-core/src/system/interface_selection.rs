@@ -65,7 +65,7 @@ where
     };
 
     let prefs = PreferenceManager::new(root.clone());
-    let dns = DnsManager::new(PathBuf::from("/etc/resolv.conf"));
+    let dns = DnsManager::new(root.join("resolv.conf"));
     let routes = RouteManager::new(Arc::clone(&ops));
 
     emit_progress(&mut progress, "validate", 5, &format!("Validating {}", iface));
@@ -108,8 +108,9 @@ where
 
     // Step 2: deactivate others
     for other in &other_ifaces {
-        ops.release_dhcp(other)
-            .context(format!("failed to release DHCP on {}", other))?;
+        if let Err(e) = ops.release_dhcp(other) {
+            warn!("Failed to release DHCP on {}: {}", other, e);
+        }
 
         if let Err(e) = ops.flush_addresses(other) {
             warn!("Failed to flush addresses on {}: {}", other, e);
@@ -117,10 +118,6 @@ where
 
         if let Err(e) = routes.delete_default_route(other) {
             debug!("No default route to delete for {}: {}", other, e);
-        }
-
-        if let Err(e) = ops.apply_nm_managed(other, false) {
-            warn!("Failed to set {} unmanaged via NetworkManager: {}", other, e);
         }
 
         ops.bring_down(other)
@@ -154,8 +151,14 @@ where
             .context(format!("rfkill unblock did not complete for {}", iface))?;
     }
 
-    if let Err(e) = ops.apply_nm_managed(iface, false) {
-        bail!("Failed to set {} unmanaged via NetworkManager: {}", iface, e);
+    if let Err(e) = ops.release_dhcp(iface) {
+        warn!("Failed to release DHCP on {}: {}", iface, e);
+    }
+    if let Err(e) = ops.flush_addresses(iface) {
+        warn!("Failed to flush addresses on {}: {}", iface, e);
+    }
+    if let Err(e) = routes.delete_default_route(iface) {
+        debug!("No default route to delete for {}: {}", iface, e);
     }
 
     ops.bring_up(iface)
@@ -398,7 +401,7 @@ fn parse_link_state(
     msg: &netlink_packet_core::NetlinkMessage<netlink_packet_route::RouteNetlinkMessage>,
     target_iface: &str,
 ) -> Option<LinkState> {
-    use netlink_packet_route::link::LinkAttribute;
+    use netlink_packet_route::link::{LinkAttribute, LinkFlag, State};
     use netlink_packet_route::RouteNetlinkMessage;
     use netlink_packet_core::NetlinkPayload;
 
@@ -416,15 +419,11 @@ fn parse_link_state(
                 return None;
             }
 
-            let admin_up = (link.header.flags & libc::IFF_UP as u32) != 0;
+            let admin_up = link.header.flags.contains(&LinkFlag::Up);
 
             let carrier = link.attributes.iter().find_map(|nla| match nla {
                 LinkAttribute::Carrier(v) => Some(*v != 0),
-                LinkAttribute::OperState(state) => {
-                    // OperState is u8 in newer netlink_packet_route
-                    // 6 = IF_OPER_UP
-                    Some(*state == 6)
-                },
+                LinkAttribute::OperState(state) => Some(*state == State::Up),
                 _ => None,
             });
 
@@ -489,7 +488,7 @@ impl LinkEventWatcher {
             if length == 0 || length > slice.len() {
                 break;
             }
-            let msg = NetlinkMessage::<RtnlMessage>::deserialize(&slice[..length])
+            let msg = NetlinkMessage::<RouteNetlinkMessage>::deserialize(&slice[..length])
                 .map_err(|e| anyhow!("failed to deserialize netlink message: {}", e))?;
 
             // Skip ACK/Done messages
