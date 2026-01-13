@@ -33,7 +33,7 @@ User=root
 # Keep only required capabilities
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE
 # Ambient capabilities for rootless operation where possible
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 
 # Filesystem access restrictions
 ProtectSystem=strict
@@ -64,7 +64,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 
 # Syscall filtering
 SystemCallFilter=@system-service
-SystemCallFilter=~@clock @debug @module @mount @obsolete @raw-io @reboot @swap
+SystemCallFilter=~@clock @debug @module @obsolete @raw-io @reboot @swap
 SystemCallArchitectures=native
 
 # Resource limits

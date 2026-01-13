@@ -8,6 +8,47 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 
+# Ensure Docker is running before trying to build or run containers.
+ensure_docker_running() {
+    if docker info >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "Docker is not running; attempting to start it..."
+    case "$(uname -s)" in
+        Darwin)
+            if command -v open >/dev/null 2>&1; then
+                open -a Docker >/dev/null 2>&1 || true
+            fi
+            ;;
+        Linux)
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl start docker >/dev/null 2>&1 || true
+                if ! docker info >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+                    sudo systemctl start docker >/dev/null 2>&1 || true
+                fi
+            elif command -v service >/dev/null 2>&1; then
+                service docker start >/dev/null 2>&1 || true
+                if ! docker info >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+                    sudo service docker start >/dev/null 2>&1 || true
+                fi
+            fi
+            ;;
+        *)
+            ;;
+    esac
+
+    for _ in $(seq 1 60); do
+        if docker info >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "Docker did not start; please start it manually." >&2
+    return 1
+}
+
 # Default to bash if no command provided
 if [ "$#" -eq 0 ]; then
     set -- bash
@@ -32,6 +73,7 @@ build_docker_image() {
     fi
 }
 
+ensure_docker_running
 build_docker_image
 
 mkdir -p "$REPO_ROOT/tmp"

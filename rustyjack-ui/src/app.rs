@@ -21,8 +21,8 @@ use rustyjack_commands::{
     HardwareCommand, HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs,
     LootCommand, LootReadArgs, MitmCommand,
     MitmStartArgs, NotifyCommand, ReverseCommand, ReverseLaunchArgs, SystemCommand,
-    SystemFdeMigrateArgs, SystemFdePrepareArgs, UsbMountArgs, UsbMountMode, UsbUnmountArgs,
-    WifiCommand, WifiDeauthArgs, WifiMacRandomizeArgs, WifiMacRestoreArgs,
+    ExportLogsToUsbArgs, SystemFdeMigrateArgs, SystemFdePrepareArgs, UsbMountArgs, UsbMountMode,
+    UsbUnmountArgs, WifiCommand, WifiDeauthArgs, WifiMacRandomizeArgs, WifiMacRestoreArgs,
     WifiMacSetArgs, WifiMacSetVendorArgs, WifiRouteCommand, WifiRouteEnsureArgs,
     WifiStatusArgs, WifiTxPowerArgs,
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
@@ -750,7 +750,9 @@ struct UsbDevice {
     size: String,
     model: String,
     #[allow(dead_code)]
-    transport: String,
+    transport: Option<String>,
+    is_partition: bool,
+    parent: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2779,7 +2781,11 @@ impl App {
         let devices = self.core.block_devices().context("listing block devices")?;
         let mut usb_devices = Vec::new();
         for dev in devices {
-            let is_usb = dev.removable || dev.transport.eq_ignore_ascii_case("usb");
+            let is_usb = dev
+                .transport
+                .as_deref()
+                .map(|t| t.eq_ignore_ascii_case("usb"))
+                .unwrap_or(false);
             if !is_usb {
                 continue;
             }
@@ -2793,9 +2799,27 @@ impl App {
                     model
                 },
                 transport: dev.transport,
+                is_partition: dev.is_partition,
+                parent: dev.parent,
             });
         }
         Ok(usb_devices)
+    }
+
+    fn list_usb_partitions(&self) -> Result<Vec<UsbDevice>> {
+        Ok(self
+            .list_usb_devices()?
+            .into_iter()
+            .filter(|dev| dev.is_partition)
+            .collect())
+    }
+
+    fn list_usb_disks(&self) -> Result<Vec<UsbDevice>> {
+        Ok(self
+            .list_usb_devices()?
+            .into_iter()
+            .filter(|dev| !dev.is_partition)
+            .collect())
     }
 
     /// Turn off all encryption toggles with a simple progress display.
@@ -3183,7 +3207,7 @@ impl App {
             return Ok(());
         }
 
-        let devices = match self.list_usb_devices() {
+        let devices = match self.list_usb_disks() {
             Ok(d) => d,
             Err(e) => {
                 return self.show_message(
@@ -3377,79 +3401,66 @@ impl App {
     }
 
     fn export_logs_to_usb(&mut self) -> Result<()> {
-        let Some((device, mount)) = self.select_usb_device_mount("Export Logs")? else {
+        let Some(device) = self.select_usb_partition("Export Logs")? else {
             return Ok(());
         };
 
         let status = self.stats.snapshot();
         self.display.draw_progress_dialog(
             "Export Logs",
-            "Collecting logs...\nDo not remove USB",
-            15.0,
+            "Exporting logs...\nDo not remove USB",
+            40.0,
             &status,
         )?;
 
-        let mut contents = String::new();
-        contents.push_str("Rustyjack log export\n");
-        contents.push_str(&format!("timestamp: {}\n", Local::now().to_rfc3339()));
-        contents.push_str(&format!(
-            "usb_device: {} {} {}\n",
-            device.name, device.size, device.model
-        ));
+        let args = ExportLogsToUsbArgs {
+            device: device.name.clone(),
+        };
 
-        match self.build_log_export() {
-            Ok(logs) => contents.push_str(&logs),
+        let result = self
+            .core
+            .dispatch(Commands::System(SystemCommand::ExportLogsToUsb(args)));
+
+        match result {
+            Ok((_msg, data)) => {
+                let filename = data
+                    .get("filename")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rustyjack_logs.txt");
+
+                self.display.draw_progress_dialog(
+                    "Export Logs",
+                    "Writing logs...\nDo not remove USB",
+                    100.0,
+                    &status,
+                )?;
+
+                let file_line = format!(
+                    "Saved {}",
+                    shorten_for_display(filename, 24)
+                );
+                let dev_line = format!(
+                    "Device: {}",
+                    shorten_for_display(&device.name, 18)
+                );
+                self.show_message("Export Logs", [file_line, dev_line])?;
+            }
             Err(e) => {
-                return self.show_message(
+                self.show_message(
                     "Export Logs",
                     [
-                        "Failed to collect logs",
+                        "Export failed",
                         &shorten_for_display(&e.to_string(), 90),
                     ],
-                );
+                )?;
             }
         }
-
-        let dest_dir = mount.join("Rustyjack_Logs");
-        fs::create_dir_all(&dest_dir)?;
-        let ts = Local::now().format("%Y-%m-%d_%H-%M-%S");
-        let filename = format!("rustyjack_logs_{ts}.txt");
-        let dest = dest_dir.join(&filename);
-
-        {
-            let mut file = File::create(&dest)?;
-            file.write_all(contents.as_bytes())?;
-            file.sync_all()?;
-            if let Ok(dir) = File::open(&dest_dir) {
-                let _ = dir.sync_all();
-            }
-        }
-        tracing::info!(
-            "[LOG EXPORT] Wrote {} bytes to {}",
-            contents.len(),
-            dest.display()
-        );
-
-        self.display.draw_progress_dialog(
-            "Export Logs",
-            "Writing logs...\nDo not remove USB",
-            100.0,
-            &status,
-        )?;
-
-        self.show_message(
-            "Export Logs",
-            [
-                "Saved log bundle",
-                &shorten_for_display(dest.to_string_lossy().as_ref(), 24),
-            ],
-        )?;
 
         Ok(())
     }
 
-    fn select_usb_device_mount(&mut self, title: &str) -> Result<Option<(UsbDevice, PathBuf)>> {
-        let devices = match self.list_usb_devices() {
+    fn select_usb_partition(&mut self, title: &str) -> Result<Option<UsbDevice>> {
+        let devices = match self.list_usb_partitions() {
             Ok(d) => d,
             Err(e) => {
                 self.show_message(
@@ -3466,7 +3477,7 @@ impl App {
         if devices.is_empty() {
             self.show_message(
                 title,
-                ["No removable USB devices detected", "Insert USB and retry"],
+                ["No USB partitions detected", "Insert USB and retry"],
             )?;
             return Ok(None);
         }
@@ -3475,55 +3486,18 @@ impl App {
             .iter()
             .map(|d| format!("{}  {}  {}", d.name, d.size, d.model))
             .collect();
-        let Some(choice) = self.choose_from_list("Select USB device", &labels)? else {
+
+        let choice = if devices.len() == 1 {
+            Some(0)
+        } else {
+            self.choose_from_list("Select USB device", &labels)?
+        };
+
+        let Some(choice) = choice else {
             return Ok(None);
         };
 
-        let dev = &devices[choice];
-        let mut mount =
-            self.resolve_usb_mount_for_device(&dev.name, UsbAccessRequirement::RequireWritable)?;
-        if mount.is_none() {
-            let dev_name = dev.name.trim_start_matches("/dev/").to_string();
-            mount = self.try_auto_mount_usb(&[dev_name], UsbAccessRequirement::RequireWritable)?;
-        }
-
-        let Some(path) = mount else {
-            self.show_message(
-                title,
-                [
-                    "USB device not writable or mounted",
-                    "Check filesystem and retry",
-                ],
-            )?;
-            return Ok(None);
-        };
-
-        Ok(Some((dev.clone(), path)))
-    }
-
-    fn resolve_usb_mount_for_device(
-        &self,
-        device: &str,
-        req: UsbAccessRequirement,
-    ) -> Result<Option<PathBuf>> {
-        let dev_name = device.trim_start_matches("/dev/");
-        let mounts = self.read_mount_points()?;
-        for mount in mounts {
-            let mounted_name = mount.device.trim_start_matches("/dev/");
-            if mounted_name.starts_with(dev_name) {
-                let path = PathBuf::from(mount.mount_point);
-                if self.mount_access_ok(&path, req) {
-                    return Ok(Some(path));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    fn build_log_export(&self) -> Result<String> {
-        self.core
-            .system_logs()
-            .context("collecting system logs")
+        Ok(Some(devices[choice].clone()))
     }
 
     fn transfer_to_usb(&mut self) -> Result<()> {
@@ -3738,226 +3712,100 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
-    fn find_usb_mount(&self) -> Result<PathBuf> {
-        let all_usb = self.find_all_usb_mounts(UsbAccessRequirement::ReadableOk)?;
-        if all_usb.is_empty() {
-            bail!("No USB storage drive found. Please insert a USB drive.")
+    fn select_usb_mount(&mut self, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
+        let Some(device) = self.select_usb_partition("USB")? else {
+            return Ok(None);
+        };
+
+        if let Some(path) = self.find_mount_for_device(&device.name, req)? {
+            return Ok(Some(path));
         }
-        Ok(all_usb.into_iter().next().unwrap())
+
+        if let Some(path) = self.mount_usb_device(&device, req)? {
+            return Ok(Some(path));
+        }
+
+        let line = match req {
+            UsbAccessRequirement::RequireWritable => "USB detected but not writable",
+            UsbAccessRequirement::ReadableOk => "USB device detected but not mounted",
+        };
+        self.show_message("USB", [line, "Check filesystem and retry"])?;
+        Ok(None)
     }
 
-    fn find_all_usb_mounts(&self, req: UsbAccessRequirement) -> Result<Vec<PathBuf>> {
-        let mut found_mounts = Vec::new();
-
-        // First, find USB block devices by checking /sys/block/
-        let usb_devices = self.find_usb_block_devices();
-
-        // Now find mount points for these USB devices
+    fn find_mount_for_device(
+        &self,
+        device: &str,
+        req: UsbAccessRequirement,
+    ) -> Result<Option<PathBuf>> {
+        let mount_root = self.root.join("mounts");
         let mounts = self.read_mount_points()?;
-
-        // Try to match detected USB devices with mounted filesystems
-        for usb_dev in &usb_devices {
-            // Check for partitions (e.g., sda1, sdb1) or the device itself
-            for mount in &mounts {
-                // Match if device starts with the USB device name (handles partitions)
-                // e.g., /dev/sda1 starts with "sda"
-                let dev_name = mount
-                    .device
-                    .strip_prefix("/dev/")
-                    .unwrap_or(mount.device.as_str());
-                if dev_name.starts_with(usb_dev) {
-                    let path = PathBuf::from(&mount.mount_point);
-                    if self.mount_access_ok(&path, req) && !found_mounts.contains(&path) {
-                        found_mounts.push(path);
-                    }
-                }
-            }
-        }
-
-        // Fallback: check common mount points even if sysfs detection failed
-        let mount_points = ["/media", "/mnt", "/run/media"];
-
-        for base in &mount_points {
-            let base_path = Path::new(base);
-            if !base_path.exists() {
+        for mount in mounts {
+            if mount.device != device {
                 continue;
             }
+            let mount_path = Path::new(&mount.mount_point);
+            if !mount_path.starts_with(&mount_root) {
+                continue;
+            }
+            let path = mount_path.to_path_buf();
+            if self.mount_access_ok(&path, req) {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
 
-            // Iterate through subdirectories (usually named after user or device)
-            if let Ok(entries) = fs::read_dir(base_path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        // For /media and /run/media, check subdirectories too (user folders)
-                        if let Ok(sub_entries) = fs::read_dir(&path) {
-                            for sub_entry in sub_entries.flatten() {
-                                let sub_path = sub_entry.path();
-                                if sub_path.is_dir()
-                                    && self.is_usb_storage_mount(&sub_path, req)
-                                    && !found_mounts.contains(&sub_path)
-                                {
-                                    found_mounts.push(sub_path);
-                                }
-                            }
-                        }
-                        // Also check direct mount
-                        if self.is_usb_storage_mount(&path, req) && !found_mounts.contains(&path) {
-                            found_mounts.push(path);
-                        }
+    fn mount_usb_device(&self, device: &UsbDevice, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
+        let dev_basename = Path::new(&device.name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&device.name);
+        let request = UsbMountArgs {
+            device: device.name.clone(),
+            mode: req.mount_mode(),
+            preferred_name: Some(dev_basename.to_string()),
+        };
+
+        match self
+            .core
+            .dispatch(Commands::System(SystemCommand::UsbMount(request)))
+        {
+            Ok((_, data)) => {
+                let mountpoint = data
+                    .get("mountpoint")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from);
+                let readonly = data
+                    .get("readonly")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if let Some(mountpoint) = mountpoint {
+                    if req.needs_write() && readonly {
+                        let _ = self.core.dispatch(Commands::System(
+                            SystemCommand::UsbUnmount(UsbUnmountArgs {
+                                mountpoint: mountpoint.to_string_lossy().to_string(),
+                                detach: false,
+                            }),
+                        ));
+                        return Ok(None);
+                    }
+                    if self.mount_access_ok(&mountpoint, req) {
+                        return Ok(Some(mountpoint));
                     }
                 }
             }
-        }
-
-        // If we found USB devices but they're not mounted, try auto-mounting
-        if found_mounts.is_empty() && !usb_devices.is_empty() {
-            if let Some(mounted_path) = self.try_auto_mount_usb(&usb_devices, req)? {
-                found_mounts.push(mounted_path);
-            } else {
+            Err(e) => {
                 tracing::warn!(
-                    "USB device detected ({}) but could not mount. Check device filesystem.",
-                    usb_devices.join(", ")
+                    "Mount failed for {} (device={}): {}",
+                    dev_basename,
+                    device.name,
+                    e
                 );
             }
         }
 
-        Ok(found_mounts)
-    }
-
-    fn select_usb_mount(&mut self, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
-        let all_usb = self.find_all_usb_mounts(req)?;
-
-        if all_usb.is_empty() {
-            let usb_devices = self.find_usb_block_devices();
-            if usb_devices.is_empty() {
-                self.show_message(
-                    "USB",
-                    ["No USB drive detected", "Insert a USB drive and retry"],
-                )?;
-            } else {
-                let line = match req {
-                    UsbAccessRequirement::RequireWritable => "USB detected but not writable",
-                    UsbAccessRequirement::ReadableOk => "USB device detected but not mounted",
-                };
-                self.show_message("USB", [line, "Check filesystem and retry"])?;
-            }
-            return Ok(None);
-        }
-
-        if all_usb.len() == 1 {
-            return Ok(Some(all_usb.into_iter().next().unwrap()));
-        }
-
-        // Multiple USB drives found, let user choose
-        let options: Vec<String> = all_usb
-            .iter()
-            .map(|p| {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("USB");
-                format!("{} ({})", name, p.display())
-            })
-            .collect();
-
-        if let Some(idx) = self.choose_from_list("Select USB Drive", &options)? {
-            Ok(Some(all_usb[idx].clone()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Attempt to automatically mount a USB device
-    fn try_auto_mount_usb(
-        &self,
-        usb_devices: &[String],
-        req: UsbAccessRequirement,
-    ) -> Result<Option<PathBuf>> {
-        for usb_dev in usb_devices {
-            // Check for partitions first
-            let sys_dev = Path::new("/sys/block").join(usb_dev);
-            if !sys_dev.exists() {
-                continue;
-            }
-
-            let mut candidates = Vec::new();
-
-            // Look for partition subdirectories (e.g., sda1, sda2)
-            if let Ok(entries) = fs::read_dir(&sys_dev) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with(usb_dev) && name.len() > usb_dev.len() {
-                        candidates.push(format!("/dev/{}", name));
-                    }
-                }
-            }
-
-            // If no partitions, try the device itself
-            if candidates.is_empty() {
-                candidates.push(format!("/dev/{}", usb_dev));
-            }
-
-            // Try mounting each candidate
-            for device in candidates {
-                let dev_basename = Path::new(&device)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(usb_dev);
-                let request = UsbMountArgs {
-                    device: device.clone(),
-                    mode: req.mount_mode(),
-                    preferred_name: Some(dev_basename.to_string()),
-                };
-
-                match self
-                    .core
-                    .dispatch(Commands::System(SystemCommand::UsbMount(request)))
-                {
-                    Ok((_, data)) => {
-                        let mountpoint = data
-                            .get("mountpoint")
-                            .and_then(|v| v.as_str())
-                            .map(PathBuf::from);
-                        let readonly = data
-                            .get("readonly")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        if let Some(mountpoint) = mountpoint {
-                            if req.needs_write() && readonly {
-                                let _ = self.core.dispatch(Commands::System(
-                                    SystemCommand::UsbUnmount(UsbUnmountArgs {
-                                        mountpoint: mountpoint.to_string_lossy().to_string(),
-                                        detach: false,
-                                    }),
-                                ));
-                                continue;
-                            }
-                            return Ok(Some(mountpoint));
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Mount failed for {} (device={}): {}",
-                            dev_basename,
-                            device,
-                            e
-                        );
-                        continue;
-                    }
-                }
-            }
-        }
-
         Ok(None)
-    }
-
-    /// Find USB block devices using lsblk filtering.
-    fn find_usb_block_devices(&self) -> Vec<String> {
-        match self.list_usb_devices() {
-            Ok(devices) => devices.into_iter().map(|dev| dev.name).collect(),
-            Err(e) => {
-                tracing::warn!("Failed to enumerate USB block devices: {}", e);
-                Vec::new()
-            }
-        }
     }
 
     /// Read mount points from /proc/mounts
@@ -4019,23 +3867,6 @@ impl App {
             UsbAccessRequirement::ReadableOk => self.is_readable_mount(path),
             UsbAccessRequirement::RequireWritable => self.is_writable_mount(path),
         }
-    }
-
-    /// Check if a path is likely a USB storage mount (not a WiFi dongle, etc.)
-    fn is_usb_storage_mount(&self, path: &Path, req: UsbAccessRequirement) -> bool {
-        if !self.mount_access_ok(path, req) {
-            return false;
-        }
-
-        let Some(entry) = self.mount_entry_for(path) else {
-            return false;
-        };
-
-        // Check filesystem type - USB storage typically uses vfat, exfat, ntfs, ext4
-        matches!(
-            entry.fs_type.as_str(),
-            "vfat" | "exfat" | "ntfs" | "ntfs3" | "ext4" | "ext3" | "ext2" | "fuseblk"
-        )
     }
 
     fn is_writable_mount(&self, path: &Path) -> bool {

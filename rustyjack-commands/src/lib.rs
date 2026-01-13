@@ -890,6 +890,8 @@ pub enum SystemCommand {
     UsbMount(UsbMountArgs),
     /// Unmount a USB device
     UsbUnmount(UsbUnmountArgs),
+    /// Export logs directly to a USB partition
+    ExportLogsToUsb(ExportLogsToUsbArgs),
 }
 
 #[derive(Args, Debug, Clone, Serialize, Deserialize)]
@@ -958,6 +960,13 @@ pub struct UsbUnmountArgs {
     /// Use lazy unmount (detach)
     #[arg(long, default_value_t = false)]
     pub detach: bool,
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+pub struct ExportLogsToUsbArgs {
+    /// Block device path (e.g., /dev/sda1)
+    #[arg(long)]
+    pub device: String,
 }
 
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]

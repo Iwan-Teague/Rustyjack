@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     env,
-    fs,
+    fs::{self, File},
     io::Write,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
@@ -42,7 +42,8 @@ use crate::cli::{
     MitmCommand, MitmStartArgs, NotifyCommand, ProcessCommand, ProcessKillArgs, ProcessStatusArgs,
     ReverseCommand, ReverseLaunchArgs, ScanCommand, ScanDiscovery, ScanRunArgs,
     StatusCommand, SystemCommand, SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs,
-    UsbMountArgs, UsbMountMode, UsbUnmountArgs, WifiBestArgs, WifiCommand, WifiCrackArgs,
+    ExportLogsToUsbArgs, UsbMountArgs, UsbMountMode, UsbUnmountArgs, WifiBestArgs, WifiCommand,
+    WifiCrackArgs,
     WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
     WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPmkidArgs, WifiProbeSniffArgs,
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
@@ -212,8 +213,11 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
         Commands::System(SystemCommand::Poweroff) => handle_system_poweroff(),
         Commands::System(SystemCommand::Purge) => handle_system_purge(root),
         Commands::System(SystemCommand::InstallWifiDrivers) => handle_system_install_wifi_drivers(root),
-        Commands::System(SystemCommand::UsbMount(args)) => handle_system_usb_mount(args),
-        Commands::System(SystemCommand::UsbUnmount(args)) => handle_system_usb_unmount(args),
+        Commands::System(SystemCommand::UsbMount(args)) => handle_system_usb_mount(root, args),
+        Commands::System(SystemCommand::UsbUnmount(args)) => handle_system_usb_unmount(root, args),
+        Commands::System(SystemCommand::ExportLogsToUsb(args)) => {
+            handle_system_export_logs_to_usb(root, args)
+        }
         Commands::Bridge(sub) => match sub {
             BridgeCommand::Start(args) => handle_bridge_start(root, args),
             BridgeCommand::Stop(args) => handle_bridge_stop(root, args),
@@ -3116,12 +3120,12 @@ fn handle_system_install_wifi_drivers(root: &Path) -> Result<HandlerResult> {
     Ok((message.to_string(), data))
 }
 
-fn handle_system_usb_mount(args: UsbMountArgs) -> Result<HandlerResult> {
+fn handle_system_usb_mount(root: &Path, args: UsbMountArgs) -> Result<HandlerResult> {
     let mode = match args.mode {
         UsbMountMode::ReadOnly => MountMode::ReadOnly,
         UsbMountMode::ReadWrite => MountMode::ReadWrite,
     };
-    let mut policy = MountPolicy::default();
+    let mut policy = MountPolicy::for_root(root);
     policy.default_mode = mode;
     policy.allow_rw = matches!(args.mode, UsbMountMode::ReadWrite);
 
@@ -3141,8 +3145,8 @@ fn handle_system_usb_mount(args: UsbMountArgs) -> Result<HandlerResult> {
     Ok(("USB mounted".to_string(), data))
 }
 
-fn handle_system_usb_unmount(args: UsbUnmountArgs) -> Result<HandlerResult> {
-    let policy = MountPolicy::default();
+fn handle_system_usb_unmount(root: &Path, args: UsbUnmountArgs) -> Result<HandlerResult> {
+    let policy = MountPolicy::for_root(root);
     let request = UnmountRequest {
         mountpoint: PathBuf::from(&args.mountpoint),
         detach: args.detach,
@@ -3150,6 +3154,78 @@ fn handle_system_usb_unmount(args: UsbUnmountArgs) -> Result<HandlerResult> {
     crate::mount::unmount(&policy, request)?;
     let data = json!({ "mountpoint": args.mountpoint });
     Ok(("USB unmounted".to_string(), data))
+}
+
+fn handle_system_export_logs_to_usb(
+    root: &Path,
+    args: ExportLogsToUsbArgs,
+) -> Result<HandlerResult> {
+    let mut policy = MountPolicy::for_root(root);
+    policy.default_mode = MountMode::ReadWrite;
+    policy.allow_rw = true;
+
+    let request = MountRequest {
+        device: PathBuf::from(&args.device),
+        mode: MountMode::ReadWrite,
+        preferred_name: None,
+    };
+
+    let response = crate::mount::mount_device(&policy, request)?;
+    let mountpoint = response.mountpoint;
+    let filename = format!(
+        "rustyjack_logs_{}.txt",
+        Local::now().format("%Y%m%d_%H%M%S")
+    );
+    let dest = mountpoint.join(&filename);
+
+    let write_result = (|| -> Result<()> {
+        let bundle = crate::services::logs::collect_log_bundle(root)
+            .map_err(|e| anyhow!("log bundle collection failed: {}", e))?;
+        let mut file = File::create(&dest)
+            .with_context(|| format!("creating {}", dest.display()))?;
+        file.write_all(bundle.as_bytes())
+            .with_context(|| format!("writing {}", dest.display()))?;
+        file.sync_all().context("syncing log file")?;
+
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+
+            let dir = File::open(&mountpoint)
+                .with_context(|| format!("opening {}", mountpoint.display()))?;
+            let rc = unsafe { libc::syncfs(dir.as_raw_fd()) };
+            if rc != 0 {
+                return Err(anyhow!(
+                    "syncfs failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+
+        Ok(())
+    })();
+
+    let unmount_result = crate::mount::unmount(
+        &policy,
+        UnmountRequest {
+            mountpoint: mountpoint.clone(),
+            detach: false,
+        },
+    );
+
+    match (write_result, unmount_result) {
+        (Ok(()), Ok(())) => {
+            let data = json!({ "filename": filename });
+            Ok(("Logs exported to USB".to_string(), data))
+        }
+        (Err(err), Ok(())) => Err(err),
+        (Ok(()), Err(err)) => Err(err),
+        (Err(err), Err(unmount_err)) => Err(anyhow!(
+            "{}; also failed to unmount: {}",
+            err,
+            unmount_err
+        )),
+    }
 }
 
 fn handle_bridge_start(root: &Path, args: BridgeStartArgs) -> Result<HandlerResult> {

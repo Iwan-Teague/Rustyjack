@@ -283,8 +283,10 @@ pub struct BlockDeviceInfo {
     pub name: String,
     pub size: String,
     pub model: String,
-    pub transport: String,
+    pub transport: Option<String>,
     pub removable: bool,
+    pub is_partition: bool,
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

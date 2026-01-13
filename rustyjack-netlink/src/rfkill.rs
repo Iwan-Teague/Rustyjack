@@ -6,7 +6,7 @@
 //! Supports all rfkill device types (WLAN, Bluetooth, GPS, NFC, etc.) and provides both
 //! individual device control and type-based bulk operations.
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -501,43 +501,40 @@ impl RfkillManager {
     /// ```
     pub fn find_index_by_interface(&self, interface: &str) -> Result<Option<u32>> {
         let rfkill_path = Path::new(Self::SYS_RFKILL);
-
         if !rfkill_path.exists() {
             return Ok(None);
         }
 
-        let entries = std::fs::read_dir(rfkill_path).map_err(|e| RfkillError::DeviceOpen(e))?;
+        let iface_path = Path::new("/sys/class/net")
+            .join(interface)
+            .join("device");
+        let iface_dev = match fs::canonicalize(&iface_path) {
+            Ok(path) => path,
+            Err(_) => return Ok(None),
+        };
+        let entries = match fs::read_dir(rfkill_path) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(None),
+        };
 
-        for entry in entries {
-            let entry = entry.map_err(|e| RfkillError::DeviceOpen(e))?;
+        for entry in entries.flatten() {
             let path = entry.path();
+            let Some(name_str) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(idx_str) = name_str.strip_prefix("rfkill") else {
+                continue;
+            };
+            let Ok(idx) = idx_str.parse::<u32>() else {
+                continue;
+            };
 
-            if let Some(name) = path.file_name() {
-                if let Some(name_str) = name.to_str() {
-                    if name_str.starts_with("rfkill") {
-                        let device_path = path.join("device/uevent");
-                        if let Ok(content) = std::fs::read_to_string(&device_path) {
-                            if content.contains(interface) {
-                                if let Some(idx_str) = name_str.strip_prefix("rfkill") {
-                                    if let Ok(idx) = idx_str.parse::<u32>() {
-                                        return Ok(Some(idx));
-                                    }
-                                }
-                            }
-                        }
-
-                        let name_path = path.join("name");
-                        if let Ok(dev_name) = std::fs::read_to_string(&name_path) {
-                            if dev_name.trim() == interface {
-                                if let Some(idx_str) = name_str.strip_prefix("rfkill") {
-                                    if let Ok(idx) = idx_str.parse::<u32>() {
-                                        return Ok(Some(idx));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            let rfkill_dev = match fs::canonicalize(path.join("device")) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            if iface_dev.starts_with(&rfkill_dev) || rfkill_dev.starts_with(&iface_dev) {
+                return Ok(Some(idx));
             }
         }
 

@@ -265,14 +265,22 @@ impl NetOps for RealNetOps {
         }).collect())
     }
     
-    fn acquire_dhcp(&self, iface: &str, _timeout: Duration) -> Result<DhcpLease> {
+    fn acquire_dhcp(&self, iface: &str, timeout: Duration) -> Result<DhcpLease> {
         use anyhow::Context;
         use rustyjack_netlink::DhcpClient;
         
         let client = DhcpClient::new()?;
         let rt = tokio::runtime::Runtime::new()?;
-        let netlink_lease = rt.block_on(client.acquire(iface, None))
-            .context(format!("DHCP failed for {}", iface))?;
+        let report = rt
+            .block_on(client.acquire_report_timeout(iface, None, timeout))
+            .with_context(|| format!("DHCP failed for {} after {:?}", iface, timeout))?;
+        let netlink_lease = report.lease.ok_or_else(|| {
+            anyhow::anyhow!(
+                "DHCP failed for {}: {}",
+                iface,
+                report.error.unwrap_or_else(|| "unknown error".to_string())
+            )
+        })?;
         
         Ok(DhcpLease {
             ip: netlink_lease.address,

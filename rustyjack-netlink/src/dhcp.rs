@@ -15,7 +15,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 #[cfg(target_os = "linux")]
 use std::os::unix::io::RawFd;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const DHCP_SERVER_PORT: u16 = 67;
@@ -256,6 +256,56 @@ impl DhcpClient {
         }
     }
 
+    pub async fn acquire_report_timeout(
+        &self,
+        interface: &str,
+        hostname: Option<&str>,
+        timeout: Duration,
+    ) -> Result<DhcpAcquireReport> {
+        let deadline = Instant::now() + timeout;
+        self.acquire_report_with_deadline(interface, hostname, deadline)
+            .await
+    }
+
+    pub async fn acquire_report_with_deadline(
+        &self,
+        interface: &str,
+        hostname: Option<&str>,
+        deadline: Instant,
+    ) -> Result<DhcpAcquireReport> {
+        if Instant::now() >= deadline {
+            return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
+                packet_type: "overall".to_string(),
+                interface: interface.to_string(),
+                timeout_secs: 0,
+            }));
+        }
+
+        match self
+            .acquire_with_transport_deadline(interface, hostname, deadline)
+            .await
+        {
+            Ok((lease, transport)) => Ok(DhcpAcquireReport {
+                transport,
+                lease: Some(lease),
+                error: None,
+            }),
+            Err((transport, err)) => {
+                if matches!(
+                    err,
+                    NetlinkError::DhcpClient(DhcpClientError::Timeout { .. })
+                ) {
+                    return Err(err);
+                }
+                Ok(DhcpAcquireReport {
+                    transport,
+                    lease: None,
+                    error: Some(err.to_string()),
+                })
+            }
+        }
+    }
+
     /// Renew DHCP lease by releasing and re-acquiring.
     ///
     /// # Arguments
@@ -334,14 +384,20 @@ impl DhcpClient {
         let raw_interface = interface.to_string();
         let raw_hostname = hostname_owned.clone();
         let raw_attempt = tokio::task::spawn_blocking(move || {
-            let offer =
-                raw_client.discover_and_wait_for_offer_raw(&raw_interface, &raw_mac, xid, raw_hostname.as_deref())?;
+            let offer = raw_client.discover_and_wait_for_offer_raw(
+                &raw_interface,
+                &raw_mac,
+                xid,
+                raw_hostname.as_deref(),
+                None,
+            )?;
             raw_client.request_and_wait_for_ack_raw(
                 &raw_interface,
                 &raw_mac,
                 xid,
                 &offer,
                 raw_hostname.as_deref(),
+                None,
             )
         })
         .await;
@@ -381,6 +437,7 @@ impl DhcpClient {
                 &udp_mac,
                 xid,
                 udp_hostname.as_deref(),
+                None,
             )?;
             udp_client.request_and_wait_for_ack(
                 &socket,
@@ -389,6 +446,110 @@ impl DhcpClient {
                 xid,
                 &offer,
                 udp_hostname.as_deref(),
+                None,
+            )
+        })
+        .await
+        .map_err(|e| {
+            (
+                DhcpTransport::Udp,
+                NetlinkError::OperationFailed(format!("DHCP UDP task failed: {}", e)),
+            )
+        })?;
+
+        let lease = udp_attempt.map_err(|e| (DhcpTransport::Udp, e))?;
+        self.configurefinterface(interface, &lease)
+            .await
+            .map_err(|e| (DhcpTransport::Udp, e))?;
+
+        Ok((lease, DhcpTransport::Udp))
+    }
+
+    async fn acquire_with_transport_deadline(
+        &self,
+        interface: &str,
+        hostname: Option<&str>,
+        deadline: Instant,
+    ) -> std::result::Result<(DhcpLease, DhcpTransport), (DhcpTransport, NetlinkError)> {
+        let mac = self
+            .get_mac_address(interface)
+            .await
+            .map_err(|e| (DhcpTransport::Raw, e))?;
+
+        let xid = self.generate_xid();
+
+        let hostname_owned = hostname.map(|h| h.to_string());
+
+        let raw_mac = mac;
+        let raw_client = self.clone();
+        let raw_interface = interface.to_string();
+        let raw_hostname = hostname_owned.clone();
+        let raw_deadline = deadline;
+        let raw_attempt = tokio::task::spawn_blocking(move || {
+            let offer = raw_client.discover_and_wait_for_offer_raw(
+                &raw_interface,
+                &raw_mac,
+                xid,
+                raw_hostname.as_deref(),
+                Some(raw_deadline),
+            )?;
+            raw_client.request_and_wait_for_ack_raw(
+                &raw_interface,
+                &raw_mac,
+                xid,
+                &offer,
+                raw_hostname.as_deref(),
+                Some(raw_deadline),
+            )
+        })
+        .await;
+
+        match raw_attempt {
+            Ok(Ok(lease)) => {
+                self.configurefinterface(interface, &lease)
+                    .await
+                    .map_err(|e| (DhcpTransport::Raw, e))?;
+                return Ok((lease, DhcpTransport::Raw));
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    "Raw DHCP attempt failed on {}: {}. Falling back to UDP",
+                    interface,
+                    err
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Raw DHCP attempt failed on {}: {}. Falling back to UDP",
+                    interface,
+                    err
+                );
+            }
+        }
+
+        let udp_mac = mac;
+        let udp_client = self.clone();
+        let udp_interface = interface.to_string();
+        let udp_hostname = hostname_owned.clone();
+        let udp_deadline = deadline;
+        let udp_attempt = tokio::task::spawn_blocking(move || {
+            let socket = udp_client.create_client_socket(&udp_interface)?;
+            let offer = udp_client.discover_and_wait_for_offer(
+                &socket,
+                &udp_interface,
+                &udp_mac,
+                xid,
+                udp_hostname.as_deref(),
+                Some(udp_deadline),
+            )?;
+            udp_client.request_and_wait_for_ack(
+                &socket,
+                &udp_interface,
+                &udp_mac,
+                xid,
+                &offer,
+                udp_hostname.as_deref(),
+                Some(udp_deadline),
             )
         })
         .await
@@ -518,10 +679,12 @@ impl DhcpClient {
         mac: &[u8; 6],
         xid: u32,
         hostname: Option<&str>,
+        deadline: Option<Instant>,
     ) -> Result<DhcpOffer> {
         let (fd, ifindex) = open_raw_socket(interface)?;
 
         for attempt in 1..=3 {
+            check_deadline(deadline, interface, "offer")?;
             tracing::info!(
                 "Sending DHCP DISCOVER (raw) on {} (attempt {})",
                 interface,
@@ -540,7 +703,7 @@ impl DhcpClient {
                 }));
             }
 
-            match wait_for_offer_raw(fd, interface, xid, &self) {
+            match wait_for_offer_raw(fd, interface, xid, &self, deadline) {
                 Ok(offer) => {
                     unsafe {
                         libc::close(fd);
@@ -582,9 +745,11 @@ impl DhcpClient {
         xid: u32,
         offer: &DhcpOffer,
         hostname: Option<&str>,
+        deadline: Option<Instant>,
     ) -> Result<DhcpLease> {
         let (fd, ifindex) = open_raw_socket(interface)?;
 
+        check_deadline(deadline, interface, "ACK")?;
         tracing::info!(
             "Sending DHCP REQUEST (raw) for {} on {}",
             offer.offered_ip,
@@ -603,7 +768,7 @@ impl DhcpClient {
             }));
         }
 
-        let lease = wait_for_ack_raw(fd, interface, xid, offer, self)?;
+        let lease = wait_for_ack_raw(fd, interface, xid, offer, self, deadline)?;
         unsafe {
             libc::close(fd);
         }
@@ -617,8 +782,10 @@ impl DhcpClient {
         mac: &[u8; 6],
         xid: u32,
         hostname: Option<&str>,
+        deadline: Option<Instant>,
     ) -> Result<DhcpOffer> {
         for attempt in 1..=3 {
+            check_deadline(deadline, interface, "offer")?;
             tracing::info!(
                 "Sending DHCP DISCOVER on {} (attempt {})",
                 interface,
@@ -637,7 +804,7 @@ impl DhcpClient {
                     })
                 })?;
 
-            match self.wait_for_offer(socket, interface, xid) {
+            match self.wait_for_offer(socket, interface, xid, deadline) {
                 Ok(offer) => {
                     tracing::info!(
                         "Received DHCP offer from {} on {} (offered_ip={})",
@@ -668,10 +835,20 @@ impl DhcpClient {
         }))
     }
 
-    fn wait_for_offer(&self, socket: &UdpSocket, interface: &str, xid: u32) -> Result<DhcpOffer> {
+    fn wait_for_offer(
+        &self,
+        socket: &UdpSocket,
+        interface: &str,
+        xid: u32,
+        deadline: Option<Instant>,
+    ) -> Result<DhcpOffer> {
         let mut buf = [0u8; 1500];
 
         loop {
+            let timeout = recv_timeout(deadline, interface, "offer")?;
+            socket
+                .set_read_timeout(Some(timeout))
+                .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
             let (len, _) = socket.recv_from(&mut buf).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut
@@ -679,7 +856,7 @@ impl DhcpClient {
                     NetlinkError::DhcpClient(DhcpClientError::Timeout {
                         packet_type: "offer".to_string(),
                         interface: interface.to_string(),
-                        timeout_secs: 5,
+                        timeout_secs: timeout.as_secs(),
                     })
                 } else {
                     NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
@@ -703,7 +880,9 @@ impl DhcpClient {
         xid: u32,
         offer: &DhcpOffer,
         hostname: Option<&str>,
+        deadline: Option<Instant>,
     ) -> Result<DhcpLease> {
+        check_deadline(deadline, interface, "ACK")?;
         tracing::info!(
             "Sending DHCP REQUEST for {} on {}",
             offer.offered_ip,
@@ -722,7 +901,7 @@ impl DhcpClient {
                 })
             })?;
 
-        self.wait_for_ack(socket, interface, xid, offer)
+        self.wait_for_ack(socket, interface, xid, offer, deadline)
     }
 
     fn wait_for_ack(
@@ -731,11 +910,17 @@ impl DhcpClient {
         interface: &str,
         xid: u32,
         offer: &DhcpOffer,
+        deadline: Option<Instant>,
     ) -> Result<DhcpLease> {
         let mut buf = [0u8; 1500];
         let mut attempts: u8 = 0;
 
         loop {
+            check_deadline(deadline, interface, "ACK")?;
+            let timeout = recv_timeout(deadline, interface, "ACK")?;
+            socket
+                .set_read_timeout(Some(timeout))
+                .map_err(|e| NetlinkError::DhcpClient(DhcpClientError::BroadcastFailed(e)))?;
             attempts += 1;
             let (len, src) = socket.recv_from(&mut buf).map_err(|e| {
                 if e.kind() == std::io::ErrorKind::WouldBlock
@@ -744,7 +929,7 @@ impl DhcpClient {
                     NetlinkError::DhcpClient(DhcpClientError::Timeout {
                         packet_type: "ACK".to_string(),
                         interface: interface.to_string(),
-                        timeout_secs: 5,
+                        timeout_secs: timeout.as_secs(),
                     })
                 } else {
                     NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
@@ -1289,9 +1474,12 @@ fn wait_for_offer_raw(
     interface: &str,
     xid: u32,
     client: &DhcpClient,
+    deadline: Option<Instant>,
 ) -> Result<DhcpOffer> {
     let mut buf = [0u8; 2048];
     loop {
+        let timeout = recv_timeout(deadline, interface, "offer")?;
+        set_raw_socket_timeout(fd, timeout);
         let len = match recv_raw_packet(fd, &mut buf) {
             Ok(len) => len,
             Err(e) => {
@@ -1299,7 +1487,7 @@ fn wait_for_offer_raw(
                     return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
                         packet_type: "offer".to_string(),
                         interface: interface.to_string(),
-                        timeout_secs: 5,
+                        timeout_secs: timeout.as_secs(),
                     }));
                 }
                 return Err(NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
@@ -1324,10 +1512,14 @@ fn wait_for_ack_raw(
     xid: u32,
     offer: &DhcpOffer,
     client: &DhcpClient,
+    deadline: Option<Instant>,
 ) -> Result<DhcpLease> {
     let mut buf = [0u8; 2048];
     let mut attempts: u8 = 0;
     loop {
+        check_deadline(deadline, interface, "ACK")?;
+        let timeout = recv_timeout(deadline, interface, "ACK")?;
+        set_raw_socket_timeout(fd, timeout);
         attempts += 1;
         let len = match recv_raw_packet(fd, &mut buf) {
             Ok(len) => len,
@@ -1336,7 +1528,7 @@ fn wait_for_ack_raw(
                     return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
                         packet_type: "ACK".to_string(),
                         interface: interface.to_string(),
-                        timeout_secs: 5,
+                        timeout_secs: timeout.as_secs(),
                     }));
                 }
                 return Err(NetlinkError::DhcpClient(DhcpClientError::ReceiveFailed {
@@ -1367,6 +1559,54 @@ fn wait_for_ack_raw(
                 timeout_secs: 5,
             }));
         }
+    }
+}
+
+fn check_deadline(
+    deadline: Option<Instant>,
+    interface: &str,
+    packet_type: &str,
+) -> Result<()> {
+    if let Some(deadline) = deadline {
+        if Instant::now() >= deadline {
+            return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
+                packet_type: packet_type.to_string(),
+                interface: interface.to_string(),
+                timeout_secs: 0,
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn recv_timeout(
+    deadline: Option<Instant>,
+    interface: &str,
+    packet_type: &str,
+) -> Result<Duration> {
+    check_deadline(deadline, interface, packet_type)?;
+    if let Some(deadline) = deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        Ok(remaining.min(Duration::from_secs(5)))
+    } else {
+        Ok(Duration::from_secs(5))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_raw_socket_timeout(fd: RawFd, timeout: Duration) {
+    let tv = libc::timeval {
+        tv_sec: timeout.as_secs() as libc::time_t,
+        tv_usec: timeout.subsec_micros() as libc::suseconds_t,
+    };
+    unsafe {
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
     }
 }
 

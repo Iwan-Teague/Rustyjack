@@ -1,13 +1,15 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::Command;
+use std::time::{Duration, SystemTime};
+
+use chrono::{DateTime, Local};
 
 use crate::services::error::ServiceError;
 
 const MAX_LOG_BUNDLE_BYTES: usize = 900_000;
 const MAX_SECTION_BYTES: usize = 200_000;
-const MAX_CMD_OUTPUT_BYTES: usize = 100_000;
 const MAX_LOG_TAIL_BYTES: usize = 150_000;
 
 pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
@@ -21,38 +23,9 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
     // Kernel log tail (replaces journalctl -k)
     append_kernel_log_tail(&mut out);
 
-    // For external system logs (NetworkManager, wpa_supplicant), fall back to journalctl if available
-    // but don't fail if it's not present
-    append_command_output_optional(
-        &mut out,
-        "journalctl (NetworkManager)",
-        "journalctl",
-        &[
-            "-u",
-            "NetworkManager",
-            "-b",
-            "--no-pager",
-            "-n",
-            "200",
-            "-o",
-            "short-precise",
-        ],
-    );
-    append_command_output_optional(
-        &mut out,
-        "journalctl (wpa_supplicant)",
-        "journalctl",
-        &[
-            "-u",
-            "wpa_supplicant",
-            "-b",
-            "--no-pager",
-            "-n",
-            "200",
-            "-o",
-            "short-precise",
-        ],
-    );
+    // Journald unit tails for system services
+    append_journald_unit_tail(&mut out, "NetworkManager.service", 200);
+    append_journald_unit_tail(&mut out, "wpa_supplicant.service", 200);
 
     append_sysfs_network_snapshot(&mut out);
     append_rfkill_status(&mut out);
@@ -285,41 +258,6 @@ fn append_netlink_routes(buf: &mut String) {
     }
 }
 
-fn append_command_output(buf: &mut String, title: &str, program: &str, args: &[&str]) {
-    buf.push_str(&format!("\n===== {title} =====\n"));
-    let output = Command::new(program).args(args).output();
-    match output {
-        Ok(output) => {
-            if !output.status.success() {
-                buf.push_str(&format!(
-                    "ERROR: command exited with {:?}\n",
-                    output.status.code()
-                ));
-            }
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            if stdout_str.len() > MAX_CMD_OUTPUT_BYTES {
-                buf.push_str(&stdout_str[..MAX_CMD_OUTPUT_BYTES]);
-                buf.push_str("\n[truncated stdout]\n");
-            } else {
-                buf.push_str(&stdout_str);
-            }
-            if !output.stderr.is_empty() {
-                buf.push_str("\n[stderr]\n");
-                let stderr_str = String::from_utf8_lossy(&output.stderr);
-                if stderr_str.len() > MAX_CMD_OUTPUT_BYTES {
-                    buf.push_str(&stderr_str[..MAX_CMD_OUTPUT_BYTES]);
-                    buf.push_str("\n[truncated stderr]\n");
-                } else {
-                    buf.push_str(&stderr_str);
-                }
-            }
-        }
-        Err(err) => {
-            buf.push_str(&format!("ERROR: failed to run {program}: {err}\n"));
-        }
-    }
-}
-
 fn append_file_section(buf: &mut String, path: &str) {
     buf.push_str(&format!("\n===== {path} =====\n"));
     match fs::read_to_string(path) {
@@ -347,30 +285,6 @@ fn append_file_section_path(buf: &mut String, path: &Path) {
             }
         }
         Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
-    }
-}
-
-fn run_cmd_output(program: &str, args: &[&str]) -> String {
-    let output = Command::new(program).args(args).output();
-    match output {
-        Ok(o) => {
-            let mut out = String::new();
-            if !o.stdout.is_empty() {
-                out.push_str(&String::from_utf8_lossy(&o.stdout));
-                if !out.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-            if !o.stderr.is_empty() {
-                out.push_str("[stderr]\n");
-                out.push_str(&String::from_utf8_lossy(&o.stderr));
-                if !out.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-            out
-        }
-        Err(err) => format!("ERROR: failed to run {program}: {err}\n"),
     }
 }
 
@@ -442,8 +356,6 @@ fn append_kernel_log_tail(out: &mut String) {
 
     #[cfg(target_os = "linux")]
     {
-        // Try to read from /dev/kmsg for real-time kernel messages
-        // This requires root privileges
         match read_kmsg_tail(300) {
             Ok(logs) => {
                 if logs.is_empty() {
@@ -454,27 +366,6 @@ fn append_kernel_log_tail(out: &mut String) {
             }
             Err(err) => {
                 out.push_str(&format!("ERROR reading /dev/kmsg: {}\n", err));
-                // Fall back to dmesg if kmsg fails
-                out.push_str("\nAttempting fallback to dmesg...\n");
-                let dmesg_output = Command::new("dmesg")
-                    .args(&["-T", "--level=err,warn,notice,info"])
-                    .output();
-                match dmesg_output {
-                    Ok(output) if output.status.success() => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let lines: Vec<&str> = stdout.lines().collect();
-                        let tail_lines = if lines.len() > 300 {
-                            &lines[lines.len() - 300..]
-                        } else {
-                            &lines[..]
-                        };
-                        out.push_str(&tail_lines.join("\n"));
-                        out.push('\n');
-                    }
-                    _ => {
-                        out.push_str("dmesg also unavailable\n");
-                    }
-                }
             }
         }
     }
@@ -485,67 +376,114 @@ fn append_kernel_log_tail(out: &mut String) {
     }
 }
 
+fn append_journald_unit_tail(out: &mut String, unit: &str, max_entries: usize) {
+    out.push_str(&format!("\n===== Journald ({unit}) =====\n"));
+
+    #[cfg(target_os = "linux")]
+    {
+        use systemd::journal::{Journal, JournalFiles, JournalSeek};
+
+        let mut journal = match Journal::open(JournalFiles::All, false, false) {
+            Ok(journal) => journal,
+            Err(err) => {
+                out.push_str(&format!("ERROR opening journal: {err}\n"));
+                return;
+            }
+        };
+
+        if let Err(err) = journal.match_add(&format!("_SYSTEMD_UNIT={unit}")) {
+            out.push_str(&format!("ERROR applying journal filter: {err}\n"));
+            return;
+        }
+
+        if let Err(err) = journal.seek(JournalSeek::Tail) {
+            out.push_str(&format!("ERROR seeking journal tail: {err}\n"));
+            return;
+        }
+
+        let mut count = 0usize;
+        while count < max_entries {
+            let entry = match journal.previous_entry() {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(err) => {
+                    out.push_str(&format!("ERROR reading journal entry: {err}\n"));
+                    break;
+                }
+            };
+
+            let message = entry
+                .get("MESSAGE")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "<no message>".to_string());
+
+            let timestamp = entry
+                .get("__REALTIME_TIMESTAMP")
+                .and_then(|s| s.parse::<u64>().ok())
+                .and_then(|micros| SystemTime::UNIX_EPOCH.checked_add(Duration::from_micros(micros)))
+                .map(|ts| DateTime::<Local>::from(ts).format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            out.push_str(&format!("{timestamp} {message}\n"));
+            count += 1;
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        out.push_str("Journal not supported on this platform\n");
+    }
+}
+
 /// Read recent kernel messages from /dev/kmsg
 #[cfg(target_os = "linux")]
 fn read_kmsg_tail(max_lines: usize) -> std::io::Result<String> {
-    use std::fs::File;
-    use std::io::BufRead;
+    use std::fs::OpenOptions;
+    use std::io::ErrorKind;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::OpenOptionsExt;
 
-    // /dev/kmsg is a special file that provides kernel ring buffer messages
-    // Opening it in read mode gives us continuous stream, but we just want recent messages
-    let file = File::open("/dev/kmsg")?;
-    let reader = std::io::BufReader::new(file);
+    if max_lines == 0 {
+        return Ok(String::new());
+    }
 
-    let mut lines = Vec::new();
-    for line in reader.lines() {
-        match line {
-            Ok(l) => {
-                lines.push(l);
-                if lines.len() > max_lines {
-                    lines.remove(0);
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/kmsg")?;
+
+    let mut lines: VecDeque<String> = VecDeque::new();
+    let mut pending = String::new();
+    let mut buf = [0u8; 4096];
+
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let chunk = String::from_utf8_lossy(&buf[..n]);
+                pending.push_str(&chunk);
+                while let Some(pos) = pending.find('\n') {
+                    let line = pending[..pos].to_string();
+                    pending = pending[pos + 1..].to_string();
+                    if lines.len() == max_lines {
+                        lines.pop_front();
+                    }
+                    lines.push_back(line);
                 }
             }
-            Err(_) => break, // Stop on error (non-blocking read will error when no more data)
+            Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+            Err(err) => return Err(err),
         }
     }
 
-    Ok(lines.join("\n"))
-}
-
-/// Like append_command_output but doesn't print ERROR if command doesn't exist
-fn append_command_output_optional(buf: &mut String, title: &str, program: &str, args: &[&str]) {
-    buf.push_str(&format!("\n===== {title} =====\n"));
-    let output = Command::new(program).args(args).output();
-    match output {
-        Ok(output) => {
-            if !output.status.success() {
-                buf.push_str(&format!(
-                    "Command exited with {:?}\n",
-                    output.status.code()
-                ));
-            }
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            if stdout_str.len() > MAX_CMD_OUTPUT_BYTES {
-                buf.push_str(&stdout_str[..MAX_CMD_OUTPUT_BYTES]);
-                buf.push_str("\n[truncated stdout]\n");
-            } else {
-                buf.push_str(&stdout_str);
-            }
-            if !output.stderr.is_empty() {
-                buf.push_str("\n[stderr]\n");
-                let stderr_str = String::from_utf8_lossy(&output.stderr);
-                if stderr_str.len() > MAX_CMD_OUTPUT_BYTES {
-                    buf.push_str(&stderr_str[..MAX_CMD_OUTPUT_BYTES]);
-                    buf.push_str("\n[truncated stderr]\n");
-                } else {
-                    buf.push_str(&stderr_str);
-                }
-            }
+    if !pending.is_empty() {
+        if lines.len() == max_lines {
+            lines.pop_front();
         }
-        Err(_) => {
-            buf.push_str(&format!("{program} not available\n"));
-        }
+        lines.push_back(pending);
     }
+
+    Ok(lines.into_iter().collect::<Vec<_>>().join("\n"))
 }
 
 /// Read GPIO chip information from sysfs (replaces gpioinfo)

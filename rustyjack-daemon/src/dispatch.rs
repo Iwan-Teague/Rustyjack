@@ -403,6 +403,8 @@ pub async fn handle_request(
                             model: dev.model,
                             transport: dev.transport,
                             removable: dev.removable,
+                            is_partition: dev.is_partition,
+                            parent: dev.parent,
                         })
                         .collect();
                     ResponseBody::Ok(ResponseOk::BlockDevices(BlockDevicesResponse {

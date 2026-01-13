@@ -94,7 +94,7 @@ where
         // Snapshot rfkill before changes
         if let Some(state) = read_rfkill_state(iface)? {
             if state.hard.unwrap_or(false) {
-                bail!("Interface {} is hard-blocked by rfkill", iface);
+                bail!("{}", rfkill_hard_block_error(iface, &state));
             }
         }
     }
@@ -147,7 +147,8 @@ where
         if let Err(e) = ops.set_rfkill_block(iface, false) {
             bail!("Failed to clear rfkill for {}: {}", iface, e);
         }
-        wait_for_rfkill(iface, Duration::from_secs(2))
+        const RFKILL_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+        wait_for_rfkill(iface, RFKILL_SETTLE_TIMEOUT)
             .context(format!("rfkill unblock did not complete for {}", iface))?;
     }
 
@@ -167,6 +168,15 @@ where
         .context(format!("timeout waiting for {} to become UP", iface))?;
     outcome.allowed.push(iface.to_string());
 
+    if is_wireless {
+        if let Err(e) = ops.flush_addresses(iface) {
+            warn!("Failed to flush addresses on {}: {}", iface, e);
+        }
+        if let Err(e) = routes.delete_default_route(iface) {
+            debug!("No default route to delete for {}: {}", iface, e);
+        }
+    }
+
     // Step 4: wired connectivity (wireless remains passive)
     emit_progress(
         &mut progress,
@@ -180,20 +190,34 @@ where
     );
 
     if !is_wireless {
-        let carrier = ops
+        let carrier_opt = ops
             .has_carrier(iface)
-            .context("failed to read carrier state")?
-            .unwrap_or(false);
-        outcome.carrier = Some(carrier);
+            .context("failed to read carrier state")?;
+        outcome.carrier = carrier_opt;
 
-        if !carrier {
-            outcome
-                .notes
-                .push("No carrier detected; leaving interface UP without IP".to_string());
-        } else {
-            let lease = ops
-                .acquire_dhcp(iface, Duration::from_secs(30))
-                .context("DHCP failed")?;
+        match carrier_opt {
+            Some(false) => {
+                emit_progress(
+                    &mut progress,
+                    "connectivity",
+                    75,
+                    "Ethernet link down; skipping DHCP",
+                );
+                outcome
+                    .notes
+                    .push("No carrier detected; leaving interface UP without IP".to_string());
+            }
+            Some(true) | None => {
+                emit_progress(
+                    &mut progress,
+                    "connectivity",
+                    75,
+                    "Attempting DHCP (carrier up or unknown)",
+                );
+
+                let lease = ops
+                    .acquire_dhcp(iface, Duration::from_secs(30))
+                    .context("DHCP failed")?;
 
             if let Some(gw) = lease.gateway {
                 routes
@@ -230,7 +254,7 @@ where
             .context("failed to query IP state")?
         {
             bail!(
-                "Wireless interface {} already has IP {} (auto-connect detected)",
+                "Wireless interface {} still has IP {} after flush",
                 iface,
                 addr
             );
@@ -284,6 +308,9 @@ fn verify_single_admin_up(ops: &dyn NetOps, selected: &str, others: &[String]) -
 
 #[derive(Debug, Default)]
 struct RfkillState {
+    idx: u32,
+    type_name: Option<String>,
+    name: Option<String>,
     soft: Option<bool>,
     hard: Option<bool>,
 }
@@ -294,6 +321,8 @@ fn read_rfkill_state(iface: &str) -> Result<Option<RfkillState>> {
     };
     let soft_path = format!("/sys/class/rfkill/rfkill{}/soft", idx);
     let hard_path = format!("/sys/class/rfkill/rfkill{}/hard", idx);
+    let type_path = format!("/sys/class/rfkill/rfkill{}/type", idx);
+    let name_path = format!("/sys/class/rfkill/rfkill{}/name", idx);
 
     let soft = std::fs::read_to_string(&soft_path)
         .ok()
@@ -309,21 +338,33 @@ fn read_rfkill_state(iface: &str) -> Result<Option<RfkillState>> {
             "1" => Some(true),
             _ => None,
         });
+    let type_name = std::fs::read_to_string(&type_path)
+        .ok()
+        .map(|c| c.trim().to_string());
+    let name = std::fs::read_to_string(&name_path)
+        .ok()
+        .map(|c| c.trim().to_string());
 
-    Ok(Some(RfkillState { soft, hard }))
+    Ok(Some(RfkillState {
+        idx,
+        type_name,
+        name,
+        soft,
+        hard,
+    }))
 }
 
 fn wait_for_rfkill(iface: &str, timeout: Duration) -> Result<()> {
     let start = Instant::now();
     loop {
-        if let Some(state) = read_rfkill_state(iface)? {
-            if state.hard.unwrap_or(false) {
-                bail!("rfkill hard block detected on {}", iface);
-            }
-            if state.soft == Some(false) || state.soft.is_none() {
-                return Ok(());
-            }
-        } else {
+        let Some(state) = read_rfkill_state(iface)? else {
+            return Ok(());
+        };
+
+        if state.hard.unwrap_or(false) {
+            bail!("{}", rfkill_hard_block_error(iface, &state));
+        }
+        if state.soft == Some(false) {
             return Ok(());
         }
 
@@ -333,6 +374,18 @@ fn wait_for_rfkill(iface: &str, timeout: Duration) -> Result<()> {
 
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn rfkill_hard_block_error(iface: &str, state: &RfkillState) -> String {
+    format!(
+        "Interface {} is hard-blocked by rfkill{} (type={}, name={}, soft={:?}, hard={:?})",
+        iface,
+        state.idx,
+        state.type_name.as_deref().unwrap_or("unknown"),
+        state.name.as_deref().unwrap_or("unknown"),
+        state.soft,
+        state.hard
+    )
 }
 
 fn wait_for_admin_state(

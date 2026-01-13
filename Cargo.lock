@@ -2408,6 +2408,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-hal",
  "image",
+ "libc",
  "linux-embedded-hal",
  "num_cpus",
  "rand 0.8.5",

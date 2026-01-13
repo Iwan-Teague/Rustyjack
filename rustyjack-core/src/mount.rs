@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use tracing::info;
 
+use crate::system::resolve_root;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountMode {
     ReadOnly,
@@ -19,6 +21,8 @@ pub enum MountMode {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FsType {
     Vfat,
+    Ext2,
+    Ext3,
     Ext4,
     Exfat,
     Unknown(String),
@@ -34,20 +38,29 @@ pub struct MountPolicy {
     pub lock_timeout: Duration,
 }
 
-impl Default for MountPolicy {
-    fn default() -> Self {
+impl MountPolicy {
+    pub fn for_root(root: &Path) -> Self {
         let mut allowed = BTreeSet::new();
         allowed.insert(FsType::Vfat);
-        allowed.insert(FsType::Ext4);
         allowed.insert(FsType::Exfat);
+        allowed.insert(FsType::Ext2);
+        allowed.insert(FsType::Ext3);
+        allowed.insert(FsType::Ext4);
         Self {
-            mount_root: PathBuf::from("/mnt/rustyjack"),
+            mount_root: root.join("mounts"),
             allowed_fs: allowed,
             default_mode: MountMode::ReadOnly,
             allow_rw: false,
             max_devices: 4,
             lock_timeout: Duration::from_secs(3),
         }
+    }
+}
+
+impl Default for MountPolicy {
+    fn default() -> Self {
+        let root = resolve_root(None).unwrap_or_else(|_| PathBuf::from("/var/lib/rustyjack"));
+        Self::for_root(&root)
     }
 }
 
@@ -95,6 +108,10 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
     ensure_mount_root(policy)?;
 
     let mut device = canonical_device_path(&req.device)?;
+    let allowed_devices = enumerate_usb_block_devices()?;
+    if !usb_device_allowed(&device, &allowed_devices) {
+        bail!("device is not an allowed USB block device");
+    }
     let mut dev_name = device
         .file_name()
         .and_then(|s| s.to_str())
@@ -291,9 +308,10 @@ pub fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>> {
         }
 
         let removable = read_sysfs_flag(entry.path().join("removable")).unwrap_or(false);
-        let is_usb = sysfs_path_contains_usb(device_symlink).unwrap_or(false);
+        let sys_class = Path::new("/sys/class/block").join(&name);
+        let is_usb = is_usb_block_device(&sys_class).unwrap_or(false);
 
-        if !is_usb && !removable {
+        if !(is_usb && removable) {
             continue;
         }
 
@@ -477,9 +495,12 @@ fn ensure_usb_removable(dev_name: &str) -> Result<()> {
     }
     let sys_base = Path::new("/sys/class/block").join(&base);
     let removable = read_sysfs_flag(sys_base.join("removable")).unwrap_or(false);
-    let is_usb = sysfs_path_contains_usb(sys_base.join("device")).unwrap_or(false);
-    if !is_usb && !removable {
-        bail!("device not marked removable or on USB path");
+    if !removable {
+        bail!("device is not removable");
+    }
+    let is_usb = is_usb_block_device(&sys_base).unwrap_or(false);
+    if !is_usb {
+        bail!("device is not a USB storage device");
     }
     Ok(())
 }
@@ -534,8 +555,8 @@ fn detect_fs_type(device: &Path) -> Result<FsType> {
     file.read_exact(&mut buf)
         .with_context(|| "reading device header")?;
 
-    if is_ext4(&buf) {
-        return Ok(FsType::Ext4);
+    if let Some(ext_type) = detect_ext_family(&buf) {
+        return Ok(ext_type);
     }
     if is_exfat(&buf) {
         return Ok(FsType::Exfat);
@@ -547,12 +568,37 @@ fn detect_fs_type(device: &Path) -> Result<FsType> {
     Err(anyhow!("unsupported or unknown filesystem"))
 }
 
-fn is_ext4(buf: &[u8]) -> bool {
-    if buf.len() < 0x400 + 0x3a {
-        return false;
+fn detect_ext_family(buf: &[u8]) -> Option<FsType> {
+    if buf.len() < 0x400 + 0x68 {
+        return None;
     }
     let magic = u16::from_le_bytes([buf[0x438], buf[0x439]]);
-    magic == 0xEF53
+    if magic != 0xEF53 {
+        return None;
+    }
+
+    let compat = u32::from_le_bytes([buf[0x45c], buf[0x45d], buf[0x45e], buf[0x45f]]);
+    let incompat = u32::from_le_bytes([buf[0x460], buf[0x461], buf[0x462], buf[0x463]]);
+
+    const EXT3_FEATURE_COMPAT_HAS_JOURNAL: u32 = 0x0004;
+    const EXT4_FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
+    const EXT4_FEATURE_INCOMPAT_64BIT: u32 = 0x0080;
+    const EXT4_FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
+
+    if incompat
+        & (EXT4_FEATURE_INCOMPAT_EXTENTS
+            | EXT4_FEATURE_INCOMPAT_64BIT
+            | EXT4_FEATURE_INCOMPAT_FLEX_BG)
+        != 0
+    {
+        return Some(FsType::Ext4);
+    }
+
+    if compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL != 0 {
+        return Some(FsType::Ext3);
+    }
+
+    Some(FsType::Ext2)
 }
 
 fn is_exfat(buf: &[u8]) -> bool {
@@ -576,6 +622,8 @@ fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Resul
     let tgt = path_to_cstring(target)?;
     let fstype = CString::new(match fs {
         FsType::Vfat => "vfat",
+        FsType::Ext2 => "ext2",
+        FsType::Ext3 => "ext3",
         FsType::Ext4 => "ext4",
         FsType::Exfat => "exfat",
         FsType::Unknown(_) => bail!("fs type not allowed"),
@@ -589,7 +637,7 @@ fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Resul
 
     let data_str = match fs {
         FsType::Vfat | FsType::Exfat => "utf8,uid=0,gid=0,fmask=0077,dmask=0077",
-        FsType::Ext4 => "errors=remount-ro",
+        FsType::Ext2 | FsType::Ext3 | FsType::Ext4 => "errors=remount-ro",
         FsType::Unknown(_) => "",
     };
     let data = CString::new(data_str)?;
@@ -731,6 +779,8 @@ fn verify_mount_safety(entry: &MountResponse) -> Result<()> {
 fn map_fs_type(fs: &str) -> FsType {
     match fs.to_lowercase().as_str() {
         "vfat" => FsType::Vfat,
+        "ext2" => FsType::Ext2,
+        "ext3" => FsType::Ext3,
         "ext4" => FsType::Ext4,
         "exfat" => FsType::Exfat,
         other => FsType::Unknown(other.to_string()),
@@ -768,9 +818,39 @@ fn read_sysfs_flag(path: PathBuf) -> Result<bool> {
     Ok(contents.trim() == "1")
 }
 
-fn sysfs_path_contains_usb(path: PathBuf) -> Result<bool> {
-    let target = fs::read_link(&path)?;
-    Ok(target.to_string_lossy().to_lowercase().contains("/usb"))
+fn sysfs_has_usb_ancestor(block_sysfs: &Path) -> bool {
+    let mut cur = Some(block_sysfs);
+    while let Some(path) = cur {
+        if path.join("idVendor").exists() && path.join("idProduct").exists() {
+            return true;
+        }
+        cur = path.parent();
+    }
+    false
+}
+
+fn is_usb_block_device(sysfs_path: &Path) -> Result<bool> {
+    let canonical = fs::canonicalize(sysfs_path)
+        .with_context(|| format!("canonicalizing {}", sysfs_path.display()))?;
+    Ok(sysfs_has_usb_ancestor(&canonical))
+}
+
+fn usb_device_allowed(device: &Path, devices: &[BlockDevice]) -> bool {
+    for dev in devices {
+        if let Ok(dev_path) = canonical_device_path(&dev.devnode) {
+            if dev_path == device {
+                return true;
+            }
+        }
+        for part in &dev.partitions {
+            if let Ok(part_path) = canonical_device_path(&part.devnode) {
+                if part_path == device {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn read_block_size_bytes(name: &str) -> Result<u64> {

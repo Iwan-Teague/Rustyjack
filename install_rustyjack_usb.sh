@@ -241,6 +241,12 @@ disable_conflicting_services() {
     sudo systemctl disable --now systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
     sudo systemctl mask systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
   fi
+  if systemctl list-unit-files | grep -q '^systemd-rfkill'; then
+    warn "Disabling systemd-rfkill to prevent rfkill state restoration"
+    sudo systemctl disable --now systemd-rfkill.service systemd-rfkill.socket 2>/dev/null || true
+    sudo systemctl mask systemd-rfkill.service systemd-rfkill.socket 2>/dev/null || true
+    sudo rm -f /var/lib/systemd/rfkill/* 2>/dev/null || true
+  fi
 }
 
 is_rustyjack_root() {

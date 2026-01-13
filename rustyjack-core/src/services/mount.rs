@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::mount::{
     enumerate_usb_block_devices, list_mounts_under, mount_device as policy_mount_device,
-    unmount as policy_unmount, FsType, MountMode, MountPolicy, MountRequest as PolicyMountRequest,
+    unmount as policy_unmount, MountMode, MountPolicy, MountRequest as PolicyMountRequest,
     UnmountRequest as PolicyUnmountRequest,
 };
 use crate::services::error::ServiceError;
@@ -15,27 +15,17 @@ pub struct BlockDeviceInfo {
     pub name: String,
     pub size: String,
     pub model: String,
-    pub transport: String,
+    pub transport: Option<String>,
     pub removable: bool,
+    pub is_partition: bool,
+    pub parent: Option<String>,
 }
 
 fn default_mount_policy() -> MountPolicy {
     let root = crate::resolve_root(None).unwrap_or_else(|_| PathBuf::from("/var/lib/rustyjack"));
-    let mount_root = root.join("mounts");
-    
-    let mut allowed_fs = std::collections::BTreeSet::new();
-    allowed_fs.insert(FsType::Vfat);
-    allowed_fs.insert(FsType::Ext4);
-    allowed_fs.insert(FsType::Exfat);
-    
-    MountPolicy {
-        mount_root,
-        allowed_fs,
-        default_mode: MountMode::ReadOnly,
-        allow_rw: false,
-        max_devices: 4,
-        lock_timeout: Duration::from_secs(10),
-    }
+    let mut policy = MountPolicy::for_root(&root);
+    policy.lock_timeout = Duration::from_secs(10);
+    policy
 }
 
 pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
@@ -55,8 +45,14 @@ pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
             name: dev.devnode.to_string_lossy().to_string(),
             size,
             model: "USB Device".to_string(),
-            transport: if dev.is_usb { "usb" } else { "unknown" }.to_string(),
+            transport: if dev.is_usb {
+                Some("usb".to_string())
+            } else {
+                None
+            },
             removable: dev.removable,
+            is_partition: false,
+            parent: None,
         });
         
         for part in dev.partitions {
@@ -69,8 +65,14 @@ pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
                 name: part.devnode.to_string_lossy().to_string(),
                 size: part_size,
                 model: "Partition".to_string(),
-                transport: if dev.is_usb { "usb" } else { "unknown" }.to_string(),
+                transport: if dev.is_usb {
+                    Some("usb".to_string())
+                } else {
+                    None
+                },
                 removable: dev.removable,
+                is_partition: true,
+                parent: Some(dev.devnode.to_string_lossy().to_string()),
             });
         }
     }
