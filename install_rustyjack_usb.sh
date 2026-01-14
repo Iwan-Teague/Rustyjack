@@ -18,11 +18,12 @@
 #   SKIP_REBOOT=1                    # do not reboot after install
 #   NO_REBOOT=1                      # do not reboot after install
 set -euo pipefail
+WARN_COUNT=0
 
 # ---- helpers ------------------------------------------------
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
-warn()  { printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
+warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
 
@@ -855,7 +856,9 @@ info "  - Runtime root: $RUNTIME_ROOT"
 info "=========================================="
 echo ""
 
-if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+if [ "$WARN_COUNT" -gt 0 ]; then
+  warn "Warnings detected ($WARN_COUNT). Skipping reboot to allow debugging."
+elif [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
   info "System rebooting in 5 seconds - press Ctrl+C to abort."
   sleep 5
   sudo reboot
