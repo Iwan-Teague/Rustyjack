@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn};
 
 use super::dns::DnsManager;
 use super::ops::{ErrorEntry, IsolationOutcome, NetOps};
+use super::isolation_policy::{IsolationMode, IsolationPolicyManager};
 use super::preference::PreferenceManager;
 use super::routing::RouteManager;
 
@@ -87,12 +88,66 @@ impl IsolationEngine {
         self.enforce_with_mode(EnforcementMode::Passive)
     }
 
+    fn enforce_explicit_allow_list(&self, allowed: &[String]) -> Result<IsolationOutcome> {
+        let outcome = crate::system::apply_interface_isolation_with_ops_strict(
+            Arc::clone(&self.ops),
+            allowed,
+        )?;
+        if !outcome.errors.is_empty() {
+            let error_msgs: Vec<String> = outcome
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.interface, e.message))
+                .collect();
+            bail!("Interface isolation errors: {}", error_msgs.join("; "));
+        }
+        Ok(outcome)
+    }
+
+    fn enforce_block_all(&self) -> Result<IsolationOutcome> {
+        let outcome = crate::system::apply_interface_isolation_with_ops_block_all(
+            Arc::clone(&self.ops),
+        )?;
+        if !outcome.errors.is_empty() {
+            let error_msgs: Vec<String> = outcome
+                .errors
+                .iter()
+                .map(|e| format!("{}: {}", e.interface, e.message))
+                .collect();
+            bail!("Interface isolation errors: {}", error_msgs.join("; "));
+        }
+        Ok(outcome)
+    }
+
     fn enforce_with_mode(&self, mode: EnforcementMode) -> Result<IsolationOutcome> {
         // Acquire global lock to prevent concurrent enforcement
         let lock = ENFORCEMENT_LOCK.get_or_init(|| StdMutex::new(()));
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         
         info!("Starting network isolation enforcement (lock acquired)");
+
+        let policy_mgr = IsolationPolicyManager::new(self.root.clone());
+        if let Some(policy) = policy_mgr.read()? {
+            match policy.mode {
+                IsolationMode::AllowList => {
+                    info!(
+                        target: "net",
+                        session = %policy.session,
+                        allow_list = ?policy.allowed,
+                        "isolation_policy_allow_list"
+                    );
+                    return self.enforce_explicit_allow_list(&policy.allowed);
+                }
+                IsolationMode::BlockAll => {
+                    info!(
+                        target: "net",
+                        session = %policy.session,
+                        "isolation_policy_block_all"
+                    );
+                    return self.enforce_block_all();
+                }
+            }
+        }
 
         // Check for hotspot exception
         if let Some(exc) = get_hotspot_exception() {

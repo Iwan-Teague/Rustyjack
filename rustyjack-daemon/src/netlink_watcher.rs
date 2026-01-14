@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -6,15 +6,41 @@ use tracing::{debug, info, warn};
 
 use crate::state::DaemonState;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnforcementSnapshot {
+    allowed: Vec<String>,
+    blocked: Vec<String>,
+}
+
+impl EnforcementSnapshot {
+    fn from_outcome(outcome: &rustyjack_core::system::IsolationOutcome) -> Self {
+        let mut allowed = outcome.allowed.clone();
+        let mut blocked = outcome.blocked.clone();
+        allowed.sort();
+        blocked.sort();
+        Self { allowed, blocked }
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub async fn run_netlink_watcher(state: Arc<DaemonState>) -> anyhow::Result<()> {
     info!("Starting netlink watcher for hardware isolation enforcement");
     
     let last_event: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>> = Arc::new(StdMutex::new(None));
     let debounce_duration = Duration::from_millis(250);
+
+    start_periodic_enforcement(Arc::clone(&state), Arc::clone(&enforcement_snapshot));
     
     loop {
-        match watch_netlink_events(Arc::clone(&state), Arc::clone(&last_event), debounce_duration).await {
+        match watch_netlink_events(
+            Arc::clone(&state),
+            Arc::clone(&last_event),
+            debounce_duration,
+            Arc::clone(&enforcement_snapshot),
+        )
+        .await
+        {
             Ok(_) => {
                 info!("Netlink watcher stopped normally");
                 break;
@@ -41,6 +67,7 @@ async fn watch_netlink_events(
     state: Arc<DaemonState>,
     last_event: Arc<Mutex<Option<Instant>>>,
     debounce_duration: Duration,
+    enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>>,
 ) -> anyhow::Result<()> {
     use futures::stream::StreamExt;
     use rtnetlink::new_connection;
@@ -74,11 +101,23 @@ async fn watch_netlink_events(
         match event {
             Event::Link => {
                 debug!("Netlink link event");
-                schedule_enforcement(Arc::clone(&state), Arc::clone(&last_event), debounce_duration).await;
+                schedule_enforcement(
+                    Arc::clone(&state),
+                    Arc::clone(&last_event),
+                    debounce_duration,
+                    Arc::clone(&enforcement_snapshot),
+                )
+                .await;
             }
             Event::Address => {
                 debug!("Netlink address event");
-                schedule_enforcement(Arc::clone(&state), Arc::clone(&last_event), debounce_duration).await;
+                schedule_enforcement(
+                    Arc::clone(&state),
+                    Arc::clone(&last_event),
+                    debounce_duration,
+                    Arc::clone(&enforcement_snapshot),
+                )
+                .await;
             }
             Event::End => {
                 debug!("Netlink stream ended");
@@ -95,6 +134,7 @@ async fn schedule_enforcement(
     state: Arc<DaemonState>,
     last_event: Arc<Mutex<Option<Instant>>>,
     debounce_duration: Duration,
+    enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>>,
 ) {
     let now = Instant::now();
     
@@ -116,6 +156,7 @@ async fn schedule_enforcement(
         let _lock = state_clone.locks.acquire_uplink().await;
         
         let root = state_clone.config.root_path.clone();
+        let snapshot = Arc::clone(&enforcement_snapshot);
         tokio::task::spawn_blocking(move || {
             use rustyjack_core::system::{IsolationEngine, RealNetOps};
             use std::sync::Arc;
@@ -124,16 +165,7 @@ async fn schedule_enforcement(
             let engine = IsolationEngine::new(ops, root);
             
             match engine.enforce() {
-                Ok(outcome) => {
-                    info!("Netlink event enforcement: allowed={:?}, blocked={:?}",
-                        outcome.allowed, outcome.blocked);
-                    if !outcome.errors.is_empty() {
-                        warn!("Enforcement had {} errors:", outcome.errors.len());
-                        for err in &outcome.errors {
-                            warn!("  {}: {}", err.interface, err.message);
-                        }
-                    }
-                }
+                Ok(outcome) => log_enforcement_outcome("Netlink enforcement", &outcome, &snapshot),
                 Err(e) => {
                     warn!("Netlink event enforcement failed: {}", e);
                 }
@@ -142,4 +174,63 @@ async fn schedule_enforcement(
         .await
         .ok();
     });
+}
+
+#[cfg(target_os = "linux")]
+fn start_periodic_enforcement(
+    state: Arc<DaemonState>,
+    enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>>,
+) {
+    tokio::spawn(async move {
+        let interval = Duration::from_secs(3);
+        loop {
+            sleep(interval).await;
+
+            let _lock = state.locks.acquire_uplink().await;
+            let root = state.config.root_path.clone();
+            let snapshot = Arc::clone(&enforcement_snapshot);
+
+            tokio::task::spawn_blocking(move || {
+                use rustyjack_core::system::{IsolationEngine, RealNetOps};
+                use std::sync::Arc;
+
+                let ops = Arc::new(RealNetOps);
+                let engine = IsolationEngine::new(ops, root);
+
+                match engine.enforce() {
+                    Ok(outcome) => {
+                        log_enforcement_outcome("Periodic enforcement", &outcome, &snapshot)
+                    }
+                    Err(e) => {
+                        warn!("Periodic enforcement failed: {}", e);
+                    }
+                }
+            })
+            .await
+            .ok();
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn log_enforcement_outcome(
+    label: &str,
+    outcome: &rustyjack_core::system::IsolationOutcome,
+    snapshot: &Arc<StdMutex<Option<EnforcementSnapshot>>>,
+) {
+    let current = EnforcementSnapshot::from_outcome(outcome);
+    let mut guard = snapshot.lock().unwrap_or_else(|e| e.into_inner());
+    let changed = guard.as_ref().map(|prev| prev != &current).unwrap_or(true);
+
+    if changed {
+        info!("{}: allowed={:?}, blocked={:?}", label, current.allowed, current.blocked);
+        *guard = Some(current);
+    }
+
+    if !outcome.errors.is_empty() {
+        warn!("{} had {} errors:", label, outcome.errors.len());
+        for err in &outcome.errors {
+            warn!("  {}: {}", err.interface, err.message);
+        }
+    }
 }

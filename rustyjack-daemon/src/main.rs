@@ -22,7 +22,15 @@ use state::DaemonState;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let config = DaemonConfig::from_env();
-    let _logging_guards = init_tracing(&config);
+    let log_cfg = rustyjack_logging::fs::read_config(&config.root_path);
+    let _logging_guards = rustyjack_logging::init("rustyjackd", &config.root_path, &log_cfg)?;
+    let _log_watcher = match rustyjack_logging::spawn_watcher(&config.root_path, "rustyjackd") {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            warn!("Logging watcher disabled: {}", err);
+            None
+        }
+    };
 
     // Wrap entire daemon execution in a component span for log identity
     let span = tracing::info_span!("rustyjackd", component = "rustyjackd");
@@ -34,6 +42,7 @@ async fn main() -> Result<()> {
     state.reconcile_on_startup().await;
     systemd::notify_ready();
     systemd::spawn_watchdog_task();
+    spawn_retention_task(config.root_path.clone());
 
     let shutdown = Arc::new(Notify::new());
 
@@ -85,76 +94,15 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-struct LoggingGuards {
-    _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
-}
-
-fn init_tracing(config: &DaemonConfig) -> LoggingGuards {
-    use tracing_log::LogTracer;
-    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-    let filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
-
-    let stdout_layer = fmt::layer()
-        .with_target(true)
-        .with_level(true)
-        .with_thread_ids(true)
-        .with_line_number(true)
-        .compact();
-
-    let log_dir = config.root_path.join("logs");
-    let mut warn_msg = None;
-    if let Err(err) = std::fs::create_dir_all(&log_dir) {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(stdout_layer)
-            .try_init()
-            .ok();
-        tracing::warn!("File logging disabled ({}): {}", log_dir.display(), err);
-        let _ = LogTracer::init();
-        return LoggingGuards { _file_guard: None };
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(err) = std::fs::set_permissions(&log_dir, std::fs::Permissions::from_mode(0o2770))
-        {
-            warn_msg = Some(format!(
-                "Failed to set log directory permissions ({}): {}",
-                log_dir.display(),
-                err
-            ));
+fn spawn_retention_task(root: std::path::PathBuf) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+        loop {
+            let cfg = rustyjack_logging::fs::read_config(&root);
+            if let Err(err) = rustyjack_logging::run_retention(&root, &cfg) {
+                tracing::warn!("Log retention failed: {}", err);
+            }
+            interval.tick().await;
         }
-    }
-
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "rustyjackd.log");
-    let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
-    let file_layer = fmt::layer()
-        .with_target(true)
-        .with_level(true)
-        .with_thread_ids(true)
-        .with_line_number(true)
-        .with_ansi(false)
-        .compact()
-        .with_writer(file_writer);
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(stdout_layer)
-        .with(file_layer)
-        .try_init()
-        .ok();
-
-    let _ = LogTracer::init();
-
-    if let Some(message) = warn_msg {
-        tracing::warn!("{message}");
-    }
-
-    LoggingGuards {
-        _file_guard: Some(file_guard),
-    }
+    });
 }

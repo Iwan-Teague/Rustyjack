@@ -130,9 +130,10 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
         let parts = enumerate_partitions_for_name(dev_name)?;
         let (chosen, fs_type) = choose_mountable_partition(policy, &parts, dev_name)?;
         info!(
-            "Whole disk {} requested; mounting partition {}",
-            dev_name,
-            chosen.devnode.display()
+            target: "usb",
+            device = %dev_name,
+            partition = %chosen.devnode.display(),
+            "mount_partition_selected"
         );
         device = canonical_device_path(&chosen.devnode)?;
         dev_name = device
@@ -232,9 +233,10 @@ pub fn unmount(policy: &MountPolicy, req: UnmountRequest) -> Result<()> {
     }
 
     info!(
-        "Unmounted {} from {}",
-        entry.device.display(),
-        mountpoint.display()
+        target: "usb",
+        device = %entry.device.display(),
+        mountpoint = %mountpoint.display(),
+        "unmounted"
     );
     Ok(())
 }

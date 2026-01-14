@@ -5,7 +5,7 @@
 use std::io;
 use std::mem;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use nix::libc::{self, c_int, c_void, sockaddr_ll, AF_PACKET, SOCK_RAW};
 
@@ -172,7 +172,8 @@ impl PacketCapture {
         self.stats.packets_passed_filter += 1;
 
         let packet = CapturedPacket {
-            timestamp: Instant::now(),
+            timestamp: SystemTime::now(),
+            monotonic: Instant::now(),
             radiotap_info: RadiotapInfo::parse(&radiotap),
             frame,
             raw_data: data.to_vec(),
@@ -358,7 +359,9 @@ impl CaptureFilter {
 #[derive(Debug, Clone)]
 pub struct CapturedPacket {
     /// Capture timestamp
-    pub timestamp: Instant,
+    pub timestamp: SystemTime,
+    /// Monotonic timestamp for elapsed calculations
+    pub monotonic: Instant,
     /// Radiotap info (signal, channel, etc.)
     pub radiotap_info: RadiotapInfo,
     /// Parsed 802.11 frame

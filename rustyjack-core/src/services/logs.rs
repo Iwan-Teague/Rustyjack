@@ -2,9 +2,8 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Local};
+use chrono::Local;
 
 use crate::services::error::ServiceError;
 
@@ -12,30 +11,87 @@ const MAX_LOG_BUNDLE_BYTES: usize = 900_000;
 const MAX_SECTION_BYTES: usize = 200_000;
 const MAX_LOG_TAIL_BYTES: usize = 150_000;
 
+struct SectionStatus {
+    name: &'static str,
+    ok: bool,
+    err: Option<String>,
+}
+
 pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
+    let cfg = rustyjack_logging::fs::read_config(root);
+    let selected_iface = crate::system::PreferenceManager::new(root.to_path_buf())
+        .get_preferred()
+        .ok()
+        .flatten();
+
+    let mut body = String::new();
+    let mut statuses = Vec::new();
+
+    append_section(&mut body, &mut statuses, "Daemon Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("rustyjackd.log"))
+    });
+    append_section(&mut body, &mut statuses, "UI Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("rustyjack-ui.log"))
+    });
+    append_section(&mut body, &mut statuses, "Portal Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("portal.log"))
+    });
+    append_section(&mut body, &mut statuses, "USB Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("usb.log"))
+    });
+    append_section(&mut body, &mut statuses, "WiFi Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("wifi.log"))
+    });
+    append_section(&mut body, &mut statuses, "Net Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("net.log"))
+    });
+    append_section(&mut body, &mut statuses, "Crypto Logs", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("crypto.log"))
+    });
+    append_section(&mut body, &mut statuses, "Audit Log", |buf| {
+        append_log_tail_path(buf, &root.join("logs").join("audit").join("audit.log"))
+    });
+
+    append_section(&mut body, &mut statuses, "Kernel Log Tail", append_kernel_log_tail);
+    append_section(
+        &mut body,
+        &mut statuses,
+        "sysfs network interfaces",
+        append_sysfs_network_snapshot,
+    );
+    append_section(&mut body, &mut statuses, "rfkill status", append_rfkill_status);
+    append_section(
+        &mut body,
+        &mut statuses,
+        "wireless link status",
+        append_wpa_supplicant_status,
+    );
+    append_section(
+        &mut body,
+        &mut statuses,
+        "netlink routes by interface",
+        append_netlink_routes,
+    );
+    append_section(&mut body, &mut statuses, "/etc/resolv.conf", |buf| {
+        append_file_section(buf, "/etc/resolv.conf")
+    });
+    append_section(&mut body, &mut statuses, "/proc/net/route", |buf| {
+        append_file_section(buf, "/proc/net/route")
+    });
+    append_section(&mut body, &mut statuses, "/proc/net/arp", |buf| {
+        append_file_section(buf, "/proc/net/arp")
+    });
+    append_section(&mut body, &mut statuses, "/proc/net/dev", |buf| {
+        append_file_section(buf, "/proc/net/dev")
+    });
+    append_section(&mut body, &mut statuses, "Watchdog Log", |buf| {
+        append_file_section_path(buf, &root.join("loot").join("logs").join("watchdog.log"))
+    });
+
     let mut out = String::new();
-
-    // Rust-native log collection (Phase 3 implementation)
-    append_rustyjack_log_tail(&mut out, root, "rustyjackd.log", "Daemon Logs");
-    append_rustyjack_log_tail(&mut out, root, "rustyjack-ui.log", "UI Logs");
-    append_rustyjack_log_tail(&mut out, root, "portal.log", "Portal Logs");
-
-    // Kernel log tail (replaces journalctl -k)
-    append_kernel_log_tail(&mut out);
-
-    // Journald unit tails for system services
-    append_journald_unit_tail(&mut out, "NetworkManager.service", 200);
-    append_journald_unit_tail(&mut out, "wpa_supplicant.service", 200);
-
-    append_sysfs_network_snapshot(&mut out);
-    append_rfkill_status(&mut out);
-    append_wpa_supplicant_status(&mut out);
-    append_netlink_routes(&mut out);
-    append_file_section(&mut out, "/etc/resolv.conf");
-    append_file_section(&mut out, "/proc/net/route");
-    append_file_section(&mut out, "/proc/net/arp");
-    append_file_section(&mut out, "/proc/net/dev");
-    append_file_section_path(&mut out, &root.join("loot").join("logs").join("watchdog.log"));
+    append_manifest(&mut out, root, &cfg, selected_iface.as_deref());
+    out.push_str(&build_summary(&statuses));
+    out.push_str(&body);
 
     if out.len() > MAX_LOG_BUNDLE_BYTES {
         out.truncate(MAX_LOG_BUNDLE_BYTES);
@@ -63,15 +119,72 @@ pub fn gpio_diagnostics() -> Result<String, ServiceError> {
     Ok(out)
 }
 
-fn append_sysfs_network_snapshot(buf: &mut String) {
-    buf.push_str("\n===== sysfs network interfaces =====\n");
-    let entries = match fs::read_dir("/sys/class/net") {
-        Ok(e) => e,
+fn append_manifest(
+    out: &mut String,
+    root: &Path,
+    cfg: &rustyjack_logging::LoggingConfig,
+    selected_iface: Option<&str>,
+) {
+    out.push_str("===== Rustyjack Log Bundle =====\n");
+    out.push_str(&format!("timestamp: {}\n", Local::now().to_rfc3339()));
+    out.push_str(&format!("version: {}\n", env!("CARGO_PKG_VERSION")));
+    out.push_str(&format!("root: {}\n", root.display()));
+    out.push_str(&format!(
+        "logging: enabled={} level={} keep_days={}\n",
+        cfg.enabled, cfg.level, cfg.keep_days
+    ));
+    out.push_str(&format!(
+        "selected_interface: {}\n",
+        selected_iface.unwrap_or("unknown")
+    ));
+    out.push('\n');
+}
+
+fn build_summary(statuses: &[SectionStatus]) -> String {
+    let mut out = String::new();
+    let missing: Vec<&SectionStatus> = statuses.iter().filter(|s| !s.ok).collect();
+    if missing.is_empty() {
+        out.push_str("Bundle Summary: all sections collected\n\n");
+        return out;
+    }
+
+    out.push_str("Bundle Summary: missing sections:\n");
+    for section in missing {
+        let err = section.err.as_deref().unwrap_or("unknown error");
+        out.push_str(&format!("- {}: {}\n", section.name, err));
+    }
+    out.push('\n');
+    out
+}
+
+fn append_section<F>(
+    out: &mut String,
+    statuses: &mut Vec<SectionStatus>,
+    name: &'static str,
+    append: F,
+) where
+    F: FnOnce(&mut String) -> Result<(), ServiceError>,
+{
+    out.push_str(&format!("\n===== {} =====\n", name));
+    match append(out) {
+        Ok(()) => statuses.push(SectionStatus {
+            name,
+            ok: true,
+            err: None,
+        }),
         Err(err) => {
-            buf.push_str(&format!("ERROR reading /sys/class/net: {err}\n"));
-            return;
+            out.push_str("(section unavailable)\n");
+            statuses.push(SectionStatus {
+                name,
+                ok: false,
+                err: Some(err.to_string()),
+            });
         }
-    };
+    }
+}
+
+fn append_sysfs_network_snapshot(buf: &mut String) -> Result<(), ServiceError> {
+    let entries = fs::read_dir("/sys/class/net")?;
 
     for entry in entries.flatten() {
         let iface = entry.file_name().to_string_lossy().to_string();
@@ -95,17 +208,11 @@ fn append_sysfs_network_snapshot(buf: &mut String) {
             "{iface}: kind={kind} operstate={oper} carrier={carrier} mac={mac} mtu={mtu}\n"
         ));
     }
+    Ok(())
 }
 
-fn append_rfkill_status(buf: &mut String) {
-    buf.push_str("\n===== rfkill status =====\n");
-    let entries = match fs::read_dir("/sys/class/rfkill") {
-        Ok(entries) => entries,
-        Err(err) => {
-            buf.push_str(&format!("ERROR reading /sys/class/rfkill: {err}\n"));
-            return;
-        }
-    };
+fn append_rfkill_status(buf: &mut String) -> Result<(), ServiceError> {
+    let entries = fs::read_dir("/sys/class/rfkill")?;
 
     let mut found = false;
     for entry in entries.flatten() {
@@ -130,47 +237,46 @@ fn append_rfkill_status(buf: &mut String) {
     if !found {
         buf.push_str("No rfkill devices found\n");
     }
+    Ok(())
 }
 
-fn append_wpa_supplicant_status(buf: &mut String) {
-    buf.push_str("\n===== wireless link status =====\n");
+fn append_wpa_supplicant_status(buf: &mut String) -> Result<(), ServiceError> {
 
     #[cfg(target_os = "linux")]
     {
         let mut found = false;
-        if let Ok(entries) = fs::read_dir("/sys/class/net") {
-            for entry in entries.flatten() {
-                let iface = entry.file_name().to_string_lossy().to_string();
-                if iface == "lo" {
-                    continue;
-                }
-                if !Path::new("/sys/class/net")
-                    .join(&iface)
-                    .join("wireless")
-                    .exists()
-                {
-                    continue;
-                }
-                found = true;
-                let operstate = fs::read_to_string(format!("/sys/class/net/{}/operstate", iface))
-                    .ok()
-                    .map(|v| v.trim().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let carrier = fs::read_to_string(format!("/sys/class/net/{}/carrier", iface))
-                    .ok()
-                    .map(|v| v.trim().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let ip = crate::netlink_helpers::netlink_get_ipv4_addresses(&iface)
-                    .ok()
-                    .and_then(|addrs| addrs.into_iter().find_map(|addr| match addr.address {
-                        std::net::IpAddr::V4(v4) => Some(v4.to_string()),
-                        _ => None,
-                    }));
-                buf.push_str(&format!(
-                    "{}: operstate={} carrier={} ip={:?}\n",
-                    iface, operstate, carrier, ip
-                ));
+        let entries = fs::read_dir("/sys/class/net")?;
+        for entry in entries.flatten() {
+            let iface = entry.file_name().to_string_lossy().to_string();
+            if iface == "lo" {
+                continue;
             }
+            if !Path::new("/sys/class/net")
+                .join(&iface)
+                .join("wireless")
+                .exists()
+            {
+                continue;
+            }
+            found = true;
+            let operstate = fs::read_to_string(format!("/sys/class/net/{}/operstate", iface))
+                .ok()
+                .map(|v| v.trim().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let carrier = fs::read_to_string(format!("/sys/class/net/{}/carrier", iface))
+                .ok()
+                .map(|v| v.trim().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let ip = crate::netlink_helpers::netlink_get_ipv4_addresses(&iface)
+                .ok()
+                .and_then(|addrs| addrs.into_iter().find_map(|addr| match addr.address {
+                    std::net::IpAddr::V4(v4) => Some(v4.to_string()),
+                    _ => None,
+                }));
+            buf.push_str(&format!(
+                "{}: operstate={} carrier={} ip={:?}\n",
+                iface, operstate, carrier, ip
+            ));
         }
         if !found {
             buf.push_str("No wireless interfaces found\n");
@@ -181,29 +287,18 @@ fn append_wpa_supplicant_status(buf: &mut String) {
     {
         buf.push_str("Not supported on this platform\n");
     }
+    Ok(())
 }
 
-fn append_netlink_routes(buf: &mut String) {
-    buf.push_str("\n===== netlink routes by interface =====\n");
-
+fn append_netlink_routes(buf: &mut String) -> Result<(), ServiceError> {
     #[cfg(target_os = "linux")]
     {
         use crate::netlink_helpers::{netlink_list_interfaces, netlink_list_routes};
 
-        let interfaces = match netlink_list_interfaces() {
-            Ok(list) => list,
-            Err(err) => {
-                buf.push_str(&format!("ERROR listing interfaces: {err}\n"));
-                return;
-            }
-        };
-        let routes = match netlink_list_routes() {
-            Ok(list) => list,
-            Err(err) => {
-                buf.push_str(&format!("ERROR listing routes: {err}\n"));
-                return;
-            }
-        };
+        let interfaces = netlink_list_interfaces()
+            .map_err(|err| ServiceError::Netlink(format!("list interfaces: {err}")))?;
+        let routes = netlink_list_routes()
+            .map_err(|err| ServiceError::Netlink(format!("list routes: {err}")))?;
 
         let mut iface_map = std::collections::HashMap::new();
         for iface in &interfaces {
@@ -240,7 +335,7 @@ fn append_netlink_routes(buf: &mut String) {
         iface_names.sort();
         if iface_names.is_empty() {
             buf.push_str("No routes found\n");
-            return;
+            return Ok(());
         }
         for name in iface_names {
             buf.push_str(&format!("{}:\n", name));
@@ -256,64 +351,49 @@ fn append_netlink_routes(buf: &mut String) {
     {
         buf.push_str("Not supported on this platform\n");
     }
+    Ok(())
 }
 
-fn append_file_section(buf: &mut String, path: &str) {
-    buf.push_str(&format!("\n===== {path} =====\n"));
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            if contents.len() > MAX_SECTION_BYTES {
-                buf.push_str(&contents[..MAX_SECTION_BYTES]);
-                buf.push_str("\n[truncated file]\n");
-            } else {
-                buf.push_str(&contents);
-            }
-        }
-        Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
+fn append_file_section(buf: &mut String, path: &str) -> Result<(), ServiceError> {
+    let contents = fs::read_to_string(path)?;
+    if contents.len() > MAX_SECTION_BYTES {
+        buf.push_str(&contents[..MAX_SECTION_BYTES]);
+        buf.push_str("\n[truncated file]\n");
+    } else {
+        buf.push_str(&contents);
     }
+    Ok(())
 }
 
-fn append_file_section_path(buf: &mut String, path: &Path) {
-    buf.push_str(&format!("\n===== {} =====\n", path.display()));
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            if contents.len() > MAX_SECTION_BYTES {
-                buf.push_str(&contents[..MAX_SECTION_BYTES]);
-                buf.push_str("\n[truncated file]\n");
-            } else {
-                buf.push_str(&contents);
-            }
-        }
-        Err(err) => buf.push_str(&format!("ERROR: {err}\n")),
+fn append_file_section_path(buf: &mut String, path: &Path) -> Result<(), ServiceError> {
+    let contents = fs::read_to_string(path)?;
+    if contents.len() > MAX_SECTION_BYTES {
+        buf.push_str(&contents[..MAX_SECTION_BYTES]);
+        buf.push_str("\n[truncated file]\n");
+    } else {
+        buf.push_str(&contents);
     }
+    Ok(())
 }
 
-/// Tail a Rustyjack log file from /var/lib/rustyjack/logs/
-fn append_rustyjack_log_tail(buf: &mut String, root: &Path, filename: &str, title: &str) {
-    buf.push_str(&format!("\n===== {} =====\n", title));
-
-    let log_path = root.join("logs").join(filename);
-
-    if !log_path.exists() {
-        buf.push_str(&format!("Log file not found: {}\n", log_path.display()));
-        return;
+fn append_log_tail_path(buf: &mut String, path: &Path) -> Result<(), ServiceError> {
+    if !path.exists() {
+        return Err(ServiceError::OperationFailed(format!(
+            "log file not found: {}",
+            path.display()
+        )));
     }
 
-    match tail_file(&log_path, MAX_LOG_TAIL_BYTES) {
-        Ok(contents) => {
-            if contents.is_empty() {
-                buf.push_str("(empty log file)\n");
-            } else {
-                buf.push_str(&contents);
-                if !contents.ends_with('\n') {
-                    buf.push('\n');
-                }
-            }
-        }
-        Err(err) => {
-            buf.push_str(&format!("ERROR reading log file: {}\n", err));
+    let contents = tail_file(path, MAX_LOG_TAIL_BYTES)?;
+    if contents.is_empty() {
+        buf.push_str("(empty log file)\n");
+    } else {
+        buf.push_str(&contents);
+        if !contents.ends_with('\n') {
+            buf.push('\n');
         }
     }
+    Ok(())
 }
 
 /// Read the tail of a file (last N bytes)
@@ -351,21 +431,16 @@ fn tail_file(path: &Path, max_bytes: usize) -> std::io::Result<String> {
 }
 
 /// Capture kernel log tail from /dev/kmsg (replaces journalctl -k)
-fn append_kernel_log_tail(out: &mut String) {
-    out.push_str("\n===== Kernel Log Tail =====\n");
-
+fn append_kernel_log_tail(out: &mut String) -> Result<(), ServiceError> {
     #[cfg(target_os = "linux")]
     {
-        match read_kmsg_tail(300) {
-            Ok(logs) => {
-                if logs.is_empty() {
-                    out.push_str("(no recent kernel messages)\n");
-                } else {
-                    out.push_str(&logs);
-                }
-            }
-            Err(err) => {
-                out.push_str(&format!("ERROR reading /dev/kmsg: {}\n", err));
+        let logs = read_kmsg_tail(300)?;
+        if logs.is_empty() {
+            out.push_str("(no recent kernel messages)\n");
+        } else {
+            out.push_str(&logs);
+            if !logs.ends_with('\n') {
+                out.push('\n');
             }
         }
     }
@@ -374,65 +449,7 @@ fn append_kernel_log_tail(out: &mut String) {
     {
         out.push_str("Kernel logging not supported on this platform\n");
     }
-}
-
-fn append_journald_unit_tail(out: &mut String, unit: &str, max_entries: usize) {
-    out.push_str(&format!("\n===== Journald ({unit}) =====\n"));
-
-    #[cfg(target_os = "linux")]
-    {
-        use systemd::journal::{Journal, JournalFiles, JournalSeek};
-
-        let mut journal = match Journal::open(JournalFiles::All, false, false) {
-            Ok(journal) => journal,
-            Err(err) => {
-                out.push_str(&format!("ERROR opening journal: {err}\n"));
-                return;
-            }
-        };
-
-        if let Err(err) = journal.match_add(&format!("_SYSTEMD_UNIT={unit}")) {
-            out.push_str(&format!("ERROR applying journal filter: {err}\n"));
-            return;
-        }
-
-        if let Err(err) = journal.seek(JournalSeek::Tail) {
-            out.push_str(&format!("ERROR seeking journal tail: {err}\n"));
-            return;
-        }
-
-        let mut count = 0usize;
-        while count < max_entries {
-            let entry = match journal.previous_entry() {
-                Ok(Some(entry)) => entry,
-                Ok(None) => break,
-                Err(err) => {
-                    out.push_str(&format!("ERROR reading journal entry: {err}\n"));
-                    break;
-                }
-            };
-
-            let message = entry
-                .get("MESSAGE")
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "<no message>".to_string());
-
-            let timestamp = entry
-                .get("__REALTIME_TIMESTAMP")
-                .and_then(|s| s.parse::<u64>().ok())
-                .and_then(|micros| SystemTime::UNIX_EPOCH.checked_add(Duration::from_micros(micros)))
-                .map(|ts| DateTime::<Local>::from(ts).format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            out.push_str(&format!("{timestamp} {message}\n"));
-            count += 1;
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        out.push_str("Journal not supported on this platform\n");
-    }
+    Ok(())
 }
 
 /// Read recent kernel messages from /dev/kmsg

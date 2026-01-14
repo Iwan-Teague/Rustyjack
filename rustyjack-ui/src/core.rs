@@ -105,6 +105,17 @@ impl CoreBridge {
         })
     }
 
+    pub fn logging_config_set(
+        &self,
+        enabled: bool,
+        level: Option<String>,
+    ) -> Result<rustyjack_ipc::LoggingConfigSetResponse> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            client.logging_config_set(enabled, level).await
+        })
+    }
+
     pub fn wifi_capabilities(&self, interface: &str) -> Result<WifiCapabilitiesResponse> {
         let interface = interface.to_string();
         self.block_on(async move {

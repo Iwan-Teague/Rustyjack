@@ -45,6 +45,7 @@ where
     select_interface_with_ops(ops, root, iface, progress)
 }
 
+#[tracing::instrument(target = "net", skip(ops, root, progress))]
 pub fn select_interface_with_ops<F>(
     ops: Arc<dyn NetOps>,
     root: PathBuf,
@@ -109,15 +110,15 @@ where
     // Step 2: deactivate others
     for other in &other_ifaces {
         if let Err(e) = ops.release_dhcp(other) {
-            warn!("Failed to release DHCP on {}: {}", other, e);
+            warn!(target: "net", iface = %other, error = %e, "dhcp_release_failed");
         }
 
         if let Err(e) = ops.flush_addresses(other) {
-            warn!("Failed to flush addresses on {}: {}", other, e);
+            warn!(target: "net", iface = %other, error = %e, "flush_addresses_failed");
         }
 
         if let Err(e) = routes.delete_default_route(other) {
-            debug!("No default route to delete for {}: {}", other, e);
+            debug!(target: "net", iface = %other, error = %e, "default_route_delete_skipped");
         }
 
         ops.bring_down(other)
@@ -125,7 +126,7 @@ where
 
         if ops.is_wireless(other) {
             if let Err(e) = ops.set_rfkill_block(other, true) {
-                warn!("Failed to rfkill block {}: {}", other, e);
+                warn!(target: "net", iface = %other, error = %e, "rfkill_block_failed");
             }
         }
 
@@ -153,13 +154,13 @@ where
     }
 
     if let Err(e) = ops.release_dhcp(iface) {
-        warn!("Failed to release DHCP on {}: {}", iface, e);
+        warn!(target: "net", iface = %iface, error = %e, "dhcp_release_failed");
     }
     if let Err(e) = ops.flush_addresses(iface) {
-        warn!("Failed to flush addresses on {}: {}", iface, e);
+        warn!(target: "net", iface = %iface, error = %e, "flush_addresses_failed");
     }
     if let Err(e) = routes.delete_default_route(iface) {
-        debug!("No default route to delete for {}: {}", iface, e);
+        debug!(target: "net", iface = %iface, error = %e, "default_route_delete_skipped");
     }
 
     ops.bring_up(iface)
@@ -170,10 +171,10 @@ where
 
     if is_wireless {
         if let Err(e) = ops.flush_addresses(iface) {
-            warn!("Failed to flush addresses on {}: {}", iface, e);
+            warn!(target: "net", iface = %iface, error = %e, "flush_addresses_failed");
         }
         if let Err(e) = routes.delete_default_route(iface) {
-            debug!("No default route to delete for {}: {}", iface, e);
+            debug!(target: "net", iface = %iface, error = %e, "default_route_delete_skipped");
         }
     }
 
@@ -219,22 +220,23 @@ where
                     .acquire_dhcp(iface, Duration::from_secs(30))
                     .context("DHCP failed")?;
 
-            if let Some(gw) = lease.gateway {
-                routes
-                    .set_default_route(iface, gw, 100)
-                    .context("failed to set default route")?;
-            }
+                if let Some(gw) = lease.gateway {
+                    routes
+                        .set_default_route(iface, gw, 100)
+                        .context("failed to set default route")?;
+                }
 
-            if !lease.dns_servers.is_empty() {
-                dns.set_dns(&lease.dns_servers)
-                    .context("failed to write DNS servers")?;
-            }
+                if !lease.dns_servers.is_empty() {
+                    dns.set_dns(&lease.dns_servers)
+                        .context("failed to write DNS servers")?;
+                }
 
-            outcome.dhcp = Some(SelectionDhcpInfo {
-                ip: Some(lease.ip),
-                gateway: lease.gateway,
-                dns_servers: lease.dns_servers.clone(),
-            });
+                outcome.dhcp = Some(SelectionDhcpInfo {
+                    ip: Some(lease.ip),
+                    gateway: lease.gateway,
+                    dns_servers: lease.dns_servers.clone(),
+                });
+            }
         }
     }
 
@@ -275,7 +277,7 @@ where
     crate::system::write_interface_preference(&root, "system_preferred", iface)
         .context("failed to write preference file")?;
 
-    info!("Interface {} selected successfully", iface);
+    info!(target: "net", iface = %iface, "interface_selected");
     Ok(outcome)
 }
 
@@ -354,6 +356,7 @@ fn read_rfkill_state(iface: &str) -> Result<Option<RfkillState>> {
     }))
 }
 
+#[tracing::instrument(target = "wifi", fields(iface = %iface))]
 fn wait_for_rfkill(iface: &str, timeout: Duration) -> Result<()> {
     let start = Instant::now();
     loop {
@@ -435,7 +438,7 @@ fn wait_for_admin_state(
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    warn!("Link watcher poll error: {}", e);
+                    warn!(target: "net", error = %e, "link_watcher_poll_error");
                 }
             }
         } else {

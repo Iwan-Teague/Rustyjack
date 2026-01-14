@@ -31,6 +31,9 @@ pub mod dns;
 pub mod routing;
 pub mod isolation;
 pub mod interface_selection;
+pub mod isolation_policy;
+pub mod isolation_guard;
+pub mod loot_session;
 
 pub use ops::{
     ErrorEntry, IsolationOutcome, NetOps, RealNetOps, RouteOutcome, RouteEntry,
@@ -41,6 +44,9 @@ pub use dns::DnsManager;
 pub use routing::RouteManager;
 pub use isolation::{IsolationEngine, set_hotspot_exception, clear_hotspot_exception};
 pub use interface_selection::{InterfaceSelectionOutcome, SelectionDhcpInfo};
+pub use isolation_policy::{IsolationMode, IsolationPolicy, IsolationPolicyManager};
+pub use isolation_guard::IsolationPolicyGuard;
+pub use loot_session::LootSession;
 
 use std::{
     collections::HashMap,
@@ -56,7 +62,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
@@ -369,7 +375,7 @@ pub fn detect_interface(override_name: Option<String>) -> Result<InterfaceInfo> 
         None => discover_default_interface().context("could not detect a default interface")?,
     };
 
-    info!("[NET] Detect interface: {}", name);
+    info!(target: "net", iface = %name, "interface_detect_start");
     let addrs = netlink_get_ipv4_addresses(&name)
         .with_context(|| format!("collecting IPv4 data for {name}"))?;
     let mut ipv4_list = Vec::new();
@@ -379,9 +385,14 @@ pub fn detect_interface(override_name: Option<String>) -> Result<InterfaceInfo> 
         }
     }
     if ipv4_list.is_empty() {
-        warn!("[NET] {} has no IPv4 addresses", name);
+        warn!(target: "net", iface = %name, "interface_ipv4_missing");
     } else {
-        info!("[NET] {} IPv4 addresses: {}", name, ipv4_list.join(", "));
+        info!(
+            target: "net",
+            iface = %name,
+            ipv4 = %ipv4_list.join(", "),
+            "interface_ipv4_addresses"
+        );
     }
     let (addr, prefix) = addrs
         .into_iter()
@@ -402,13 +413,18 @@ pub fn detect_interface(override_name: Option<String>) -> Result<InterfaceInfo> 
 pub fn detect_ethernet_interface(override_name: Option<String>) -> Result<InterfaceInfo> {
     let summaries = list_interface_summaries().context("listing interfaces")?;
     info!(
-        "[NET] Detect ethernet interface override={:?}",
-        override_name
+        target: "net",
+        override_name = ?override_name,
+        "ethernet_detect_start"
     );
     for summary in &summaries {
         debug!(
-            "[NET] iface {} kind={} state={} ip={:?}",
-            summary.name, summary.kind, summary.oper_state, summary.ip
+            target: "net",
+            iface = %summary.name,
+            kind = %summary.kind,
+            state = %summary.oper_state,
+            ip = ?summary.ip,
+            "interface_summary"
         );
     }
 
@@ -418,8 +434,10 @@ pub fn detect_ethernet_interface(override_name: Option<String>) -> Result<Interf
     };
     let select = |summary: &InterfaceSummary, reason: &str| -> Result<InterfaceInfo> {
         info!(
-            "[NET] Selected ethernet interface {} ({})",
-            summary.name, reason
+            target: "net",
+            iface = %summary.name,
+            reason = %reason,
+            "ethernet_selected"
         );
         detect_interface(Some(summary.name.clone()))
     };
@@ -464,12 +482,15 @@ pub fn discover_default_interface() -> Result<String> {
     if let Ok(Some(route)) = read_default_route() {
         if let Some(name) = route.interface {
             info!(
-                "[NET] Default route interface: {} gateway={:?} metric={:?}",
-                name, route.gateway, route.metric
+                target: "net",
+                iface = %name,
+                gateway = ?route.gateway,
+                metric = ?route.metric,
+                "default_route_interface"
             );
             return Ok(name);
         }
-        warn!("[NET] Default route found without an interface");
+        warn!(target: "net", "default_route_missing_interface");
     }
 
     let entries = fs::read_dir("/sys/class/net").context("listing network interfaces")?;
@@ -478,7 +499,7 @@ pub fn discover_default_interface() -> Result<String> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name != "lo" {
-            info!("[NET] Default interface fallback: {}", name);
+            info!(target: "net", iface = %name, "default_interface_fallback");
             return Ok(name.into());
         }
     }
@@ -1571,8 +1592,11 @@ pub fn read_default_route() -> Result<Option<DefaultRouteInfo>> {
 
     if let Some(route) = route {
         debug!(
-            "[NET] Default route: iface={:?} gateway={:?} metric={:?}",
-            route.interface_index, route.gateway, route.metric
+            target: "net",
+            iface_index = ?route.interface_index,
+            gateway = ?route.gateway,
+            metric = ?route.metric,
+            "default_route"
         );
         Ok(Some(DefaultRouteInfo {
             interface: route.interface_index.and_then(|idx| iface_map.get(&idx).cloned()),
@@ -1583,7 +1607,7 @@ pub fn read_default_route() -> Result<Option<DefaultRouteInfo>> {
             metric: route.metric,
         }))
     } else {
-        warn!("[NET] No default route found");
+        warn!(target: "net", "default_route_missing");
         Ok(None)
     }
 }
@@ -1592,7 +1616,12 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
     let ifindex = match netlink_get_interface_index(interface) {
         Ok(idx) => idx,
         Err(err) => {
-            warn!("[NET] Failed to resolve ifindex for {}: {}", interface, err);
+            warn!(
+                target: "net",
+                iface = %interface,
+                error = %err,
+                "ifindex_lookup_failed"
+            );
             return Ok(None);
         }
     };
@@ -1617,7 +1646,12 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
     if let Some(route) = routes.iter().find(|r| r.interface_index == Some(ifindex) && is_default(r))
     {
         if let Some(gateway) = find_gateway(route) {
-            info!("[NET] Gateway for {}: {}", interface, gateway);
+            info!(
+                target: "net",
+                iface = %interface,
+                gateway = %gateway,
+                "gateway_detected"
+            );
             return Ok(Some(gateway));
         }
     }
@@ -1627,12 +1661,21 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
         .find(|r| r.interface_index == Some(ifindex) && r.gateway.is_some())
     {
         if let Some(gateway) = find_gateway(route) {
-            info!("[NET] Gateway for {}: {}", interface, gateway);
+            info!(
+                target: "net",
+                iface = %interface,
+                gateway = %gateway,
+                "gateway_detected"
+            );
             return Ok(Some(gateway));
         }
     }
 
-    warn!("[NET] No gateway found for {}", interface);
+    warn!(
+        target: "net",
+        iface = %interface,
+        "gateway_missing"
+    );
     Ok(None)
 }
 
@@ -1643,6 +1686,7 @@ fn dhcp_transport_label(transport: DhcpTransport) -> String {
     }
 }
 
+#[tracing::instrument(target = "net", skip(hostname), fields(iface = %interface))]
 fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAttemptResult> {
     #[cfg(target_os = "linux")]
     {
@@ -1673,11 +1717,12 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                     record_lease(interface, &ops_lease);
                     record_dhcp_outcome(interface, true, transport, Some(&ops_lease), None);
                     tracing::info!(
-                        "[ROUTE] DHCP lease acquired on {}: {}/{} gateway={:?}",
-                        interface,
-                        ops_lease.ip,
-                        ops_lease.prefix_len,
-                        ops_lease.gateway
+                        target: "net",
+                        iface = %interface,
+                        address = %ops_lease.ip,
+                        prefix_len = ops_lease.prefix_len,
+                        gateway = ?ops_lease.gateway,
+                        "dhcp_lease_acquired"
                     );
                     Ok(DhcpAttemptResult::Lease(ops_lease))
                 } else {
@@ -1685,7 +1730,12 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                         .error
                         .unwrap_or_else(|| "DHCP failed without error detail".to_string());
                     record_dhcp_outcome(interface, false, transport, None, Some(error.clone()));
-                    tracing::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, error);
+                    tracing::warn!(
+                        target: "net",
+                        iface = %interface,
+                        error = %error,
+                        "dhcp_acquire_failed"
+                    );
                     Ok(DhcpAttemptResult::Failed(error))
                 }
             }
@@ -1697,7 +1747,12 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                     None,
                     Some(err.to_string()),
                 );
-                tracing::warn!("[ROUTE] DHCP acquire failed on {}: {}", interface, err);
+                tracing::warn!(
+                    target: "net",
+                    iface = %interface,
+                    error = %err,
+                    "dhcp_acquire_failed"
+                );
                 Ok(DhcpAttemptResult::Failed(err.to_string()))
             }
         }
@@ -1712,16 +1767,22 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
     }
 }
 
+#[tracing::instrument(target = "net", fields(iface = %interface))]
 pub fn acquire_dhcp_lease(interface: &str) -> Result<DhcpAttemptResult> {
     let _guard = lock_interface(interface);
     dhcp_acquire_report(interface, None)
 }
 
+#[tracing::instrument(target = "net", fields(iface = %interface))]
 pub fn try_acquire_dhcp_lease(interface: &str) -> Result<DhcpAttemptResult> {
     let _guard = match try_lock_interface(interface) {
         Some(guard) => guard,
         None => {
-            tracing::debug!("[ROUTE] DHCP acquire skipped on {} (lock busy)", interface);
+            tracing::debug!(
+                target: "net",
+                iface = %interface,
+                "dhcp_acquire_skipped_lock_busy"
+            );
             return Ok(DhcpAttemptResult::Busy);
         }
     };
@@ -1945,19 +2006,21 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
             })
             .collect::<Vec<_>>();
         tracing::info!(
-            "[ROUTE] ensure_route_no_isolation iface={} operstate={} carrier={} ipv4={:?}",
-            interface,
-            oper_state,
-            carrier,
-            ipv4_addrs
+            target: "net",
+            iface = %interface,
+            operstate = %oper_state,
+            carrier = %carrier,
+            ipv4 = ?ipv4_addrs,
+            "route_no_isolation_snapshot"
         );
     }
 
     let mut gateway = candidate_gateway(interface);
     if gateway.is_none() {
         tracing::info!(
-            "[ROUTE] No gateway detected for {}; attempting DHCP acquire",
-            interface
+            target: "net",
+            iface = %interface,
+            "gateway_missing_dhcp_attempt"
         );
         gateway = dhcp_acquire_gateway(interface)?;
     }
@@ -1967,7 +2030,11 @@ pub fn ensure_route_no_isolation(interface: &str) -> Result<Option<Ipv4Addr>> {
         return Ok(Some(gateway));
     }
 
-    tracing::warn!("[ROUTE] No gateway found for {} after DHCP", interface);
+    tracing::warn!(
+        target: "net",
+        iface = %interface,
+        "gateway_missing_after_dhcp"
+    );
     let _ = select_active_uplink();
     Ok(None)
 }
@@ -2027,6 +2094,261 @@ pub fn find_interface_by_mac(mac: &str) -> Option<String> {
     None
 }
 
+pub fn apply_interface_isolation_strict(allowed: &[String]) -> Result<()> {
+    let ops = Arc::new(crate::system::ops::RealNetOps) as Arc<dyn crate::system::ops::NetOps>;
+    let outcome = apply_interface_isolation_with_ops_strict(ops, allowed)?;
+    if !outcome.errors.is_empty() {
+        let error_msgs: Vec<String> = outcome
+            .errors
+            .iter()
+            .map(|e| format!("{}: {}", e.interface, e.message))
+            .collect();
+        bail!("Interface isolation errors: {}", error_msgs.join("; "));
+    }
+    Ok(())
+}
+
+pub fn apply_interface_isolation_with_ops_strict(
+    ops: Arc<dyn crate::system::ops::NetOps>,
+    allowed: &[String],
+) -> Result<crate::system::ops::IsolationOutcome> {
+    apply_interface_isolation_with_ops_strict_impl(ops, allowed, false)
+}
+
+pub(crate) fn apply_interface_isolation_with_ops_block_all(
+    ops: Arc<dyn crate::system::ops::NetOps>,
+) -> Result<crate::system::ops::IsolationOutcome> {
+    apply_interface_isolation_with_ops_strict_impl(ops, &[], true)
+}
+
+fn apply_interface_isolation_with_ops_strict_impl(
+    ops: Arc<dyn crate::system::ops::NetOps>,
+    allowed: &[String],
+    allow_empty: bool,
+) -> Result<crate::system::ops::IsolationOutcome> {
+    use std::collections::HashSet;
+
+    let allowed_set: HashSet<String> = allowed
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    if allowed_set.is_empty() && !allow_empty {
+        warn!(target: "net", "interface_isolation_empty_allow_list");
+        bail!("Cannot enforce isolation: no allowed interfaces provided");
+    }
+
+    debug!(
+        target: "net",
+        allow_list = ?allowed_set,
+        "interface_isolation_strict_allow_list"
+    );
+
+    let routes = RouteManager::new(Arc::clone(&ops));
+    let interfaces = ops.list_interfaces()?;
+    let mut allowed_vec = Vec::new();
+    let mut blocked_vec = Vec::new();
+    let mut errors = Vec::new();
+
+    if !allow_empty && !interfaces.iter().any(|iface| allowed_set.contains(&iface.name)) {
+        let allowed_list = allowed_set.iter().cloned().collect::<Vec<_>>().join(", ");
+        warn!(
+            target: "net",
+            allowed_list = %allowed_list,
+            "interface_isolation_missing_allowed"
+        );
+        bail!(
+            "Cannot enforce isolation: none of the allowed interfaces exist ({})",
+            allowed_list
+        );
+    }
+
+    for iface_info in interfaces {
+        let is_allowed = allowed_set.contains(&iface_info.name);
+        debug!(
+            target: "net",
+            iface = %iface_info.name,
+            allowed = is_allowed,
+            wireless = iface_info.is_wireless,
+            "interface_isolation_strict_eval"
+        );
+
+        if is_allowed {
+            if let Err(e) = ops.release_dhcp(&iface_info.name) {
+                warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
+            }
+            if let Err(e) = ops.flush_addresses(&iface_info.name) {
+                warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
+            }
+            if let Err(e) = routes.delete_default_route(&iface_info.name) {
+                debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
+            }
+
+            if iface_info.is_wireless {
+                if let Err(e) = ops.set_rfkill_block(&iface_info.name, false) {
+                    errors.push(crate::system::ops::ErrorEntry {
+                        interface: iface_info.name.clone(),
+                        message: format!("rfkill unblock failed: {}", e),
+                    });
+                }
+                if let Ok(blocked) = ops.is_rfkill_blocked(&iface_info.name) {
+                    if blocked {
+                        errors.push(crate::system::ops::ErrorEntry {
+                            interface: iface_info.name.clone(),
+                            message: "rfkill still blocked after unblock".to_string(),
+                        });
+                    }
+                }
+            }
+
+            if let Err(e) = ops.bring_up(&iface_info.name) {
+                errors.push(crate::system::ops::ErrorEntry {
+                    interface: iface_info.name.clone(),
+                    message: format!("bring up failed: {}", e),
+                });
+            }
+
+            if let Err(e) = wait_for_admin_state(&*ops, &iface_info.name, true, Duration::from_secs(10)) {
+                errors.push(crate::system::ops::ErrorEntry {
+                    interface: iface_info.name.clone(),
+                    message: format!("wait for up failed: {}", e),
+                });
+            }
+
+            allowed_vec.push(iface_info.name);
+        } else {
+            if let Err(e) = ops.release_dhcp(&iface_info.name) {
+                warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
+            }
+            if let Err(e) = ops.flush_addresses(&iface_info.name) {
+                warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
+            }
+            if let Err(e) = routes.delete_default_route(&iface_info.name) {
+                debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
+            }
+
+            if let Err(e) = ops.bring_down(&iface_info.name) {
+                errors.push(crate::system::ops::ErrorEntry {
+                    interface: iface_info.name.clone(),
+                    message: format!("bring down failed: {}", e),
+                });
+            }
+
+            if let Err(e) = wait_for_admin_state(&*ops, &iface_info.name, false, Duration::from_secs(5)) {
+                errors.push(crate::system::ops::ErrorEntry {
+                    interface: iface_info.name.clone(),
+                    message: format!("wait for down failed: {}", e),
+                });
+            }
+
+            if iface_info.is_wireless {
+                if let Err(e) = ops.set_rfkill_block(&iface_info.name, true) {
+                    errors.push(crate::system::ops::ErrorEntry {
+                        interface: iface_info.name.clone(),
+                        message: format!("rfkill block failed: {}", e),
+                    });
+                }
+                if let Ok(blocked) = ops.is_rfkill_blocked(&iface_info.name) {
+                    if !blocked {
+                        errors.push(crate::system::ops::ErrorEntry {
+                            interface: iface_info.name.clone(),
+                            message: "rfkill not blocked after block".to_string(),
+                        });
+                    }
+                }
+            }
+
+            blocked_vec.push(iface_info.name);
+        }
+    }
+
+    if let Err(e) = verify_only_allow_list_admin_up(&*ops, &allowed_set) {
+        errors.push(crate::system::ops::ErrorEntry {
+            interface: "invariant".to_string(),
+            message: e.to_string(),
+        });
+    }
+
+    Ok(crate::system::ops::IsolationOutcome {
+        allowed: allowed_vec,
+        blocked: blocked_vec,
+        errors,
+    })
+}
+
+pub(crate) fn verify_only_allow_list_admin_up(
+    ops: &dyn crate::system::ops::NetOps,
+    allowed: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let interfaces = ops.list_interfaces()?;
+    let mut admin_up = Vec::new();
+    for iface in &interfaces {
+        if ops.admin_is_up(&iface.name)? {
+            admin_up.push(iface.name.clone());
+        }
+    }
+
+    for iface in &admin_up {
+        if !allowed.contains(iface) {
+            bail!("Isolation invariant violated: {} is UP but not allowed", iface);
+        }
+    }
+
+    for iface in allowed {
+        if !admin_up.contains(iface) {
+            bail!("Isolation invariant violated: allowed {} is not UP", iface);
+        }
+    }
+
+    for iface in &interfaces {
+        if allowed.contains(&iface.name) || !iface.is_wireless {
+            continue;
+        }
+        match ops.is_rfkill_blocked(&iface.name) {
+            Ok(true) => {}
+            Ok(false) => bail!(
+                "Isolation invariant violated: {} is wireless but not rfkill blocked",
+                iface.name
+            ),
+            Err(e) => {
+                bail!("Isolation invariant violated: rfkill check failed for {}: {}", iface.name, e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn wait_for_admin_state(
+    ops: &dyn crate::system::ops::NetOps,
+    iface: &str,
+    desired_up: bool,
+    timeout: Duration,
+) -> Result<()> {
+    if ops.admin_is_up(iface)? == desired_up {
+        return Ok(());
+    }
+
+    let start = Instant::now();
+    loop {
+        if ops.admin_is_up(iface)? == desired_up {
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            bail!(
+                "Timed out waiting for {} to become {}",
+                iface,
+                if desired_up { "UP" } else { "DOWN" }
+            );
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
     let outcome = apply_interface_isolation_with_ops(&crate::system::ops::RealNetOps, allowed)?;
     if !outcome.errors.is_empty() {
@@ -2052,10 +2374,14 @@ pub fn apply_interface_isolation_with_ops(
         .collect();
 
     if allowed_set.is_empty() {
-        warn!("[NET] Interface isolation failed: empty allow list");
+        warn!(target: "net", "interface_isolation_empty_allow_list");
         bail!("Cannot enforce isolation: no allowed interfaces provided");
     }
-    debug!("[NET] Interface isolation allow list: {:?}", allowed_set);
+    debug!(
+        target: "net",
+        allow_list = ?allowed_set,
+        "interface_isolation_allow_list"
+    );
 
     let interfaces = ops.list_interfaces()?;
     let mut allowed_vec = Vec::new();
@@ -2065,8 +2391,9 @@ pub fn apply_interface_isolation_with_ops(
     if !interfaces.iter().any(|iface| allowed_set.contains(&iface.name)) {
         let allowed_list = allowed_set.iter().cloned().collect::<Vec<_>>().join(", ");
         warn!(
-            "[NET] Interface isolation failed: allowed interfaces missing ({})",
-            allowed_list
+            target: "net",
+            allowed_list = %allowed_list,
+            "interface_isolation_missing_allowed"
         );
         bail!(
             "Cannot enforce isolation: none of the allowed interfaces exist ({})",
@@ -2077,8 +2404,11 @@ pub fn apply_interface_isolation_with_ops(
     for iface_info in interfaces {
         let is_allowed = allowed_set.contains(&iface_info.name);
         debug!(
-            "[NET] Interface isolation {} allowed={} wireless={}",
-            iface_info.name, is_allowed, iface_info.is_wireless
+            target: "net",
+            iface = %iface_info.name,
+            allowed = is_allowed,
+            wireless = iface_info.is_wireless,
+            "interface_isolation_eval"
         );
 
         if is_allowed {
@@ -2121,8 +2451,8 @@ pub fn enforce_single_interface(interface: &str) -> Result<()> {
     if interface.is_empty() {
         bail!("Cannot enforce isolation: no interface specified");
     }
-    info!("[NET] Enforcing single interface: {}", interface);
-    apply_interface_isolation(&[interface.to_string()])
+    info!(target: "net", iface = %interface, "enforce_single_interface");
+    apply_interface_isolation_strict(&[interface.to_string()])
 }
 
 pub fn set_default_route(interface: &str, gateway: Ipv4Addr) -> Result<()> {
@@ -2165,8 +2495,9 @@ pub fn set_default_route_with_metric(
 pub fn rewrite_dns_servers(interface: &str, dns_servers: &[Ipv4Addr]) -> Result<()> {
     let servers = if dns_servers.is_empty() {
         tracing::warn!(
-            "[DNS] DHCP provided no DNS for {}; using fallback servers",
-            interface
+            target: "net",
+            iface = %interface,
+            "dns_missing_fallback"
         );
         fallback_dns()
     } else {
@@ -2204,7 +2535,7 @@ pub fn select_best_interface(root: &Path, prefer_wifi: bool) -> Result<Option<St
 
     if let Some(pref) = read_interface_preference(root, "system_preferred")? {
         if summaries.iter().any(|s| s.name == pref && s.ip.is_some()) {
-            info!("[NET] Selected preferred interface: {}", pref);
+            info!(target: "net", iface = %pref, "preferred_interface_selected");
             return Ok(Some(pref));
         }
     }
@@ -2214,7 +2545,11 @@ pub fn select_best_interface(root: &Path, prefer_wifi: bool) -> Result<Option<St
             .iter()
             .any(|s| s.name == default_route && s.ip.is_some())
         {
-            info!("[NET] Selected default-route interface: {}", default_route);
+            info!(
+                target: "net",
+                iface = %default_route,
+                "default_route_interface_selected"
+            );
             return Ok(Some(default_route));
         }
     }
@@ -2224,7 +2559,11 @@ pub fn select_best_interface(root: &Path, prefer_wifi: bool) -> Result<Option<St
             .iter()
             .find(|s| s.kind == "wireless" && s.ip.is_some())
         {
-            info!("[NET] Selected wireless interface: {}", wireless.name);
+            info!(
+                target: "net",
+                iface = %wireless.name,
+                "wireless_interface_selected"
+            );
             return Ok(Some(wireless.name.clone()));
         }
     }
@@ -2235,7 +2574,7 @@ pub fn select_best_interface(root: &Path, prefer_wifi: bool) -> Result<Option<St
             .iter()
             .any(|s| s.name == candidate && s.ip.is_some())
         {
-            info!("[NET] Selected priority interface: {}", candidate);
+            info!(target: "net", iface = %candidate, "priority_interface_selected");
             return Ok(Some(candidate.to_string()));
         }
     }
@@ -2247,7 +2586,7 @@ pub fn select_best_interface(root: &Path, prefer_wifi: bool) -> Result<Option<St
         .or_else(|| summaries.first().map(|s| s.name.clone()))
         .ok_or_else(|| anyhow!("No interfaces available"))
         .map(|name| {
-            info!("[NET] Selected fallback interface: {}", name);
+            info!(target: "net", iface = %name, "fallback_interface_selected");
             name
         })
         .map(Some)
@@ -2501,7 +2840,11 @@ pub fn select_wifi_interface(preferred: Option<String>) -> Result<String> {
         if summary.kind != "wireless" {
             bail!("interface {} is not wireless", name);
         }
-        info!("[NET] Selected WiFi interface override: {}", name);
+        info!(
+            target: "wifi",
+            iface = %name,
+            "wifi_interface_override_selected"
+        );
         return Ok(name);
     }
     let summaries = list_interface_summaries()?;
@@ -2509,11 +2852,19 @@ pub fn select_wifi_interface(preferred: Option<String>) -> Result<String> {
         .iter()
         .find(|s| s.kind == "wireless" && s.ip.is_some())
     {
-        info!("[NET] Selected active WiFi interface: {}", active.name);
+        info!(
+            target: "wifi",
+            iface = %active.name,
+            "wifi_interface_active_selected"
+        );
         return Ok(active.name.clone());
     }
     if let Some(any_wireless) = summaries.iter().find(|s| s.kind == "wireless") {
-        info!("[NET] Selected available WiFi interface: {}", any_wireless.name);
+        info!(
+            target: "wifi",
+            iface = %any_wireless.name,
+            "wifi_interface_available_selected"
+        );
         return Ok(any_wireless.name.clone());
     }
     Err(anyhow!("No wireless interfaces found"))
@@ -2537,7 +2888,12 @@ pub fn scan_wifi_networks_with_timeout(
 
     if let Ok(Some(idx)) = rfkill_find_index(interface) {
         if let Err(e) = rfkill_unblock(idx) {
-            tracing::warn!("Failed to unblock rfkill for {interface}: {e}");
+            tracing::warn!(
+                target: "wifi",
+                iface = %interface,
+                error = %e,
+                "rfkill_unblock_failed"
+            );
         }
     }
 
@@ -2618,7 +2974,11 @@ fn signal_to_quality(dbm: i32) -> i32 {
 fn log_wifi_preflight(interface: &str) {
     let base = Path::new("/sys/class/net").join(interface);
     if !base.exists() {
-        tracing::warn!("[WIFI] Preflight: interface {} not found in sysfs", interface);
+        tracing::warn!(
+            target: "wifi",
+            iface = %interface,
+            "wifi_preflight_missing_sysfs"
+        );
         return;
     }
 
@@ -2640,12 +3000,13 @@ fn log_wifi_preflight(interface: &str) {
         })
         .collect::<Vec<_>>();
     tracing::info!(
-        "[WIFI] Preflight iface={} operstate={} carrier={} mac={} ipv4={:?}",
-        interface,
-        oper,
-        carrier,
-        mac,
-        ipv4
+        target: "wifi",
+        iface = %interface,
+        operstate = %oper,
+        carrier = %carrier,
+        mac = %mac,
+        ipv4 = ?ipv4,
+        "wifi_preflight_state"
     );
 
     if let Ok(Some(idx)) = rfkill_find_index(interface) {
@@ -2654,15 +3015,20 @@ fn log_wifi_preflight(interface: &str) {
         let hard = read_trim(&rf_base.join("hard"));
         let name = read_trim(&rf_base.join("name"));
         tracing::info!(
-            "[WIFI] Preflight rfkill iface={} idx={} name={} soft={} hard={}",
-            interface,
-            idx,
-            name,
-            soft,
-            hard
+            target: "wifi",
+            iface = %interface,
+            idx = idx,
+            name = %name,
+            soft = %soft,
+            hard = %hard,
+            "wifi_preflight_rfkill"
         );
     } else {
-        tracing::info!("[WIFI] Preflight rfkill iface={} idx=none", interface);
+        tracing::info!(
+            target: "wifi",
+            iface = %interface,
+            "wifi_preflight_rfkill_missing"
+        );
     }
 
 }
@@ -2718,13 +3084,18 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
     let dir = wifi_profiles_dir(root);
     if !dir.exists() {
         tracing::info!(
-            "WiFi profiles directory does not exist yet: {}",
-            dir.display()
+            target: "wifi",
+            path = %dir.display(),
+            "wifi_profiles_missing"
         );
         return Ok(profiles);
     }
 
-    tracing::info!("Loading WiFi profiles from: {}", dir.display());
+    tracing::info!(
+        target: "wifi",
+        path = %dir.display(),
+        "wifi_profiles_load_start"
+    );
 
     let entries = fs::read_dir(&dir)
         .with_context(|| format!("reading profiles directory {}", dir.display()))?;
@@ -2733,7 +3104,11 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!("Error reading directory entry: {e}");
+                tracing::warn!(
+                    target: "wifi",
+                    error = %e,
+                    "wifi_profiles_entry_read_failed"
+                );
                 continue;
             }
         };
@@ -2758,7 +3133,12 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                             copy
                         }
                         Err(e) => {
-                            tracing::warn!("Invalid UTF-8 in profile {}: {e}", path.display());
+                            tracing::warn!(
+                                target: "wifi",
+                                path = %path.display(),
+                                error = %e,
+                                "wifi_profile_utf8_invalid"
+                            );
                             bytes.zeroize();
                             continue;
                         }
@@ -2767,7 +3147,12 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                     out
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to decrypt profile {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "wifi",
+                        path = %path.display(),
+                        error = %e,
+                        "wifi_profile_decrypt_failed"
+                    );
                     continue;
                 }
             }
@@ -2779,7 +3164,12 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                     out
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to read profile {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "wifi",
+                        path = %path.display(),
+                        error = %e,
+                        "wifi_profile_read_failed"
+                    );
                     continue;
                 }
             }
@@ -2793,7 +3183,12 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                     .unwrap_or_default()
                     .to_string();
 
-                tracing::debug!("Loaded profile: {} from {}", profile.ssid, filename);
+                tracing::debug!(
+                    target: "wifi",
+                    ssid = %profile.ssid,
+                    filename = %filename,
+                    "wifi_profile_loaded"
+                );
 
                 profiles.push(WifiProfileRecord {
                     ssid: profile.ssid,
@@ -2806,7 +3201,12 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
                 });
             }
             Err(err) => {
-                tracing::warn!("Failed to parse Wi-Fi profile {}: {err}", path.display());
+                tracing::warn!(
+                    target: "wifi",
+                    path = %path.display(),
+                    error = %err,
+                    "wifi_profile_parse_failed"
+                );
             }
         }
     }
@@ -2817,19 +3217,31 @@ pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
             .then_with(|| a.ssid.to_lowercase().cmp(&b.ssid.to_lowercase()))
     });
 
-    tracing::info!("Loaded {} WiFi profile(s)", profiles.len());
+    tracing::info!(
+        target: "wifi",
+        count = profiles.len(),
+        "wifi_profiles_loaded"
+    );
     Ok(profiles)
 }
 
 pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredWifiProfile>> {
     let dir = wifi_profiles_dir(root);
     if !dir.exists() {
-        tracing::warn!("WiFi profiles directory does not exist: {}", dir.display());
+        tracing::warn!(
+            target: "wifi",
+            path = %dir.display(),
+            "wifi_profiles_directory_missing"
+        );
         return Ok(None);
     }
 
     let identifier_lower = identifier.trim().to_lowercase();
-    tracing::info!("Loading WiFi profile for identifier: {identifier}");
+    tracing::info!(
+        target: "wifi",
+        identifier = %identifier,
+        "wifi_profile_lookup_start"
+    );
 
     // Try direct filename match first (case-insensitive), support .json and .json.enc
     let sanitized = sanitize_profile_name(identifier);
@@ -2838,7 +3250,11 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
 
     for candidate in [&direct_plain, &direct_enc] {
         if candidate.exists() {
-            tracing::info!("Found profile by direct match: {}", candidate.display());
+            tracing::info!(
+                target: "wifi",
+                path = %candidate.display(),
+                "wifi_profile_direct_match"
+            );
             let contents = if candidate.extension().and_then(|s| s.to_str()) == Some("enc") {
                 let mut bytes = rustyjack_encryption::decrypt_file(candidate)
                     .with_context(|| format!("decrypting profile {}", candidate.display()))?;
@@ -2865,7 +3281,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
     }
 
     // Search all profiles for case-insensitive SSID match
-    tracing::info!("Direct match not found, searching all profiles...");
+    tracing::info!(target: "wifi", "wifi_profile_direct_match_missing");
     for entry in fs::read_dir(&dir)
         .with_context(|| format!("reading profiles directory {}", dir.display()))?
     {
@@ -2890,7 +3306,12 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
                             copy
                         }
                         Err(e) => {
-                            tracing::warn!("Could not parse profile file {}: {e}", path.display());
+                            tracing::warn!(
+                                target: "wifi",
+                                path = %path.display(),
+                                error = %e,
+                                "wifi_profile_parse_failed"
+                            );
                             bytes.zeroize();
                             continue;
                         }
@@ -2899,7 +3320,12 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
                     out
                 }
                 Err(e) => {
-                    tracing::warn!("Could not decrypt profile file {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "wifi",
+                        path = %path.display(),
+                        error = %e,
+                        "wifi_profile_decrypt_failed"
+                    );
                     continue;
                 }
             }
@@ -2911,7 +3337,12 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
                     out
                 }
                 Err(e) => {
-                    tracing::warn!("Could not read profile file {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "wifi",
+                        path = %path.display(),
+                        error = %e,
+                        "wifi_profile_read_failed"
+                    );
                     continue;
                 }
             }
@@ -2920,19 +3351,32 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
         let profile = match serde_json::from_str::<WifiProfile>(&contents) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("Could not parse profile file {}: {e}", path.display());
+                tracing::warn!(
+                    target: "wifi",
+                    path = %path.display(),
+                    error = %e,
+                    "wifi_profile_parse_failed"
+                );
                 continue;
             }
         };
 
         // Case-insensitive comparison
         if profile.ssid.trim().to_lowercase() == identifier_lower {
-            tracing::info!("Found profile by SSID match: {}", path.display());
+            tracing::info!(
+                target: "wifi",
+                path = %path.display(),
+                "wifi_profile_ssid_match"
+            );
             return Ok(Some(StoredWifiProfile { profile, path }));
         }
     }
 
-    tracing::info!("No matching profile found for: {identifier}");
+    tracing::info!(
+        target: "wifi",
+        identifier = %identifier,
+        "wifi_profile_not_found"
+    );
     Ok(None)
 }
 
@@ -2948,7 +3392,12 @@ pub fn ensure_default_wifi_profiles(root: &Path) -> Result<usize> {
             Ok(Some(_)) => continue,
             Ok(None) => {}
             Err(err) => {
-                tracing::warn!("Failed to check WiFi profile {}: {}", ssid, err);
+                tracing::warn!(
+                    target: "wifi",
+                    ssid = %ssid,
+                    error = %err,
+                    "wifi_profile_check_failed"
+                );
                 continue;
             }
         }
@@ -2966,11 +3415,21 @@ pub fn ensure_default_wifi_profiles(root: &Path) -> Result<usize> {
 
         match save_wifi_profile(root, &profile) {
             Ok(path) => {
-                tracing::info!("Seeded WiFi profile {} at {}", ssid, path.display());
+                tracing::info!(
+                    target: "wifi",
+                    ssid = %ssid,
+                    path = %path.display(),
+                    "wifi_profile_seeded"
+                );
                 created += 1;
             }
             Err(err) => {
-                tracing::warn!("Failed to seed WiFi profile {}: {}", ssid, err);
+                tracing::warn!(
+                    target: "wifi",
+                    ssid = %ssid,
+                    error = %err,
+                    "wifi_profile_seed_failed"
+                );
             }
         }
     }
@@ -2999,7 +3458,11 @@ pub fn save_wifi_profile(root: &Path, profile: &WifiProfile) -> Result<PathBuf> 
         }
     }
 
-    tracing::info!("Saving WiFi profile for SSID: {}", profile.ssid);
+    tracing::info!(
+        target: "wifi",
+        ssid = %profile.ssid,
+        "wifi_profile_save_start"
+    );
 
     let dir = wifi_profiles_dir(root);
     fs::create_dir_all(&dir)
@@ -3036,23 +3499,35 @@ pub fn save_wifi_profile(root: &Path, profile: &WifiProfile) -> Result<PathBuf> 
         let _ = fs::remove_file(&legacy);
     }
 
-    tracing::info!("Writing profile to: {}", path.display());
+    tracing::info!(
+        target: "wifi",
+        path = %path.display(),
+        "wifi_profile_write_start"
+    );
     write_wifi_profile(&path, &to_save)
         .with_context(|| format!("writing WiFi profile to {}", path.display()))?;
 
-    tracing::info!("WiFi profile saved successfully");
+    tracing::info!(target: "wifi", "wifi_profile_save_complete");
     Ok(path)
 }
 
 pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
     let dir = wifi_profiles_dir(root);
     if !dir.exists() {
-        tracing::error!("Profile directory does not exist: {}", dir.display());
+        tracing::error!(
+            target: "wifi",
+            path = %dir.display(),
+            "wifi_profile_dir_missing"
+        );
         bail!("Profile directory missing at {}", dir.display());
     }
 
     let identifier_lower = identifier.trim().to_lowercase();
-    tracing::info!("Attempting to delete WiFi profile: {identifier}");
+    tracing::info!(
+        target: "wifi",
+        identifier = %identifier,
+        "wifi_profile_delete_start"
+    );
 
     // Try direct filename match first (plain or encrypted)
     let sanitized = sanitize_profile_name(identifier);
@@ -3060,16 +3535,20 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
     let direct_enc = dir.join(format!("{sanitized}.json.enc"));
     for candidate in [&direct_plain, &direct_enc] {
         if candidate.exists() {
-            tracing::info!("Deleting profile by direct match: {}", candidate.display());
+            tracing::info!(
+                target: "wifi",
+                path = %candidate.display(),
+                "wifi_profile_delete_direct"
+            );
             fs::remove_file(candidate)
                 .with_context(|| format!("deleting profile at {}", candidate.display()))?;
-            tracing::info!("Profile deleted successfully");
+            tracing::info!(target: "wifi", "wifi_profile_delete_complete");
             return Ok(());
         }
     }
 
     // Search for case-insensitive match
-    tracing::info!("Direct match not found, searching all profiles...");
+    tracing::info!(target: "wifi", "wifi_profile_delete_search");
     for entry in fs::read_dir(&dir)
         .with_context(|| format!("reading profiles directory {}", dir.display()))?
     {
@@ -3094,7 +3573,12 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
                             copy
                         }
                         Err(e) => {
-                            tracing::warn!("Could not parse profile {}: {e}", path.display());
+                            tracing::warn!(
+                                target: "wifi",
+                                path = %path.display(),
+                                error = %e,
+                                "wifi_profile_parse_failed"
+                            );
                             bytes.zeroize();
                             continue;
                         }
@@ -3103,7 +3587,12 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
                     out
                 }
                 Err(e) => {
-                    tracing::warn!("Could not decrypt profile {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "wifi",
+                        path = %path.display(),
+                        error = %e,
+                        "wifi_profile_decrypt_failed"
+                    );
                     continue;
                 }
             }
@@ -3115,7 +3604,12 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
                     out
                 }
                 Err(e) => {
-                    tracing::warn!("Could not read profile {}: {e}", path.display());
+                    tracing::warn!(
+                        target: "wifi",
+                        path = %path.display(),
+                        error = %e,
+                        "wifi_profile_read_failed"
+                    );
                     continue;
                 }
             }
@@ -3124,21 +3618,34 @@ pub fn delete_wifi_profile(root: &Path, identifier: &str) -> Result<()> {
         let profile = match serde_json::from_str::<WifiProfile>(&contents) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("Could not parse profile {}: {e}", path.display());
+                tracing::warn!(
+                    target: "wifi",
+                    path = %path.display(),
+                    error = %e,
+                    "wifi_profile_parse_failed"
+                );
                 continue;
             }
         };
 
         if profile.ssid.trim().to_lowercase() == identifier_lower {
-            tracing::info!("Deleting profile by SSID match: {}", path.display());
+            tracing::info!(
+                target: "wifi",
+                path = %path.display(),
+                "wifi_profile_delete_match"
+            );
             fs::remove_file(&path)
                 .with_context(|| format!("deleting profile at {}", path.display()))?;
-            tracing::info!("Profile deleted successfully");
+            tracing::info!(target: "wifi", "wifi_profile_delete_complete");
             return Ok(());
         }
     }
 
-    tracing::error!("Profile not found: {identifier}");
+    tracing::error!(
+        target: "wifi",
+        identifier = %identifier,
+        "wifi_profile_not_found"
+    );
     bail!("Profile '{identifier}' not found")
 }
 
@@ -3173,7 +3680,8 @@ fn wifi_backend_from_env() -> StationBackendKind {
     {
         Some("external") | Some("wpa") | Some("wpa_supplicant") => {
             tracing::warn!(
-                "[WIFI] External wpa_supplicant backend disabled; using RustWpa2 instead"
+                target: "wifi",
+                "wpa_supplicant_backend_disabled"
             );
             StationBackendKind::RustWpa2
         }
@@ -3183,6 +3691,7 @@ fn wifi_backend_from_env() -> StationBackendKind {
     }
 }
 
+#[tracing::instrument(target = "wifi", skip(password), fields(iface = %interface, ssid = %ssid))]
 pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>) -> Result<()> {
     // Check permissions first
     check_network_permissions()?;
@@ -3201,7 +3710,12 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         bail!("Interface {} is not a wireless device", interface);
     }
 
-    tracing::info!("Connecting to WiFi: ssid={ssid}, interface={interface}");
+    tracing::info!(
+        target: "wifi",
+        iface = %interface,
+        ssid = %ssid,
+        "wifi_connect_start"
+    );
 
     log_wifi_preflight(interface);
 
@@ -3209,33 +3723,45 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         .with_context(|| "Failed to use tokio runtime for WiFi connect")?;
 
     let backend = wifi_backend_from_env();
-    tracing::info!("[WIFI] Station backend set to {:?}", backend);
+    tracing::info!(target: "wifi", backend = ?backend, "wifi_backend_selected");
 
     // Release DHCP lease
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(interface).await }) {
-        tracing::warn!("Failed to release DHCP lease for {}: {}", interface, e);
+        tracing::warn!(
+            target: "net",
+            iface = %interface,
+            error = %e,
+            "dhcp_release_failed"
+        );
     }
     runtime_sleep(std::time::Duration::from_millis(100));
 
     // Reset interface: down, flush, set to station, then up
     tracing::info!(
-        "Resetting interface {} for WiFi connect (down/flush/station/up)",
-        interface
+        target: "wifi",
+        iface = %interface,
+        "wifi_interface_reset"
     );
     netlink_set_interface_down(interface)
         .with_context(|| format!("bringing interface {interface} down"))?;
     runtime_sleep(std::time::Duration::from_millis(200));
     if let Err(e) = rt.block_on(async { rustyjack_netlink::flush_addresses(interface).await }) {
-        tracing::warn!("Failed to flush addresses on {}: {}", interface, e);
+        tracing::warn!(
+            target: "net",
+            iface = %interface,
+            error = %e,
+            "flush_addresses_failed"
+        );
     }
     {
         let mut wm =
             WirelessManager::new().map_err(|e| anyhow!("Failed to open nl80211 socket: {}", e))?;
         if let Err(e) = wm.set_mode(interface, InterfaceMode::Station) {
             tracing::warn!(
-                "Failed to set {} to station mode via nl80211 (continuing): {}",
-                interface,
-                e
+                target: "wifi",
+                iface = %interface,
+                error = %e,
+                "wifi_station_mode_set_failed"
             );
         }
     }
@@ -3262,15 +3788,16 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         .connect(&station_cfg)
         .with_context(|| format!("Failed to connect to {} via supplicant", ssid))?;
     tracing::info!(
-        "[WIFI] Station connection completed: state={:?} bssid={:?} freq={:?} attempts={} scan_ssid={}",
-        outcome.final_state,
-        outcome.selected_bssid,
-        outcome.selected_freq,
-        outcome.attempts,
-        outcome.used_scan_ssid
+        target: "wifi",
+        state = ?outcome.final_state,
+        bssid = ?outcome.selected_bssid,
+        freq = ?outcome.selected_freq,
+        attempts = outcome.attempts,
+        scan_ssid = outcome.used_scan_ssid,
+        "wifi_station_connected"
     );
 
-    tracing::info!("[WIFI] WPA connection successful, requesting DHCP lease...");
+    tracing::info!(target: "wifi", "wifi_wpa_connected_dhcp_start");
 
     // Request DHCP lease with retry
     let mut dhcp_success = false;
@@ -3280,20 +3807,30 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
             DhcpAttemptResult::Lease(lease) => {
                 dhcp_success = true;
                 tracing::info!(
-                    "DHCP lease acquired on attempt {}: {}/{}, gateway: {:?}",
-                    attempt,
-                    lease.ip,
-                    lease.prefix_len,
-                    lease.gateway
+                    target: "net",
+                    attempt = attempt,
+                    address = %lease.ip,
+                    prefix_len = lease.prefix_len,
+                    gateway = ?lease.gateway,
+                    "dhcp_lease_acquired"
                 );
                 break;
             }
             DhcpAttemptResult::Failed(err) => {
                 last_error = Some(err.clone());
-                tracing::warn!("DHCP attempt {} failed: {}", attempt, err);
+                tracing::warn!(
+                    target: "net",
+                    attempt = attempt,
+                    error = %err,
+                    "dhcp_attempt_failed"
+                );
             }
             DhcpAttemptResult::Busy => {
-                tracing::debug!("DHCP attempt {} skipped (lock busy)", attempt);
+                tracing::debug!(
+                    target: "net",
+                    attempt = attempt,
+                    "dhcp_attempt_skipped_lock_busy"
+                );
             }
         }
 
@@ -3309,7 +3846,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         bail!("DHCP lease acquisition failed: {}", reason);
     }
 
-    tracing::info!("WiFi connection process completed for {ssid}");
+    tracing::info!(target: "wifi", ssid = %ssid, "wifi_connect_complete");
     Ok(())
 }
 
@@ -3320,28 +3857,40 @@ pub fn disconnect_wifi_interface(interface: Option<String>) -> Result<String> {
         iface
     } else {
         auto_detect_wifi_interface()?.ok_or_else(|| {
-            tracing::error!("No Wi-Fi interface found to disconnect");
+            tracing::error!(target: "wifi", "wifi_disconnect_no_interface");
             anyhow!("No Wi-Fi interface to disconnect")
         })?
     };
 
-    tracing::info!("Disconnecting WiFi interface: {iface}");
+    let span = tracing::info_span!(target: "wifi", "wifi_disconnect", iface = %iface);
+    let _guard = span.enter();
+    tracing::info!(target: "wifi", iface = %iface, "wifi_disconnect_start");
 
     let _rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for disconnect")?;
     if let Err(e) = rustyjack_netlink::station_disconnect(&iface) {
-        tracing::error!("nl80211 disconnect failed for {iface}: {e}");
+        tracing::error!(
+            target: "wifi",
+            iface = %iface,
+            error = %e,
+            "wifi_disconnect_failed"
+        );
         bail!("Failed to disconnect {iface}: {e}");
     }
 
-    tracing::info!("Releasing DHCP lease for {iface}");
+    tracing::info!(target: "net", iface = %iface, "dhcp_release_start");
     let rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for DHCP release")?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(&iface).await }) {
-        tracing::warn!("Failed to release DHCP lease for {}: {}", iface, e);
+        tracing::warn!(
+            target: "net",
+            iface = %iface,
+            error = %e,
+            "dhcp_release_failed"
+        );
     }
 
-    tracing::info!("Interface {iface} disconnected successfully");
+    tracing::info!(target: "wifi", iface = %iface, "wifi_disconnect_complete");
     Ok(iface)
 }
 
@@ -3353,7 +3902,11 @@ fn check_network_permissions() -> Result<()> {
     {
         let euid = unsafe { libc::geteuid() };
         if euid != 0 {
-            tracing::error!("Network operations require root privileges (current euid: {euid})");
+            tracing::error!(
+                target: "net",
+                euid = euid,
+                "network_permissions_missing"
+            );
             bail!("Network operations require root privileges. Please run as root or with sudo.");
         }
     }
@@ -3366,23 +3919,32 @@ fn check_network_permissions() -> Result<()> {
 /// Cleanup function for graceful WiFi operation failures
 /// Attempts to restore interface to a working state after errors
 pub fn cleanup_wifi_interface(interface: &str) -> Result<()> {
-    tracing::info!("Performing cleanup for interface: {interface}");
+    tracing::info!(
+        target: "wifi",
+        iface = %interface,
+        "wifi_cleanup_start"
+    );
 
     // Release DHCP if any
     let rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for cleanup DHCP release")?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::dhcp_release(interface).await }) {
         tracing::warn!(
-            "Failed to release DHCP lease during cleanup for {}: {}",
-            interface,
-            e
+            target: "net",
+            iface = %interface,
+            error = %e,
+            "dhcp_release_cleanup_failed"
         );
     }
 
     // Ensure interface is up
     let _ = netlink_set_interface_up(interface);
 
-    tracing::info!("Cleanup completed for {interface}");
+    tracing::info!(
+        target: "wifi",
+        iface = %interface,
+        "wifi_cleanup_complete"
+    );
     Ok(())
 }
 

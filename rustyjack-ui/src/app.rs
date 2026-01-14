@@ -813,7 +813,9 @@ impl App {
             active_mitm: None,
         };
         // Apply log preference from config at startup so the backend honors it
-        app.apply_log_setting();
+        if let Err(err) = app.apply_log_setting() {
+            tracing::warn!("Failed to apply logging config: {}", err);
+        }
         app.try_load_saved_key();
         rustyjack_encryption::set_wifi_profile_encryption(app.wifi_encryption_active());
         rustyjack_encryption::set_loot_encryption(app.loot_encryption_active());
@@ -1292,8 +1294,16 @@ impl App {
         self.display.update_palette(&self.config.colors);
     }
 
-    fn apply_log_setting(&self) {
-        if self.config.settings.logs_enabled {
+    fn apply_log_setting(&mut self) -> Result<()> {
+        let enabled = self.config.settings.logs_enabled;
+        let response = self.core.logging_config_set(enabled, None)?;
+        self.config.settings.logs_enabled = response.enabled;
+        self.sync_log_env(response.enabled);
+        Ok(())
+    }
+
+    fn sync_log_env(&self, enabled: bool) {
+        if enabled {
             std::env::remove_var("RUSTYJACK_LOGS_DISABLED");
         } else {
             std::env::set_var("RUSTYJACK_LOGS_DISABLED", "1");
@@ -1302,7 +1312,7 @@ impl App {
 
     fn toggle_logs(&mut self) -> Result<()> {
         self.config.settings.logs_enabled = !self.config.settings.logs_enabled;
-        self.apply_log_setting();
+        self.apply_log_setting()?;
         let config_path = self.root.join("gui_conf.json");
         let _ = self.config.save(&config_path);
         let state = if self.config.settings.logs_enabled {

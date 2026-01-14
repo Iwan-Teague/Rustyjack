@@ -1,0 +1,17 @@
+[package]
+name = "rustyjack-logging"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+tracing-appender = "0.2"
+tracing-log = "0.2"
+tracing-error = "0.2"
+once_cell = "1"
+notify = "6"
+chrono = { workspace = true }

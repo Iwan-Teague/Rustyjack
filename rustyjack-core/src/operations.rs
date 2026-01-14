@@ -6,6 +6,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex as StdMutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -58,26 +59,28 @@ use crate::netlink_helpers::netlink_set_interface_up;
 use crate::anti_forensics::perform_complete_purge;
 use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 use crate::system::{
-    active_uplink, acquire_dhcp_lease, append_payload_log, arp_spoof_running, backup_repository,
-    backup_routing_state, build_scan_loot_path, build_manual_embed, build_mitm_pcap_path,
-    cached_gateway, compose_status_text, connect_wifi_network, default_gateway_ip,
-    delete_wifi_profile, detect_ethernet_interface, detect_interface, disconnect_wifi_interface,
-    dns_spoof_running, enable_ip_forwarding, enforce_single_interface, find_interface_by_mac,
-    git_reset_to_remote, interface_gateway, kill_process,
-    last_dhcp_outcome, lease_record, list_interface_summaries, list_wifi_profiles,
+    active_uplink, acquire_dhcp_lease, append_payload_log, apply_interface_isolation_strict,
+    arp_spoof_running, backup_repository, backup_routing_state, build_scan_loot_path,
+    build_manual_embed, build_mitm_pcap_path, cached_gateway, compose_status_text,
+    connect_wifi_network, default_gateway_ip, delete_wifi_profile, detect_ethernet_interface,
+    detect_interface, disconnect_wifi_interface, dns_spoof_running, enable_ip_forwarding,
+    enforce_single_interface, find_interface_by_mac, git_reset_to_remote, interface_gateway,
+    kill_process, last_dhcp_outcome, lease_record, list_interface_summaries, list_wifi_profiles,
     load_wifi_profile, log_mac_usage, pcap_capture_running, ping_host, preferred_interface,
     process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
     read_dns_servers, read_interface_preference, read_interface_preference_with_mac,
     read_interface_stats, read_wifi_link_info, restart_system_service, restore_routing_state,
-    sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks,
-    select_active_uplink, select_best_interface, select_wifi_interface, send_discord_payload,
-    send_scan_to_discord, set_interface_metric, spawn_arpspoof_pair, start_bridge_pair,
-    start_dns_spoof, start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof,
-    stop_pcap_capture, write_interface_preference, write_wifi_profile, HostInfo, KillResult,
-    WifiProfile,
+    sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks, select_active_uplink,
+    select_best_interface, select_wifi_interface, send_discord_payload, send_scan_to_discord,
+    set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof,
+    start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
+    write_interface_preference, write_wifi_profile, HostInfo, IsolationPolicyGuard, KillResult,
+    LootSession, WifiProfile,
 };
 
 pub type HandlerResult = (String, Value);
+
+static HOTSPOT_POLICY_GUARD: OnceLock<StdMutex<Option<IsolationPolicyGuard>>> = OnceLock::new();
 
 fn get_active_interface(root: &Path) -> Result<Option<String>> {
     use crate::system::PreferenceManager;
@@ -99,6 +102,23 @@ pub fn set_active_interface(root: &Path, iface: &str) -> Result<crate::system::o
         blocked: selection.blocked,
         errors: selection.errors,
     })
+}
+
+fn store_hotspot_policy_guard(guard: IsolationPolicyGuard) -> Result<()> {
+    let lock = HOTSPOT_POLICY_GUARD.get_or_init(|| StdMutex::new(None));
+    let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_some() {
+        bail!("Hotspot isolation policy already set");
+    }
+    *slot = Some(guard);
+    Ok(())
+}
+
+fn clear_hotspot_policy_guard() {
+    if let Some(lock) = HOTSPOT_POLICY_GUARD.get() {
+        let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
+        slot.take();
+    }
 }
 
 #[allow(dead_code)]
@@ -587,8 +607,6 @@ fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<Hand
 }
 
 fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerResult> {
-    use crate::system::apply_interface_isolation;
-
     tracing::info!(
         "[CORE] Hotspot start requested ap_interface={} upstream_interface={} ssid={} channel={}",
         args.ap_interface,
@@ -606,8 +624,36 @@ fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerRe
         restore_nm_on_stop: args.restore_nm_on_stop,
     };
 
-    // Start hotspot FIRST (it handles interface configuration and rfkill)
-    let state = start_hotspot(cfg).context("starting hotspot")?;
+    let mut allowed_interfaces = vec![args.ap_interface.clone()];
+    if !args.upstream_interface.is_empty() {
+        allowed_interfaces.push(args.upstream_interface.clone());
+    }
+
+    let session = format!(
+        "hotspot_{}_{}",
+        Local::now().format("%Y%m%d_%H%M%S"),
+        format!("{:04x}", rand::random::<u16>())
+    );
+    let guard = IsolationPolicyGuard::set_allow_list(
+        root.to_path_buf(),
+        allowed_interfaces.clone(),
+        session,
+    )?;
+    store_hotspot_policy_guard(guard)?;
+
+    if let Err(e) = apply_interface_isolation_strict(&allowed_interfaces) {
+        clear_hotspot_policy_guard();
+        return Err(e);
+    }
+
+    // Start hotspot (it handles interface configuration and rfkill)
+    let state = match start_hotspot(cfg).context("starting hotspot") {
+        Ok(state) => state,
+        Err(e) => {
+            clear_hotspot_policy_guard();
+            return Err(e);
+        }
+    };
 
     let preferred_iface = if !args.upstream_interface.is_empty() {
         args.upstream_interface.clone()
@@ -618,16 +664,10 @@ fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerRe
         let _ = write_interface_preference(root, "system_preferred", &preferred_iface);
     }
 
-    // Now apply interface isolation to block other interfaces
-    // This runs AFTER hotspot is up to avoid interfering with startup
-    let mut allowed_interfaces = vec![args.ap_interface.clone()];
-    if !args.upstream_interface.is_empty() {
-        allowed_interfaces.push(args.upstream_interface.clone());
-    }
-
-    // Best-effort isolation - don't fail hotspot if isolation fails
-    if let Err(e) = apply_interface_isolation(&allowed_interfaces) {
-        tracing::warn!("Interface isolation failed: {}", e);
+    if let Err(e) = apply_interface_isolation_strict(&allowed_interfaces) {
+        let _ = stop_hotspot();
+        clear_hotspot_policy_guard();
+        bail!("Interface isolation failed after hotspot start: {}", e);
     }
 
     tracing::info!(
@@ -656,6 +696,7 @@ fn handle_hotspot_start(root: &Path, args: HotspotStartArgs) -> Result<HandlerRe
 fn handle_hotspot_stop() -> Result<HandlerResult> {
     tracing::info!("[CORE] Hotspot stop requested");
     stop_hotspot().context("stopping hotspot")?;
+    clear_hotspot_policy_guard();
     let data = json!({ "running": false });
     tracing::info!("[CORE] Hotspot stop completed");
     Ok(("Hotspot stopped".to_string(), data))
@@ -2684,18 +2725,12 @@ fn ensure_route_health_check() -> Result<()> {
     }
 
     // root permissions
-    let uid_out = Command::new("id").arg("-u").output();
-    match uid_out {
-        Ok(out) if out.status.success() => {
-            let uid = String::from_utf8_lossy(&out.stdout)
-                .trim()
-                .parse::<u32>()
-                .unwrap_or(u32::MAX);
-            if uid != 0 {
-                bail!("Rustyjack must run as root (uid 0) to manage interfaces and routes");
-            }
+    #[cfg(target_os = "linux")]
+    {
+        let euid = unsafe { libc::geteuid() };
+        if euid != 0 {
+            bail!("Rustyjack must run as root (uid 0) to manage interfaces and routes");
         }
-        _ => bail!("Unable to determine UID (need root to manage interfaces)"),
     }
 
     // rfkill availability - check /dev/rfkill exists
@@ -3156,6 +3191,7 @@ fn handle_system_usb_unmount(root: &Path, args: UsbUnmountArgs) -> Result<Handle
     Ok(("USB unmounted".to_string(), data))
 }
 
+#[tracing::instrument(target = "usb", skip(root, args), fields(device = %args.device))]
 fn handle_system_export_logs_to_usb(
     root: &Path,
     args: ExportLogsToUsbArgs,
@@ -3830,9 +3866,8 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
         .map_err(|e| anyhow::anyhow!("Failed to check requirements: {}", e))?;
     if !missing.is_empty() {
         bail!(
-            "Missing required tools for Evil Twin: {}. Install with: apt install {}",
-            missing.join(", "),
-            missing.join(" ")
+            "Missing required capabilities for Evil Twin: {}",
+            missing.join(", ")
         );
     }
 
@@ -4077,9 +4112,8 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
         );
     }
 
-    // Create loot directory for probe sniffing (goes under probe_sniff subdirectory)
-    let loot_dir = loot_directory(root, LootKind::Wireless).join("probe_sniff");
-    fs::create_dir_all(&loot_dir)?;
+    let session = LootSession::new(root, "probe_sniff", &args.interface)?;
+    let loot_dir = session.artifacts.clone();
 
     let tag = wireless_tag(None, None, &args.interface);
     let _ = log_mac_usage(root, &args.interface, "wifi_probe_sniff", Some(&tag));
@@ -4100,11 +4134,8 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
         );
     })?;
 
-    let log_file = write_scoped_log(
-        root,
-        "Wireless",
-        &args.interface,
-        "ProbeSniff",
+    let log_file = write_session_log(
+        &session,
         "probesniff",
         &[
             format!("Probe sniff on {}", args.interface),
@@ -4125,6 +4156,7 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
         "unique_clients": result.unique_clients,
         "unique_networks": result.unique_networks,
         "loot_directory": result.loot_path.display().to_string(),
+        "session_directory": session.dir.display().to_string(),
         "log_file": log_file,
     });
 
@@ -4161,6 +4193,27 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
         );
     }
 
+    let mut allowed_interfaces = vec![args.interface.clone()];
+    if args.with_ap {
+        if let Some(ref ap_iface) = args.ap_interface {
+            if !ap_iface.is_empty() && ap_iface != &args.interface {
+                allowed_interfaces.push(ap_iface.clone());
+            }
+        }
+    }
+
+    let policy_session = format!(
+        "wifi_karma_{}_{}",
+        Local::now().format("%Y%m%d_%H%M%S"),
+        format!("{:04x}", rand::random::<u16>())
+    );
+    let _iso_guard = IsolationPolicyGuard::set_allow_list(
+        root.to_path_buf(),
+        allowed_interfaces.clone(),
+        policy_session,
+    )?;
+    apply_interface_isolation_strict(&allowed_interfaces)?;
+
     let tag = wireless_tag(None, None, &args.interface);
     let _ = log_mac_usage(root, &args.interface, "wifi_karma", Some(&tag));
 
@@ -4177,9 +4230,8 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
         .map(|s| s.split(',').map(|ss| ss.trim().to_string()).collect())
         .unwrap_or_default();
 
-    // Create loot directory
-    let loot_dir = loot_directory(root, LootKind::Wireless).join("karma");
-    fs::create_dir_all(&loot_dir)?;
+    let loot_session = LootSession::new(root, "karma", &args.interface)?;
+    let loot_dir = loot_session.artifacts.clone();
 
     // Build config
     let config = KarmaAttackConfig {
@@ -4197,11 +4249,8 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
         tracing::debug!("Karma progress: {:.0}% - {}", progress * 100.0, status);
     })?;
 
-    let log_file = write_scoped_log(
-        root,
-        "Wireless",
-        &args.interface,
-        "Karma",
+    let log_file = write_session_log(
+        &loot_session,
         "karma",
         &[
             format!("Karma attack on {}", args.interface),
@@ -4229,6 +4278,7 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
         "unique_clients": result.unique_clients,
         "victims": result.victims,
         "loot_directory": result.loot_path.display().to_string(),
+        "session_directory": loot_session.dir.display().to_string(),
         "log_file": log_file,
     });
 
@@ -4724,6 +4774,27 @@ fn write_scoped_log(
         return None;
     }
     let dir = scoped_log_dir(root, scope, target, action)?;
+    let fname = format!(
+        "{}_{}.log",
+        sanitize_label(hint),
+        Local::now().format("%Y%m%d_%H%M%S")
+    );
+    let path = dir.join(fname);
+    if let Ok(mut file) = fs::File::create(&path) {
+        for line in lines {
+            let _ = writeln!(file, "{line}");
+        }
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn write_session_log(session: &LootSession, hint: &str, lines: &[String]) -> Option<PathBuf> {
+    if lines.is_empty() {
+        return None;
+    }
+    let dir = session.logs.as_ref()?;
     let fname = format!(
         "{}_{}.log",
         sanitize_label(hint),

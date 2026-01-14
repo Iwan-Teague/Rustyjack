@@ -15,8 +15,6 @@ anyhow = { workspace = true }
 axum = "0.7"
 chrono = { workspace = true }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
 serde = { workspace = true }
 socket2 = { version = "0.5", features = ["all"] }
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "net", "time", "sync", "signal", "fs", "io-util"] }
@@ -24,6 +22,7 @@ tower = { version = "0.5", features = ["limit"] }
 tower-http = { version = "0.6", features = ["fs", "limit", "timeout"] }
 
 rustyjack-client = { path = "../rustyjack-client" }
+rustyjack-logging = { path = "../rustyjack-logging" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

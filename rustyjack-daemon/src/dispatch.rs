@@ -1171,9 +1171,7 @@ pub async fn handle_request(
         RequestBody::LoggingConfigGet => {
             use rustyjack_ipc::LoggingConfigResponse;
 
-            // Read current logging configuration
-            let enabled = std::env::var("RUSTYJACK_LOGS_DISABLED").is_err();
-            let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+            let cfg = rustyjack_logging::fs::read_config(&state.config.root_path);
             let components = vec![
                 "rustyjackd".to_string(),
                 "rustyjack-ui".to_string(),
@@ -1181,8 +1179,8 @@ pub async fn handle_request(
             ];
 
             ResponseBody::Ok(ResponseOk::LoggingConfig(LoggingConfigResponse {
-                enabled,
-                level,
+                enabled: cfg.enabled,
+                level: cfg.level,
                 components,
             }))
         }
@@ -1194,45 +1192,59 @@ pub async fn handle_request(
             let uid = peer.uid;
             let pid = peer.pid;
 
-            // Update logging configuration
-            if enabled {
-                std::env::remove_var("RUSTYJACK_LOGS_DISABLED");
-            } else {
-                std::env::set_var("RUSTYJACK_LOGS_DISABLED", "1");
+            let mut cfg = rustyjack_logging::fs::read_config(&root);
+            cfg.enabled = enabled;
+            if let Some(new_level) = level.as_ref().and_then(|lvl| {
+                let trimmed = lvl.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }) {
+                cfg.level = new_level;
             }
+            if let Err(err) = rustyjack_logging::fs::write_config_atomic(&root, &cfg) {
+                ResponseBody::Err(
+                    DaemonError::new(ErrorCode::Io, "failed to write logging config", false)
+                        .with_detail(err.to_string()),
+                )
+            } else {
+                // Audit the configuration change
+                let context = serde_json::json!({
+                    "enabled": cfg.enabled,
+                    "level": cfg.level.as_str(),
+                    "keep_days": cfg.keep_days
+                });
 
-            let final_level = level.unwrap_or_else(|| "info".to_string());
-            std::env::set_var("RUST_LOG", &final_level);
+                let event = AuditEvent::new(operations::LOGGING_CONFIG_CHANGE)
+                    .with_actor(uid, pid)
+                    .with_context(context)
+                    .success();
 
-            // Audit the configuration change
-            let context = serde_json::json!({
-                "enabled": enabled,
-                "level": &final_level
-            });
+                let _ = event.log(&root);
 
-            let event = AuditEvent::new(operations::LOGGING_CONFIG_CHANGE)
-                .with_actor(uid, pid)
-                .with_context(context)
-                .success();
+                let applied = match rustyjack_logging::apply(&cfg, "rustyjackd") {
+                    Ok(()) => true,
+                    Err(err) => {
+                        tracing::warn!("Failed to apply logging config: {}", err);
+                        false
+                    }
+                };
+                rustyjack_logging::apply_env(&cfg);
+                tracing::info!(
+                    operation = "logging_config_set",
+                    enabled = cfg.enabled,
+                    level = %cfg.level,
+                    "Logging configuration updated"
+                );
 
-            let _ = event.log(&root);
-
-            // Note: This only affects child processes and the environment
-            // The actual tracing subscriber cannot be dynamically reconfigured without reload
-            // For now, we mark it as applied but note that existing processes need restart
-
-            tracing::info!(
-                operation = "logging_config_set",
-                enabled = enabled,
-                level = %final_level,
-                "Logging configuration updated (requires process restart for full effect)"
-            );
-
-            ResponseBody::Ok(ResponseOk::LoggingConfigSet(LoggingConfigSetResponse {
-                enabled,
-                level: final_level,
-                applied: true,
-            }))
+                ResponseBody::Ok(ResponseOk::LoggingConfigSet(LoggingConfigSetResponse {
+                    enabled: cfg.enabled,
+                    level: cfg.level,
+                    applied,
+                }))
+            }
         }
         RequestBody::CoreDispatch(CoreDispatchRequest { legacy, args }) => {
             if !state.config.allow_core_dispatch {

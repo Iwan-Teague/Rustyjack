@@ -404,6 +404,7 @@ impl RfkillManager {
     }
 
     /// Set state for a specific device by index
+    #[tracing::instrument(target = "wifi", skip(self))]
     fn set_state(&self, idx: u32, block: bool) -> Result<()> {
         let mut file = OpenOptions::new().write(true).open(self.dev_path)?;
 
@@ -419,15 +420,17 @@ impl RfkillManager {
             .map_err(|e| RfkillError::WriteEvent(e.to_string()))?;
 
         tracing::info!(
-            "rfkill device {} {}",
-            idx,
-            if block { "blocked" } else { "unblocked" }
+            target: "wifi",
+            idx = idx,
+            state = if block { "blocked" } else { "unblocked" },
+            "rfkill_device_state"
         );
 
         Ok(())
     }
 
     /// Set state for all devices of a type
+    #[tracing::instrument(target = "wifi", skip(self))]
     fn set_state_all(&self, type_: RfkillType, block: bool) -> Result<()> {
         let mut file = OpenOptions::new().write(true).open(self.dev_path)?;
 
@@ -443,9 +446,10 @@ impl RfkillManager {
             .map_err(|e| RfkillError::WriteEvent(e.to_string()))?;
 
         tracing::info!(
-            "rfkill {} devices {}",
-            type_.name(),
-            if block { "blocked" } else { "unblocked" }
+            target: "wifi",
+            rf_type = type_.name(),
+            state = if block { "blocked" } else { "unblocked" },
+            "rfkill_type_state"
         );
 
         Ok(())

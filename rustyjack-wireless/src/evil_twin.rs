@@ -164,10 +164,25 @@ impl EvilTwin {
 
     /// Check if required tools are available
     pub fn check_requirements() -> Result<Vec<String>> {
-        let missing = Vec::new();
+        let mut missing = Vec::new();
 
-        // No external tools needed - we use Rust implementations
-        // (AP, DHCP, DNS, iptables all via rustyjack-netlink)
+        #[cfg(target_os = "linux")]
+        {
+            if unsafe { libc::geteuid() } != 0 {
+                missing.push("root (CAP_NET_ADMIN)".to_string());
+            }
+            if std::fs::read_dir("/sys/class/net").is_err() {
+                missing.push("netlink interface access (/sys/class/net)".to_string());
+            }
+            if !std::path::Path::new("/dev/rfkill").exists() {
+                missing.push("rfkill device (/dev/rfkill)".to_string());
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            missing.push("Linux nl80211 support".to_string());
+        }
 
         Ok(missing)
     }
@@ -668,7 +683,7 @@ where
     let missing = EvilTwin::check_requirements()?;
     if !missing.is_empty() {
         return Err(WirelessError::System(format!(
-            "Missing required tools: {}",
+            "Missing required capabilities: {}",
             missing.join(", ")
         )));
     }

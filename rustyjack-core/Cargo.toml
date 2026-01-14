@@ -30,6 +30,7 @@ rustyjack-wpa = { path = "../rustyjack-wpa" }
 rand = "0.8"
 zeroize = "1.7"
 rustyjack-encryption = { path = "../rustyjack-encryption" }
+rustyjack-logging = { path = "../rustyjack-logging" }
 
 # Native wireless toolkit (Linux only)
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -41,7 +42,6 @@ nix = { version = "0.27", default-features = false, features = ["poll"] }
 netlink-packet-core = "0.7"
 netlink-packet-route = "0.19"
 netlink-sys = { version = "0.8", features = ["tokio_socket"] }
-systemd = "0.10"
 
 [[bin]]
 name = "rustyjack"

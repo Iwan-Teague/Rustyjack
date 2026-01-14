@@ -4,6 +4,7 @@ members = [
     "rustyjack-commands",
     "rustyjack-core",
     "rustyjack-evasion",
+    "rustyjack-logging",
     "rustyjack-ui",
     "rustyjack-wireless",
     "rustyjack-ethernet",

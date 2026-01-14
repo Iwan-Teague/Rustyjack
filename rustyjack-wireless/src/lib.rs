@@ -63,6 +63,7 @@ mod netlink_helpers;
 pub mod nl80211;
 pub mod nl80211_queries;
 pub mod pmkid;
+pub mod pcap;
 pub mod probe;
 mod process_helpers;
 pub mod radiotap;
@@ -104,6 +105,7 @@ pub use evil_twin::{execute_evil_twin, EvilTwin, EvilTwinConfig, EvilTwinResult,
 pub use frames::{DeauthFrame, DeauthReason, FrameSubtype, FrameType, Ieee80211Frame, MacAddress};
 pub use handshake::{HandshakeCapture, HandshakeMessage, HandshakeState};
 pub use interface::WirelessInterface;
+pub use pcap::PcapWriter;
 pub use rustyjack_wpa::crack;
 pub use rustyjack_wpa::{CrackResult, CrackerConfig, HandshakeExport, WpaCracker};
 pub use karma::{

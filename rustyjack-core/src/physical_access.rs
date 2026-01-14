@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use tracing::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use crate::redact;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WifiCredential {
@@ -25,7 +26,11 @@ pub struct PhysicalAccessReport {
 
 /// Main physical access attack - extract WiFi password from wired connection
 pub fn physical_access_attack(interface: &str, root: &Path) -> Result<PhysicalAccessReport> {
-    info!("Starting physical access attack on {}", interface);
+    info!(
+        target: "net",
+        iface = %interface,
+        "physical_access_start"
+    );
 
     let mut report = PhysicalAccessReport {
         wifi_credentials: Vec::new(),
@@ -38,7 +43,7 @@ pub fn physical_access_attack(interface: &str, root: &Path) -> Result<PhysicalAc
 
     // Step 1: Get gateway/router IP
     let gateway = get_gateway_ip(interface)?;
-    info!("Gateway detected: {}", gateway);
+    info!(target: "net", gateway = %gateway, "physical_access_gateway");
 
     // Step 2: Fingerprint router
     if let Ok((model, firmware)) = fingerprint_router(&gateway) {
@@ -88,8 +93,9 @@ pub fn physical_access_attack(interface: &str, root: &Path) -> Result<PhysicalAc
     save_report(root, &report)?;
 
     info!(
-        "Physical access attack complete. Found {} credentials",
-        report.wifi_credentials.len()
+        target: "net",
+        count = report.wifi_credentials.len(),
+        "physical_access_complete"
     );
 
     Ok(report)
@@ -353,7 +359,14 @@ fn try_router_webui(
         .build()?;
 
     for (username, password) in default_creds {
-        info!("Trying {}:{} on {}", username, password, gateway);
+        let redacted_password = redact!(password.clone());
+        info!(
+            target: "net",
+            user = %username,
+            pass = %redacted_password,
+            gateway = %gateway,
+            "router_auth_try"
+        );
 
         // Try basic auth
         let response = client
@@ -370,7 +383,13 @@ fn try_router_webui(
         tried.push((username.clone(), password.clone(), success));
 
         if success {
-            info!("SUCCESS: {}:{}", username, password);
+            let redacted_password = redact!(password.clone());
+            info!(
+                target: "net",
+                user = %username,
+                pass = %redacted_password,
+                "router_auth_success"
+            );
             // Try to extract WiFi config from admin page
             // (implementation would scrape admin interface)
             break;

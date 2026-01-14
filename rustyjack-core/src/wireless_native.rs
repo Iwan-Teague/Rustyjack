@@ -14,6 +14,8 @@ use chrono::Local;
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
+use std::io::BufWriter;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 /// Result of a deauthentication attack
@@ -86,6 +88,15 @@ pub fn is_wireless_interface(interface: &str) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+#[cfg(target_os = "linux")]
+fn compute_burst_interval(config: &DeauthConfig, duration: Duration) -> Duration {
+    if config.continuous {
+        Duration::from_secs(config.interval as u64)
+    } else {
+        duration.saturating_add(Duration::from_secs(1))
+    }
+}
+
 /// Execute a deauthentication attack using native Rust implementation
 #[cfg(target_os = "linux")]
 pub fn execute_deauth_attack(
@@ -98,8 +109,9 @@ pub fn execute_deauth_attack(
     };
 
     tracing::info!(
-        "Starting native Rust deauth attack on BSSID: {}",
-        config.bssid
+        target: "wifi",
+        bssid = %config.bssid,
+        "deauth_start"
     );
     on_progress(0.02, "Validating configuration...");
 
@@ -154,11 +166,14 @@ pub fn execute_deauth_attack(
         .set_channel(config.channel)
         .context("Failed to set channel")?;
 
+    let duration = Duration::from_secs(config.duration as u64);
+    let burst_interval = compute_burst_interval(config, duration);
+
     // Create native deauth config
     let native_config = NativeDeauthConfig {
         packets_per_burst: config.packets,
-        duration: Duration::from_secs(config.duration as u64),
-        burst_interval: Duration::from_secs(config.interval as u64),
+        duration,
+        burst_interval,
         reason: DeauthReason::Class3FromNonAssoc,
         bidirectional: true,
         include_disassoc: false,
@@ -180,16 +195,18 @@ pub fn execute_deauth_attack(
     // Save captured packets to pcap file
     let mut capture_files = Vec::new();
     if !captured_packets.is_empty() {
-        // Write packets to a simple capture format
-        let mut pcap_data = Vec::new();
+        use rustyjack_wireless::pcap::PcapWriter;
+
+        let file = fs::File::create(&capture_file)
+            .with_context(|| format!("Writing capture file: {}", capture_file.display()))?;
+        let mut writer = PcapWriter::new(BufWriter::new(file))
+            .with_context(|| format!("Writing capture file: {}", capture_file.display()))?;
         for pkt in &captured_packets {
-            pcap_data.extend_from_slice(&pkt.raw_data);
-        }
-        if !pcap_data.is_empty() {
-            fs::write(&capture_file, &pcap_data)
+            writer
+                .write_packet(pkt.timestamp, &pkt.raw_data)
                 .with_context(|| format!("Writing capture file: {}", capture_file.display()))?;
-            capture_files.push(capture_file.clone());
         }
+        capture_files.push(capture_file.clone());
     }
 
     if let Some(export) = handshake_export {
@@ -208,7 +225,7 @@ pub fn execute_deauth_attack(
 
     // Cleanup - restore managed mode
     if let Err(e) = iface.set_managed_mode() {
-        tracing::warn!("Failed to restore managed mode: {}", e);
+        tracing::warn!(target: "wifi", error = %e, "restore_managed_mode_failed");
     }
 
     // Write detailed log file when logging is enabled
@@ -235,7 +252,10 @@ pub fn execute_deauth_attack(
         log_content.push_str("\n--- ATTACK CONFIGURATION --------------------------\n");
         log_content.push_str(&format!("Duration: {} seconds\n", config.duration));
         log_content.push_str(&format!("Packets per burst: {}\n", config.packets));
-        log_content.push_str(&format!("Burst interval: {} seconds\n", config.interval));
+        log_content.push_str(&format!(
+            "Burst interval: {} seconds\n",
+            burst_interval.as_secs()
+        ));
         log_content.push_str(&format!("Continuous mode: {}\n", config.continuous));
         log_content.push_str("\n--- ATTACK RESULTS --------------------------------\n");
         log_content.push_str(&format!(
@@ -423,7 +443,11 @@ pub fn execute_pmkid_capture(
 ) -> Result<PmkidResult> {
     use rustyjack_wireless::{execute_pmkid_capture as native_pmkid, PmkidConfig};
 
-    tracing::info!("Starting native PMKID capture on {}", config.interface);
+    tracing::info!(
+        target: "wifi",
+        iface = %config.interface,
+        "pmkid_capture_start"
+    );
     on_progress(0.05, "Initializing PMKID capture...");
 
     // Validate interface
@@ -499,7 +523,11 @@ pub fn execute_probe_sniff(
         execute_probe_sniff as native_probe, ProbeSniffConfig as NativeProbeConfig,
     };
 
-    tracing::info!("Starting probe sniff on {}", config.interface);
+    tracing::info!(
+        target: "wifi",
+        iface = %config.interface,
+        "probe_sniff_start"
+    );
     on_progress(0.05, "Initializing probe sniffer...");
 
     if !is_wireless_interface(&config.interface) {
@@ -577,7 +605,11 @@ pub fn execute_evil_twin(
     use std::sync::Arc;
     use std::time::Duration;
 
-    tracing::info!("Starting Evil Twin attack for SSID: {}", config.ssid);
+    tracing::info!(
+        target: "wifi",
+        ssid = %config.ssid,
+        "evil_twin_start"
+    );
 
     // Wrap on_progress in Arc for sharing
     let on_progress = Arc::new(on_progress);
@@ -678,7 +710,11 @@ pub fn execute_karma(
     use rustyjack_wireless::{execute_karma as native_karma, execute_karma_with_ap, KarmaConfig};
     use std::sync::Arc;
 
-    tracing::info!("Starting Karma attack on {}", config.interface);
+    tracing::info!(
+        target: "wifi",
+        iface = %config.interface,
+        "karma_start"
+    );
 
     // Wrap on_progress in Arc for sharing
     let on_progress = Arc::new(on_progress);
@@ -752,6 +788,7 @@ pub fn execute_karma(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_deauth_result_to_json() {
@@ -779,5 +816,23 @@ mod tests {
         let caps = check_capabilities("wlan0");
         // Just verify it doesn't panic
         let _ = caps.is_attack_capable();
+    }
+
+    #[test]
+    fn test_burst_interval_non_continuous() {
+        let config = DeauthConfig {
+            bssid: "AA:BB:CC:DD:EE:FF".to_string(),
+            ssid: Some("TestNetwork".to_string()),
+            channel: 6,
+            interface: "wlan0".to_string(),
+            client: None,
+            packets: 64,
+            duration: 10,
+            interval: 2,
+            continuous: false,
+        };
+        let duration = Duration::from_secs(config.duration as u64);
+        let burst_interval = compute_burst_interval(&config, duration);
+        assert!(burst_interval > duration);
     }
 }
