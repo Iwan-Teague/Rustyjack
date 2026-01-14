@@ -6,10 +6,11 @@
 #   USB_MOUNT_POINT=/mnt/usb      # where to mount removable media
 #   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
 set -euo pipefail
+WARN_COUNT=0
 
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
-warn()  { printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
+warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
 
@@ -1123,7 +1124,9 @@ else
 fi
 
 info "Prebuilt installation finished. Reboot is recommended."
-if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+if [ "$WARN_COUNT" -gt 0 ]; then
+  warn "Warnings detected ($WARN_COUNT). Skipping reboot to allow debugging."
+elif [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
   info "Rebooting in 5 seconds..."
   sleep 5
   sudo reboot

@@ -9,11 +9,12 @@
 # * RUST UI - Phase 3 complete, Python UI removed
 # ------------------------------------------------------------
 set -euo pipefail
+WARN_COUNT=0
 
 # ---- helpers ------------------------------------------------
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
-warn()  { printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
+warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
 has_crate_artifact() {
@@ -927,7 +928,10 @@ info "To skip automatic reboot, run with SKIP_REBOOT=1 or NO_REBOOT=1"
 info ""
 
 # By default we reboot so required changes are applied immediately.
-if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+if [ "$WARN_COUNT" -gt 0 ]; then
+  warn "Warnings detected ($WARN_COUNT). Skipping reboot to allow debugging."
+  info "You must reboot manually for some changes to take effect."
+elif [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
   info "System rebooting in 5 seconds to finish setup - press Ctrl+C to abort."
   sleep 5
   sudo reboot
