@@ -330,10 +330,12 @@ impl App {
         status.target_network = settings.target_network.clone();
         status.target_bssid = settings.target_bssid.clone();
         status.target_channel = settings.target_channel;
-        status.active_interface = settings.active_network_interface.clone();
+        if status.active_interface.is_empty() {
+            status.active_interface = settings.active_network_interface.clone();
+        }
 
-        let interface_mac = self.read_interface_mac(&settings.active_network_interface);
-        let interface_name = &settings.active_network_interface;
+        let interface_name = &status.active_interface;
+        let interface_mac = self.read_interface_mac(interface_name);
         let current_mac = interface_mac
             .clone()
             .or_else(|| settings.current_macs.get(interface_name).cloned())

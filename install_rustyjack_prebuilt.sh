@@ -696,7 +696,8 @@ for dir in img scripts wordlists DNSSpoof; do
     sudo cp -a "$PROJECT_ROOT/$dir" "$RUNTIME_ROOT/"
   fi
 done
-sudo mkdir -p "$RUNTIME_ROOT/loot"/{Wireless,Ethernet,reports,Hotspot,logs} 2>/dev/null || true
+sudo mkdir -p "$RUNTIME_ROOT/loot"/{Wireless,Ethernet,reports,Hotspot,logs,Portal} 2>/dev/null || true
+sudo mkdir -p "$RUNTIME_ROOT/portal" 2>/dev/null || true
 sudo mkdir -p "$RUNTIME_ROOT/wifi/profiles"
 sudo chown root:root "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
 sudo chmod 700 "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
@@ -776,19 +777,34 @@ fi
 if ! getent group rustyjack-ui >/dev/null 2>&1; then
   sudo groupadd --system rustyjack-ui || true
 fi
+if ! getent group rustyjack-portal >/dev/null 2>&1; then
+  sudo groupadd --system rustyjack-portal || true
+fi
 if ! id -u rustyjack-ui >/dev/null 2>&1; then
   sudo useradd --system --home /var/lib/rustyjack --shell /usr/sbin/nologin -g rustyjack-ui rustyjack-ui || true
+fi
+if ! id -u rustyjack-portal >/dev/null 2>&1; then
+  sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin -g rustyjack-portal rustyjack-portal || true
 fi
 for grp in rustyjack gpio spi; do
   if getent group "$grp" >/dev/null 2>&1; then
     sudo usermod -aG "$grp" rustyjack-ui || true
   fi
 done
+for grp in rustyjack; do
+  if getent group "$grp" >/dev/null 2>&1; then
+    sudo usermod -aG "$grp" rustyjack-portal || true
+  fi
+done
 
 sudo chown -R root:rustyjack "$RUNTIME_ROOT"
 sudo chmod -R g+rwX "$RUNTIME_ROOT"
+sudo chmod 2770 "$RUNTIME_ROOT/logs" 2>/dev/null || true
+sudo find "$RUNTIME_ROOT/logs" -type f -name "*.log*" -exec chmod g+rw {} + 2>/dev/null || true
 sudo find "$RUNTIME_ROOT/wifi/profiles" -type f -exec chmod 660 {} \; 2>/dev/null || true
 sudo chmod 770 "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
+sudo chown -R rustyjack-portal:rustyjack-portal "$RUNTIME_ROOT/portal" "$RUNTIME_ROOT/loot/Portal" 2>/dev/null || true
+sudo chmod 770 "$RUNTIME_ROOT/portal" "$RUNTIME_ROOT/loot/Portal" 2>/dev/null || true
 
 DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
@@ -821,6 +837,7 @@ StateDirectoryMode=0770
 ConfigurationDirectory=rustyjack
 ConfigurationDirectoryMode=0770
 Group=rustyjack
+UMask=0007
 Environment=RUST_BACKTRACE=1
 Environment=RUSTYJACK_ROOT=${RUNTIME_ROOT}
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
@@ -860,6 +877,7 @@ RestartSec=2
 User=rustyjack-ui
 Group=rustyjack-ui
 SupplementaryGroups=rustyjack gpio spi
+UMask=0007
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
 NoNewPrivileges=true
 PrivateTmp=true
@@ -887,6 +905,7 @@ RestartSec=2
 User=rustyjack-portal
 Group=rustyjack-portal
 SupplementaryGroups=rustyjack
+UMask=0007
 Environment=RUSTYJACK_PORTAL_PORT=3000
 Environment=RUSTYJACK_PORTAL_BIND=0.0.0.0
 Environment=RUSTYJACK_DAEMON_SOCKET=/run/rustyjack/rustyjackd.sock

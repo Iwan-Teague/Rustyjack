@@ -1161,30 +1161,78 @@ impl Display {
 
         let mut entries = Vec::new();
 
+        if !status.active_interface.is_empty() {
+            let state_label = if status.active_interface_up {
+                "UP"
+            } else {
+                match status.active_interface_state.as_str() {
+                    "down" => "DN",
+                    "dormant" => "DR",
+                    "lowerlayerdown" => "DN",
+                    "" => "??",
+                    _ => "??",
+                }
+            };
+            let ip_label = status
+                .active_interface_ip
+                .as_deref()
+                .unwrap_or("-");
+            entries.push(format!(
+                "Active: {} [{}]",
+                status.active_interface, state_label
+            ));
+            entries.push(format!("  IP: {}", ip_label));
+        }
+
         for iface in status.interfaces.iter() {
             if iface.name == "lo" {
                 continue;
             }
 
-            let state_symbol = match iface.oper_state.as_str() {
-                "up" => "UP",
-                "down" => "DN",
-                other => {
-                    if other.eq_ignore_ascii_case("dormant") {
-                        "DR"
-                    } else {
-                        "??"
+            let is_active = iface.name == status.active_interface;
+            let (state_symbol, ip_display) = if is_active {
+                let symbol = if status.active_interface_up {
+                    "UP"
+                } else {
+                    match status.active_interface_state.as_str() {
+                        "down" => "DN",
+                        "dormant" => "DR",
+                        "lowerlayerdown" => "DN",
+                        "" => "??",
+                        _ => "??",
                     }
-                }
-            };
-
-            let ip_display = if iface.oper_state == "up" {
-                iface.ip.as_deref().unwrap_or("-")
+                };
+                let ip = status
+                    .active_interface_ip
+                    .as_deref()
+                    .unwrap_or("-");
+                (symbol, ip)
             } else {
-                "-"
+                let symbol = match iface.oper_state.as_str() {
+                    "up" => "UP",
+                    "down" => "DN",
+                    other => {
+                        if other.eq_ignore_ascii_case("dormant") {
+                            "DR"
+                        } else {
+                            "??"
+                        }
+                    }
+                };
+                let ip = if iface.oper_state == "up" {
+                    iface.ip.as_deref().unwrap_or("-")
+                } else {
+                    "-"
+                };
+                (symbol, ip)
             };
 
-            entries.push(format!("{} [{}] {}", iface.name, state_symbol, iface.kind));
+            let label = if is_active {
+                format!("*{} [{}] {}", iface.name, state_symbol, iface.kind)
+            } else {
+                format!("{} [{}] {}", iface.name, state_symbol, iface.kind)
+            };
+            entries.push(label);
             entries.push(format!("  IP: {}", ip_display));
         }
 
@@ -1486,6 +1534,11 @@ pub struct StatusOverlay {
     pub target_bssid: String,
     pub target_channel: u8,
     pub active_interface: String,
+    pub active_interface_state: String,
+    pub active_interface_up: bool,
+    pub active_interface_carrier: Option<bool>,
+    pub active_interface_ip: Option<String>,
+    pub active_interface_has_ip: bool,
     pub original_mac: String,
     pub current_mac: String,
     pub interfaces: Vec<crate::types::InterfaceSummary>,

@@ -148,7 +148,37 @@ fn sample_once(
         snapshot.uptime_secs = uptime_secs;
         snapshot
     };
-    let mut has_ip = has_network_ip(&overlay.interfaces);
+    let mut has_ip = false;
+
+    let active_interface = core.get_active_interface().ok().flatten();
+    if let Some(iface) = active_interface {
+        overlay.active_interface = iface.clone();
+        if let Ok(status) = core.interface_status(&iface) {
+            overlay.active_interface_state = status.oper_state;
+            overlay.active_interface_up = status.is_up;
+            overlay.active_interface_carrier = status.carrier;
+            overlay.active_interface_ip = status.ip;
+            overlay.active_interface_has_ip = overlay
+                .active_interface_ip
+                .as_deref()
+                .map(ip_is_valid)
+                .unwrap_or(false);
+            has_ip = overlay.active_interface_has_ip;
+        } else {
+            overlay.active_interface_state = "unknown".to_string();
+            overlay.active_interface_up = false;
+            overlay.active_interface_carrier = None;
+            overlay.active_interface_ip = None;
+            overlay.active_interface_has_ip = false;
+        }
+    } else {
+        overlay.active_interface.clear();
+        overlay.active_interface_state.clear();
+        overlay.active_interface_up = false;
+        overlay.active_interface_carrier = None;
+        overlay.active_interface_ip = None;
+        overlay.active_interface_has_ip = false;
+    }
 
     if let Ok((_, data)) = core.dispatch(Commands::Status(StatusCommand::Summary)) {
         if let Some(text) = extract_status_text(&data) {
@@ -161,8 +191,10 @@ fn sample_once(
 
     if let Ok((_, data)) = core.dispatch(Commands::Wifi(WifiCommand::List)) {
         if let Ok(list) = serde_json::from_value::<WifiListResponse>(data) {
-            has_ip = has_network_ip(&list.interfaces);
             overlay.interfaces = list.interfaces;
+            if !overlay.active_interface_has_ip {
+                has_ip = has_network_ip(&overlay.interfaces);
+            }
         }
     }
 
@@ -193,6 +225,13 @@ fn extract_dns_spoof_running(data: &Value) -> Option<bool> {
     }
 }
 
+fn ip_is_valid(ip: &str) -> bool {
+    if ip == "0.0.0.0" || ip.starts_with("127.") {
+        return false;
+    }
+    true
+}
+
 fn has_network_ip(interfaces: &[InterfaceSummary]) -> bool {
     interfaces.iter().any(|iface| {
         if iface.name == "lo" {
@@ -208,10 +247,7 @@ fn has_network_ip(interfaces: &[InterfaceSummary]) -> bool {
             Some(ip) => ip,
             None => return false,
         };
-        if ip == "0.0.0.0" || ip.starts_with("127.") {
-            return false;
-        }
-        true
+        ip_is_valid(ip)
     })
 }
 

@@ -643,6 +643,8 @@ sudo chmod -R 755 "$RUNTIME_ROOT/loot/Portal"
 
 sudo chown -R root:rustyjack "$RUNTIME_ROOT"
 sudo chmod -R g+rwX "$RUNTIME_ROOT"
+sudo chmod 2770 "$RUNTIME_ROOT/logs" 2>/dev/null || true
+sudo find "$RUNTIME_ROOT/logs" -type f -name "*.log*" -exec chmod g+rw {} + 2>/dev/null || true
 sudo find "$RUNTIME_ROOT/wifi/profiles" -type f -exec chmod 660 {} \; 2>/dev/null || true
 sudo chmod 770 "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
 
@@ -677,6 +679,7 @@ RestartSec=5
 # Environment
 Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+UMask=0007
 # Uncomment to enable dangerous operations (system updates)
 #Environment=RUSTYJACKD_DANGEROUS_OPS=true
 
@@ -758,6 +761,7 @@ RestartSec=2
 User=rustyjack-ui
 Group=rustyjack-ui
 SupplementaryGroups=rustyjack gpio spi
+UMask=0007
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
 NoNewPrivileges=true
 PrivateTmp=true
@@ -784,6 +788,7 @@ RestartSec=2
 User=rustyjack-portal
 Group=rustyjack-portal
 SupplementaryGroups=rustyjack
+UMask=0007
 Environment=RUSTYJACK_PORTAL_PORT=3000
 Environment=RUSTYJACK_PORTAL_BIND=0.0.0.0
 Environment=RUSTYJACK_DAEMON_SOCKET=/run/rustyjack/rustyjackd.sock
