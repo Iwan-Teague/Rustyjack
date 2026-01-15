@@ -1986,7 +1986,10 @@ impl App {
         };
         
         let data = self.core.wifi_scan(&interface, 30000)?;
-        let resp: WifiScanResponse = serde_json::from_value(data)?;
+        let mut resp: WifiScanResponse = serde_json::from_value(data)?;
+        if resp.count == 0 && !resp.networks.is_empty() {
+            resp.count = resp.networks.len();
+        }
         Ok(resp)
     }
 
@@ -3814,6 +3817,15 @@ impl App {
                     device.name,
                     e
                 );
+                let err_msg = shorten_for_display(&e.to_string(), 120);
+                self.show_message(
+                    "USB Mount Failed",
+                    [
+                        "Mount failed:",
+                        &err_msg,
+                        "Fix: format USB as FAT32/ext4 or verify kernel filesystem support",
+                    ],
+                )?;
             }
         }
 
@@ -4103,8 +4115,16 @@ impl App {
                         if let Some(kind) = info.get("kind").and_then(|v| v.as_str()) {
                             details.push(format!("Kind: {}", kind));
                         }
+                        if let Some(admin_up) = info.get("admin_up").and_then(|v| v.as_bool()) {
+                            let admin_label = if admin_up { "UP" } else { "DOWN" };
+                            details.push(format!("Admin: {}", admin_label));
+                        }
                         if let Some(state) = info.get("oper_state").and_then(|v| v.as_str()) {
-                            details.push(format!("State: {}", state));
+                            details.push(format!("Oper: {}", state));
+                        }
+                        if let Some(carrier) = info.get("carrier").and_then(|v| v.as_bool()) {
+                            let carrier_label = if carrier { "yes" } else { "no" };
+                            details.push(format!("Carrier: {}", carrier_label));
                         }
                         if let Some(ip) = info.get("ip").and_then(|v| v.as_str()) {
                             details.push(format!("IP: {}", ip));

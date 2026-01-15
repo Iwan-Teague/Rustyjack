@@ -12,6 +12,8 @@ pub struct InterfaceSummary {
     pub oper_state: String,
     pub ip: Option<String>,
     pub is_wireless: bool,
+    pub admin_up: bool,
+    pub carrier: Option<bool>,
     pub capabilities: Option<InterfaceCapabilities>,
 }
 
@@ -169,6 +171,20 @@ impl NetOps for RealNetOps {
                 .trim()
                 .to_string();
 
+            let flags_hex = fs::read_to_string(entry.path().join("flags")).unwrap_or_default();
+            let flags = u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16)
+                .or_else(|_| flags_hex.trim().parse::<u32>())
+                .unwrap_or(0);
+            let admin_up = (flags & 0x1) != 0;
+
+            let carrier = fs::read_to_string(entry.path().join("carrier"))
+                .ok()
+                .and_then(|val| match val.trim() {
+                    "0" => Some(false),
+                    "1" => Some(true),
+                    _ => None,
+                });
+
             // Query capabilities (ignore errors)
             let capabilities = self.get_interface_capabilities(&name).ok();
 
@@ -178,6 +194,8 @@ impl NetOps for RealNetOps {
                 oper_state,
                 ip: None,
                 is_wireless,
+                admin_up,
+                carrier,
                 capabilities,
             });
         }
@@ -477,6 +495,8 @@ mod tests {
                 oper_state: oper_state.to_string(),
                 ip: None,
                 is_wireless,
+                admin_up: oper_state == "up",
+                carrier: None,
                 capabilities: None,
             });
             self.admin_state.lock().unwrap().insert(

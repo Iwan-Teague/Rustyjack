@@ -360,22 +360,25 @@ impl IsolationEngine {
             warn!("Preferred interface '{}' not found", pref);
         }
 
-        for iface in interfaces {
-            if iface.oper_state == "up" && !iface.is_wireless {
-                info!("Auto-selected wired interface: {}", iface.name);
-                return Ok(Some(iface.name.clone()));
-            }
+        let candidates: Vec<&super::ops::InterfaceSummary> =
+            interfaces.iter().filter(|iface| iface.name != "lo").collect();
+
+        if candidates.is_empty() {
+            warn!("No interfaces found");
+            return Ok(None);
         }
 
-        for iface in interfaces {
-            if iface.oper_state == "up" && iface.is_wireless {
-                info!("Auto-selected wireless interface: {}", iface.name);
-                return Ok(Some(iface.name.clone()));
-            }
+        if let Some(wired) = candidates.iter().find(|iface| !iface.is_wireless) {
+            info!("Auto-selected wired interface: {}", wired.name);
+            return Ok(Some(wired.name.clone()));
         }
 
-        warn!("No operational interfaces found");
-        Ok(None)
+        if let Some(wifi) = candidates.iter().find(|iface| iface.is_wireless) {
+            info!("Auto-selected wireless interface: {}", wifi.name);
+            return Ok(Some(wifi.name.clone()));
+        }
+
+        Ok(Some(candidates[0].name.clone()))
     }
 
     /// Activate an interface using a step-by-step pipeline.
@@ -709,8 +712,33 @@ impl IsolationEngine {
         self.ops.release_dhcp(iface).ok();
         
         // CRITICAL: Bring interface DOWN to prevent any communication
-        if let Err(e) = self.ops.bring_down(iface) {
-            warn!("Failed to bring down {}: {}", iface, e);
+        let mut bring_down_ok = false;
+        let mut last_err = None;
+        for _ in 0..3 {
+            match self.ops.bring_down(iface) {
+                Ok(()) => {
+                    bring_down_ok = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        if !bring_down_ok {
+            if let Some(err) = last_err {
+                return Err(err).with_context(|| {
+                    format!("CRITICAL: failed to bring down {}", iface)
+                });
+            }
+            bail!("CRITICAL: failed to bring down {}", iface);
+        }
+        if self.ops.admin_is_up(iface)? {
+            bail!(
+                "CRITICAL: {} remained admin-UP after bring_down retries",
+                iface
+            );
         }
         
         // Block wireless if applicable

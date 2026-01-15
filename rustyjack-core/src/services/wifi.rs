@@ -60,8 +60,10 @@ where
         .map_err(|e| ServiceError::OperationFailed(format!("WiFi scan failed: {}", e)))?;
     
     on_progress(100, "Scan complete");
+    let count = networks.len();
     Ok(serde_json::json!({
         "interface": req.interface,
+        "count": count,
         "networks": networks
     }))
 }

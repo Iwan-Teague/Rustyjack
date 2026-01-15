@@ -28,7 +28,7 @@ pub struct WifiNetworkEntry {
 #[derive(Debug, Deserialize)]
 pub struct WifiScanResponse {
     pub networks: Vec<WifiNetworkEntry>,
-    #[allow(dead_code)]
+    #[serde(default)]
     pub count: usize,
 }
 
@@ -57,6 +57,10 @@ pub struct InterfaceSummary {
     pub kind: String,
     pub oper_state: String,
     pub ip: Option<String>,
+    #[serde(default)]
+    pub admin_up: bool,
+    #[serde(default)]
+    pub carrier: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
