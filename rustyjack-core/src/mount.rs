@@ -313,7 +313,7 @@ pub fn enumerate_usb_block_devices() -> Result<Vec<BlockDevice>> {
         let sys_class = Path::new("/sys/class/block").join(&name);
         let is_usb = is_usb_block_device(&sys_class).unwrap_or(false);
 
-        if !(is_usb && removable) {
+        if !is_usb {
             continue;
         }
 
@@ -496,14 +496,17 @@ fn ensure_usb_removable(dev_name: &str) -> Result<()> {
         bail!("device type not allowed");
     }
     let sys_base = Path::new("/sys/class/block").join(&base);
-    let removable = read_sysfs_flag(sys_base.join("removable")).unwrap_or(false);
-    if !removable {
-        bail!("device is not removable");
-    }
     let is_usb = is_usb_block_device(&sys_base).unwrap_or(false);
     if !is_usb {
         bail!("device is not a USB storage device");
     }
+    let removable = read_sysfs_flag(sys_base.join("removable")).unwrap_or(false);
+    tracing::info!(
+        target: "usb",
+        device = %base,
+        removable = %removable,
+        "usb_device_removable_flag"
+    );
     Ok(())
 }
 

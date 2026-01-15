@@ -1536,6 +1536,18 @@ pub fn list_interface_summaries() -> Result<Vec<InterfaceSummary>> {
             .unwrap_or_else(|_| "unknown".into())
             .trim()
             .to_string();
+        let flags_hex = fs::read_to_string(entry.path().join("flags")).unwrap_or_default();
+        let flags = u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16)
+            .or_else(|_| flags_hex.trim().parse::<u32>())
+            .unwrap_or(0);
+        let admin_up = (flags & 0x1) != 0;
+        let carrier = fs::read_to_string(entry.path().join("carrier"))
+            .ok()
+            .and_then(|val| match val.trim() {
+                "0" => Some(false),
+                "1" => Some(true),
+                _ => None,
+            });
         let ip = match oper_state.as_str() {
             "down" | "dormant" | "lowerlayerdown" => None,
             _ => interface_ipv4(&name),
@@ -1547,6 +1559,8 @@ pub fn list_interface_summaries() -> Result<Vec<InterfaceSummary>> {
             oper_state,
             ip,
             is_wireless,
+            admin_up,
+            carrier,
             capabilities: None,
         });
     }

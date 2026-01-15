@@ -47,8 +47,15 @@ async fn dispatch_core_command(
 ) -> Result<CoreDispatchResponse, DaemonError> {
     let result = run_blocking(label, move || {
         rustyjack_core::operations::dispatch_command(&root, command).map_err(|err| {
-            DaemonError::new(ErrorCode::Internal, "command dispatch failed", false)
-                .with_detail(err.to_string())
+            let msg = err.to_string();
+            let code = if msg.contains("mount") || msg.contains("filesystem not allowed") {
+                ErrorCode::MountFailed
+            } else if msg.contains("WiFi") || msg.contains("wifi") {
+                ErrorCode::WifiFailed
+            } else {
+                ErrorCode::Internal
+            };
+            DaemonError::new(code, msg, false)
                 .with_source(format!("daemon.dispatch.{label}"))
         })
     })
