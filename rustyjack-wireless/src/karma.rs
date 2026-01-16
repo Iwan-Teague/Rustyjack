@@ -478,6 +478,18 @@ pub fn execute_karma<F>(
 where
     F: Fn(&str) + Send + Sync + 'static,
 {
+    execute_karma_cancellable(config, loot_base, None, progress)
+}
+
+pub fn execute_karma_cancellable<F>(
+    config: KarmaConfig,
+    loot_base: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: F,
+) -> Result<KarmaExecutionResult>
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
     let mut config = config;
     let logging_enabled = rustyjack_evasion::logs_enabled();
     if !logging_enabled {
@@ -493,6 +505,11 @@ where
         .map_err(|e| WirelessError::System(format!("Failed to create loot dir: {}", e)))?;
 
     progress("Starting Karma attack...");
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
+    }
 
     // Create attack state
     let attack = Arc::new(KarmaAttack::new(config.clone()));
@@ -553,6 +570,7 @@ where
     let progress = Arc::new(progress);
     let start = Instant::now();
     let duration = Duration::from_secs(config.duration as u64);
+    let mut cancelled = false;
 
     // Channel hopping if configured
     let hop_channels: Vec<u8> = if config.channel == 0 {
@@ -566,6 +584,13 @@ where
 
     // Main capture loop
     while attack.is_running() {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                cancelled = true;
+                attack.stop();
+                break;
+            }
+        }
         if duration.as_secs() > 0 && start.elapsed() >= duration {
             break;
         }
@@ -668,6 +693,10 @@ where
         tracing::warn!("Failed to restore managed mode: {}", e);
     }
 
+    if cancelled {
+        return Err(WirelessError::Cancelled);
+    }
+
     progress(&format!(
         "Karma complete: {} probes, {} SSIDs, {} clients",
         result.stats.probes_seen, result.stats.unique_ssids, result.stats.unique_clients
@@ -692,6 +721,19 @@ pub fn execute_karma_with_ap<F>(
 where
     F: Fn(&str) + Send + Sync + 'static,
 {
+    execute_karma_with_ap_cancellable(config, ap_interface, loot_base, None, progress)
+}
+
+pub fn execute_karma_with_ap_cancellable<F>(
+    config: KarmaConfig,
+    ap_interface: &str,
+    loot_base: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: F,
+) -> Result<KarmaExecutionResult>
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
     let mut config = config;
     let logging_enabled = rustyjack_evasion::logs_enabled();
     if !logging_enabled {
@@ -706,6 +748,11 @@ where
         .map_err(|e| WirelessError::System(format!("Failed to create loot dir: {}", e)))?;
 
     progress("Starting Karma attack with AP...");
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
+    }
 
     let attack = Arc::new(KarmaAttack::new(config.clone()));
     attack.running.store(true, Ordering::SeqCst);
@@ -778,8 +825,16 @@ where
     // Wait for attack duration
     let start = Instant::now();
     let duration = Duration::from_secs(config.duration as u64);
+    let mut cancelled = false;
 
     while start.elapsed() < duration && attack.is_running() {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                cancelled = true;
+                attack.stop();
+                break;
+            }
+        }
         thread::sleep(Duration::from_secs(5));
 
         let clients = arp_clients(ap_interface);
@@ -810,6 +865,10 @@ where
         writeln!(summary, "Primary SSID: {}", primary_ssid).ok();
         writeln!(summary, "Duration: {:?}", start.elapsed()).ok();
         writeln!(summary, "Victims: {}", result.stats.victims).ok();
+    }
+
+    if cancelled {
+        return Err(WirelessError::Cancelled);
     }
 
     progress(&format!(

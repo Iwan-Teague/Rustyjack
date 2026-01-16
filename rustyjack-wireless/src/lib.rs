@@ -101,7 +101,10 @@ pub use capture::{CaptureFilter, CapturedPacket, PacketCapture};
 pub use deauth::{DeauthAttacker, DeauthConfig, DeauthStats};
 pub use nl80211_queries::{InterfaceCapabilities, query_interface_capabilities};
 pub use error::{Result, WirelessError};
-pub use evil_twin::{execute_evil_twin, EvilTwin, EvilTwinConfig, EvilTwinResult, EvilTwinStats};
+pub use evil_twin::{
+    execute_evil_twin, execute_evil_twin_cancellable, EvilTwin, EvilTwinConfig, EvilTwinResult,
+    EvilTwinStats,
+};
 pub use frames::{DeauthFrame, DeauthReason, FrameSubtype, FrameType, Ieee80211Frame, MacAddress};
 pub use handshake::{HandshakeCapture, HandshakeMessage, HandshakeState};
 pub use interface::WirelessInterface;
@@ -109,20 +112,24 @@ pub use pcap::PcapWriter;
 pub use rustyjack_wpa::crack;
 pub use rustyjack_wpa::{CrackResult, CrackerConfig, HandshakeExport, WpaCracker};
 pub use karma::{
-    execute_karma, execute_karma_with_ap, CapturedProbe, KarmaAttack, KarmaConfig,
+    execute_karma, execute_karma_cancellable, execute_karma_with_ap,
+    execute_karma_with_ap_cancellable, CapturedProbe, KarmaAttack, KarmaConfig,
     KarmaExecutionResult, KarmaResult, KarmaStats, KarmaVictim,
 };
 pub use pmkid::{
-    execute_pmkid_capture, PmkidCapture, PmkidCaptureResult, PmkidCapturer, PmkidConfig,
+    execute_pmkid_capture, execute_pmkid_capture_cancellable, PmkidCapture, PmkidCaptureResult,
+    PmkidCapturer, PmkidConfig,
 };
 pub use probe::{
-    execute_probe_sniff, ClientStats, ProbeRequest, ProbeSniffConfig, ProbeSniffResult,
-    ProbeSniffer, ProbedNetwork,
+    execute_probe_sniff, execute_probe_sniff_cancellable, ClientStats, ProbeRequest,
+    ProbeSniffConfig, ProbeSniffResult, ProbeSniffer, ProbedNetwork,
 };
 pub use recon::{
-    arp_scan, calculate_bandwidth, discover_gateway, discover_mdns_devices, get_traffic_stats,
-    capture_dns_queries, scan_network_services, ArpDevice, BandwidthSample,
-    DeviceServices, DnsQuery, GatewayInfo, MdnsDevice, ServiceInfo, TrafficStats,
+    arp_scan, arp_scan_cancellable, calculate_bandwidth, discover_gateway, discover_mdns_devices,
+    discover_mdns_devices_cancellable, get_traffic_stats, capture_dns_queries,
+    capture_dns_queries_cancellable, scan_network_services, scan_network_services_cancellable,
+    ArpDevice, BandwidthSample, DeviceServices, DnsQuery, GatewayInfo, MdnsDevice, ServiceInfo,
+    TrafficStats,
 };
 
 /// Library version

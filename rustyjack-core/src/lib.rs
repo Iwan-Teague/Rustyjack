@@ -13,6 +13,7 @@ pub mod mount;
 pub mod arp_helpers;
 pub mod audit;
 pub mod cli;
+pub mod cancel;
 pub mod dhcp_helpers;
 pub mod dns_helpers;
 pub mod netlink_helpers;
@@ -33,7 +34,7 @@ pub use cli::{
     Cli, Commands, OutputFormat, WifiCommand, WifiCrackArgs, WifiDeauthArgs, WifiEvilTwinArgs,
     WifiKarmaArgs, WifiPmkidArgs, WifiProbeSniffArgs, WifiScanArgs,
 };
-pub use operations::{dispatch_command, HandlerResult};
+pub use operations::{dispatch_command, dispatch_command_with_cancel, is_cancelled_error, HandlerResult};
 pub use rustyjack_evasion::{logs_disabled, logs_enabled};
 pub use system::{
     apply_interface_isolation, enforce_single_interface, ensure_default_wifi_profiles,

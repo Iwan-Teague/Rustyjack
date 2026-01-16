@@ -557,33 +557,14 @@ impl App {
         cmd: Commands,
         duration_secs: u64,
     ) -> Result<Option<(String, serde_json::Value)>> {
-        use std::sync::{Arc, Mutex};
-        use std::thread;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
-        let core = self.core.clone();
-        let result: Arc<Mutex<Option<Result<(String, serde_json::Value)>>>> =
-            Arc::new(Mutex::new(None));
-        let result_clone = Arc::clone(&result);
-
-        // Spawn command in background
-        thread::spawn(move || {
-            let r = core.dispatch(cmd);
-            if let Ok(mut guard) = result_clone.lock() {
-                *guard = Some(r);
-            } else {
-                eprintln!("[UI] Failed to lock result mutex (cancellable dispatch)");
-                // Fallback to an error result so caller can surface a generic failure
-                if let Ok(mut guard) = result_clone.lock() {
-                    *guard = Some(Err(anyhow::anyhow!(
-                        "Internal error: failed to capture command result"
-                    )));
-                }
-            }
-        });
-
-        let start = std::time::Instant::now();
+        let job_id = self.core.start_core_command(cmd)?;
+        let start = Instant::now();
         let mut last_displayed_secs: u64 = u64::MAX; // Force initial draw
+        let poll_interval = Duration::from_millis(200);
+        let mut last_poll = Instant::now() - poll_interval;
+        let mut last_status = None;
 
         loop {
             let elapsed = start.elapsed().as_secs();
@@ -592,6 +573,24 @@ impl App {
             match self.check_attack_cancel(attack_name)? {
                 CancelAction::Continue => {}
                 CancelAction::GoBack => {
+                    self.show_progress(
+                        attack_name,
+                        ["Cancelling...", "Please wait", ""],
+                    )?;
+                    let _ = self.core.cancel_job(job_id);
+
+                    let cancel_start = Instant::now();
+                    while cancel_start.elapsed() < Duration::from_secs(3) {
+                        let st = self.core.job_status(job_id)?;
+                        if matches!(
+                            st.state,
+                            JobState::Cancelled | JobState::Failed | JobState::Completed
+                        ) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+
                     self.show_message(
                         &format!("{} Cancelled", attack_name),
                         [
@@ -605,6 +604,24 @@ impl App {
                 }
                 CancelAction::GoMainMenu => {
                     self.menu_state.home();
+                    self.show_progress(
+                        attack_name,
+                        ["Cancelling...", "Please wait", ""],
+                    )?;
+                    let _ = self.core.cancel_job(job_id);
+
+                    let cancel_start = Instant::now();
+                    while cancel_start.elapsed() < Duration::from_secs(3) {
+                        let st = self.core.job_status(job_id)?;
+                        if matches!(
+                            st.state,
+                            JobState::Cancelled | JobState::Failed | JobState::Completed
+                        ) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+
                     self.show_message(
                         &format!("{} Cancelled", attack_name),
                         [
@@ -618,13 +635,57 @@ impl App {
                 }
             }
 
-            // Check if completed
-            if let Some(r) = result
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))?
-                .take()
-            {
-                return Ok(Some(r?));
+            if last_status.is_none() || last_poll.elapsed() >= poll_interval {
+                last_status = Some(self.core.job_status(job_id)?);
+                last_poll = Instant::now();
+            }
+
+            if let Some(status) = last_status.as_ref() {
+                match status.state {
+                    JobState::Completed => {
+                        let value = status
+                            .result
+                            .clone()
+                            .ok_or_else(|| anyhow::anyhow!("Job completed without result"))?;
+                        let message = value
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| anyhow::anyhow!("Job result missing message"))?
+                            .to_string();
+                        let data = value
+                            .get("data")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        return Ok(Some((message, data)));
+                    }
+                    JobState::Failed => {
+                        let err_msg = status
+                            .error
+                            .as_ref()
+                            .map(|e| e.message.clone())
+                            .unwrap_or_else(|| "Job failed".to_string());
+                        let detail = status.error.as_ref().and_then(|e| e.detail.clone());
+                        let full = if let Some(detail) = detail {
+                            format!("{} ({})", err_msg, detail)
+                        } else {
+                            err_msg
+                        };
+                        bail!("Job failed: {}", full);
+                    }
+                    JobState::Cancelled => {
+                        self.show_message(
+                            &format!("{} Cancelled", attack_name),
+                            [
+                                "Attack stopped early",
+                                "",
+                                "Partial results may be",
+                                "saved in loot folder",
+                            ],
+                        )?;
+                        return Ok(None);
+                    }
+                    JobState::Queued | JobState::Running => {}
+                }
             }
 
             // Only redraw if seconds changed (reduces flicker significantly)
@@ -651,7 +712,7 @@ impl App {
             }
 
             // Sleep briefly between button checks (50ms for responsive cancellation)
-            thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }
@@ -5501,6 +5562,22 @@ impl App {
             } else {
                 return Ok(());
             }
+        }
+
+        // Ensure the daemon strict-isolation preference matches the selected interface.
+        self.show_progress(
+            "Preparing Evil Twin",
+            [
+                &format!("Selecting interface: {}", attack_interface),
+                "Applying strict isolation...",
+                "Please wait",
+            ],
+        )?;
+        if let Err(e) = self.core.set_active_interface(&attack_interface) {
+            return self.show_preflight_error(
+                "Interface Select Failed",
+                &format!("Failed to set active interface in daemon: {}", e),
+            );
         }
 
         if let Some(error) = self.preflight_evil_twin(&attack_interface)? {
@@ -12332,6 +12409,7 @@ impl App {
                         [
                             &format!("Interface: {}", selected_name),
                             &msg,
+                            "LEFT = Cancel",
                         ],
                     )?;
                     last_message = Some(msg);
@@ -12342,6 +12420,7 @@ impl App {
                     [
                         &format!("Interface: {}", selected_name),
                         "Queued...",
+                        "LEFT = Cancel",
                     ],
                 )?;
                 last_message = Some("Queued".to_string());
@@ -12349,6 +12428,45 @@ impl App {
 
             match status.state {
                 JobState::Queued | JobState::Running => {
+                    if let Some(button) = self.buttons.try_read()? {
+                        match self.map_button(button) {
+                            ButtonAction::Back | ButtonAction::MainMenu => {
+                                self.show_progress(
+                                    title,
+                                    [
+                                        &format!("Interface: {}", selected_name),
+                                        "Cancelling...",
+                                        "Please wait",
+                                    ],
+                                )?;
+                                let _ = self.core.cancel_job(job_id);
+
+                                let cancel_start = std::time::Instant::now();
+                                while cancel_start.elapsed() < Duration::from_secs(3) {
+                                    let st = self.core.job_status(job_id)?;
+                                    if matches!(
+                                        st.state,
+                                        JobState::Cancelled | JobState::Failed | JobState::Completed
+                                    ) {
+                                        break;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(100));
+                                }
+
+                                self.show_message(
+                                    "Interface Selection",
+                                    [
+                                        "Cancelled",
+                                        "",
+                                        "Run Interface Select again",
+                                        "to ensure desired state",
+                                    ],
+                                )?;
+                                return Ok(None);
+                            }
+                            _ => {}
+                        }
+                    }
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 JobState::Completed => {

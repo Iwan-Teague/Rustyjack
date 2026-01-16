@@ -53,6 +53,10 @@ pub enum WirelessError {
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
+    /// Operation cancelled
+    #[error("Operation cancelled")]
+    Cancelled,
+
     /// System/OS error
     #[error("System error: {0}")]
     System(String),

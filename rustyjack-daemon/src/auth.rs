@@ -234,6 +234,7 @@ pub fn required_tier_for_jobkind(kind: &JobKind) -> AuthorizationTier {
         JobKind::InterfaceSelect { .. } => AuthorizationTier::Operator,
         JobKind::ScanRun { .. } => AuthorizationTier::Operator,
         JobKind::SystemUpdate { .. } => AuthorizationTier::Admin,
+        JobKind::CoreCommand { .. } => AuthorizationTier::Operator,
     }
 }
 

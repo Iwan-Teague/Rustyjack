@@ -197,6 +197,22 @@ impl CoreBridge {
         })
     }
 
+    pub fn start_core_command(&self, command: Commands) -> Result<JobId> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            let job = client.job_start(JobKind::CoreCommand { command }).await?;
+            Ok(job.job_id)
+        })
+    }
+
+    pub fn cancel_job(&self, job_id: JobId) -> Result<bool> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            let response = client.job_cancel(job_id).await?;
+            Ok(response.cancelled)
+        })
+    }
+
     pub fn job_status(&self, job_id: JobId) -> Result<JobInfo> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
