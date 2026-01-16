@@ -106,11 +106,40 @@ MIT
 - Operation modes: Stealth, Default, Aggressive
 
 ### Loot Management
-- Organized storage by target
-- Automated reports with insights
+- Session-based organization by target
+- Automated reports with insights and next steps
+- Artifact sweep for comprehensive file collection
+- Pipeline loot isolation
 - Discord webhook uploads
-- USB export
+- USB export with mount policy enforcement
 - Optional AES-GCM encryption
+- Audit logging with operation history
+
+### Anti-Forensics
+- Secure file deletion (DoD 5220.22-M standard)
+- RAM wipe on secure shutdown
+- Log purging with selective artifact removal
+- Complete system purge capability
+- Sensitive data redaction in logs
+- Zeroization of sensitive data structures
+
+### Physical Access
+- WiFi credential extraction from routers
+- Router fingerprinting and vulnerability detection
+- Default credential testing
+- USB mounting with read-only/read-write modes
+- Mount policy enforcement
+
+### Full Disk Encryption
+- USB key preparation for encrypted volumes
+- Root filesystem migration to encrypted storage
+- LUKS-based encryption support
+
+### Advanced CLI Operations
+- DNS spoofing with captive portal templates
+- Reverse shell launcher with job tracking
+- Transparent network bridging
+- Process management and daemon control
 
 ---
 
@@ -154,10 +183,21 @@ Outputs to `prebuilt/arm32/`
 ### Environment Variables
 ```bash
 RUSTYJACK_ROOT=/var/lib/rustyjack
+RUSTYJACK_DISPLAY_ROTATION=landscape  # or portrait
+RUSTYJACK_LOGS_DISABLED=1             # disables logging when set
 RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 RUSTYJACKD_READ_TIMEOUT_MS=5000
 RUSTYJACKD_WRITE_TIMEOUT_MS=5000
+RUSTYJACKD_ALLOW_CORE_DISPATCH=true   # enables IPC dispatch (required)
+RUSTYJACKD_DANGEROUS_OPS=true         # enables system updates (commented out by default)
+RUSTYJACK_NFTABLES_LOG=1              # logs nf_tables packet matches to journalctl
 ```
+
+### Systemd Services
+- `rustyjackd.service` - Privileged daemon (root) with CAP_NET_ADMIN, CAP_NET_RAW, CAP_SYS_ADMIN
+- `rustyjack-ui.service` - Unprivileged LCD UI (rustyjack-ui user, groups: gpio, spi, rustyjack)
+- `rustyjack-portal.service` - Captive portal server (rustyjack-portal user, port 3000)
+- `rustyjack.service` - Alias for rustyjack-ui.service
 
 ---
 
@@ -209,29 +249,54 @@ journalctl -u rustyjackd -f
 - RustyJack enforces single active interface
 - Check interface isolation in Settings → Hardware
 
+### DNS resolution issues
+- Check that `/etc/resolv.conf` is a plain file (not a symlink)
+- Verify NetworkManager is purged: `dpkg -s network-manager` should show "not installed"
+- Installation removes NetworkManager completely via `apt-get purge`
+
+### USB mount failures
+- Verify device is writable and has correct filesystem
+- Check permissions on `/var/lib/rustyjack/mounts/`
+- Ensure correct mount mode selected (ReadOnly/ReadWrite)
+
+### FDE operations
+- FDE preparation and migration are **destructive and irreversible**
+- Always backup data before running
+- Requires USB key and will format target devices
+
 ---
 
 ## File Structure
 
 ```
 rustyjack/
-├── rustyjack-core/        # Operations, pipelines, orchestration
+├── rustyjack-core/        # Operations, pipelines, orchestration, anti-forensics
+│   ├── src/
+│   │   ├── operations.rs       # 68 command handlers
+│   │   ├── anti_forensics.rs   # Secure delete, RAM wipe, evidence removal
+│   │   ├── physical_access.rs  # WiFi credential extraction from routers
+│   │   ├── mount.rs            # USB mount operations with policy enforcement
+│   │   └── redact.rs           # Sensitive data redaction for logs
 ├── rustyjack-daemon/      # Privileged service
 ├── rustyjack-ui/          # LCD interface
 ├── rustyjack-client/      # IPC client library
 ├── rustyjack-ipc/         # Protocol types
 ├── rustyjack-commands/    # Command definitions
 ├── rustyjack-netlink/     # Pure Rust networking
-├── rustyjack-wireless/    # 802.11 attacks
+├── rustyjack-wireless/    # 802.11 attacks (9,688 lines, 18 modules)
 ├── rustyjack-ethernet/    # LAN operations
-├── rustyjack-portal/      # Captive portal
-├── rustyjack-evasion/     # MAC/hostname randomization
-├── rustyjack-encryption/  # Crypto helpers
-├── rustyjack-wpa/         # WPA handshake processing
-├── scripts/               # Build scripts
+├── rustyjack-portal/      # Captive portal (Axum + Tower)
+├── rustyjack-evasion/     # MAC/hostname randomization with policy engine
+├── rustyjack-encryption/  # AES-GCM crypto helpers
+├── rustyjack-wpa/         # WPA handshake processing (PBKDF2, HMAC-SHA1)
+├── DNSSpoof/              # Captive portal templates (HTML/JS, not Rust)
+├── scripts/               # Build scripts, WiFi drivers, FDE scripts
+│   ├── fde_prepare_usb.sh
+│   ├── fde_migrate_root.sh
+│   └── wifi_driver_installer.sh
 ├── docker/                # Cross-compilation containers
 ├── docs/                  # Documentation
-└── install_*.sh           # Installation scripts
+└── install_*.sh           # Installation scripts (production/dev/prebuilt)
 ```
 
 ---
