@@ -6,7 +6,7 @@ This document describes the comprehensive diagnostic test suite for RustyJack, i
 
 ## Files
 
-- **`rustyjack_comprehensive_test.sh`** - Main comprehensive test script (NEW)
+- **`scripts/rustyjack_comprehensive_test.sh`** - Main comprehensive test script (NEW)
 - **`rustyjackd_diag.sh`** - Original diagnostic script (baseline)
 - **`rustyjackd_pi_diagnostic_blueprint.pdf`** - Detailed test specification
 
@@ -16,7 +16,7 @@ This document describes the comprehensive diagnostic test suite for RustyJack, i
 
 ```bash
 # Run as root (required for user creation, systemd inspection, /proc access)
-sudo ./rustyjack_comprehensive_test.sh
+sudo ./scripts/rustyjack_comprehensive_test.sh
 ```
 
 This runs **all non-disruptive tests** including:
@@ -31,7 +31,7 @@ This runs **all non-disruptive tests** including:
 
 ```bash
 # Enable disruptive tests (WiFi, hotspot, mount operations)
-sudo ./rustyjack_comprehensive_test.sh --dangerous
+sudo ./scripts/rustyjack_comprehensive_test.sh --dangerous
 ```
 
 ⚠️ **Warning**: Dangerous mode may:
@@ -44,16 +44,16 @@ sudo ./rustyjack_comprehensive_test.sh --dangerous
 
 ```bash
 # Verbose output
-sudo ./rustyjack_comprehensive_test.sh --verbose
+sudo ./scripts/rustyjack_comprehensive_test.sh --verbose
 
 # Custom socket path
-sudo ./rustyjack_comprehensive_test.sh --socket /custom/path/rustyjackd.sock
+sudo ./scripts/rustyjack_comprehensive_test.sh --socket /custom/path/rustyjackd.sock
 
 # Custom stress iterations
-sudo ./rustyjack_comprehensive_test.sh --stress 500
+sudo ./scripts/rustyjack_comprehensive_test.sh --stress 500
 
 # Parallel stress clients
-sudo ./rustyjack_comprehensive_test.sh --parallel 50
+sudo ./scripts/rustyjack_comprehensive_test.sh --parallel 50
 ```
 
 ## Test Suites
@@ -342,7 +342,7 @@ Typical values on Raspberry Pi Zero 2 W:
 
 ### Enhanced Features
 
-| Feature | Original (`rustyjackd_diag.sh`) | Comprehensive (`rustyjack_comprehensive_test.sh`) |
+| Feature | Original (`rustyjackd_diag.sh`) | Comprehensive (`scripts/rustyjack_comprehensive_test.sh`) |
 |---------|----------------------------------|---------------------------------------------------|
 | Test Suites | A, B, C (partial), D (partial), E, F, H (basic) | **All suites: A-J** |
 | Suite G (Logging) | ❌ Not implemented | ✅ Full journal capture, log permissions |
@@ -376,7 +376,7 @@ Typical values on Raspberry Pi Zero 2 W:
 
 **Solution**:
 ```bash
-sudo ./rustyjack_comprehensive_test.sh
+sudo ./scripts/rustyjack_comprehensive_test.sh
 ```
 
 ### "Service not active"
@@ -433,7 +433,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Run comprehensive tests
-        run: sudo ./rustyjack_comprehensive_test.sh
+        run: sudo ./scripts/rustyjack_comprehensive_test.sh
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v3
@@ -448,7 +448,7 @@ jobs:
 # .git/hooks/pre-commit
 if [[ "$(git diff --cached --name-only | grep -E 'rustyjack-daemon|rustyjack-ipc')" ]]; then
     echo "Daemon code changed - running quick diagnostic..."
-    sudo ./rustyjack_comprehensive_test.sh --stress 50
+    sudo ./scripts/rustyjack_comprehensive_test.sh --stress 50
 fi
 ```
 

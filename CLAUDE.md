@@ -221,11 +221,26 @@ RUSTYJACK_NFTABLES_LOG=1              # logs nf_tables packet matches to journal
 # Check compilation
 cargo check --workspace
 
-# Run on Pi
+# Run comprehensive test suite (safe mode)
+sudo ./scripts/rustyjack_comprehensive_test.sh
+
+# Run with dangerous/disruptive tests (lab devices only)
+sudo ./scripts/rustyjack_comprehensive_test.sh --dangerous
+
+# Check services on Pi
 systemctl status rustyjackd
 systemctl status rustyjack-ui
 journalctl -u rustyjackd -f
 ```
+
+**Test Suite** (`scripts/rustyjack_comprehensive_test.sh`):
+- Suite A: Installation & service sanity
+- Suite B: Systemd hardening posture
+- Suite C: Authorization matrix & tiers
+- Suite D: Protocol robustness
+- Suite E: Stress testing
+- Suite F: Security adversarial probes
+- Dangerous mode: WiFi, hotspot, USB mount operations
 
 ---
 
