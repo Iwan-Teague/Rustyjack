@@ -15,6 +15,17 @@ use anyhow::{anyhow, Context, Result};
 use ipnet::Ipv4Net;
 use socket2::{Domain, Protocol, Socket, Type};
 
+#[derive(Debug)]
+pub struct CancelledError;
+
+impl std::fmt::Display for CancelledError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Operation cancelled")
+    }
+}
+
+impl std::error::Error for CancelledError {}
+
 const DEFAULT_BANNER_READ: Duration = Duration::from_millis(750);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const DEFAULT_ARP_PPS: u32 = 100;
@@ -231,7 +242,7 @@ pub fn discover_hosts_cancellable(
     // Send probes with cancellation checks
     for ip in network.hosts() {
         if cancel.load(Ordering::Relaxed) {
-            return Err(anyhow!("Discovery cancelled"));
+            return Err(CancelledError.into());
         }
         
         let packet = build_icmp_echo(ident, seq);
@@ -261,7 +272,7 @@ pub fn discover_hosts_cancellable(
     // Receive with cancellation checks
     while Instant::now() < deadline {
         if cancel.load(Ordering::Relaxed) {
-            return Err(anyhow!("Discovery cancelled"));
+            return Err(CancelledError.into());
         }
         
         match socket.recv_from(&mut buf) {
@@ -388,7 +399,7 @@ pub fn quick_port_scan_cancellable(
     for port in ports {
         // Check cancellation before each port
         if cancel.load(Ordering::Relaxed) {
-            return Err(anyhow!("Scan cancelled"));
+            return Err(CancelledError.into());
         }
         
         let addr = SocketAddr::new(target.into(), *port);
@@ -424,7 +435,7 @@ pub fn quick_port_scan_with_source_cancellable(
     for port in ports {
         // Check cancellation before each port
         if cancel.load(Ordering::Relaxed) {
-            return Err(anyhow!("Scan cancelled"));
+            return Err(CancelledError.into());
         }
         
         let addr = SocketAddr::new(target.into(), *port);
@@ -721,7 +732,7 @@ pub async fn discover_hosts_arp_cancellable(
     // Send probes with cancellation checks
     for ip in &targets {
         if cancel.load(Ordering::Relaxed) {
-            return Err(anyhow!("ARP discovery cancelled"));
+            return Err(CancelledError.into());
         }
         
         let frame = build_arp_request(&local_mac, &local_ip, ip);
@@ -759,7 +770,7 @@ pub async fn discover_hosts_arp_cancellable(
     // Receive with cancellation checks
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(anyhow!("ARP discovery cancelled"));
+            return Err(CancelledError.into());
         }
         
         match sock.recv(&mut buf) {
@@ -1315,6 +1326,117 @@ pub fn build_device_inventory(
             open_ports: Vec::new(),
             banners: Vec::new(),
         });
+
+        let ttl_raw = discovery
+            .details
+            .iter()
+            .find(|d| d.ip == *host)
+            .and_then(|d| d.ttl);
+        let ttl_guess = ttl_raw.and_then(|t| guess_os_from_ttl(Some(t)));
+        let os_hint = guess_os_from_ports(ttl_guess, &scan.open_ports);
+
+        let mut services = Vec::new();
+        if let Some(names) = mdns.get(host) {
+            for n in names {
+                services.push(ServiceInfo {
+                    protocol: "mDNS".to_string(),
+                    detail: n.clone(),
+                });
+            }
+        }
+        if let Some(names) = llmnr.get(host) {
+            for n in names {
+                services.push(ServiceInfo {
+                    protocol: "LLMNR".to_string(),
+                    detail: n.clone(),
+                });
+            }
+        }
+        if let Some(names) = netbios.get(host) {
+            for n in names {
+                services.push(ServiceInfo {
+                    protocol: "NetBIOS".to_string(),
+                    detail: n.clone(),
+                });
+            }
+        }
+        if let Some(types) = wsd.get(host) {
+            for t in types {
+                services.push(ServiceInfo {
+                    protocol: "WS-Discovery".to_string(),
+                    detail: t.clone(),
+                });
+            }
+        }
+
+        let hostname = services
+            .iter()
+            .find_map(|s| {
+                if s.detail.contains(".local") {
+                    Some(s.detail.clone())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| services.get(0).map(|s| s.detail.clone()));
+
+        devices.push(DeviceInfo {
+            ip: *host,
+            hostname,
+            services,
+            os_hint,
+            ttl: ttl_raw,
+            open_ports: scan.open_ports.clone(),
+            banners: scan.banners.clone(),
+        });
+    }
+
+    Ok(devices)
+}
+
+pub fn build_device_inventory_cancellable(
+    discovery: &LanDiscoveryResult,
+    ports: &[u16],
+    timeout: Duration,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Vec<DeviceInfo>> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CancelledError.into());
+    }
+
+    let mdns = query_mdns(timeout).unwrap_or_default();
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CancelledError.into());
+    }
+    let llmnr = query_llmnr(timeout).unwrap_or_default();
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CancelledError.into());
+    }
+    let netbios = query_netbios(timeout).unwrap_or_default();
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CancelledError.into());
+    }
+    let wsd = query_ws_discovery(timeout).unwrap_or_default();
+
+    let mut devices = Vec::new();
+    for host in &discovery.hosts {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(CancelledError.into());
+        }
+
+        let scan = match quick_port_scan_cancellable(*host, ports, timeout, cancel) {
+            Ok(result) => result,
+            Err(err) => {
+                if err.is::<CancelledError>() {
+                    return Err(err);
+                }
+                PortScanResult {
+                    target: *host,
+                    open_ports: Vec::new(),
+                    banners: Vec::new(),
+                }
+            }
+        };
 
         let ttl_raw = discovery
             .details

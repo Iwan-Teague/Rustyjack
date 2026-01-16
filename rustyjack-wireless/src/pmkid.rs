@@ -17,6 +17,10 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use chrono::Local;
@@ -425,8 +429,26 @@ pub fn execute_pmkid_capture<F>(
 where
     F: Fn(f32, &str),
 {
+    execute_pmkid_capture_cancellable(loot_dir, config, None, on_progress)
+}
+
+pub fn execute_pmkid_capture_cancellable<F>(
+    loot_dir: &Path,
+    config: &PmkidConfig,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: F,
+) -> Result<PmkidCaptureResult>
+where
+    F: Fn(f32, &str),
+{
     tracing::info!("Starting PMKID capture on interface {}", config.interface);
     on_progress(0.05, "Initializing interface...");
+
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
+    }
 
     // Validate interface
     if !crate::is_wireless_interface(&config.interface) {
@@ -480,6 +502,7 @@ where
     let mut last_channel_hop = Instant::now();
     let channel_hop_interval = Duration::from_secs(2);
     let mut packets_analyzed = 0u64;
+    let mut cancelled = false;
 
     // Target BSSID for filtering
     let target_bssid: Option<MacAddress> = config.bssid.as_ref().and_then(|b| b.parse().ok());
@@ -489,6 +512,12 @@ where
     capture.set_filter(CaptureFilter::eapol_only());
 
     while start.elapsed() < duration {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
+            }
+        }
         // Channel hopping for passive mode
         if channels_to_scan.len() > 1 && last_channel_hop.elapsed() > channel_hop_interval {
             let ch = channels_to_scan[channel_idx % channels_to_scan.len()];
@@ -611,6 +640,10 @@ where
 
         fs::write(&log_file, &log_content)
             .map_err(|e| WirelessError::System(format!("Failed to write log: {}", e)))?;
+    }
+
+    if cancelled {
+        return Err(WirelessError::Cancelled);
     }
 
     on_progress(1.0, "Complete");

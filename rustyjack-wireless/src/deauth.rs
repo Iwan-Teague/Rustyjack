@@ -157,6 +157,17 @@ impl DeauthAttacker {
         client: Option<MacAddress>,
         config: DeauthConfig,
     ) -> Result<DeauthStats> {
+        self.attack_cancellable(bssid, client, config, None)
+    }
+
+    /// Execute deauth attack with cancellation support
+    pub fn attack_cancellable(
+        &mut self,
+        bssid: MacAddress,
+        client: Option<MacAddress>,
+        config: DeauthConfig,
+        cancel: Option<&Arc<AtomicBool>>,
+    ) -> Result<DeauthStats> {
         tracing::info!(
             "Starting deauth attack on BSSID {} (client: {})",
             bssid,
@@ -167,7 +178,6 @@ impl DeauthAttacker {
 
         let mut stats = DeauthStats::default();
         let start = Instant::now();
-        let stop_flag = Arc::new(AtomicBool::new(false));
 
         // Optional: Start handshake capture in background thread
         let handshake_state = if config.capture_handshake {
@@ -179,7 +189,12 @@ impl DeauthAttacker {
         };
 
         // Main attack loop
-        while start.elapsed() < config.duration && !stop_flag.load(Ordering::Relaxed) {
+        while start.elapsed() < config.duration {
+            if let Some(flag) = cancel {
+                if flag.load(Ordering::Relaxed) {
+                    return Err(WirelessError::Cancelled);
+                }
+            }
             // Send deauth burst
             let result = self.send_deauth_burst(bssid, client, &config)?;
 
@@ -197,6 +212,11 @@ impl DeauthAttacker {
 
             // Wait before next burst
             if start.elapsed() + config.burst_interval < config.duration {
+                if let Some(flag) = cancel {
+                    if flag.load(Ordering::Relaxed) {
+                        return Err(WirelessError::Cancelled);
+                    }
+                }
                 thread::sleep(config.burst_interval);
             }
         }
@@ -232,11 +252,28 @@ impl DeauthAttacker {
         client: Option<MacAddress>,
         config: DeauthConfig,
     ) -> Result<(DeauthStats, Vec<CapturedPacket>, Option<HandshakeExport>)> {
+        self.attack_with_capture_cancellable(bssid, client, config, None)
+    }
+
+    /// Execute attack with real-time capture and cancellation support
+    pub fn attack_with_capture_cancellable(
+        &mut self,
+        bssid: MacAddress,
+        client: Option<MacAddress>,
+        config: DeauthConfig,
+        cancel: Option<&Arc<AtomicBool>>,
+    ) -> Result<(DeauthStats, Vec<CapturedPacket>, Option<HandshakeExport>)> {
         tracing::info!("Starting deauth attack with capture");
 
         let mut stats = DeauthStats::default();
         let mut captured_packets = Vec::new();
         let start = Instant::now();
+
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                return Err(WirelessError::Cancelled);
+            }
+        }
 
         // Create capture socket
         let mut capture = PacketCapture::new(&self.interface_name)?;
@@ -247,6 +284,11 @@ impl DeauthAttacker {
         let mut handshake_export: Option<HandshakeExport> = None;
 
         while start.elapsed() < config.duration {
+            if let Some(flag) = cancel {
+                if flag.load(Ordering::Relaxed) {
+                    return Err(WirelessError::Cancelled);
+                }
+            }
             // Send deauth burst
             let result = self.send_deauth_burst(bssid, client, &config)?;
             stats.packets_sent += result.sent as u64;
@@ -257,6 +299,11 @@ impl DeauthAttacker {
             // Capture packets during burst interval
             let capture_until = Instant::now() + config.burst_interval;
             while Instant::now() < capture_until {
+                if let Some(flag) = cancel {
+                    if flag.load(Ordering::Relaxed) {
+                        return Err(WirelessError::Cancelled);
+                    }
+                }
                 if let Some(packet) = capture.next_packet()? {
                     if packet.is_eapol() {
                         stats.eapol_frames += 1;

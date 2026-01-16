@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -212,16 +212,19 @@ impl NetOps for RealNetOps {
     }
 
     fn set_rfkill_block(&self, interface: &str, blocked: bool) -> Result<()> {
-        use crate::netlink_helpers::{rfkill_find_index, rfkill_block, rfkill_unblock};
-        
-        if let Ok(Some(idx)) = rfkill_find_index(interface) {
-            if blocked {
-                rfkill_block(idx)?;
-            } else {
-                rfkill_unblock(idx)?;
+        use crate::netlink_helpers::{rfkill_block, rfkill_find_index, rfkill_unblock};
+
+        match rfkill_find_index(interface)? {
+            Some(idx) => {
+                if blocked {
+                    rfkill_block(idx)?;
+                } else {
+                    rfkill_unblock(idx)?;
+                }
+                Ok(())
             }
+            None => Err(anyhow!("rfkill device not found for interface {}", interface)),
         }
-        Ok(())
     }
 
     fn is_wireless(&self, interface: &str) -> bool {
@@ -441,7 +444,7 @@ impl NetOps for RealNetOps {
 
         match rfkill_find_index(interface)? {
             Some(idx) => rfkill_is_blocked(idx),
-            None => Ok(false), // No rfkill device = not blocked
+            None => Err(anyhow!("rfkill device not found for interface {}", interface)),
         }
     }
 
@@ -450,7 +453,7 @@ impl NetOps for RealNetOps {
 
         match rfkill_find_index(interface)? {
             Some(idx) => rfkill_is_hard_blocked(idx),
-            None => Ok(false), // No rfkill device = not blocked
+            None => Err(anyhow!("rfkill device not found for interface {}", interface)),
         }
     }
 }

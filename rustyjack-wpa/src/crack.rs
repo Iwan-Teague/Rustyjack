@@ -111,6 +111,12 @@ impl WpaCracker {
         self
     }
 
+    /// Override the stop flag (used for external cancellation).
+    pub fn with_stop_flag(mut self, stop_flag: Arc<AtomicBool>) -> Self {
+        self.stop_flag = stop_flag;
+        self
+    }
+
     /// Stop cracking.
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::Relaxed);

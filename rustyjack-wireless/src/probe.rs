@@ -20,6 +20,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use chrono::Local;
@@ -493,8 +497,26 @@ pub fn execute_probe_sniff<F>(
 where
     F: Fn(f32, &str),
 {
+    execute_probe_sniff_cancellable(loot_dir, config, None, on_progress)
+}
+
+pub fn execute_probe_sniff_cancellable<F>(
+    loot_dir: &Path,
+    config: &ProbeSniffConfig,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: F,
+) -> Result<ProbeSniffResult>
+where
+    F: Fn(f32, &str),
+{
     tracing::info!("Starting probe sniff on interface {}", config.interface);
     on_progress(0.05, "Initializing interface...");
+
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
+    }
 
     // Validate interface
     if !crate::is_wireless_interface(&config.interface) {
@@ -546,6 +568,7 @@ where
     let mut channel_idx = 0;
     let mut last_channel_hop = Instant::now();
     let channel_hop_interval = Duration::from_millis(500); // Fast hopping for probes
+    let mut cancelled = false;
 
     // Create packet capture with probe request filter
     let mut capture = PacketCapture::new(&config.interface)?;
@@ -557,6 +580,12 @@ where
     capture.set_filter(filter);
 
     while start.elapsed() < duration {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
+            }
+        }
         // Channel hopping
         if channels.len() > 1 && last_channel_hop.elapsed() > channel_hop_interval {
             let ch = channels[channel_idx % channels.len()];
@@ -709,6 +738,10 @@ where
 
         fs::write(&global_log, &log_content)
             .map_err(|e| WirelessError::System(format!("Failed to write log: {}", e)))?;
+    }
+
+    if cancelled {
+        return Err(WirelessError::Cancelled);
     }
 
     on_progress(1.0, "Complete");

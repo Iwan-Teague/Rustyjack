@@ -679,6 +679,18 @@ pub fn execute_evil_twin<F>(
 where
     F: Fn(&str) + Send + Sync + 'static,
 {
+    execute_evil_twin_cancellable(config, loot_base, None, progress)
+}
+
+pub fn execute_evil_twin_cancellable<F>(
+    config: EvilTwinConfig,
+    loot_base: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: F,
+) -> Result<EvilTwinResult>
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
     // Check requirements first
     let missing = EvilTwin::check_requirements()?;
     if !missing.is_empty() {
@@ -686,6 +698,12 @@ where
             "Missing required capabilities: {}",
             missing.join(", ")
         )));
+    }
+
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
     }
 
     // Wrap progress in Arc for sharing between threads
@@ -758,10 +776,18 @@ where
     let stop_flag = Arc::clone(&attack.stop_flag);
     let progress_ssid = config.ssid.clone();
     let progress_clone = Arc::clone(&progress);
+    let cancel_flag = cancel.cloned();
+    let cancel_flag_for_result = cancel_flag.clone();
     let progress_thread = thread::spawn(move || {
         let mut last_update = Instant::now();
         while !stop_flag.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_secs(5));
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(Ordering::Relaxed) {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
             if last_update.elapsed() >= Duration::from_secs(10) {
                 progress_clone(&format!(
                     "Evil Twin '{}' running for {:?}...",
@@ -773,12 +799,14 @@ where
         }
     });
 
-    // Run the attack
-    let stats = attack.start()?;
+    // Run the attack (capture the result so we can always stop/join the progress thread)
+    let stats_res = attack.start();
 
-    // Stop progress thread
+    // Stop progress thread (always, even if the attack fails early)
     attack.stop_flag.store(true, Ordering::Relaxed);
     let _ = progress_thread.join();
+
+    let stats = stats_res?;
 
     // Log results
     if let Some(log_file) = log_file.as_mut() {
@@ -799,6 +827,12 @@ where
             stats.credentials_captured
         )
         .ok();
+    }
+
+    if let Some(flag) = cancel_flag_for_result {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
     }
 
     progress(&format!(

