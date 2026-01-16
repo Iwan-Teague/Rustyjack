@@ -14,6 +14,10 @@ use std::mem;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::os::unix::io::RawFd;
 use std::ptr;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +83,15 @@ pub struct DnsQuery {
 }
 
 const MDNS_MULTICAST: &str = "224.0.0.251:5353";
+
+fn check_cancel(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err(WirelessError::Cancelled);
+        }
+    }
+    Ok(())
+}
 
 /// Discover network gateway, DNS servers, and DHCP server
 pub fn discover_gateway(interface: &str) -> Result<GatewayInfo> {
@@ -262,8 +275,16 @@ fn get_dhcp_server(interface: &str) -> Result<Option<Ipv4Addr>> {
 
 /// Perform ARP scan of local subnet to discover devices
 pub fn arp_scan(interface: &str) -> Result<Vec<ArpDevice>> {
+    arp_scan_cancellable(interface, None)
+}
+
+pub fn arp_scan_cancellable(
+    interface: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Vec<ArpDevice>> {
     let subnet = get_interface_subnet(interface)?;
     let mut devices = Vec::new();
+    check_cancel(cancel)?;
 
     if let Ok(contents) = std::fs::read_to_string("/proc/net/arp") {
         for (idx, line) in contents.lines().enumerate() {
@@ -277,7 +298,8 @@ pub fn arp_scan(interface: &str) -> Result<Vec<ArpDevice>> {
     }
 
     if devices.is_empty() {
-        perform_active_arp_scan(&subnet, interface)?;
+        perform_active_arp_scan(&subnet, interface, cancel)?;
+        check_cancel(cancel)?;
         std::thread::sleep(Duration::from_millis(500));
 
         if let Ok(contents) = std::fs::read_to_string("/proc/net/arp") {
@@ -334,17 +356,32 @@ fn parse_arp_line(line: &str, interface: Option<&str>) -> Option<ArpDevice> {
     })
 }
 
-fn perform_active_arp_scan(subnet: &str, interface: &str) -> Result<()> {
+fn perform_active_arp_scan(
+    subnet: &str,
+    interface: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<()> {
     let network: Ipv4Net = subnet.parse().map_err(|e| {
         WirelessError::System(format!("Invalid subnet {}: {}", subnet, e))
     })?;
 
     let timeout = Duration::from_secs(1);
-    if let Err(err) = rustyjack_ethernet::discover_hosts(network, timeout) {
+    check_cancel(cancel)?;
+    if let Some(flag) = cancel {
+        if let Err(err) = rustyjack_ethernet::discover_hosts_cancellable(network, timeout, flag) {
+            if check_cancel(cancel).is_err() {
+                return Err(WirelessError::Cancelled);
+            }
+            tracing::warn!("ICMP sweep failed on {}: {}", subnet, err);
+        }
+    } else if let Err(err) = rustyjack_ethernet::discover_hosts(network, timeout) {
         tracing::warn!("ICMP sweep failed on {}: {}", subnet, err);
     }
 
-    if let Err(err) = run_arp_discovery(interface, network, timeout) {
+    if let Err(err) = run_arp_discovery(interface, network, timeout, cancel) {
+        if check_cancel(cancel).is_err() {
+            return Err(WirelessError::Cancelled);
+        }
         tracing::warn!("ARP sweep failed on {} ({}): {}", interface, subnet, err);
     }
 
@@ -355,28 +392,56 @@ fn run_arp_discovery(
     interface: &str,
     network: Ipv4Net,
     timeout: Duration,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<()> {
     use tokio::runtime::Handle;
 
     let run = |handle: &Handle| {
-        handle.block_on(async {
-            rustyjack_ethernet::discover_hosts_arp(interface, network, None, timeout)
-                .await
-                .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
-        })
-        .map(|_| ())
+        handle
+            .block_on(async {
+                if let Some(flag) = cancel {
+                    rustyjack_ethernet::discover_hosts_arp_cancellable(
+                        interface,
+                        network,
+                        None,
+                        timeout,
+                        flag,
+                    )
+                    .await
+                    .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
+                } else {
+                    rustyjack_ethernet::discover_hosts_arp(interface, network, None, timeout)
+                        .await
+                        .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
+                }
+            })
+            .map(|_| ())
     };
 
     match Handle::try_current() {
         Ok(handle) => run(&handle),
-        Err(_) => tokio::runtime::Runtime::new()
-            .map_err(|e| WirelessError::System(format!("Failed to create runtime: {}", e)))?
-            .block_on(async {
-                rustyjack_ethernet::discover_hosts_arp(interface, network, None, timeout)
+        Err(_) => {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| WirelessError::System(format!("Failed to create runtime: {}", e)))?;
+            rt.block_on(async {
+                if let Some(flag) = cancel {
+                    rustyjack_ethernet::discover_hosts_arp_cancellable(
+                        interface,
+                        network,
+                        None,
+                        timeout,
+                        flag,
+                    )
                     .await
                     .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
+                } else {
+                    rustyjack_ethernet::discover_hosts_arp(interface, network, None, timeout)
+                        .await
+                        .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
+                }
             })
-            .map(|_| ()),
+            .map(|_| ())
+        }
     }
 }
 
@@ -457,6 +522,13 @@ fn lookup_mac_vendor(mac: &str) -> Option<String> {
 
 /// Scan common network services on discovered devices
 pub fn scan_network_services(devices: &[ArpDevice]) -> Result<Vec<DeviceServices>> {
+    scan_network_services_cancellable(devices, None)
+}
+
+pub fn scan_network_services_cancellable(
+    devices: &[ArpDevice],
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Vec<DeviceServices>> {
     let common_ports = vec![
         (21, "FTP"),
         (22, "SSH"),
@@ -471,9 +543,11 @@ pub fn scan_network_services(devices: &[ArpDevice]) -> Result<Vec<DeviceServices
     let mut results = Vec::new();
 
     for device in devices {
+        check_cancel(cancel)?;
         let mut services = Vec::new();
 
         for (port, service_name) in &common_ports {
+            check_cancel(cancel)?;
             if is_port_open(device.ip, *port) {
                 services.push(ServiceInfo {
                     port: *port,
@@ -503,14 +577,22 @@ fn is_port_open(ip: Ipv4Addr, port: u16) -> bool {
 
 /// Discover mDNS/Bonjour devices on the network
 pub fn discover_mdns_devices(duration_secs: u64) -> Result<Vec<MdnsDevice>> {
+    discover_mdns_devices_cancellable(duration_secs, None)
+}
+
+pub fn discover_mdns_devices_cancellable(
+    duration_secs: u64,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Vec<MdnsDevice>> {
     let mut devices = Vec::new();
     let mut seen_devices = HashSet::new();
     let timeout = Duration::from_secs(duration_secs.max(1));
 
-    let mut results = query_mdns(timeout)?;
+    let mut results = query_mdns(timeout, cancel)?;
     results.retain(|_, names| !names.is_empty());
 
     for (ip, names) in results {
+        check_cancel(cancel)?;
         let name = names.first().cloned().unwrap_or_else(|| ip.to_string());
         let key = format!("{}:{}", name, ip);
         if seen_devices.insert(key) {
@@ -656,7 +738,9 @@ fn query_multicast_dns(
     name: &str,
     qtype: u16,
     timeout: Duration,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<HashMap<Ipv4Addr, Vec<String>>> {
+    check_cancel(cancel)?;
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|e| WirelessError::System(format!("binding UDP socket: {}", e)))?;
     socket
@@ -678,6 +762,7 @@ fn query_multicast_dns(
     let mut results: HashMap<Ipv4Addr, Vec<String>> = HashMap::new();
     let mut buf = [0u8; 1500];
     while start.elapsed() < timeout {
+        check_cancel(cancel)?;
         match socket.recv_from(&mut buf) {
             Ok((n, addr)) => {
                 if n == 0 {
@@ -707,10 +792,18 @@ fn query_multicast_dns(
     Ok(results)
 }
 
-fn query_mdns(timeout: Duration) -> Result<HashMap<Ipv4Addr, Vec<String>>> {
-    let mut results =
-        query_multicast_dns(MDNS_MULTICAST, "_services._dns-sd._udp.local", 12, timeout)?;
-    let extra = query_multicast_dns(MDNS_MULTICAST, "local", 255, timeout)?;
+fn query_mdns(
+    timeout: Duration,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<HashMap<Ipv4Addr, Vec<String>>> {
+    let mut results = query_multicast_dns(
+        MDNS_MULTICAST,
+        "_services._dns-sd._udp.local",
+        12,
+        timeout,
+        cancel,
+    )?;
+    let extra = query_multicast_dns(MDNS_MULTICAST, "local", 255, timeout, cancel)?;
     for (k, v) in extra {
         results.entry(k).or_default().extend(v);
     }
@@ -767,6 +860,14 @@ pub fn calculate_bandwidth(before: &TrafficStats, after: &TrafficStats) -> Bandw
 
 /// Capture DNS queries using a raw socket on the interface.
 pub fn capture_dns_queries(interface: &str, duration: Duration) -> Result<Vec<DnsQuery>> {
+    capture_dns_queries_cancellable(interface, duration, None)
+}
+
+pub fn capture_dns_queries_cancellable(
+    interface: &str,
+    duration: Duration,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Vec<DnsQuery>> {
     if !crate::check_privileges() {
         return Err(WirelessError::Permission(
             "Root privileges required for DNS capture".to_string(),
@@ -779,6 +880,7 @@ pub fn capture_dns_queries(interface: &str, duration: Duration) -> Result<Vec<Dn
     let mut queries = Vec::new();
 
     while start.elapsed() < duration {
+        check_cancel(cancel)?;
         let n = unsafe {
             libc::recv(
                 fd,

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 #[cfg(target_os = "linux")]
 use chrono::Local;
+use crate::cancel::{check_cancel, CancelFlag};
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
@@ -104,6 +105,17 @@ pub fn execute_deauth_attack(
     config: &DeauthConfig,
     on_progress: impl Fn(f32, &str),
 ) -> Result<DeauthResult> {
+    execute_deauth_attack_cancellable(loot_dir, config, None, on_progress)
+}
+
+/// Execute a deauthentication attack using native Rust implementation with cancellation
+#[cfg(target_os = "linux")]
+pub fn execute_deauth_attack_cancellable(
+    loot_dir: &Path,
+    config: &DeauthConfig,
+    cancel: Option<&CancelFlag>,
+    on_progress: impl Fn(f32, &str),
+) -> Result<DeauthResult> {
     use rustyjack_wireless::{
         DeauthAttacker, DeauthConfig as NativeDeauthConfig, DeauthReason, WirelessInterface,
     };
@@ -114,6 +126,8 @@ pub fn execute_deauth_attack(
         "deauth_start"
     );
     on_progress(0.02, "Validating configuration...");
+
+    check_cancel(cancel)?;
 
     // Validate interface is wireless
     if !is_wireless_interface(&config.interface) {
@@ -186,9 +200,16 @@ pub fn execute_deauth_attack(
     // Create attacker and execute with capture
     let mut attacker = DeauthAttacker::new(&iface).context("Failed to create deauth attacker")?;
 
-    let (stats, captured_packets, handshake_export) = attacker
-        .attack_with_capture(bssid, client, native_config)
-        .context("Deauth attack failed")?;
+    let attack_result = attacker
+        .attack_with_capture_cancellable(bssid, client, native_config, cancel)
+        .context("Deauth attack failed");
+
+    // Cleanup - restore managed mode even on failure/cancel
+    if let Err(e) = iface.set_managed_mode() {
+        tracing::warn!(target: "wifi", error = %e, "restore_managed_mode_failed");
+    }
+
+    let (stats, captured_packets, handshake_export) = attack_result?;
 
     on_progress(0.90, "Saving capture data...");
 
@@ -222,11 +243,6 @@ pub fn execute_deauth_attack(
     }
 
     on_progress(0.95, "Restoring interface...");
-
-    // Cleanup - restore managed mode
-    if let Err(e) = iface.set_managed_mode() {
-        tracing::warn!(target: "wifi", error = %e, "restore_managed_mode_failed");
-    }
 
     // Write detailed log file when logging is enabled
     if logging_enabled {
@@ -318,6 +334,16 @@ pub fn execute_deauth_attack(
 pub fn execute_deauth_attack(
     _loot_dir: &Path,
     _config: &DeauthConfig,
+    _on_progress: impl Fn(f32, &str),
+) -> Result<DeauthResult> {
+    bail!("Native wireless operations require Linux. This platform is not supported.")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn execute_deauth_attack_cancellable(
+    _loot_dir: &Path,
+    _config: &DeauthConfig,
+    _cancel: Option<&CancelFlag>,
     _on_progress: impl Fn(f32, &str),
 ) -> Result<DeauthResult> {
     bail!("Native wireless operations require Linux. This platform is not supported.")
@@ -441,7 +467,18 @@ pub fn execute_pmkid_capture(
     config: &PmkidCaptureConfig,
     on_progress: impl Fn(f32, &str) + Send + 'static,
 ) -> Result<PmkidResult> {
-    use rustyjack_wireless::{execute_pmkid_capture as native_pmkid, PmkidConfig};
+    execute_pmkid_capture_cancellable(loot_dir, config, None, on_progress)
+}
+
+/// Execute PMKID capture using native Rust implementation with cancellation
+#[cfg(target_os = "linux")]
+pub fn execute_pmkid_capture_cancellable(
+    loot_dir: &Path,
+    config: &PmkidCaptureConfig,
+    cancel: Option<&CancelFlag>,
+    on_progress: impl Fn(f32, &str) + Send + 'static,
+) -> Result<PmkidResult> {
+    use rustyjack_wireless::{execute_pmkid_capture_cancellable as native_pmkid, PmkidConfig};
 
     tracing::info!(
         target: "wifi",
@@ -450,6 +487,7 @@ pub fn execute_pmkid_capture(
     );
     on_progress(0.05, "Initializing PMKID capture...");
 
+    check_cancel(cancel)?;
     // Validate interface
     if !is_wireless_interface(&config.interface) {
         bail!("Interface {} is not a wireless interface", config.interface);
@@ -467,7 +505,7 @@ pub fn execute_pmkid_capture(
     on_progress(0.10, "Starting capture...");
 
     // Execute capture - actual API: (loot_dir, config, callback)
-    let result = native_pmkid(loot_dir, &native_config, |progress, msg| {
+    let result = native_pmkid(loot_dir, &native_config, cancel, |progress, msg| {
         on_progress(progress, msg);
     })
     .context("PMKID capture failed")?;
@@ -488,6 +526,16 @@ pub fn execute_pmkid_capture(
 pub fn execute_pmkid_capture(
     _loot_dir: &Path,
     _config: &PmkidCaptureConfig,
+    _on_progress: impl Fn(f32, &str),
+) -> Result<PmkidResult> {
+    bail!("PMKID capture requires Linux.")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn execute_pmkid_capture_cancellable(
+    _loot_dir: &Path,
+    _config: &PmkidCaptureConfig,
+    _cancel: Option<&CancelFlag>,
     _on_progress: impl Fn(f32, &str),
 ) -> Result<PmkidResult> {
     bail!("PMKID capture requires Linux.")
@@ -519,8 +567,20 @@ pub fn execute_probe_sniff(
     config: &ProbeSniffConfig,
     on_progress: impl Fn(f32, &str) + Send + 'static,
 ) -> Result<ProbeSniffResult> {
+    execute_probe_sniff_cancellable(loot_dir, config, None, on_progress)
+}
+
+/// Execute probe sniffing using native Rust implementation with cancellation
+#[cfg(target_os = "linux")]
+pub fn execute_probe_sniff_cancellable(
+    loot_dir: &Path,
+    config: &ProbeSniffConfig,
+    cancel: Option<&CancelFlag>,
+    on_progress: impl Fn(f32, &str) + Send + 'static,
+) -> Result<ProbeSniffResult> {
     use rustyjack_wireless::{
-        execute_probe_sniff as native_probe, ProbeSniffConfig as NativeProbeConfig,
+        execute_probe_sniff_cancellable as native_probe,
+        ProbeSniffConfig as NativeProbeConfig,
     };
 
     tracing::info!(
@@ -530,6 +590,7 @@ pub fn execute_probe_sniff(
     );
     on_progress(0.05, "Initializing probe sniffer...");
 
+    check_cancel(cancel)?;
     if !is_wireless_interface(&config.interface) {
         bail!("Interface {} is not a wireless interface", config.interface);
     }
@@ -544,7 +605,7 @@ pub fn execute_probe_sniff(
     on_progress(0.10, "Starting probe capture...");
 
     // Execute capture - actual API: (loot_dir, config, callback)
-    let result = native_probe(loot_dir, &native_config, |progress, msg| {
+    let result = native_probe(loot_dir, &native_config, cancel, |progress, msg| {
         on_progress(progress, msg);
     })
     .context("Probe sniff failed")?;
@@ -565,6 +626,16 @@ pub fn execute_probe_sniff(
 pub fn execute_probe_sniff(
     _loot_dir: &Path,
     _config: &ProbeSniffConfig,
+    _on_progress: impl Fn(f32, &str),
+) -> Result<ProbeSniffResult> {
+    bail!("Probe sniffing requires Linux.")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn execute_probe_sniff_cancellable(
+    _loot_dir: &Path,
+    _config: &ProbeSniffConfig,
+    _cancel: Option<&CancelFlag>,
     _on_progress: impl Fn(f32, &str),
 ) -> Result<ProbeSniffResult> {
     bail!("Probe sniffing requires Linux.")
@@ -601,7 +672,18 @@ pub fn execute_evil_twin(
     config: &EvilTwinAttackConfig,
     on_progress: impl Fn(f32, &str) + Send + Sync + 'static,
 ) -> Result<EvilTwinResult> {
-    use rustyjack_wireless::{execute_evil_twin as native_evil_twin, EvilTwinConfig};
+    execute_evil_twin_cancellable(loot_dir, config, None, on_progress)
+}
+
+/// Execute Evil Twin attack using native Rust implementation with cancellation
+#[cfg(target_os = "linux")]
+pub fn execute_evil_twin_cancellable(
+    loot_dir: &Path,
+    config: &EvilTwinAttackConfig,
+    cancel: Option<&CancelFlag>,
+    on_progress: impl Fn(f32, &str) + Send + Sync + 'static,
+) -> Result<EvilTwinResult> {
+    use rustyjack_wireless::{execute_evil_twin_cancellable as native_evil_twin, EvilTwinConfig};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -649,6 +731,7 @@ pub fn execute_evil_twin(
     let result = native_evil_twin(
         native_config,
         Some(loot_dir.to_str().unwrap_or("loot/Wireless")),
+        cancel,
         move |msg| {
             progress_clone(0.50, msg);
         },
@@ -671,6 +754,16 @@ pub fn execute_evil_twin(
 pub fn execute_evil_twin(
     _loot_dir: &Path,
     _config: &EvilTwinAttackConfig,
+    _on_progress: impl Fn(f32, &str),
+) -> Result<EvilTwinResult> {
+    bail!("Evil Twin attack requires Linux.")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn execute_evil_twin_cancellable(
+    _loot_dir: &Path,
+    _config: &EvilTwinAttackConfig,
+    _cancel: Option<&CancelFlag>,
     _on_progress: impl Fn(f32, &str),
 ) -> Result<EvilTwinResult> {
     bail!("Evil Twin attack requires Linux.")
@@ -707,7 +800,20 @@ pub fn execute_karma(
     config: &KarmaAttackConfig,
     on_progress: impl Fn(f32, &str) + Send + Sync + 'static,
 ) -> Result<KarmaResult> {
-    use rustyjack_wireless::{execute_karma as native_karma, execute_karma_with_ap, KarmaConfig};
+    execute_karma_cancellable(loot_dir, config, None, on_progress)
+}
+
+/// Execute Karma attack using native Rust implementation with cancellation
+#[cfg(target_os = "linux")]
+pub fn execute_karma_cancellable(
+    loot_dir: &Path,
+    config: &KarmaAttackConfig,
+    cancel: Option<&CancelFlag>,
+    on_progress: impl Fn(f32, &str) + Send + Sync + 'static,
+) -> Result<KarmaResult> {
+    use rustyjack_wireless::{
+        execute_karma_cancellable as native_karma, execute_karma_with_ap_cancellable, KarmaConfig,
+    };
     use std::sync::Arc;
 
     tracing::info!(
@@ -742,10 +848,11 @@ pub fn execute_karma(
     let result = if config.with_ap {
         let ap_iface = config.ap_interface.as_deref().unwrap_or(&config.interface);
         let progress_clone = Arc::clone(&on_progress);
-        execute_karma_with_ap(
+        execute_karma_with_ap_cancellable(
             native_config,
             ap_iface,
             Some(loot_dir.to_str().unwrap_or("loot/Wireless")),
+            cancel,
             move |msg| {
                 progress_clone(0.50, msg);
             },
@@ -756,6 +863,7 @@ pub fn execute_karma(
         native_karma(
             native_config,
             Some(loot_dir.to_str().unwrap_or("loot/Wireless")),
+            cancel,
             move |msg| {
                 progress_clone(0.50, msg);
             },
@@ -780,6 +888,16 @@ pub fn execute_karma(
 pub fn execute_karma(
     _loot_dir: &Path,
     _config: &KarmaAttackConfig,
+    _on_progress: impl Fn(f32, &str),
+) -> Result<KarmaResult> {
+    bail!("Karma attack requires Linux.")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn execute_karma_cancellable(
+    _loot_dir: &Path,
+    _config: &KarmaAttackConfig,
+    _cancel: Option<&CancelFlag>,
     _on_progress: impl Fn(f32, &str),
 ) -> Result<KarmaResult> {
     bail!("Karma attack requires Linux.")

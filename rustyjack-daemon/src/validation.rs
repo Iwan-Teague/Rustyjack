@@ -484,6 +484,7 @@ pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
             validate_interface_name(interface)?;
             Ok(())
         }
+        JobKind::CoreCommand { .. } => Ok(()),
     }
 }
 

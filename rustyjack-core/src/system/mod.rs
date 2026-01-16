@@ -85,6 +85,7 @@ use zeroize::Zeroize;
 use rustyjack_netlink::wireless::{InterfaceMode, WirelessManager};
 use rustyjack_netlink::{StationBackendKind, StationConfig, StationManager};
 
+use crate::cancel::{check_cancel, CancelFlag};
 use crate::netlink_helpers::{
     netlink_add_default_route, netlink_bridge_add_interface, netlink_bridge_create,
     netlink_bridge_delete, netlink_delete_default_route, netlink_get_interface_index,
@@ -734,6 +735,13 @@ pub fn default_gateway_ip() -> Result<Ipv4Addr> {
 }
 
 pub fn scan_local_hosts(interface: &str) -> Result<Vec<HostInfo>> {
+    scan_local_hosts_cancellable(interface, None)
+}
+
+pub fn scan_local_hosts_cancellable(
+    interface: &str,
+    cancel: Option<&CancelFlag>,
+) -> Result<Vec<HostInfo>> {
     let interface_info =
         detect_interface(Some(interface.to_string())).context("detecting interface for ARP scan")?;
     let cidr = format!("{}/{}", interface_info.address, interface_info.prefix);
@@ -741,18 +749,53 @@ pub fn scan_local_hosts(interface: &str) -> Result<Vec<HostInfo>> {
     let rate_limit_pps = Some(50);
     let timeout = Duration::from_secs(3);
 
-    let result = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle.block_on(async {
-            rustyjack_ethernet::discover_hosts_arp(interface, network, rate_limit_pps, timeout)
+    check_cancel(cancel)?;
+    let result = if let Some(flag) = cancel {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(async {
+                rustyjack_ethernet::discover_hosts_arp_cancellable(
+                    interface,
+                    network,
+                    rate_limit_pps,
+                    timeout,
+                    flag,
+                )
                 .await
-        }),
-        Err(_) => {
-            let rt = crate::runtime::shared_runtime()
-                .context("using shared tokio runtime for ARP scan")?;
-            rt.block_on(async {
+            }),
+            Err(_) => {
+                let rt = crate::runtime::shared_runtime()
+                    .context("using shared tokio runtime for ARP scan")?;
+                rt.block_on(async {
+                    rustyjack_ethernet::discover_hosts_arp_cancellable(
+                        interface,
+                        network,
+                        rate_limit_pps,
+                        timeout,
+                        flag,
+                    )
+                    .await
+                })
+            }
+        }
+    } else {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(async {
                 rustyjack_ethernet::discover_hosts_arp(interface, network, rate_limit_pps, timeout)
                     .await
-            })
+            }),
+            Err(_) => {
+                let rt = crate::runtime::shared_runtime()
+                    .context("using shared tokio runtime for ARP scan")?;
+                rt.block_on(async {
+                    rustyjack_ethernet::discover_hosts_arp(
+                        interface,
+                        network,
+                        rate_limit_pps,
+                        timeout,
+                    )
+                    .await
+                })
+            }
         }
     }?;
 
@@ -2885,12 +2928,20 @@ pub fn select_wifi_interface(preferred: Option<String>) -> Result<String> {
 }
 
 pub fn scan_wifi_networks(interface: &str) -> Result<Vec<WifiNetwork>> {
-    scan_wifi_networks_with_timeout(interface, Duration::from_secs(5))
+    scan_wifi_networks_with_timeout_cancel(interface, Duration::from_secs(5), None)
 }
 
 pub fn scan_wifi_networks_with_timeout(
     interface: &str,
     timeout: Duration,
+) -> Result<Vec<WifiNetwork>> {
+    scan_wifi_networks_with_timeout_cancel(interface, timeout, None)
+}
+
+pub fn scan_wifi_networks_with_timeout_cancel(
+    interface: &str,
+    timeout: Duration,
+    cancel: Option<&CancelFlag>,
 ) -> Result<Vec<WifiNetwork>> {
     check_network_permissions()?;
 
@@ -2914,6 +2965,7 @@ pub fn scan_wifi_networks_with_timeout(
     let _ = netlink_set_interface_up(interface);
     runtime_sleep(std::time::Duration::from_millis(750));
 
+    check_cancel(cancel)?;
     let results = rustyjack_netlink::scan_wifi_networks(interface, timeout)
         .with_context(|| format!("nl80211 scan failed for {interface}"))?;
 

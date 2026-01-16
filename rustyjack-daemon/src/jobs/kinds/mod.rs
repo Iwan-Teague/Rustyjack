@@ -1,4 +1,5 @@
 mod hotspot_start;
+mod core_command;
 mod interface_select;
 mod mount_start;
 mod noop;
@@ -40,5 +41,6 @@ where
         JobKind::MountStart { req } => mount_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::UnmountStart { req } => unmount_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::InterfaceSelect { interface } => interface_select::run(interface.clone(), Arc::clone(state), cancel, &mut progress).await,
+        JobKind::CoreCommand { command } => core_command::run(command.clone(), Arc::clone(state), cancel, &mut progress).await,
     }
 }
