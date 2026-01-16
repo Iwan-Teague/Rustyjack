@@ -28,22 +28,60 @@ Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joys
 ## Architecture
 
 ```
-rustyjack-ui/          LCD UI: menus, rendering, GPIO buttons, dashboards
-rustyjack-core/        Orchestrator CLI: Wi-Fi/Ethernet ops, hotspot, MITM, loot, autopilot, system update
-rustyjack-wireless/    Native wireless ops (nl80211 monitor/injection, deauth, PMKID, karma, evil twin, hotspot, cracking helpers)
-rustyjack-evasion/     MAC/hostname evasion, vendor-aware MAC generation, TX power/passive helpers
-rustyjack-ethernet/    LAN discovery, TCP port scan, banner grabs, inventory helpers
-DNSSpoof/              Captive portal templates for DNS spoof/MITM pipelines
-scripts/               Wi-Fi driver installer + USB hotplug helper (udev rule included)
-wordlists/             Bundled password lists for handshake cracking
-img/                   Splash assets for the LCD (`rustyjack.png`)
-rustyjack-ui.service   Systemd unit (unprivileged UI, sets display rotation and RUSTYJACK_ROOT)
-rustyjackd.service     Systemd unit (root daemon, privileged operations + IPC)
-install_rustyjack*.sh  Production/dev installers for Pi OS targets
+rustyjack-ui/            LCD UI: menus, rendering, GPIO buttons, dashboards
+rustyjack-core/          Orchestrator CLI: Wi-Fi/Ethernet ops, hotspot, MITM, loot, autopilot, system update, anti-forensics
+rustyjack-wireless/      Native wireless ops (nl80211 monitor/injection, deauth, PMKID, karma, evil twin, hotspot, cracking helpers)
+rustyjack-evasion/       MAC/hostname evasion, vendor-aware MAC generation, TX power/passive helpers
+rustyjack-ethernet/      LAN discovery, TCP port scan, banner grabs, inventory helpers
+rustyjack-netlink/       Pure Rust networking: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables
+rustyjack-ipc/           IPC protocol types and endpoints
+rustyjack-daemon/        Privileged daemon with IPC dispatch
+rustyjack-client/        Unix socket client library
+rustyjack-portal/        Captive portal HTTP server (Axum-based)
+rustyjack-wpa/           WPA/WPA2 handshake processing (PBKDF2, HMAC-SHA1)
+rustyjack-encryption/    AES-GCM encryption for loot
+rustyjack-commands/      CLI/IPC command definitions
+DNSSpoof/                Captive portal templates (not a Rust crate - HTML/JS templates)
+scripts/                 Wi-Fi driver installer, USB hotplug helper, FDE scripts (udev rule included)
+wordlists/               Bundled password lists for handshake cracking
+img/                     Splash assets for the LCD (`rustyjack.png`)
+rustyjack-ui.service     Systemd unit (unprivileged UI, sets display rotation and RUSTYJACK_ROOT)
+rustyjackd.service       Systemd unit (root daemon, privileged operations + IPC)
+rustyjack-portal.service Systemd unit (captive portal server, unprivileged)
+rustyjack.service        Systemd alias for rustyjack-ui.service
+install_rustyjack*.sh    Production/dev/prebuilt installers for Pi OS targets
 ```
 
 Runtime directories are created by the installers under `/var/lib/rustyjack`:
 `loot/` (Wireless, Ethernet, reports), `wifi/profiles/`, `DNSSpoof/captures/`, and `gui_conf.json` (pins, colors, settings).
+
+### System-Level Operations
+
+**Anti-Forensics** (`rustyjack-core/src/anti_forensics.rs`):
+- Secure file deletion with configurable overwrite passes (DoD 5220.22-M standard)
+- RAM wipe on secure shutdown
+- Log purging with selective artifact removal
+- Evidence management and cleanup
+
+**Physical Access** (`rustyjack-core/src/physical_access.rs`):
+- WiFi credential extraction from routers via wired connection
+- Router fingerprinting and vulnerability detection
+- Default credential testing
+
+**USB Operations** (`rustyjack-core/src/mount.rs`):
+- USB mounting with read-only/read-write mode selection
+- Mount policy enforcement (filesystem type filtering, device limits)
+- Safe unmount with lock timeout protection
+
+**Full Disk Encryption** (`scripts/fde_*.sh`):
+- USB key preparation for encrypted volumes
+- Root filesystem migration to encrypted storage
+- LUKS-based encryption support
+
+**Process Management**:
+- Daemon/service lifecycle control
+- IPC-based job dispatch
+- Background operation tracking
 
 ## Hardware & Wiring
 
@@ -95,7 +133,7 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 - **Dashboards**: Cycle System Health, Target Status, and MAC Status views from the main menu.
 - **Colors**: Pick palette entries directly from the UI.
 - **Logs toggle**: Enables/disables logging by setting/clearing `RUSTYJACK_LOGS_DISABLED`; **Purge Logs** removes log files under loot.
-- **System**: Restart, Secure Shutdown (best-effort RAM wipe then poweroff), Complete Purge (removes binaries, service, loot, udev helpers; exits UI).
+- **System**: Restart, Secure Shutdown (best-effort RAM wipe then poweroff), Complete Purge (removes binaries, services, loot, udev helpers; exits UI), FDE Prepare/Migrate (full-disk encryption setup), USB Mount/Unmount (with read-only/read-write mode selection).
 - **Wi-Fi driver installer**: Runs `scripts/wifi_driver_installer.sh`, detecting USB chipsets and installing/compiling drivers; progress is shown in the UI (`/var/log/rustyjack_wifi_driver.log`).
 - **Autopilot (main menu)**: Start Standard/Aggressive/Stealth/Harvest runs or stop/view status. Requires an active wired interface with link; blocked when Operation Mode is Stealth unless you choose the Stealth autopilot. Optional DNS spoof site selection when starting. Toolbar shows `AP:<mode>` while running.
 - **Wireless menus split**: Main menu → Wireless. Inside: Get Connected (Scan + Recon/Offence folders plus Connect), Post Connection (Recon + Offence items like DNS spoof/reverse shell), and Hotspot. Selecting an active interface in Hardware Detect enforces the default route and brings other interfaces down; non-selected Wi-Fi adapters are rfkill-blocked. Hotspot temporarily unblocks/uses its AP + upstream interfaces while running.
@@ -150,7 +188,41 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 
 ### CLI-only extras (via `rustyjack-core`)
 
-DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop exist in the core CLI but are not exposed as LCD menu items.
+The following features exist in the core CLI but are not exposed as LCD menu items:
+
+**DNS Spoof** (`DnsSpoofCommand`):
+- Site-based DNS spoof with captive portal templates
+- Uses templates from `DNSSpoof/sites/`
+- Captures visit/credential logs
+
+**Reverse Shell** (`ReverseCommand::Launch`):
+- Configurable reverse shell launcher
+- Supports custom callback host and port
+- Background execution with job tracking
+
+**Transparent Bridge** (`BridgeCommand`):
+- Network bridging functionality
+- Bridge start/stop operations
+- Interface aggregation support
+
+### Anti-Forensics & Evidence Management
+
+**Secure Operations**:
+- **Secure Shutdown**: Best-effort RAM wipe before poweroff to clear sensitive data from memory
+- **Secure Delete**: Multi-pass file overwrite using DoD 5220.22-M standard (7 passes)
+- **Log Purging**: Selective removal of log files and artifacts under loot directories
+- **Complete System Purge**: Removes all RustyJack binaries, systemd services, loot, and configuration files
+
+**Loot Management**:
+- **Session-Based Organization**: Artifacts organized by target (Wireless/<SSID>, Ethernet/<IP>)
+- **Artifact Sweep**: Automatically identifies and collects all related files for a target
+- **Pipeline Loot Isolation**: Artifacts created during pipelines are isolated to pipeline-specific directories
+- **Audit Logging**: Operation audit trail with timestamps and command history
+
+**Data Protection**:
+- **Sensitive Data Redaction**: Automatic redaction of passwords, keys, and credentials in logs
+- **Optional Encryption**: AES-GCM encryption for loot storage
+- **Zeroization**: Secure clearing of sensitive data structures in memory
 
 ## Installation
 
@@ -166,12 +238,13 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
 2. SSH to the Pi, become root: `sudo su -`.
 3. Clone the project: `git clone https://github.com/Iwan-Teague/Rusty-Jack.git Rustyjack && cd Rustyjack`.
 4. Run the installer: `chmod +x install_rustyjack.sh && ./install_rustyjack.sh`
-   - Installs packages: build-essential, pkg-config, libssl-dev, DKMS toolchain, `procps`, `network-manager`, `wireless-tools`, `wpa_supplicant`, firmware for Realtek/Atheros/Ralink, git, i2c-tools, curl.
+   - Installs packages: build-essential, pkg-config, libssl-dev, DKMS toolchain, `procps`, `wireless-tools`, `wpa_supplicant`, firmware for Realtek/Atheros/Ralink, git, i2c-tools, curl.
+   - **Removes NetworkManager**: Runs `apt-get purge network-manager` to completely remove NetworkManager from the system (not just disabled).
    - Enables I2C/SPI overlays, `dtoverlay=spi0-2cs`, and GPIO pull-ups for all buttons.
    - Ensures ~2 GB swap for compilation, builds `rustyjack-ui` (release), installs to `/usr/local/bin/`.
    - Creates `/var/lib/rustyjack/loot/{Wireless,Ethernet,reports}`, `/var/lib/rustyjack/wifi/profiles/sample.json`, and keeps WLAN interfaces up.
    - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT=/var/lib/rustyjack`, installs/enables `rustyjack-ui.service` + `rustyjackd.socket`, starts the service, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
-   - Claims `/etc/resolv.conf` for Rustyjack (plain root-owned file), disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present), and sets NetworkManager `dns=none` so `nmcli` stays available but does not rewrite `resolv.conf`.
+   - **Claims `/etc/resolv.conf`**: Replaces any symlinks with a plain root-owned file managed by RustyJack. Disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). NetworkManager is completely removed to prevent DNS conflicts.
    - Remounts `/` read-write if needed on fresh images to allow installs/edits.
 5. After reboot, the LCD shows the menu. Service status: `systemctl status rustyjack-ui`.
 
@@ -179,15 +252,34 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
 
 ## Configuration & Paths
 
+**Configuration Files**:
 - `gui_conf.json` (auto-created): pins, colors, active interface, target SSID/BSSID/channel, MAC/hostname/passive toggles, hotspot credentials, log/Discord toggles.
 - `discord_webhook.txt`: webhook URL for Discord uploads.
 - `wifi/profiles/*.json`: saved Wi-Fi profiles used by Connect Known Network (sample provided); directory is `770` and files are `660` for UI access.
+
+**Loot Directories**:
 - `loot/`: wireless, Ethernet, and scan captures; pipelines are under `loot/Wireless/<target>/pipelines/`; reports live in `loot/reports/`.
 - `loot/Scan/`: Rust-native scan reports from `rustyjack-core scan run`.
 - `DNSSpoof/sites/`: portal templates for DNS spoof/MITM; captures go to `DNSSpoof/captures/`.
-- `RUSTYJACK_NFTABLES_LOG=1`: optional environment flag (systemd unit) to log nf_tables packet matches in journalctl with `[NFTABLE]` prefixes.
-- Splash image: `img/rustyjack.png` (shown on boot).
-- Systemd unit: `rustyjack-ui.service` sets `RUSTYJACK_DISPLAY_ROTATION` and `RUSTYJACK_ROOT`.
+
+**Environment Variables**:
+- `RUSTYJACK_ROOT=/var/lib/rustyjack` - Root directory for all runtime data
+- `RUSTYJACK_DISPLAY_ROTATION={landscape|portrait}` - LCD display orientation (default: landscape)
+- `RUSTYJACK_LOGS_DISABLED` - When set, disables logging globally
+- `RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock` - Daemon IPC socket path
+- `RUSTYJACKD_ALLOW_CORE_DISPATCH=true` - Enables IPC command dispatch (required)
+- `RUSTYJACKD_DANGEROUS_OPS=true` - Enables system update operations (commented out by default)
+- `RUSTYJACK_NFTABLES_LOG=1` - Optional flag to log nf_tables packet matches in journalctl with `[NFTABLE]` prefixes
+
+**Systemd Services**:
+- `rustyjackd.service` - Privileged daemon (root) with CAP_NET_ADMIN, CAP_NET_RAW, CAP_SYS_ADMIN capabilities
+- `rustyjack-ui.service` - Unprivileged LCD UI service (rustyjack-ui user, supplementary groups: gpio, spi, rustyjack)
+- `rustyjack-portal.service` - Captive portal HTTP server (rustyjack-portal user, port 3000)
+- `rustyjack.service` - Alias for rustyjack-ui.service
+
+**Other Assets**:
+- Splash image: `img/rustyjack.png` (shown on boot)
+- Audit logs: Operation history with timestamps
 
 ## Usage Tips
 
@@ -204,11 +296,29 @@ DNS spoof start/stop, reverse shell launcher, and transparent bridge start/stop 
 
 ## Troubleshooting
 
+**Display & Hardware**:
 - Blank LCD: confirm `/dev/spidev0.0` exists and `dtparam=spi=on` + `dtoverlay=spi0-2cs` are in `/boot/firmware/config.txt`; reboot after installer changes.
 - Buttons not responding: ensure the UI user is in `gpio` and the pull-up line `gpio=6,19,5,26,13,21,20,16=pu` exists in config.txt.
-- Wireless attacks fail: verify you are using an adapter with monitor/injection; use Settings -> WiFi Drivers if a USB chipset needs firmware/DKMS.
-- Service issues: `journalctl -u rustyjack-ui -f` and `systemctl status rustyjack-ui`.
+
+**Wireless Operations**:
+- Wireless attacks fail: verify you are using an adapter with monitor/injection; use Settings → WiFi Drivers if a USB chipset needs firmware/DKMS.
 - Hotspot: set upstream/AP interfaces when starting; randomize SSID/password from the hotspot menu if conflicts occur.
+
+**Network & DNS**:
+- DNS resolution issues: Check that `/etc/resolv.conf` is a plain file (not a symlink) and verify NetworkManager is purged with `dpkg -s network-manager` (should show "not installed").
+- NetworkManager conflicts: If you see DNS or networking issues after installation, confirm NetworkManager was fully removed: `sudo apt-get purge network-manager && sudo apt-get autoremove`.
+
+**USB & Storage**:
+- USB mount failures: Verify the device is writable, check permissions on `/var/lib/rustyjack/mounts/`, and ensure you selected the correct mount mode (ReadOnly/ReadWrite).
+- Transfer to USB not working: Ensure USB device is mounted and writable; check for sufficient space.
+
+**FDE Operations**:
+- FDE preparation/migration: These operations are **destructive and irreversible**. Always backup data before running. FDE requires a USB key and will format target devices.
+- FDE boot issues: Verify the USB key is inserted and LUKS passphrase is correct.
+
+**Service & Logs**:
+- Service issues: `journalctl -u rustyjack-ui -f` and `systemctl status rustyjack-ui`.
+- Daemon not responding: Check `systemctl status rustyjackd` and verify socket exists: `ls -l /run/rustyjack/rustyjackd.sock`.
 
 ## Legal
 
