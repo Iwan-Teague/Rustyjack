@@ -13,6 +13,68 @@ $TargetDir = "/work/target-32"
 $HostTargetDir = Join-Path $RepoRoot "target-32"
 $ImageName = "rustyjack/arm32-dev"
 
+# Step 0: Ensure Docker Desktop is running
+Write-Host "=== CHECKING DOCKER ===" -ForegroundColor Cyan
+
+function Test-DockerRunning {
+    try {
+        $null = docker ps 2>$null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Start-DockerDesktop {
+    $DockerPaths = @(
+        "C:\Program Files\Docker\Docker\Docker Desktop.exe",
+        "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
+        "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe",
+        "$env:LOCALAPPDATA\Programs\Docker\Docker Desktop.exe"
+    )
+
+    $DockerExe = $null
+    foreach ($path in $DockerPaths) {
+        if (Test-Path $path) {
+            $DockerExe = $path
+            break
+        }
+    }
+
+    if (-not $DockerExe) {
+        Write-Host "Docker Desktop executable not found. Please install Docker Desktop from:" -ForegroundColor Red
+        Write-Host "https://www.docker.com/products/docker-desktop/" -ForegroundColor Yellow
+        exit 1
+    }
+
+    Write-Host "Starting Docker Desktop..." -ForegroundColor Yellow
+    Start-Process -FilePath $DockerExe
+
+    Write-Host "Waiting for Docker Desktop to be ready..." -ForegroundColor Yellow
+    $timeout = 120
+    $elapsed = 0
+    while (-not (Test-DockerRunning)) {
+        Start-Sleep -Seconds 2
+        $elapsed += 2
+        if ($elapsed % 10 -eq 0) {
+            Write-Host "Still waiting... ($elapsed seconds)" -ForegroundColor Gray
+        }
+        if ($elapsed -ge $timeout) {
+            Write-Host "Docker Desktop did not start within $timeout seconds." -ForegroundColor Red
+            Write-Host "Please start Docker Desktop manually and try again." -ForegroundColor Yellow
+            exit 1
+        }
+    }
+    Write-Host "Docker Desktop is ready!" -ForegroundColor Green
+}
+
+if (-not (Test-DockerRunning)) {
+    Write-Host "Docker Desktop is not running." -ForegroundColor Yellow
+    Start-DockerDesktop
+} else {
+    Write-Host "Docker Desktop is already running." -ForegroundColor Green
+}
+
 # Step 1: Clean everything
 Write-Host "=== CLEAN BUILD ===" -ForegroundColor Cyan
 Write-Host "Removing existing target directory to ensure fresh build..." -ForegroundColor Yellow
@@ -24,13 +86,24 @@ if (Test-Path $HostTargetDir) {
 
 # Step 2: Stop any containers using the image and remove it
 Write-Host "Stopping any containers using the image..." -ForegroundColor Yellow
-$containers = docker ps -aq --filter "ancestor=$ImageName" 2>$null
-if ($containers) {
-    docker stop $containers 2>$null
-    docker rm $containers 2>$null
+try {
+    $containers = docker ps -aq --filter "ancestor=$ImageName" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $containers) {
+        docker stop $containers 2>$null | Out-Null
+        docker rm $containers 2>$null | Out-Null
+        Write-Host "Stopped and removed existing containers" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "No existing containers to clean up" -ForegroundColor Gray
 }
+
 Write-Host "Removing old Docker image..." -ForegroundColor Yellow
-docker rmi -f $ImageName 2>$null
+try {
+    docker rmi -f $ImageName 2>$null | Out-Null
+    Write-Host "Removed old Docker image" -ForegroundColor Green
+} catch {
+    Write-Host "No existing image to remove" -ForegroundColor Gray
+}
 Write-Host "Building Docker image from scratch (no cache)..." -ForegroundColor Cyan
 
 docker build --no-cache --platform linux/arm/v7 -t $ImageName $DockerDir

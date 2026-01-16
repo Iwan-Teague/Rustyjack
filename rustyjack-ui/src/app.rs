@@ -3771,7 +3771,7 @@ impl App {
         Ok(None)
     }
 
-    fn mount_usb_device(&self, device: &UsbDevice, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
+    fn mount_usb_device(&mut self, device: &UsbDevice, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
         let dev_basename = Path::new(&device.name)
             .file_name()
             .and_then(|s| s.to_str())

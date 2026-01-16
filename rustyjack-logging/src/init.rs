@@ -33,7 +33,7 @@ pub fn init(component: &str, root: &Path, cfg: &LoggingConfig) -> Result<Logging
         .compact();
 
     let log_dir = root.join("logs");
-    let mut warn_msg = None;
+    let mut warn_msg: Option<String> = None;
 
     let base = tracing_subscriber::registry()
         .with(filter_layer)
