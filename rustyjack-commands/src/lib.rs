@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[command(
     name = "rustyjack-core",
     author,
@@ -33,13 +33,13 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OutputFormat {
     Json,
     Text,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Commands {
     #[command(subcommand)]
     Scan(ScanCommand),
@@ -72,12 +72,12 @@ pub enum Commands {
     Hotspot(HotspotCommand),
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ScanCommand {
     Run(ScanRunArgs),
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EthernetCommand {
     /// Discover hosts on the local network (ICMP sweep)
     Discover(EthernetDiscoverArgs),
@@ -89,7 +89,7 @@ pub enum EthernetCommand {
     SiteCredCapture(EthernetSiteCredArgs),
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HotspotCommand {
     /// Start a NATed hotspot (Rust AP + DHCP/DNS)
     Start(HotspotStartArgs),
@@ -103,7 +103,7 @@ pub enum HotspotCommand {
     SetBlacklist(HotspotBlacklistArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthernetDiscoverArgs {
     /// Optional interface override (defaults to best interface)
     #[arg(long)]
@@ -118,7 +118,7 @@ pub struct EthernetDiscoverArgs {
     pub timeout_ms: u64,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthernetPortScanArgs {
     /// Target IPv4 address (defaults to gateway if omitted)
     #[arg(long)]
@@ -137,7 +137,7 @@ pub struct EthernetPortScanArgs {
     pub timeout_ms: u64,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthernetInventoryArgs {
     /// Optional interface override (defaults to best interface)
     #[arg(long)]
@@ -152,7 +152,7 @@ pub struct EthernetInventoryArgs {
     pub timeout_ms: u64,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthernetSiteCredArgs {
     /// Optional interface override (defaults to best Ethernet)
     #[arg(long)]
@@ -175,7 +175,7 @@ pub struct EthernetSiteCredArgs {
     pub timeout_ms: u64,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HotspotStartArgs {
     /// Interface to host the hotspot (AP mode)
     #[arg(long, default_value = "wlan0")]
@@ -197,21 +197,21 @@ pub struct HotspotStartArgs {
     pub restore_nm_on_stop: bool,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HotspotDisconnectArgs {
     /// Client MAC address to disconnect
     #[arg(long)]
     pub mac: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HotspotBlacklistArgs {
     /// Comma-separated list of MAC addresses to block
     #[arg(long, value_delimiter = ',')]
     pub macs: Vec<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScanRunArgs {
     /// Friendly name for the scan profile (used for loot filenames)
     #[arg(long)]
@@ -282,7 +282,7 @@ pub struct ScanRunArgs {
     pub arp_rate_pps: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ScanDiscovery {
     Icmp,
     Arp,
@@ -290,13 +290,13 @@ pub enum ScanDiscovery {
     None,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum NotifyCommand {
     #[command(subcommand)]
     Discord(DiscordCommand),
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DiscordCommand {
     /// Send a manual Discord notification
     Send(DiscordSendArgs),
@@ -304,7 +304,7 @@ pub enum DiscordCommand {
     Status,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscordSendArgs {
     /// Title used in the Discord embed
     #[arg(long)]
@@ -327,7 +327,7 @@ pub struct DiscordSendArgs {
     pub interface: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MitmCommand {
     /// Launch ARP spoof + packet capture
     Start(MitmStartArgs),
@@ -335,7 +335,7 @@ pub enum MitmCommand {
     Stop,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MitmStartArgs {
     /// Optional interface override
     #[arg(long)]
@@ -354,7 +354,7 @@ pub struct MitmStartArgs {
     pub label: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WifiCommand {
     /// List all detected network interfaces
     List,
@@ -401,31 +401,31 @@ pub enum WifiCommand {
     Recon(WifiReconCommand),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiStatusArgs {
     #[arg(long)]
     pub interface: Option<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiBestArgs {
     #[arg(long)]
     pub prefer_wifi: bool,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiSwitchArgs {
     #[arg(long)]
     pub interface: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiMacRandomizeArgs {
     #[arg(long)]
     pub interface: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiMacSetVendorArgs {
     #[arg(long)]
     pub interface: String,
@@ -433,7 +433,7 @@ pub struct WifiMacSetVendorArgs {
     pub vendor: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiMacSetArgs {
     #[arg(long)]
     pub interface: String,
@@ -441,7 +441,7 @@ pub struct WifiMacSetArgs {
     pub mac: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiMacRestoreArgs {
     #[arg(long)]
     pub interface: String,
@@ -449,7 +449,7 @@ pub struct WifiMacRestoreArgs {
     pub original_mac: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiTxPowerArgs {
     #[arg(long)]
     pub interface: String,
@@ -458,13 +458,13 @@ pub struct WifiTxPowerArgs {
     pub dbm: u32,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiScanArgs {
     #[arg(long)]
     pub interface: Option<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiDeauthArgs {
     /// Target network BSSID (MAC address of AP, e.g., AA:BB:CC:DD:EE:FF)
     #[arg(long)]
@@ -495,7 +495,7 @@ pub struct WifiDeauthArgs {
     pub interval: u32,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiEvilTwinArgs {
     /// SSID to impersonate
     #[arg(long)]
@@ -517,7 +517,7 @@ pub struct WifiEvilTwinArgs {
     pub open: bool,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiPmkidArgs {
     /// Interface to use
     #[arg(long)]
@@ -536,7 +536,7 @@ pub struct WifiPmkidArgs {
     pub duration: u32,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiProbeSniffArgs {
     /// Interface to use
     #[arg(long)]
@@ -549,7 +549,7 @@ pub struct WifiProbeSniffArgs {
     pub channel: u8,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiCrackArgs {
     /// Path to handshake file (.cap, .pcap, .hc22000)
     #[arg(long)]
@@ -565,7 +565,7 @@ pub struct WifiCrackArgs {
     pub wordlist: Option<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiKarmaArgs {
     /// Interface for probe sniffing (must support monitor mode)
     #[arg(long)]
@@ -590,7 +590,7 @@ pub struct WifiKarmaArgs {
     pub ssid_blacklist: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WifiReconCommand {
     /// Discover gateway, DNS servers, and DHCP server
     Gateway(WifiReconGatewayArgs),
@@ -606,35 +606,35 @@ pub enum WifiReconCommand {
     DnsCapture(WifiReconDnsCaptureArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiReconGatewayArgs {
     /// Interface to query (defaults to active connection)
     #[arg(long)]
     pub interface: Option<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiReconArpScanArgs {
     /// Interface to scan on
     #[arg(long)]
     pub interface: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiReconServiceScanArgs {
     /// Interface to scan on
     #[arg(long)]
     pub interface: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiReconMdnsScanArgs {
     /// Duration in seconds to listen for mDNS announcements
     #[arg(long, default_value_t = 10)]
     pub duration: u64,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiReconBandwidthArgs {
     /// Interface to monitor
     #[arg(long)]
@@ -644,7 +644,7 @@ pub struct WifiReconBandwidthArgs {
     pub duration: u64,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiReconDnsCaptureArgs {
     /// Interface to capture on
     #[arg(long)]
@@ -654,7 +654,7 @@ pub struct WifiReconDnsCaptureArgs {
     pub duration: u64,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WifiProfileCommand {
     /// List saved Wi-Fi profiles
     List,
@@ -668,14 +668,14 @@ pub enum WifiProfileCommand {
     Delete(WifiProfileDeleteArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiProfileShowArgs {
     /// Profile/SSID identifier to show
     #[arg(long)]
     pub ssid: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiProfileSaveArgs {
     #[arg(long)]
     pub ssid: String,
@@ -689,7 +689,7 @@ pub struct WifiProfileSaveArgs {
     pub auto_connect: Option<bool>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiProfileConnectArgs {
     /// Optional saved profile name (defaults to sanitized SSID)
     #[arg(long)]
@@ -708,21 +708,21 @@ pub struct WifiProfileConnectArgs {
     pub remember: bool,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiProfileDeleteArgs {
     /// Profile/SSID identifier to delete
     #[arg(long)]
     pub ssid: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiDisconnectArgs {
     /// Interface to disconnect (defaults to active Wi-Fi)
     #[arg(long)]
     pub interface: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WifiRouteCommand {
     /// Show default route and DNS information
     Status,
@@ -736,13 +736,13 @@ pub enum WifiRouteCommand {
     SetMetric(WifiRouteMetricArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiRouteEnsureArgs {
     #[arg(long)]
     pub interface: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiRouteMetricArgs {
     #[arg(long)]
     pub interface: String,
@@ -750,7 +750,7 @@ pub struct WifiRouteMetricArgs {
     pub metric: u32,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DnsSpoofCommand {
     /// Start DNS spoofing for the selected template
     Start(DnsSpoofStartArgs),
@@ -758,7 +758,7 @@ pub enum DnsSpoofCommand {
     Stop,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsSpoofStartArgs {
     /// Site template to serve (must exist under DNSSpoof/sites)
     #[arg(long)]
@@ -773,7 +773,7 @@ pub struct DnsSpoofStartArgs {
     pub loot_dir: Option<PathBuf>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LootCommand {
     /// List loot files for a given tool
     List(LootListArgs),
@@ -781,7 +781,7 @@ pub enum LootCommand {
     Read(LootReadArgs),
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LootKind {
     #[value(alias = "nmap")]
     Scan,
@@ -791,13 +791,13 @@ pub enum LootKind {
     Wireless,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LootListArgs {
     #[arg(long, value_enum)]
     pub kind: LootKind,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LootReadArgs {
     /// Absolute or relative path to the loot file
     #[arg(long)]
@@ -808,7 +808,7 @@ pub struct LootReadArgs {
     pub max_lines: usize,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProcessCommand {
     /// Terminate processes by exact name
     Kill(ProcessKillArgs),
@@ -816,21 +816,21 @@ pub enum ProcessCommand {
     Status(ProcessStatusArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProcessKillArgs {
     /// Process names to kill (repeat for multiple targets)
     #[arg(long = "name")]
     pub names: Vec<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProcessStatusArgs {
     /// Process names to check (repeat for multiple targets)
     #[arg(long = "name")]
     pub names: Vec<String>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StatusCommand {
     /// Report running-state information for attack modules
     Summary,
@@ -838,19 +838,19 @@ pub enum StatusCommand {
     Network,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HardwareCommand {
     /// Scan and detect all available network hardware
     Detect,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReverseCommand {
     /// Launch a reverse shell via Rust TCP
     Launch(ReverseLaunchArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReverseLaunchArgs {
     /// Target IP address to connect back to
     #[arg(long)]
@@ -869,7 +869,7 @@ pub struct ReverseLaunchArgs {
     pub interface: Option<String>,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SystemCommand {
     /// Backup, update from git, and restart the Rustyjack service
     Update(SystemUpdateArgs),
@@ -895,7 +895,7 @@ pub enum SystemCommand {
     ExportLogsToUsb(ExportLogsToUsbArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemUpdateArgs {
     /// Systemd service to restart after updating
     #[arg(long, default_value = "rustyjack-ui")]
@@ -914,14 +914,14 @@ pub struct SystemUpdateArgs {
     pub backup_dir: Option<PathBuf>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemFdePrepareArgs {
     /// Target removable USB device (e.g., /dev/sda)
     #[arg(long)]
     pub device: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SystemFdeMigrateArgs {
     /// Target block device for encrypted root (unused partition)
     #[arg(long)]
@@ -934,13 +934,13 @@ pub struct SystemFdeMigrateArgs {
     pub execute: bool,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(ValueEnum, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum UsbMountMode {
     ReadOnly,
     ReadWrite,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UsbMountArgs {
     /// Block device path (e.g., /dev/sda1)
     #[arg(long)]
@@ -953,7 +953,7 @@ pub struct UsbMountArgs {
     pub preferred_name: Option<String>,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UsbUnmountArgs {
     /// Mountpoint to unmount
     #[arg(long)]
@@ -963,14 +963,14 @@ pub struct UsbUnmountArgs {
     pub detach: bool,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportLogsToUsbArgs {
     /// Block device path (e.g., /dev/sda1)
     #[arg(long)]
     pub device: String,
 }
 
-#[derive(Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BridgeCommand {
     /// Create a transparent bridge between two interfaces and capture traffic
     Start(BridgeStartArgs),
@@ -978,7 +978,7 @@ pub enum BridgeCommand {
     Stop(BridgeStopArgs),
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BridgeStartArgs {
     #[arg(long = "interface-a", default_value = "eth0")]
     pub interface_a: String,
@@ -986,7 +986,7 @@ pub struct BridgeStartArgs {
     pub interface_b: String,
 }
 
-#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BridgeStopArgs {
     #[arg(long = "interface-a", default_value = "eth0")]
     pub interface_a: String,

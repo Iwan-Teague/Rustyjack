@@ -9,9 +9,9 @@ mod types;
 mod wire;
 
 pub use rustyjack_commands::{
-    BridgeCommand, DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand, LootCommand,
-    MitmCommand, NotifyCommand, ProcessCommand, ReverseCommand, ScanCommand, StatusCommand,
-    SystemCommand, WifiCommand,
+    BridgeCommand, Commands, DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand,
+    LootCommand, MitmCommand, NotifyCommand, ProcessCommand, ReverseCommand, ScanCommand,
+    StatusCommand, SystemCommand, WifiCommand,
 };
 pub use authz::{AuthzSummary, AuthorizationTier};
 pub use error::{DaemonError, ErrorCode};
