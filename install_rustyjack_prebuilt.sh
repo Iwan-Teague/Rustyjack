@@ -810,19 +810,35 @@ DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
 step "Installing rustyjackd socket/service..."
 
-# Ensure rustyjackd.socket/service are stopped and socket unit removed to avoid socket-activation races
+# Ensure old units are stopped before re-installing.
 sudo systemctl stop rustyjackd.socket rustyjackd.service 2>/dev/null || true
 sudo systemctl disable --now rustyjackd.socket rustyjackd.service 2>/dev/null || true
-sudo systemctl mask rustyjackd.socket 2>/dev/null || true
-sudo rm -f "$DAEMON_SOCKET" /etc/systemd/system/rustyjackd.socket 2>/dev/null || true
+sudo systemctl unmask rustyjackd.socket 2>/dev/null || true
+sudo rm -f "$DAEMON_SOCKET" 2>/dev/null || true
 sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
 
+sudo tee "$DAEMON_SOCKET" >/dev/null <<UNIT
+[Unit]
+Description=Rustyjack daemon socket
+
+[Socket]
+ListenStream=/run/rustyjack/rustyjackd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=rustyjack
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
+UNIT
+
 sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack privileged daemon
-After=local-fs.target network.target
+Requires=rustyjackd.socket
+After=local-fs.target network.target rustyjackd.socket
 Wants=network.target
 
 [Service]
@@ -840,6 +856,7 @@ Group=rustyjack
 UMask=0007
 Environment=RUST_BACKTRACE=1
 Environment=RUSTYJACK_ROOT=${RUNTIME_ROOT}
+Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
 WatchdogSec=20s
 NotifyAccess=main
@@ -940,15 +957,19 @@ else
   done
 fi
 
-# Disable socket activation and prefer always-on service
-sudo systemctl stop rustyjackd.socket rustyjackd.service 2>/dev/null || true
-sudo systemctl disable --now rustyjackd.socket rustyjackd.service 2>/dev/null || true
-sudo systemctl mask rustyjackd.socket 2>/dev/null || true
-# Remove any lingering socket unit file and runtime socket to prevent accidental socket activation
-sudo rm -f "$DAEMON_SOCKET" /etc/systemd/system/rustyjackd.socket 2>/dev/null || true
-sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
+# Enable socket activation for the daemon.
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
+sudo systemctl enable rustyjackd.socket
+if sudo systemctl start rustyjackd.socket 2>/dev/null; then
+  info "Daemon socket started successfully"
+else
+  warn "Failed to start rustyjackd.socket"
+  warn "Socket status:"
+  systemctl status rustyjackd.socket 2>&1 | head -n 10 | while IFS= read -r line; do
+    warn "  $line"
+  done
+fi
 
 sudo systemctl enable rustyjackd.service
 if sudo systemctl start rustyjackd.service 2>/dev/null; then
