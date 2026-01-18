@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 pub mod config;
 pub mod fs;
 pub mod init;

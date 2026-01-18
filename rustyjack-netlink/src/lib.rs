@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 //! # rustyjack-netlink
 //!
 //! Pure Rust networking library that replaces system binaries (`ip`, `dhclient`, `dnsmasq`, `rfkill`, `pgrep/pkill`)

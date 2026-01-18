@@ -1,11 +1,11 @@
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio::time;
 use tracing::{debug, instrument, warn};
 
@@ -73,6 +73,8 @@ async fn write_frame_timed(
 }
 
 pub async fn run(listener: UnixListener, state: Arc<DaemonState>, shutdown: Arc<Notify>) {
+    let max_connections = state.config.max_connections.max(1);
+    let conn_limit = Arc::new(Semaphore::new(max_connections));
     loop {
         tokio::select! {
             _ = shutdown.notified() => {
@@ -87,8 +89,17 @@ pub async fn run(listener: UnixListener, state: Arc<DaemonState>, shutdown: Arc<
                     }
                 };
 
+                let permit = match conn_limit.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        warn!("Connection limit reached, rejecting");
+                        continue;
+                    }
+                };
+
                 let state = Arc::clone(&state);
                 tokio::spawn(async move {
+                    let _permit = permit;
                     handle_connection(stream, state).await;
                 });
             }
@@ -194,6 +205,9 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
         return;
     }
 
+    let max_rps = state.config.max_requests_per_second;
+    let mut tokens = max_rps;
+    let mut last_refill = Instant::now();
     let mut violations = 0usize;
 
     loop {
@@ -275,6 +289,26 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
                 break;
             }
             continue;
+        }
+
+        if max_rps > 0 {
+            if last_refill.elapsed() >= Duration::from_secs(1) {
+                tokens = max_rps;
+                last_refill = Instant::now();
+            }
+            if tokens == 0 {
+                let _ = send_error_timed(
+                    &mut stream,
+                    PROTOCOL_VERSION,
+                    request.request_id,
+                    DaemonError::new(ErrorCode::Busy, "rate limit exceeded", true),
+                    state.config.max_frame,
+                    state.config.write_timeout,
+                )
+                .await;
+                continue;
+            }
+            tokens -= 1;
         }
 
         // Create request span with timing

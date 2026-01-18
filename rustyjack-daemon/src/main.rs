@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};

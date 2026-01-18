@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 // This UI binary is Linux-only; building on non-Linux hosts is not supported because
 // the application interacts with Linux-specific device files (SPI, GPIO) and system
 // commands. Fail early on non-Linux targets with a clear message.

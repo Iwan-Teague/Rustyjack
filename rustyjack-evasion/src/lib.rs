@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 //! # rustyjack-evasion
 //!
 //! A reusable Rust library for network evasion and obfuscation techniques.

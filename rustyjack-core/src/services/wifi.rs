@@ -1,3 +1,4 @@
+use crate::cancel::CancelFlag;
 use crate::services::error::ServiceError;
 use crate::wireless_native::{check_capabilities, WirelessCapabilities};
 use serde_json::Value;
@@ -42,7 +43,11 @@ pub struct WifiConnectRequest {
     pub timeout_ms: u64,
 }
 
-pub fn scan<F>(req: WifiScanRequest, mut on_progress: F) -> Result<Value, ServiceError>
+pub fn scan<F>(
+    req: WifiScanRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -50,14 +55,29 @@ where
         return Err(ServiceError::InvalidInput("interface".to_string()));
     }
     
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
+
     on_progress(10, "Starting scan");
     
     on_progress(50, "Scanning networks");
-    let networks = crate::system::scan_wifi_networks_with_timeout(
+    let networks = crate::system::scan_wifi_networks_with_timeout_cancel(
         &req.interface,
         std::time::Duration::from_millis(req.timeout_ms),
+        cancel,
     )
-        .map_err(|e| ServiceError::OperationFailed(format!("WiFi scan failed: {}", e)))?;
+    .map_err(|e| {
+        if crate::operations::is_cancelled_error(&e) {
+            ServiceError::Cancelled
+        } else {
+            ServiceError::OperationFailed(format!("WiFi scan failed: {}", e))
+        }
+    })?;
+
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
     
     on_progress(100, "Scan complete");
     let count = networks.len();
@@ -68,7 +88,11 @@ where
     }))
 }
 
-pub fn connect<F>(req: WifiConnectRequest, mut on_progress: F) -> Result<Value, ServiceError>
+pub fn connect<F>(
+    req: WifiConnectRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -79,13 +103,25 @@ where
         return Err(ServiceError::InvalidInput("ssid".to_string()));
     }
     
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
+
     on_progress(10, "Connecting to network");
     
-    crate::system::connect_wifi_network(
+    crate::system::connect_wifi_network_with_cancel(
         &req.interface,
         &req.ssid,
-        req.psk.as_deref()
-    ).map_err(|e| ServiceError::OperationFailed(format!("WiFi connect failed: {}", e)))?;
+        req.psk.as_deref(),
+        cancel,
+    )
+    .map_err(|e| {
+        if crate::operations::is_cancelled_error(&e) {
+            ServiceError::Cancelled
+        } else {
+            ServiceError::OperationFailed(format!("WiFi connect failed: {}", e))
+        }
+    })?;
     
     on_progress(100, "Connected");
     Ok(serde_json::json!({

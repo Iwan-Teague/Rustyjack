@@ -1,7 +1,9 @@
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use rustyjack_ipc::{DaemonError, ErrorCode, WifiConnectRequestIpc};
+use crate::jobs::cancel_bridge::create_cancel_flag;
 
 pub async fn run<F, Fut>(
     req: WifiConnectRequestIpc,
@@ -24,26 +26,27 @@ where
         timeout_ms: req.timeout_ms,
     };
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<(u8, String)>();
+    let cancel_flag = create_cancel_flag(cancel);
+    let cancel_flag_for_task = cancel_flag.clone();
+
+    let (tx, mut rx) = mpsc::channel::<(u8, String)>(64);
     let mut handle = tokio::task::spawn_blocking(move || {
-        rustyjack_core::services::wifi::connect(request, |percent, message| {
-            let _ = tx.send((percent, message.to_string()));
+        rustyjack_core::services::wifi::connect(request, Some(&cancel_flag_for_task), |percent, message| {
+            let _ = tx.try_send((percent, message.to_string()));
         })
     });
 
+    let mut cancel_notified = false;
     let result = loop {
         tokio::select! {
-            _ = cancel.cancelled() => {
-                handle.abort();
+            _ = cancel.cancelled(), if !cancel_notified => {
+                cancel_flag.store(true, Ordering::Relaxed);
+                cancel_notified = true;
                 let interface = interface.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     let _ = rustyjack_core::services::wifi::disconnect(&interface);
                 }).await;
-                return Err(DaemonError::new(
-                    ErrorCode::Cancelled,
-                    "Job cancelled",
-                    false
-                ).with_source("daemon.jobs.wifi_connect"));
+                progress("wifi_connect", 90, "Cancelling...").await;
             }
             res = &mut handle => {
                 break res;

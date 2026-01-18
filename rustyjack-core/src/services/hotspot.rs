@@ -1,3 +1,4 @@
+use crate::cancel::CancelFlag;
 use crate::services::error::ServiceError;
 
 use rustyjack_ipc::{
@@ -139,7 +140,11 @@ pub struct HotspotStartRequest {
     pub channel: Option<u8>,
 }
 
-pub fn start<F>(req: HotspotStartRequest, mut on_progress: F) -> Result<serde_json::Value, ServiceError>
+pub fn start<F>(
+    req: HotspotStartRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<serde_json::Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -151,6 +156,10 @@ where
     }
     // Allow empty upstream for offline hotspots.
     let has_upstream = !req.upstream_interface.trim().is_empty();
+
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
     
     on_progress(5, "Registering hotspot exception");
     
@@ -166,12 +175,17 @@ where
             )));
         }
     }
+
+    if crate::cancel::check_cancel(cancel).is_err() {
+        let _ = crate::system::clear_hotspot_exception();
+        return Err(ServiceError::Cancelled);
+    }
     
     on_progress(10, "Starting hotspot");
     
     #[cfg(target_os = "linux")]
     {
-        use rustyjack_wireless::start_hotspot;
+        use rustyjack_wireless::{start_hotspot, stop_hotspot};
         
         on_progress(50, "Configuring access point");
         
@@ -187,6 +201,12 @@ where
         
         match start_hotspot(config) {
             Ok(_) => {
+                if crate::cancel::check_cancel(cancel).is_err() {
+                    let _ = stop_hotspot();
+                    let _ = crate::system::clear_hotspot_exception();
+                    return Err(ServiceError::Cancelled);
+                }
+
                 let mut isolation_enforced = false;
                 let mut isolation_error = None;
 
@@ -215,6 +235,12 @@ where
                             isolation_error = Some(format!("Isolation enforcement failed: {}", e));
                         }
                     }
+                }
+
+                if crate::cancel::check_cancel(cancel).is_err() {
+                    let _ = stop_hotspot();
+                    let _ = crate::system::clear_hotspot_exception();
+                    return Err(ServiceError::Cancelled);
                 }
 
                 on_progress(100, "Hotspot started");

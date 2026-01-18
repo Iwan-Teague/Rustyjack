@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 //! # rustyjack-wireless
 //!
 //! Native Rust wireless security toolkit for Raspberry Pi.

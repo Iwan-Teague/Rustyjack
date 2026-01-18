@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME: u32 = 1_048_576;
 
@@ -29,13 +30,13 @@ pub use types::{
     HotspotClient, HotspotClientsResponse, HotspotDiagnosticsRequest, HotspotDiagnosticsResponse,
     HotspotStartRequest, HotspotWarningsResponse, HostnameResponse, JobCancelRequest,
     JobCancelResponse, JobStartRequest, JobStatusRequest, JobStatusResponse, LegacyCommand,
-    LoggingConfigResponse, LoggingConfigSetRequest, LoggingConfigSetResponse, LogTailRequest,
-    LogTailResponse, MountInfo, MountListResponse, MountStartRequest, PortalActionResponse,
-    PortalStartRequest, PortalStatusResponse, RequestBody, RequestEnvelope, ResponseBody,
-    ResponseEnvelope, ResponseOk, RfkillEntry, SetActiveInterfaceRequest, SetActiveInterfaceResponse,
-    StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse,
-    UnmountStartRequest, VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse,
-    WifiConnectStartRequest, WifiDisconnectRequest, WifiDisconnectResponse,
-    WifiInterfacesResponse, WifiScanStartRequest,
+    LoggingConfigResponse, LoggingConfigSetRequest, LoggingConfigSetResponse, LogComponent,
+    LogLevel, LogTailRequest, LogTailResponse, MountInfo, MountListResponse, MountStartRequest,
+    PortalActionResponse, PortalStartRequest, PortalStatusResponse, RequestBody, RequestEnvelope,
+    ResponseBody, ResponseEnvelope, ResponseOk, RfkillEntry, SetActiveInterfaceRequest,
+    SetActiveInterfaceResponse, StatusResponse, SystemActionResponse, SystemLogsResponse,
+    SystemStatusResponse, UnmountStartRequest, VersionResponse, WifiCapabilitiesRequest,
+    WifiCapabilitiesResponse, WifiConnectStartRequest, WifiDisconnectRequest,
+    WifiDisconnectResponse, WifiInterfacesResponse, WifiScanStartRequest,
 };
 pub use wire::{decode_frame_length, encode_frame, FrameError};

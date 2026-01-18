@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use std::path::PathBuf;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};

@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use anyhow::Result;
 use clap::Parser;
 use rustyjack_core::{dispatch_command, logs_enabled, resolve_root, Cli, OutputFormat};

@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;

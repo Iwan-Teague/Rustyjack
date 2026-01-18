@@ -9,9 +9,10 @@ use rustyjack_ipc::{
     HotspotClientsResponse, HotspotDiagnosticsRequest, HotspotDiagnosticsResponse,
     HotspotWarningsResponse, InterfaceCapabilities, InterfaceStatusRequest, InterfaceStatusResponse,
     JobCancelRequest, JobCancelResponse, JobSpec, JobStarted, JobStartRequest, JobStatusRequest,
-    JobStatusResponse, LegacyCommand, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
-    ResponseOk, StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse,
-    VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse, PROTOCOL_VERSION,
+    JobStatusResponse, LegacyCommand, LogComponent, LogLevel, RequestBody, RequestEnvelope,
+    ResponseBody, ResponseEnvelope, ResponseOk, StatusResponse, SystemActionResponse,
+    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
+    WifiCapabilitiesResponse, PROTOCOL_VERSION,
 };
 use tokio::task;
 
@@ -38,6 +39,25 @@ where
             .with_source(format!("daemon.dispatch.{}", label))
         })?
         .map_err(|e| e.into())
+}
+
+const MAX_LOG_TAIL_LINES: usize = 5000;
+
+fn log_path_for(root: &PathBuf, component: &LogComponent) -> PathBuf {
+    match component {
+        LogComponent::Rustyjackd => root.join("logs").join("rustyjackd.log"),
+        LogComponent::RustyjackUi => root.join("logs").join("rustyjack-ui.log"),
+        LogComponent::Portal => root.join("logs").join("portal.log"),
+        LogComponent::Usb => root.join("logs").join("usb.log"),
+        LogComponent::Wifi => root.join("logs").join("wifi.log"),
+        LogComponent::Net => root.join("logs").join("net.log"),
+        LogComponent::Crypto => root.join("logs").join("crypto.log"),
+        LogComponent::Audit => root.join("logs").join("audit").join("audit.log"),
+    }
+}
+
+fn normalize_log_level(value: &str) -> LogLevel {
+    value.parse().unwrap_or(LogLevel::Info)
 }
 
 async fn dispatch_core_command(
@@ -1135,14 +1155,15 @@ pub async fn handle_request(
             use rustyjack_ipc::{LogTailResponse};
 
             let root = state.config.root_path.clone();
-            let max_lines = max_lines.unwrap_or(500);
+            let max_lines = max_lines.unwrap_or(500).clamp(1, MAX_LOG_TAIL_LINES);
             let component_clone = component.clone();
 
             let result = run_blocking("log_tail", move || {
                 use std::fs::File;
                 use std::io::{BufRead, BufReader};
+                use std::collections::VecDeque;
 
-                let log_path = root.join("logs").join(format!("{}.log", component_clone));
+                let log_path = log_path_for(&root, &component_clone);
 
                 if !log_path.exists() {
                     return Ok((Vec::new(), false));
@@ -1154,15 +1175,22 @@ pub async fn handle_request(
                 })?;
 
                 let reader = BufReader::new(file);
-                let mut all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+                let mut buf: VecDeque<String> = VecDeque::with_capacity(max_lines.saturating_add(1));
+                let mut truncated = false;
 
-                let truncated = all_lines.len() > max_lines;
-                if truncated {
-                    let start = all_lines.len() - max_lines;
-                    all_lines = all_lines.into_iter().skip(start).collect();
+                for line in reader.lines() {
+                    let line = line.map_err(|e| {
+                        DaemonError::new(ErrorCode::Io, "failed to read log file", false)
+                            .with_detail(e.to_string())
+                    })?;
+                    if buf.len() == max_lines {
+                        buf.pop_front();
+                        truncated = true;
+                    }
+                    buf.push_back(line);
                 }
 
-                Ok::<(Vec<String>, bool), DaemonError>((all_lines, truncated))
+                Ok::<(Vec<String>, bool), DaemonError>((buf.into_iter().collect(), truncated))
             })
             .await;
 
@@ -1187,7 +1215,7 @@ pub async fn handle_request(
 
             ResponseBody::Ok(ResponseOk::LoggingConfig(LoggingConfigResponse {
                 enabled: cfg.enabled,
-                level: cfg.level,
+                level: normalize_log_level(&cfg.level),
                 components,
             }))
         }
@@ -1201,15 +1229,8 @@ pub async fn handle_request(
 
             let mut cfg = rustyjack_logging::fs::read_config(&root);
             cfg.enabled = enabled;
-            if let Some(new_level) = level.as_ref().and_then(|lvl| {
-                let trimmed = lvl.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            }) {
-                cfg.level = new_level;
+            if let Some(new_level) = level.as_ref() {
+                cfg.level = new_level.as_str().to_string();
             }
             if let Err(err) = rustyjack_logging::fs::write_config_atomic(&root, &cfg) {
                 ResponseBody::Err(
@@ -1248,7 +1269,7 @@ pub async fn handle_request(
 
                 ResponseBody::Ok(ResponseOk::LoggingConfigSet(LoggingConfigSetResponse {
                     enabled: cfg.enabled,
-                    level: cfg.level,
+                    level: normalize_log_level(&cfg.level),
                     applied,
                 }))
             }

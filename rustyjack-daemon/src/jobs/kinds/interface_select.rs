@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::state::DaemonState;
+use crate::jobs::cancel_bridge::create_cancel_flag;
 use rustyjack_ipc::{
     DaemonError, ErrorCode, InterfaceSelectDhcpResult, InterfaceSelectJobResult,
 };
@@ -27,11 +29,14 @@ where
     }
 
     let root_path = state.config.root_path.clone();
-    let (tx, mut rx) = mpsc::unbounded_channel::<(String, u8, String)>();
+    let cancel_flag = create_cancel_flag(cancel);
+    let cancel_flag_for_task = cancel_flag.clone();
+
+    let (tx, mut rx) = mpsc::channel::<(String, u8, String)>(64);
 
     let mut handle = tokio::task::spawn_blocking(move || {
         let mut cb = |phase: &str, percent: u8, message: &str| {
-            let _ = tx.send((
+            let _ = tx.try_send((
                 phase.to_string(),
                 percent,
                 message.to_string(),
@@ -42,18 +47,17 @@ where
             root_path,
             &interface,
             Some(&mut cb),
+            Some(&cancel_flag_for_task),
         )
     });
 
+    let mut cancel_notified = false;
     let result = loop {
         tokio::select! {
-            _ = cancel.cancelled() => {
-                handle.abort();
-                return Err(DaemonError::new(
-                    ErrorCode::Cancelled,
-                    "Job cancelled",
-                    false,
-                ));
+            _ = cancel.cancelled(), if !cancel_notified => {
+                cancel_flag.store(true, Ordering::Relaxed);
+                cancel_notified = true;
+                progress("cancel", 90, "Cancelling...").await;
             }
             Some((phase, percent, message)) = rx.recv() => {
                 progress(&phase, percent, &message).await;
@@ -91,15 +95,26 @@ where
                 .with_source("daemon.jobs.interface_select")
             })
         }
-        Ok(Err(err)) => Err(
-            DaemonError::new(
-                ErrorCode::Internal,
-                "Interface selection failed",
-                false,
-            )
-            .with_detail(format!("{:#}", err))
-            .with_source("daemon.jobs.interface_select"),
-        ),
+        Ok(Err(err)) => {
+            if rustyjack_core::operations::is_cancelled_error(&err) {
+                Err(DaemonError::new(
+                    ErrorCode::Cancelled,
+                    "Job cancelled",
+                    false,
+                )
+                .with_source("daemon.jobs.interface_select"))
+            } else {
+                Err(
+                    DaemonError::new(
+                        ErrorCode::Internal,
+                        "Interface selection failed",
+                        false,
+                    )
+                    .with_detail(format!("{:#}", err))
+                    .with_source("daemon.jobs.interface_select"),
+                )
+            }
+        }
         Err(join_err) => Err(DaemonError::new(
             ErrorCode::Internal,
             "Interface selection job panicked",

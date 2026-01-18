@@ -108,7 +108,7 @@ impl CoreBridge {
     pub fn logging_config_set(
         &self,
         enabled: bool,
-        level: Option<String>,
+        level: Option<rustyjack_ipc::LogLevel>,
     ) -> Result<rustyjack_ipc::LoggingConfigSetResponse> {
         self.block_on(async move {
             let mut client = self.create_client().await?;

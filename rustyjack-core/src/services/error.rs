@@ -10,6 +10,7 @@ pub enum ServiceError {
     External(String),
     Internal(String),
     OperationFailed(String),
+    Cancelled,
 }
 
 impl fmt::Display for ServiceError {
@@ -21,6 +22,7 @@ impl fmt::Display for ServiceError {
             ServiceError::External(msg) => write!(f, "external error: {msg}"),
             ServiceError::Internal(msg) => write!(f, "internal error: {msg}"),
             ServiceError::OperationFailed(msg) => write!(f, "operation failed: {msg}"),
+            ServiceError::Cancelled => write!(f, "operation cancelled"),
         }
     }
 }
@@ -50,6 +52,7 @@ impl ServiceError {
             ServiceError::External(msg) => DaemonError::new(ErrorCode::Internal, msg, false),
             ServiceError::Internal(msg) => DaemonError::new(ErrorCode::Internal, msg, false),
             ServiceError::OperationFailed(msg) => DaemonError::new(ErrorCode::Internal, msg, true),
+            ServiceError::Cancelled => DaemonError::new(ErrorCode::Cancelled, "cancelled", false),
         }
     }
 
@@ -75,6 +78,8 @@ impl ServiceError {
             ServiceError::Internal(msg) => DaemonError::new(ErrorCode::Internal, msg, false)
                 .with_source(source),
             ServiceError::OperationFailed(msg) => DaemonError::new(code, msg, true)
+                .with_source(source),
+            ServiceError::Cancelled => DaemonError::new(ErrorCode::Cancelled, "cancelled", false)
                 .with_source(source),
         }
     }

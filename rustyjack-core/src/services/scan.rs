@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::cancel::CancelFlag;
 use crate::operations::run_scan_with_progress;
 use crate::services::error::ServiceError;
 use rustyjack_commands::{ScanDiscovery, ScanRunArgs};
@@ -20,7 +21,12 @@ pub struct ScanRequest {
     pub timeout_ms: u64,
 }
 
-pub fn run_scan<F>(root: &Path, req: ScanRequest, mut on_progress: F) -> Result<Value, ServiceError>
+pub fn run_scan<F>(
+    root: &Path,
+    req: ScanRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -48,13 +54,19 @@ where
         arp_rate_pps: None,
     };
 
-    let result = run_scan_with_progress(root, args, |percent, message| {
+    let result = run_scan_with_progress(root, args, cancel, |percent, message| {
         let clamped = percent.max(0.0).min(100.0);
         on_progress(clamped.round() as u8, message);
     });
 
     match result {
         Ok((_message, data)) => Ok(data),
-        Err(err) => Err(ServiceError::External(err.to_string())),
+        Err(err) => {
+            if crate::operations::is_cancelled_error(&err) {
+                Err(ServiceError::Cancelled)
+            } else {
+                Err(ServiceError::External(err.to_string()))
+            }
+        }
     }
 }

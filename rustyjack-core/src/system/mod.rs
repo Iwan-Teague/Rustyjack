@@ -85,7 +85,7 @@ use zeroize::Zeroize;
 use rustyjack_netlink::wireless::{InterfaceMode, WirelessManager};
 use rustyjack_netlink::{StationBackendKind, StationConfig, StationManager};
 
-use crate::cancel::{check_cancel, CancelFlag};
+use crate::cancel::{cancel_sleep, check_cancel, CancelFlag};
 use crate::netlink_helpers::{
     netlink_add_default_route, netlink_bridge_add_interface, netlink_bridge_create,
     netlink_bridge_delete, netlink_delete_default_route, netlink_get_interface_index,
@@ -2963,7 +2963,7 @@ pub fn scan_wifi_networks_with_timeout_cancel(
     }
 
     let _ = netlink_set_interface_up(interface);
-    runtime_sleep(std::time::Duration::from_millis(750));
+    cancel_sleep(cancel, std::time::Duration::from_millis(750))?;
 
     check_cancel(cancel)?;
     let results = rustyjack_netlink::scan_wifi_networks(interface, timeout)
@@ -3759,8 +3759,19 @@ fn wifi_backend_from_env() -> StationBackendKind {
 
 #[tracing::instrument(target = "wifi", skip(password), fields(iface = %interface, ssid = %ssid))]
 pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>) -> Result<()> {
+    connect_wifi_network_with_cancel(interface, ssid, password, None)
+}
+
+#[tracing::instrument(target = "wifi", skip(password), fields(iface = %interface, ssid = %ssid))]
+pub fn connect_wifi_network_with_cancel(
+    interface: &str,
+    ssid: &str,
+    password: Option<&str>,
+    cancel: Option<&CancelFlag>,
+) -> Result<()> {
     // Check permissions first
     check_network_permissions()?;
+    check_cancel(cancel)?;
 
     // Validate inputs
     if ssid.trim().is_empty() {
@@ -3775,6 +3786,8 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     if !is_wireless_interface(interface) {
         bail!("Interface {} is not a wireless device", interface);
     }
+
+    check_cancel(cancel)?;
 
     tracing::info!(
         target: "wifi",
@@ -3800,7 +3813,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
             "dhcp_release_failed"
         );
     }
-    runtime_sleep(std::time::Duration::from_millis(100));
+    cancel_sleep(cancel, std::time::Duration::from_millis(100))?;
 
     // Reset interface: down, flush, set to station, then up
     tracing::info!(
@@ -3810,7 +3823,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     );
     netlink_set_interface_down(interface)
         .with_context(|| format!("bringing interface {interface} down"))?;
-    runtime_sleep(std::time::Duration::from_millis(200));
+    cancel_sleep(cancel, std::time::Duration::from_millis(200))?;
     if let Err(e) = rt.block_on(async { rustyjack_netlink::flush_addresses(interface).await }) {
         tracing::warn!(
             target: "net",
@@ -3819,6 +3832,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
             "flush_addresses_failed"
         );
     }
+    check_cancel(cancel)?;
     {
         let mut wm =
             WirelessManager::new().map_err(|e| anyhow!("Failed to open nl80211 socket: {}", e))?;
@@ -3833,7 +3847,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     }
     netlink_set_interface_up(interface)
         .with_context(|| format!("bringing interface {interface} up"))?;
-    runtime_sleep(std::time::Duration::from_millis(300));
+    cancel_sleep(cancel, std::time::Duration::from_millis(300))?;
 
     // Keep the interface managed entirely in-process (no NetworkManager dependency).
 
@@ -3850,6 +3864,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         ..StationConfig::default()
     };
 
+    check_cancel(cancel)?;
     let outcome = station
         .connect(&station_cfg)
         .with_context(|| format!("Failed to connect to {} via supplicant", ssid))?;
@@ -3869,6 +3884,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
     let mut dhcp_success = false;
     let mut last_error: Option<String> = None;
     for attempt in 1..=3 {
+        check_cancel(cancel)?;
         match acquire_dhcp_lease(interface)? {
             DhcpAttemptResult::Lease(lease) => {
                 dhcp_success = true;
@@ -3901,7 +3917,7 @@ pub fn connect_wifi_network(interface: &str, ssid: &str, password: Option<&str>)
         }
 
         if attempt < 3 {
-            runtime_sleep(std::time::Duration::from_secs(2));
+            cancel_sleep(cancel, std::time::Duration::from_secs(2))?;
         }
     }
 

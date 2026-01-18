@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 // This crate targets Linux only. Fail early on non-Linux targets to avoid
 // platform-specific surprises (Windows/macOS users should not attempt to build
 // or run Rusty-Jack components that operate on low-level network or system

@@ -39,7 +39,7 @@ impl AuditEvent {
         Self {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis() as u64,
             operation: operation.into(),
             actor_uid: None,
@@ -96,11 +96,26 @@ impl AuditEvent {
         let audit_dir = root.join("logs").join("audit");
         std::fs::create_dir_all(&audit_dir)?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&audit_dir, std::fs::Permissions::from_mode(0o750));
+        }
+
         let audit_file = audit_dir.join("audit.log");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&audit_file)?;
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o640);
+        }
+        let mut file = opts.open(&audit_file)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&audit_file, std::fs::Permissions::from_mode(0o640));
+        }
 
         let json = serde_json::to_string(self)?;
         writeln!(file, "{}", json)?;

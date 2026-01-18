@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 //! WPA handshake export and offline cracking utilities.
 
 pub mod crack;

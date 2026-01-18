@@ -11,6 +11,8 @@ pub const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
 pub const DEFAULT_ADMIN_GROUP: &str = "rustyjack-admin";
 pub const DEFAULT_OPERATOR_GROUP: &str = "rustyjack";
 pub const DEFAULT_ROOT_PATH: &str = "/opt/rustyjack";
+pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
+pub const DEFAULT_MAX_REQUESTS_PER_SECOND: u32 = 20;
 
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
@@ -26,6 +28,8 @@ pub struct DaemonConfig {
     pub operator_group: String,
     pub root_path: PathBuf,
     pub network_manager_integration: bool,
+    pub max_connections: usize,
+    pub max_requests_per_second: u32,
 }
 
 impl DaemonConfig {
@@ -38,9 +42,10 @@ impl DaemonConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(MAX_FRAME);
-        let dangerous_ops_enabled = env::var("RUSTYJACKD_DANGEROUS_OPS")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let dangerous_ops_enabled = cfg!(feature = "dangerous_ops")
+            && env::var("RUSTYJACKD_DANGEROUS_OPS")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
         let allow_core_dispatch = env::var("RUSTYJACKD_ALLOW_CORE_DISPATCH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -68,6 +73,14 @@ impl DaemonConfig {
         let network_manager_integration = env::var("RUSTYJACKD_NM_INTEGRATION")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
+        let max_connections = env::var("RUSTYJACKD_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_MAX_CONNECTIONS);
+        let max_requests_per_second = env::var("RUSTYJACKD_MAX_REQUESTS_PER_SECOND")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_MAX_REQUESTS_PER_SECOND);
 
         Self {
             socket_path,
@@ -82,6 +95,8 @@ impl DaemonConfig {
             operator_group,
             root_path,
             network_manager_integration,
+            max_connections,
+            max_requests_per_second,
         }
     }
 }

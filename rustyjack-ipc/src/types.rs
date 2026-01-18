@@ -518,35 +518,85 @@ pub struct HotplugNotifyResponse {
 
 // Logging and audit endpoints (Phase 4)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogComponent {
+    Rustyjackd,
+    RustyjackUi,
+    Portal,
+    Usb,
+    Wifi,
+    Net,
+    Crypto,
+    Audit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogTailRequest {
-    pub component: String,
+    pub component: LogComponent,
     pub max_lines: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogTailResponse {
-    pub component: String,
+    pub component: LogComponent,
     pub lines: Vec<String>,
     pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+}
+
+impl std::str::FromStr for LogLevel {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_lowercase().as_str() {
+            "trace" => Ok(LogLevel::Trace),
+            "debug" => Ok(LogLevel::Debug),
+            "info" => Ok(LogLevel::Info),
+            "warn" | "warning" => Ok(LogLevel::Warn),
+            "error" => Ok(LogLevel::Error),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfigResponse {
     pub enabled: bool,
-    pub level: String,
+    pub level: LogLevel,
     pub components: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfigSetRequest {
     pub enabled: bool,
-    pub level: Option<String>,
+    pub level: Option<LogLevel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfigSetResponse {
     pub enabled: bool,
-    pub level: String,
+    pub level: LogLevel,
     pub applied: bool,
 }
 

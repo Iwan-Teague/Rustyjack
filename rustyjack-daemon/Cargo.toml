@@ -7,6 +7,10 @@ edition = "2021"
 name = "rustyjackd"
 path = "src/main.rs"
 
+[features]
+default = []
+dangerous_ops = []
+
 [dependencies]
 anyhow = "1.0"
 libc = "0.2"

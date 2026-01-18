@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::os::unix::io::AsRawFd;
+use std::collections::HashMap;
 
 use tracing::debug;
 use tokio::net::UnixStream;
@@ -66,7 +67,7 @@ pub fn authorization_for_peer(peer: &PeerCred, config: &DaemonConfig) -> Authori
     }
 
     // Check supplementary groups
-    match read_supplementary_groups(peer.pid) {
+    match read_supplementary_groups(peer) {
         Ok(group_names) => {
             debug!(
                 "peer pid {} uid {} groups: {:?}",
@@ -89,9 +90,8 @@ pub fn authorization_for_peer(peer: &PeerCred, config: &DaemonConfig) -> Authori
                 "failed to read groups for pid {} uid {}: {}",
                 peer.pid, peer.uid, err
             );
-            // Fallback: non-root without group info is operator
-            // (preserves old behavior for compatibility)
-            AuthorizationTier::Operator
+            // Fail closed when peer groups cannot be determined.
+            AuthorizationTier::ReadOnly
         }
     }
 }
@@ -100,9 +100,27 @@ pub fn authorization_for_peer(peer: &PeerCred, config: &DaemonConfig) -> Authori
 ///
 /// Parses the "Groups:" line which contains space-separated GIDs,
 /// then resolves each GID to a group name via /etc/group.
-fn read_supplementary_groups(pid: u32) -> io::Result<Vec<String>> {
-    let status_path = format!("/proc/{}/status", pid);
+fn read_supplementary_groups(peer: &PeerCred) -> io::Result<Vec<String>> {
+    let status_path = format!("/proc/{}/status", peer.pid);
     let content = fs::read_to_string(&status_path)?;
+
+    // Verify Uid matches the kernel-provided peer credential.
+    let uid_line = content
+        .lines()
+        .find(|line| line.starts_with("Uid:"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Uid line not found"))?;
+    let mut uid_parts = uid_line.split_whitespace();
+    let _label = uid_parts.next();
+    let real_uid = uid_parts
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Uid parse failed"))?;
+    if real_uid != peer.uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "pid uid mismatch",
+        ));
+    }
 
     // Find "Groups:" line
     let groups_line = content
@@ -117,39 +135,34 @@ fn read_supplementary_groups(pid: u32) -> io::Result<Vec<String>> {
         .filter_map(|s| s.parse::<u32>().ok())
         .collect();
 
-    // Resolve GID -> name
-    let mut group_names = Vec::new();
-    for gid in gids {
-        if let Ok(name) = resolve_group_name(gid) {
-            group_names.push(name);
-        }
-    }
-
-    Ok(group_names)
+    let map = parse_group_file()?;
+    Ok(gids
+        .into_iter()
+        .filter_map(|gid| map.get(&gid).cloned())
+        .collect())
 }
 
 /// Resolve GID to group name by reading /etc/group.
 ///
 /// This is a simple parser for the group file format:
 /// groupname:x:gid:members
-fn resolve_group_name(gid: u32) -> io::Result<String> {
+fn parse_group_file() -> io::Result<HashMap<u32, String>> {
     let group_content = fs::read_to_string("/etc/group")?;
+    let mut map = HashMap::new();
 
     for line in group_content.lines() {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() >= 3 {
-            if let Ok(line_gid) = parts[2].parse::<u32>() {
-                if line_gid == gid {
-                    return Ok(parts[0].to_string());
-                }
-            }
+        let mut parts = line.split(':');
+        let name = parts.next().unwrap_or("");
+        let _pw = parts.next();
+        let gid = parts
+            .next()
+            .and_then(|s| s.parse::<u32>().ok());
+        if let Some(gid) = gid {
+            map.insert(gid, name.to_string());
         }
     }
 
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        format!("group {} not found", gid),
-    ))
+    Ok(map)
 }
 
 pub fn required_tier(endpoint: Endpoint) -> AuthorizationTier {

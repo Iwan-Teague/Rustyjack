@@ -14,3 +14,7 @@ jobs:
         run: |
           rustc ci/no_new_command_new.rs -o /tmp/no_new_command_new
           /tmp/no_new_command_new
+      - name: Check no new unwrap/expect callsites
+        run: |
+          rustc ci/no_new_unwrap_expect.rs -o /tmp/no_new_unwrap_expect
+          /tmp/no_new_unwrap_expect

@@ -3961,11 +3961,20 @@ impl App {
     }
 
     fn build_loot_archive(&self) -> Result<(TempPath, PathBuf)> {
+        const MAX_LOOT_ARCHIVE_BYTES: u64 = 500 * 1024 * 1024;
         let mut temp = NamedTempFile::new()?;
+        let mut total_bytes: u64 = 0;
         {
             let mut zip = ZipWriter::new(&mut temp);
             let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
-            self.add_directory_to_zip(&mut zip, &self.root.join("loot"), "loot/", options.clone())?;
+            self.add_directory_to_zip(
+                &mut zip,
+                &self.root.join("loot"),
+                "loot/",
+                options.clone(),
+                &mut total_bytes,
+                MAX_LOOT_ARCHIVE_BYTES,
+            )?;
             zip.finish()?;
         }
         let temp_path = temp.into_temp_path();
@@ -3979,20 +3988,36 @@ impl App {
         dir: &Path,
         prefix: &str,
         options: FileOptions,
+        total_bytes: &mut u64,
+        max_bytes: u64,
     ) -> Result<()> {
         if !dir.exists() {
             return Ok(());
         }
         for entry in WalkDir::new(dir) {
             let entry = entry?;
-            if entry.file_type().is_file() {
+            let file_type = entry.file_type();
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_file() {
+                let meta = entry.metadata()?;
+                let size = meta.len();
+                if total_bytes.saturating_add(size) > max_bytes {
+                    bail!(
+                        "Loot archive exceeds size cap ({} bytes).",
+                        max_bytes
+                    );
+                }
+
                 let rel = entry.path().strip_prefix(dir).unwrap_or(entry.path());
                 let mut name = PathBuf::from(prefix);
                 name.push(rel);
                 let name = name.to_string_lossy().replace('\\', "/");
                 zip.start_file(name, options)?;
-                let data = fs::read(entry.path())?;
-                zip.write_all(&data)?;
+                let mut file = File::open(entry.path())?;
+                std::io::copy(&mut file, zip)?;
+                *total_bytes = total_bytes.saturating_add(size);
             }
         }
         Ok(())

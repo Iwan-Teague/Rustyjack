@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::cancel::CancelFlag;
 use crate::mount::{
     enumerate_usb_block_devices, list_mounts_under, mount_device as policy_mount_device,
     unmount as policy_unmount, MountMode, MountPolicy, MountRequest as PolicyMountRequest,
@@ -127,7 +128,11 @@ pub struct MountRequest {
     pub filesystem: Option<String>,
 }
 
-pub fn mount<F>(req: MountRequest, mut on_progress: F) -> Result<Value, ServiceError>
+pub fn mount<F>(
+    req: MountRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -141,6 +146,10 @@ where
         ));
     }
     
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
+
     on_progress(10, "Validating device");
     
     let policy = default_mount_policy();
@@ -156,6 +165,10 @@ where
     
     let response = policy_mount_device(&policy, policy_req)
         .map_err(|e| ServiceError::OperationFailed(format!("mount failed: {}", e)))?;
+
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
     
     on_progress(100, "Mounted");
     
@@ -172,7 +185,11 @@ pub struct UnmountRequest {
     pub device: String,
 }
 
-pub fn unmount<F>(req: UnmountRequest, mut on_progress: F) -> Result<Value, ServiceError>
+pub fn unmount<F>(
+    req: UnmountRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -180,6 +197,10 @@ where
         return Err(ServiceError::InvalidInput("device".to_string()));
     }
     
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
+
     on_progress(10, "Finding mount");
     
     let policy = default_mount_policy();
@@ -202,6 +223,10 @@ where
     
     policy_unmount(&policy, policy_req)
         .map_err(|e| ServiceError::OperationFailed(format!("unmount failed: {}", e)))?;
+
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
     
     on_progress(100, "Unmounted");
     

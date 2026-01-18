@@ -771,9 +771,13 @@ impl DaemonClient {
     }
 
     // Logging and configuration endpoints (Phase 4)
-    pub async fn log_tail(&mut self, component: &str, max_lines: Option<usize>) -> Result<rustyjack_ipc::LogTailResponse> {
+    pub async fn log_tail(
+        &mut self,
+        component: rustyjack_ipc::LogComponent,
+        max_lines: Option<usize>,
+    ) -> Result<rustyjack_ipc::LogTailResponse> {
         let body = RequestBody::LogTailGet(rustyjack_ipc::LogTailRequest {
-            component: component.to_string(),
+            component,
             max_lines,
         });
         match self.request(body).await? {
@@ -792,7 +796,11 @@ impl DaemonClient {
         }
     }
 
-    pub async fn logging_config_set(&mut self, enabled: bool, level: Option<String>) -> Result<rustyjack_ipc::LoggingConfigSetResponse> {
+    pub async fn logging_config_set(
+        &mut self,
+        enabled: bool,
+        level: Option<rustyjack_ipc::LogLevel>,
+    ) -> Result<rustyjack_ipc::LoggingConfigSetResponse> {
         let body = RequestBody::LoggingConfigSet(rustyjack_ipc::LoggingConfigSetRequest {
             enabled,
             level,

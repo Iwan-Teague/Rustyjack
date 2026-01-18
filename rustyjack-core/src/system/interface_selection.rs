@@ -9,6 +9,7 @@ use nix::poll::{poll, PollFd, PollFlags};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::cancel::{check_cancel, CancelFlag};
 use crate::netlink_helpers::rfkill_find_index;
 use crate::system::{
     dns::DnsManager, ops::ErrorEntry, preference::PreferenceManager, routing::RouteManager, NetOps,
@@ -37,12 +38,13 @@ pub fn select_interface<F>(
     root: PathBuf,
     iface: &str,
     progress: Option<&mut F>,
+    cancel: Option<&CancelFlag>,
 ) -> Result<InterfaceSelectionOutcome>
 where
     F: FnMut(&str, u8, &str),
 {
     let ops = Arc::new(RealNetOps) as Arc<dyn NetOps>;
-    select_interface_with_ops(ops, root, iface, progress)
+    select_interface_with_ops(ops, root, iface, progress, cancel)
 }
 
 #[tracing::instrument(target = "net", skip(ops, root, progress))]
@@ -51,10 +53,13 @@ pub fn select_interface_with_ops<F>(
     root: PathBuf,
     iface: &str,
     mut progress: Option<&mut F>,
+    cancel: Option<&CancelFlag>,
 ) -> Result<InterfaceSelectionOutcome>
 where
     F: FnMut(&str, u8, &str),
 {
+    check_cancel(cancel)?;
+
     let mut outcome = InterfaceSelectionOutcome {
         interface: iface.to_string(),
         allowed: Vec::new(),
@@ -70,6 +75,7 @@ where
     let routes = RouteManager::new(Arc::clone(&ops));
 
     emit_progress(&mut progress, "validate", 5, &format!("Validating {}", iface));
+    check_cancel(cancel)?;
 
     // Step 1: validate + snapshot
     if !ops.interface_exists(iface) {
@@ -106,9 +112,11 @@ where
         25,
         "Disabling other interfaces",
     );
+    check_cancel(cancel)?;
 
     // Step 2: deactivate others
     for other in &other_ifaces {
+        check_cancel(cancel)?;
         if let Err(e) = ops.release_dhcp(other) {
             warn!(target: "net", iface = %other, error = %e, "dhcp_release_failed");
         }
@@ -130,7 +138,7 @@ where
             }
         }
 
-        wait_for_admin_state(&*ops, other, false, Duration::from_secs(5))
+        wait_for_admin_state(&*ops, other, false, Duration::from_secs(5), cancel)
             .context(format!("timeout waiting for {} to go DOWN", other))?;
 
         outcome.blocked.push(other.clone());
@@ -142,6 +150,7 @@ where
         55,
         &format!("Bringing {} UP", iface),
     );
+    check_cancel(cancel)?;
 
     // Step 3: prepare selected interface
     if is_wireless {
@@ -149,9 +158,10 @@ where
             bail!("Failed to clear rfkill for {}: {}", iface, e);
         }
         const RFKILL_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
-        wait_for_rfkill(iface, RFKILL_SETTLE_TIMEOUT)
+        wait_for_rfkill(iface, RFKILL_SETTLE_TIMEOUT, cancel)
             .context(format!("rfkill unblock did not complete for {}", iface))?;
     }
+    check_cancel(cancel)?;
 
     if let Err(e) = ops.release_dhcp(iface) {
         warn!(target: "net", iface = %iface, error = %e, "dhcp_release_failed");
@@ -165,9 +175,10 @@ where
 
     ops.bring_up(iface)
         .context(format!("failed to bring {} UP", iface))?;
-    wait_for_admin_state(&*ops, iface, true, Duration::from_secs(10))
+    wait_for_admin_state(&*ops, iface, true, Duration::from_secs(10), cancel)
         .context(format!("timeout waiting for {} to become UP", iface))?;
     outcome.allowed.push(iface.to_string());
+    check_cancel(cancel)?;
 
     if is_wireless {
         if let Err(e) = ops.flush_addresses(iface) {
@@ -189,6 +200,7 @@ where
             "Checking carrier and DHCP"
         },
     );
+    check_cancel(cancel)?;
 
     if !is_wireless {
         let carrier_opt = ops
@@ -219,6 +231,7 @@ where
                 let lease = ops
                     .acquire_dhcp(iface, Duration::from_secs(30))
                     .context("DHCP failed")?;
+                check_cancel(cancel)?;
 
                 if let Some(gw) = lease.gateway {
                     routes
@@ -246,6 +259,7 @@ where
         90,
         "Verifying interface invariants",
     );
+    check_cancel(cancel)?;
 
     // Step 5: verify invariants
     verify_single_admin_up(&*ops, iface, &other_ifaces)?;
@@ -271,6 +285,7 @@ where
     }
 
     emit_progress(&mut progress, "persist", 100, "Persisting preference");
+    check_cancel(cancel)?;
 
     // Step 6: persist preference
     prefs.set_preferred(iface)?;
@@ -357,9 +372,10 @@ fn read_rfkill_state(iface: &str) -> Result<Option<RfkillState>> {
 }
 
 #[tracing::instrument(target = "wifi", fields(iface = %iface))]
-fn wait_for_rfkill(iface: &str, timeout: Duration) -> Result<()> {
+fn wait_for_rfkill(iface: &str, timeout: Duration, cancel: Option<&CancelFlag>) -> Result<()> {
     let start = Instant::now();
     loop {
+        check_cancel(cancel)?;
         let Some(state) = read_rfkill_state(iface)? else {
             return Ok(());
         };
@@ -396,6 +412,7 @@ fn wait_for_admin_state(
     iface: &str,
     desired_up: bool,
     timeout: Duration,
+    cancel: Option<&CancelFlag>,
 ) -> Result<()> {
     if ops.admin_is_up(iface)? == desired_up {
         return Ok(());
@@ -407,6 +424,7 @@ fn wait_for_admin_state(
     buf.reserve(8192);
 
     loop {
+        check_cancel(cancel)?;
         if ops.admin_is_up(iface)? == desired_up {
             return Ok(());
         }

@@ -1,3 +1,4 @@
+use crate::cancel::CancelFlag;
 use crate::services::error::ServiceError;
 use serde_json::Value;
 use std::sync::Mutex;
@@ -15,7 +16,11 @@ pub struct PortalStartRequest {
     pub port: u16,
 }
 
-pub fn start<F>(req: PortalStartRequest, mut on_progress: F) -> Result<Value, ServiceError>
+pub fn start<F>(
+    req: PortalStartRequest,
+    cancel: Option<&CancelFlag>,
+    mut on_progress: F,
+) -> Result<Value, ServiceError>
 where
     F: FnMut(u8, &str),
 {
@@ -26,6 +31,10 @@ where
         return Err(ServiceError::InvalidInput("port".to_string()));
     }
     
+    if crate::cancel::check_cancel(cancel).is_err() {
+        return Err(ServiceError::Cancelled);
+    }
+
     on_progress(10, "Starting captive portal");
     
     #[cfg(target_os = "linux")]
@@ -57,6 +66,13 @@ where
         
         match rustyjack_portal::start_portal(config) {
             Ok(_) => {
+                if crate::cancel::check_cancel(cancel).is_err() {
+                    let _ = rustyjack_portal::stop_portal();
+                    let mut state = PORTAL_STATE.lock().unwrap();
+                    *state = None;
+                    return Err(ServiceError::Cancelled);
+                }
+
                 let mut state = PORTAL_STATE.lock().unwrap();
                 *state = Some(PortalState {
                     interface: req.interface.clone(),

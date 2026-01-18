@@ -424,7 +424,71 @@ pub fn validate_mount_device_hint(device: &str) -> Result<(), DaemonError> {
             false,
         ));
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        validate_removable_block_device(device)?;
+    }
     
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_removable_block_device(device: &str) -> Result<(), DaemonError> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::path::Path;
+
+    let path = Path::new(device);
+    let meta = std::fs::symlink_metadata(path).map_err(|e| {
+        DaemonError::new(ErrorCode::BadRequest, "cannot stat device", false)
+            .with_detail(e.to_string())
+    })?;
+
+    if meta.file_type().is_symlink() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "device must not be a symlink",
+            false,
+        ));
+    }
+
+    if !meta.file_type().is_block_device() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "device is not a block device",
+            false,
+        ));
+    }
+
+    let rdev = meta.rdev();
+    let major = ((rdev >> 8) & 0xfff) as u32;
+    let minor = ((rdev & 0xff) | ((rdev >> 12) & 0xfff00)) as u32;
+    let sys_base = Path::new("/sys/dev/block").join(format!("{}:{}", major, minor));
+    let sys_real = std::fs::canonicalize(&sys_base).unwrap_or(sys_base);
+    let removable = std::fs::read_to_string(sys_real.join("removable"))
+        .or_else(|_| {
+            let parent = sys_real.parent().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "no sysfs parent")
+            })?;
+            std::fs::read_to_string(parent.join("removable"))
+        })
+        .map_err(|e| {
+            DaemonError::new(
+                ErrorCode::BadRequest,
+                "failed to read removable flag",
+                false,
+            )
+            .with_detail(e.to_string())
+        })?;
+
+    if removable.trim() != "1" {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "device not removable",
+            false,
+        ));
+    }
+
     Ok(())
 }
 
@@ -521,9 +585,39 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_validate_mount_device_accepts_sda() {
-        let result = validate_mount_device_hint("/dev/sda1");
-        assert!(result.is_ok());
+        let path = "/dev/sda1";
+        if is_removable_block_device(path) {
+            let result = validate_mount_device_hint(path);
+            assert!(result.is_ok());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_removable_block_device(path: &str) -> bool {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        use std::path::Path;
+
+        let meta = match std::fs::symlink_metadata(Path::new(path)) {
+            Ok(meta) => meta,
+            Err(_) => return false,
+        };
+        if meta.file_type().is_symlink() || !meta.file_type().is_block_device() {
+            return false;
+        }
+
+        let rdev = meta.rdev();
+        let major = ((rdev >> 8) & 0xfff) as u32;
+        let minor = ((rdev & 0xff) | ((rdev >> 12) & 0xfff00)) as u32;
+        let sys_path = Path::new("/sys/dev/block")
+            .join(format!("{}:{}", major, minor))
+            .join("removable");
+
+        match std::fs::read_to_string(&sys_path) {
+            Ok(val) => val.trim() == "1",
+            Err(_) => false,
+        }
     }
 
     #[test]

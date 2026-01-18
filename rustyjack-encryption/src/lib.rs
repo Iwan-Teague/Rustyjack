@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 //! AES-256-GCM helpers and simple process-wide key management.
 //! Used by Rustyjack components to encrypt/decrypt small blobs and files.
 

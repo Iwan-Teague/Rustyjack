@@ -117,6 +117,7 @@ pub fn set_active_interface(root: &Path, iface: &str) -> Result<crate::system::o
         root.to_path_buf(),
         iface,
         None::<&mut fn(&str, u8, &str)>,
+        None,
     )?;
 
     Ok(crate::system::ops::IsolationOutcome {
@@ -296,7 +297,7 @@ pub fn dispatch_command_with_cancel(
 }
 
 fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
-    run_scan_with_progress(root, args, |_, _| {})
+    run_scan_with_progress(root, args, None, |_, _| {})
 }
 
 #[cfg(target_os = "linux")]
@@ -942,11 +943,13 @@ enum ScanTarget {
 pub fn run_scan_with_progress<F>(
     root: &Path,
     args: ScanRunArgs,
+    cancel: Option<&CancelFlag>,
     mut on_progress: F,
 ) -> Result<HandlerResult>
 where
     F: FnMut(f32, &str),
 {
+    check_cancel(cancel)?;
     let label = args.label.clone();
     let interface = args.interface.clone();
     let target = args.target.clone();
@@ -954,6 +957,7 @@ where
     let no_discord = args.no_discord;
 
     let interface_info = detect_interface(interface)?;
+    check_cancel(cancel)?;
     enforce_single_interface(&interface_info.name)?;
     let target_str = target.unwrap_or_else(|| interface_info.network_cidr());
     let scan_target = parse_scan_target(&target_str)?;
@@ -983,6 +987,7 @@ where
     }
 
     on_progress(0.0, "Preparing");
+    check_cancel(cancel)?;
 
     let (hosts, discovery_summary) = if config.no_discovery || matches!(config.discovery, ScanDiscovery::None) {
         let hosts = expand_targets(&scan_target, config.max_hosts)?;
@@ -1009,6 +1014,7 @@ where
             config.discovery,
             config.arp_rate_pps,
             config.timeout,
+            cancel,
         );
         let mut hosts = discovery.0;
         if let Some(limit) = config.max_hosts {
@@ -1022,6 +1028,7 @@ where
         (hosts, discovery.1)
     };
 
+    check_cancel(cancel)?;
     on_progress(20.0, "Discovery complete");
 
     let results = if config.no_port_scan {
@@ -1040,6 +1047,7 @@ where
         if ports.is_empty() {
             bail!("No ports selected for scan");
         }
+        check_cancel(cancel)?;
         let worker_count = config
             .workers
             .clamp(1, 32)
@@ -1051,6 +1059,7 @@ where
             interface_info.address,
             config.service_detect,
             worker_count,
+            cancel,
             |done, total| {
                 let pct = 20.0 + (done as f32 / total.max(1) as f32) * 80.0;
                 on_progress(pct, "Port scan");
@@ -1059,6 +1068,7 @@ where
         merge_scan_results(hosts, scan_results, scan_errors)
     };
 
+    check_cancel(cancel)?;
     let report = render_scan_report(
         &interface_info.name,
         interface_info.address,
@@ -1070,9 +1080,11 @@ where
     fs::write(&loot_path, report).with_context(|| format!("writing {}", loot_path.display()))?;
 
     on_progress(100.0, "Completed");
+    check_cancel(cancel)?;
 
     let mut discord_sent = false;
     if !no_discord {
+        check_cancel(cancel)?;
         discord_sent =
             send_scan_to_discord(root, &label, &loot_path, &target_str, &interface_info.name)?;
     }
@@ -1344,18 +1356,26 @@ fn run_scan_discovery(
     mode: ScanDiscovery,
     arp_rate_pps: Option<u32>,
     timeout: Duration,
+    cancel: Option<&CancelFlag>,
 ) -> (Vec<HostDiscovery>, String) {
+    if check_cancel(cancel).is_err() {
+        return (Vec::new(), "Discovery cancelled".to_string());
+    }
+
     let mut details = Vec::new();
     match target {
         ScanTarget::Network(net) => {
             if matches!(mode, ScanDiscovery::Arp | ScanDiscovery::Both) {
                 if let Ok(arp_result) =
-                    run_arp_discovery(interface, *net, arp_rate_pps, timeout, None)
+                    run_arp_discovery(interface, *net, arp_rate_pps, timeout, cancel)
                 {
                     details.extend(arp_result.details);
                 }
             }
             if matches!(mode, ScanDiscovery::Icmp | ScanDiscovery::Both) {
+                if check_cancel(cancel).is_err() {
+                    return (Vec::new(), "Discovery cancelled".to_string());
+                }
                 if let Ok(icmp_result) = discover_hosts(*net, timeout) {
                     details.extend(icmp_result.details);
                 }
@@ -1363,18 +1383,24 @@ fn run_scan_discovery(
         }
         ScanTarget::Hosts(hosts) => {
             for ip in hosts {
+                if check_cancel(cancel).is_err() {
+                    return (Vec::new(), "Discovery cancelled".to_string());
+                }
                 let net = match Ipv4Net::new(*ip, 32) {
                     Ok(n) => n,
                     Err(_) => continue,
                 };
                 if matches!(mode, ScanDiscovery::Arp | ScanDiscovery::Both) {
                     if let Ok(arp_result) =
-                        run_arp_discovery(interface, net, arp_rate_pps, timeout, None)
+                        run_arp_discovery(interface, net, arp_rate_pps, timeout, cancel)
                     {
                         details.extend(arp_result.details);
                     }
                 }
                 if matches!(mode, ScanDiscovery::Icmp | ScanDiscovery::Both) {
+                    if check_cancel(cancel).is_err() {
+                        return (Vec::new(), "Discovery cancelled".to_string());
+                    }
                     if let Ok(icmp_result) = discover_hosts(net, timeout) {
                         details.extend(icmp_result.details);
                     }
@@ -1423,6 +1449,7 @@ fn scan_hosts<F>(
     source_ip: Ipv4Addr,
     capture_banners: bool,
     workers: usize,
+    cancel: Option<&CancelFlag>,
     mut on_progress: F,
 ) -> (
     HashMap<Ipv4Addr, rustyjack_ethernet::PortScanResult>,
@@ -1435,6 +1462,7 @@ where
     let queue = std::sync::Arc::new(std::sync::Mutex::new(queue));
     let ports = std::sync::Arc::new(ports.to_vec());
     let (tx, rx) = std::sync::mpsc::channel();
+    let cancel_flag = cancel.cloned();
     let mut handles = Vec::new();
     let total = hosts.len();
     let worker_count = workers.clamp(1, 32).min(total.max(1));
@@ -1443,20 +1471,37 @@ where
         let queue = std::sync::Arc::clone(&queue);
         let ports = std::sync::Arc::clone(&ports);
         let tx = tx.clone();
+        let cancel_flag = cancel_flag.clone();
         let handle = std::thread::spawn(move || {
             loop {
+                if let Some(flag) = cancel_flag.as_ref() {
+                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                }
                 let ip = {
                     let mut guard = queue.lock().ok()?;
                     guard.pop_front()
                 };
                 let Some(ip) = ip else { break; };
-                let result = rustyjack_ethernet::quick_port_scan_with_source(
-                    ip,
-                    &ports,
-                    timeout,
-                    source_ip,
-                    capture_banners,
-                );
+                let result = if let Some(flag) = cancel_flag.as_ref() {
+                    rustyjack_ethernet::quick_port_scan_with_source_cancellable(
+                        ip,
+                        &ports,
+                        timeout,
+                        source_ip,
+                        capture_banners,
+                        flag,
+                    )
+                } else {
+                    rustyjack_ethernet::quick_port_scan_with_source(
+                        ip,
+                        &ports,
+                        timeout,
+                        source_ip,
+                        capture_banners,
+                    )
+                };
                 let _ = tx.send((ip, result));
             }
             Some(())
@@ -1469,6 +1514,11 @@ where
     let mut results = HashMap::new();
     let mut errors = HashMap::new();
     for received in rx {
+        if let Some(flag) = cancel_flag.as_ref() {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        }
         done += 1;
         if let (ip, Ok(scan)) = received {
             results.insert(ip, scan);
@@ -3149,12 +3199,13 @@ fn handle_wifi_route_metric(args: WifiRouteMetricArgs) -> Result<HandlerResult> 
 }
 
 fn handle_system_update(root: &Path, args: SystemUpdateArgs) -> Result<HandlerResult> {
-    run_system_update_with_progress(root, args, |_, _| {})
+    run_system_update_with_progress(root, args, None, |_, _| {})
 }
 
 pub fn run_system_update_with_progress<F>(
     root: &Path,
     args: SystemUpdateArgs,
+    cancel: Option<&CancelFlag>,
     mut on_progress: F,
 ) -> Result<HandlerResult>
 where
@@ -3167,12 +3218,15 @@ where
     {
         bail!("System updates are disabled until the signed Rust-only update pipeline is implemented. Set RUSTYJACK_ALLOW_UNSAFE_UPDATES=1 to override.");
     }
+    check_cancel(cancel)?;
     on_progress(0.1, "Creating backup...");
     let backup = backup_repository(root, args.backup_dir.as_deref())?;
 
+    check_cancel(cancel)?;
     on_progress(0.3, "Fetching updates...");
     git_reset_to_remote(root, &args.remote, &args.branch)?;
 
+    check_cancel(cancel)?;
     on_progress(0.5, "Compiling binary...");
     // We assume cargo is available in the path
     let status = std::process::Command::new("cargo")
@@ -3186,6 +3240,7 @@ where
         bail!("Compilation failed with status {}", status);
     }
 
+    check_cancel(cancel)?;
     on_progress(0.9, "Restarting service...");
     restart_system_service(&args.service)?;
 
@@ -3314,29 +3369,63 @@ fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<
 }
 
 pub(crate) fn handle_system_reboot() -> Result<HandlerResult> {
-    let _ = Command::new("sync").status();
-    let status = Command::new("systemctl").arg("reboot").status();
-    if status.as_ref().map(|s| s.success()).unwrap_or(false) {
+    #[cfg(target_os = "linux")]
+    {
+        system_reboot_cmd(LINUX_REBOOT_CMD_RESTART)?;
         return Ok(("Reboot initiated".to_string(), json!({ "action": "reboot" })));
     }
-    let fallback = Command::new("reboot").status();
-    if fallback.as_ref().map(|s| s.success()).unwrap_or(false) {
-        return Ok(("Reboot initiated".to_string(), json!({ "action": "reboot" })));
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Reboot not supported on this platform");
     }
-    bail!("Failed to reboot system");
 }
 
 pub(crate) fn handle_system_poweroff() -> Result<HandlerResult> {
-    let _ = Command::new("sync").status();
-    let status = Command::new("systemctl").arg("poweroff").status();
-    if status.as_ref().map(|s| s.success()).unwrap_or(false) {
+    #[cfg(target_os = "linux")]
+    {
+        system_reboot_cmd(LINUX_REBOOT_CMD_POWER_OFF)?;
         return Ok(("Poweroff initiated".to_string(), json!({ "action": "poweroff" })));
     }
-    let fallback = Command::new("shutdown").args(["-h", "now"]).status();
-    if fallback.as_ref().map(|s| s.success()).unwrap_or(false) {
-        return Ok(("Poweroff initiated".to_string(), json!({ "action": "poweroff" })));
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Poweroff not supported on this platform");
     }
-    bail!("Failed to power off system");
+}
+
+#[cfg(target_os = "linux")]
+const LINUX_REBOOT_MAGIC1: libc::c_int = 0xfee1dead_u32 as i32;
+#[cfg(target_os = "linux")]
+const LINUX_REBOOT_MAGIC2: libc::c_int = 672274793;
+#[cfg(target_os = "linux")]
+const LINUX_REBOOT_CMD_RESTART: libc::c_int = 0x01234567;
+#[cfg(target_os = "linux")]
+const LINUX_REBOOT_CMD_POWER_OFF: libc::c_int = 0x4321fedc;
+
+#[cfg(target_os = "linux")]
+fn system_reboot_cmd(cmd: libc::c_int) -> Result<()> {
+    unsafe { libc::sync() };
+
+    let res = unsafe {
+        libc::syscall(
+            libc::SYS_reboot as libc::c_long,
+            LINUX_REBOOT_MAGIC1,
+            LINUX_REBOOT_MAGIC2,
+            cmd,
+            0,
+        )
+    };
+
+    if res == 0 {
+        return Ok(());
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::PermissionDenied {
+        bail!("Insufficient privileges to reboot (CAP_SYS_BOOT required)");
+    }
+    bail!("Reboot syscall failed: {}", err);
 }
 
 fn handle_system_purge(root: &Path) -> Result<HandlerResult> {
