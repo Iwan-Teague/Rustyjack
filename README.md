@@ -45,10 +45,10 @@ DNSSpoof/                Captive portal templates (not a Rust crate - HTML/JS te
 scripts/                 Wi-Fi driver installer, USB hotplug helper, FDE scripts (udev rule included)
 wordlists/               Bundled password lists for handshake cracking
 img/                     Splash assets for the LCD (`rustyjack.png`)
-rustyjack-ui.service     Systemd unit (unprivileged UI, sets display rotation and RUSTYJACK_ROOT)
-rustyjackd.service       Systemd unit (root daemon, privileged operations + IPC)
-rustyjack-portal.service Systemd unit (captive portal server, unprivileged)
-rustyjack.service        Systemd alias for rustyjack-ui.service
+services/rustyjack-ui.service     Systemd unit (unprivileged UI, sets display rotation and RUSTYJACK_ROOT)
+services/rustyjackd.service       Systemd unit (root daemon, privileged operations + IPC)
+services/rustyjack-portal.service Systemd unit (captive portal server, unprivileged)
+services/rustyjack.service        Systemd alias for rustyjack-ui.service
 install_rustyjack*.sh    Production/dev/prebuilt installers for Pi OS targets
 ```
 
