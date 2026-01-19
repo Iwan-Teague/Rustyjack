@@ -1,0 +1,21 @@
+# MITM & DNS Spoof
+Created: 2026-01-07
+
+Middle-in-the-man flows for Ethernet targets with optional captive portals. Orchestrated by `rustyjack-core` using netfilter/Rust PCAP capture and DNS spoof helpers.
+
+## Flow
+1. Core enforces interface isolation and sets active Ethernet iface.
+2. ARP poison victims (pair or subset); enable NAT/forwarding via `rustyjack-netlink::iptables`.
+3. Start Rust PCAP capture and Rust DNS spoof add-on.
+4. Optional Rust captive portal served from `DNSSpoof/sites/<site>`; visits/credentials logged.
+5. Stop tears down ARP spoof, DNS spoof, capture, and NAT rules.
+
+## Dependencies
+- ARP spoof helpers (core/system) and `rustyjack-netlink` iptables/NAT.
+- External tools: none required for the portal server.
+- Loot paths under `loot/Ethernet/<label>/` with PCAP, visit/credential logs, DNS spoof logs.
+
+## Notes
+- Victim selection capped by pipeline args (`max_hosts` for “human” classification).
+- DNS spoof templates live in `DNSSpoof/sites/`; adjust or add new portals as needed.
+- Requires root; runs on Ethernet interfaces with carrier.

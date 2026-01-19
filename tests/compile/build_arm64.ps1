@@ -64,10 +64,10 @@ if ($args.Count -gt 0) {
     $DefaultBuild = $true
 
     $Packages = @(
-        @{name="rustyjack-ui"; cmd="cargo build --target $Target -p rustyjack-ui"; dir="rustyjack-ui"},
-        @{name="rustyjackd"; cmd="cargo build --target $Target -p rustyjack-daemon"; dir="rustyjack-daemon"},
-        @{name="rustyjack-portal"; cmd="cargo build --target $Target -p rustyjack-portal"; dir="rustyjack-portal"},
-        @{name="rustyjack"; cmd="cargo build --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"; dir="rustyjack-core"}
+        @{name="rustyjack-ui"; cmd="cargo build --target $Target -p rustyjack-ui"; dir="crates/rustyjack-ui"},
+        @{name="rustyjackd"; cmd="cargo build --target $Target -p rustyjack-daemon"; dir="crates/rustyjack-daemon"},
+        @{name="rustyjack-portal"; cmd="cargo build --target $Target -p rustyjack-portal"; dir="crates/rustyjack-portal"},
+        @{name="rustyjack"; cmd="cargo build --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"; dir="crates/rustyjack-core"}
     )
 
     $changed = @()

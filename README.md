@@ -1,6 +1,6 @@
 # Rustyjack
 
-Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as an unprivileged UI service backed by a privileged daemon. Additional documentation is in `docs/`.
+Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as an unprivileged UI service backed by a privileged daemon. Additional documentation is in `logs/done/` (current) and `logs/outdated/` (historical).
 
 > Authorized testing and education only. Verify permissions before running any operation.
 
@@ -19,7 +19,7 @@ Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joys
 
 ## Project Overview
 
-- Linux-only UI (compile guard in `rustyjack-ui/src/main.rs`); designed for a Pi Zero 2 W with an Ethernet HAT.
+- Linux-only UI (compile guard in `crates/rustyjack-ui/src/main.rs`); designed for a Pi Zero 2 W with an Ethernet HAT.
 - Runs as `rustyjack-ui.service` (unprivileged) with `RUSTYJACK_DISPLAY_ROTATION=landscape` by default.
 - Status overlay shows CPU temp/load, memory, disk, uptime, target SSID/BSSID/channel, active interface, current/original MAC, and autopilot status if the CLI autopilot is running.
 - Firewall/NAT rules are applied via Rust nf_tables netlink (no `iptables` binary dependency).
@@ -28,19 +28,19 @@ Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joys
 ## Architecture
 
 ```
-rustyjack-ui/            LCD UI: menus, rendering, GPIO buttons, dashboards
-rustyjack-core/          Orchestrator CLI: Wi-Fi/Ethernet ops, hotspot, MITM, loot, autopilot, system update, anti-forensics
-rustyjack-wireless/      Native wireless ops (nl80211 monitor/injection, deauth, PMKID, karma, evil twin, hotspot, cracking helpers)
-rustyjack-evasion/       MAC/hostname evasion, vendor-aware MAC generation, TX power/passive helpers
-rustyjack-ethernet/      LAN discovery, TCP port scan, banner grabs, inventory helpers
-rustyjack-netlink/       Pure Rust networking: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables
-rustyjack-ipc/           IPC protocol types and endpoints
-rustyjack-daemon/        Privileged daemon with IPC dispatch
-rustyjack-client/        Unix socket client library
-rustyjack-portal/        Captive portal HTTP server (Axum-based)
-rustyjack-wpa/           WPA/WPA2 handshake processing (PBKDF2, HMAC-SHA1)
-rustyjack-encryption/    AES-GCM encryption for loot
-rustyjack-commands/      CLI/IPC command definitions
+crates/rustyjack-ui/         LCD UI: menus, rendering, GPIO buttons, dashboards
+crates/rustyjack-core/       Orchestrator CLI: Wi-Fi/Ethernet ops, hotspot, MITM, loot, autopilot, system update, anti-forensics
+crates/rustyjack-wireless/   Native wireless ops (nl80211 monitor/injection, deauth, PMKID, karma, evil twin, hotspot, cracking helpers)
+crates/rustyjack-evasion/    MAC/hostname evasion, vendor-aware MAC generation, TX power/passive helpers
+crates/rustyjack-ethernet/   LAN discovery, TCP port scan, banner grabs, inventory helpers
+crates/rustyjack-netlink/    Pure Rust networking: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables
+crates/rustyjack-ipc/        IPC protocol types and endpoints
+crates/rustyjack-daemon/     Privileged daemon with IPC dispatch
+crates/rustyjack-client/     Unix socket client library
+crates/rustyjack-portal/     Captive portal HTTP server (Axum-based)
+crates/rustyjack-wpa/        WPA/WPA2 handshake processing (PBKDF2, HMAC-SHA1)
+crates/rustyjack-encryption/ AES-GCM encryption for loot
+crates/rustyjack-commands/   CLI/IPC command definitions
 DNSSpoof/                Captive portal templates (not a Rust crate - HTML/JS templates)
 scripts/                 Wi-Fi driver installer, USB hotplug helper, FDE scripts (udev rule included)
 wordlists/               Bundled password lists for handshake cracking
@@ -57,18 +57,18 @@ Runtime directories are created by the installers under `/var/lib/rustyjack`:
 
 ### System-Level Operations
 
-**Anti-Forensics** (`rustyjack-core/src/anti_forensics.rs`):
+**Anti-Forensics** (`crates/rustyjack-core/src/anti_forensics.rs`):
 - Secure file deletion with configurable overwrite passes (DoD 5220.22-M standard)
 - RAM wipe on secure shutdown
 - Log purging with selective artifact removal
 - Evidence management and cleanup
 
-**Physical Access** (`rustyjack-core/src/physical_access.rs`):
+**Physical Access** (`crates/rustyjack-core/src/physical_access.rs`):
 - WiFi credential extraction from routers via wired connection
 - Router fingerprinting and vulnerability detection
 - Default credential testing
 
-**USB Operations** (`rustyjack-core/src/mount.rs`):
+**USB Operations** (`crates/rustyjack-core/src/mount.rs`):
 - USB mounting with read-only/read-write mode selection
 - Mount policy enforcement (filesystem type filtering, device limits)
 - Safe unmount with lock timeout protection
@@ -90,7 +90,7 @@ Runtime directories are created by the installers under `/var/lib/rustyjack`:
 - Backlight: BCM24 held high by the UI; you can test with `gpioset gpiochip0 24=1`.
 - Buttons are active-low; installers add GPIO pull-ups via `/boot/firmware/config.txt` (or `/boot/config.txt`): `gpio=6,19,5,26,13,21,20,16=pu`.
 
-**Display pins (from `rustyjack-ui/src/display.rs`):**
+**Display pins (from `crates/rustyjack-ui/src/display.rs`):**
 
 | Signal | BCM GPIO |          Notes          |
 |--------|----------|-------------------------|
@@ -99,7 +99,7 @@ Runtime directories are created by the installers under `/var/lib/rustyjack`:
 | BL     | 24       | Backlight control       |
 | SPI    | spidev0.0 (SCLK 11, MOSI 10, CS 8) | 
 
-**Input pins (defaults from `rustyjack-ui/src/config.rs`):**
+**Input pins (defaults from `crates/rustyjack-ui/src/config.rs`):**
 
 | Control | BCM GPIO |           Purpose           |
 |---------|----------|-----------------------------|
