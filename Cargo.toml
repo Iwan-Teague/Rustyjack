@@ -1,20 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "rustyjack-commands",
-    "rustyjack-core",
-    "rustyjack-evasion",
-    "rustyjack-logging",
-    "rustyjack-ui",
-    "rustyjack-wireless",
-    "rustyjack-ethernet",
-    "rustyjack-encryption",
-    "rustyjack-wpa",
-    "rustyjack-netlink",
-    "rustyjack-portal",
-    "rustyjack-ipc",
-    "rustyjack-daemon",
-    "rustyjack-client",
+    "crates/rustyjack-commands",
+    "crates/rustyjack-core",
+    "crates/rustyjack-evasion",
+    "crates/rustyjack-logging",
+    "crates/rustyjack-ui",
+    "crates/rustyjack-wireless",
+    "crates/rustyjack-ethernet",
+    "crates/rustyjack-encryption",
+    "crates/rustyjack-wpa",
+    "crates/rustyjack-netlink",
+    "crates/rustyjack-portal",
+    "crates/rustyjack-ipc",
+    "crates/rustyjack-daemon",
+    "crates/rustyjack-client",
 ]
 
 [workspace.package]

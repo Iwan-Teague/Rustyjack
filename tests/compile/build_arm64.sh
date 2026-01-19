@@ -18,10 +18,10 @@ if [ "$#" -gt 0 ]; then
 else
     DEFAULT_BUILD=1
     PACKAGES=(
-        "rustyjack-ui|cargo build --target $TARGET -p rustyjack-ui|rustyjack-ui"
-        "rustyjackd|cargo build --target $TARGET -p rustyjack-daemon|rustyjack-daemon"
-        "rustyjack-portal|cargo build --target $TARGET -p rustyjack-portal|rustyjack-portal"
-        "rustyjack|cargo build --target $TARGET -p rustyjack-core --bin rustyjack --features rustyjack-core/cli|rustyjack-core"
+        "rustyjack-ui|cargo build --target $TARGET -p rustyjack-ui|crates/rustyjack-ui"
+        "rustyjackd|cargo build --target $TARGET -p rustyjack-daemon|crates/rustyjack-daemon"
+        "rustyjack-portal|cargo build --target $TARGET -p rustyjack-portal|crates/rustyjack-portal"
+        "rustyjack|cargo build --target $TARGET -p rustyjack-core --bin rustyjack --features rustyjack-core/cli|crates/rustyjack-core"
     )
 
     changed=()

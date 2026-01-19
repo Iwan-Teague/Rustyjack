@@ -1,8 +1,8 @@
 /payloads/ideas
 /payloads/ref
 /loot/
-/rustyjack-core/target
-/rustyjack-ui/target
+/crates/rustyjack-core/target
+/crates/rustyjack-ui/target
 /target/
 /target-32/
 /target-64/
