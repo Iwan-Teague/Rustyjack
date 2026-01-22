@@ -3,7 +3,7 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = Resolve-Path (Join-Path $ScriptDir "..\..") | Select-Object -ExpandProperty Path
+$RepoRoot = Resolve-Path (Join-Path $ScriptDir "..") | Select-Object -ExpandProperty Path
 $DockerDir = Join-Path $RepoRoot "docker\arm64"
 $Target = "aarch64-unknown-linux-gnu"
 $TargetDir = "/work/target-64"

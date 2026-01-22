@@ -54,10 +54,7 @@ pub struct ScanRequestIpc {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateRequestIpc {
-    pub service: String,
-    pub remote: String,
-    pub branch: String,
-    pub backup_dir: Option<String>,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

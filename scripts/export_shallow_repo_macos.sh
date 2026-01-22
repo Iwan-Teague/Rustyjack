@@ -18,12 +18,15 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/rustyjack_shallow_${timestamp}_XXXXXX")"
 clone_dir="${work_dir}/${repo_name}"
 zip_path="${repo_root}/${repo_name}_shallow_${timestamp}.zip"
 
-git clone --depth 1 --no-tags --no-local "$repo_root" "$clone_dir"
+mkdir -p "$clone_dir"
 
-rm -rf "$clone_dir/.git"
-
-# Keep only rust source, docs, and systemd unit files.
-find "$clone_dir" -type f ! \( \
+# Copy only rust source, docs, and systemd unit files from the local tree.
+while IFS= read -r -d '' src; do
+  rel="${src#"$repo_root"/}"
+  dest="$clone_dir/$rel"
+  mkdir -p "$(dirname "$dest")"
+  cp -p "$src" "$dest"
+done < <(find "$repo_root" -type f \( \
   -name '*.rs' -o \
   -name '*.toml' -o \
   -name '*.lock' -o \
@@ -34,7 +37,7 @@ find "$clone_dir" -type f ! \( \
   -name 'LICENSE*' -o \
   -name 'COPYING*' -o \
   -name 'NOTICE*' \
-\) -delete
+\) -print0)
 
 find "$clone_dir" -type d -empty -delete
 

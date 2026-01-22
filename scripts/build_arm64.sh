@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET="aarch64-unknown-linux-gnu"
 TARGET_DIR="/work/target-64"
 HOST_TARGET_DIR="$REPO_ROOT/target-64"

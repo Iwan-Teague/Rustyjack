@@ -1,4 +1,4 @@
-# WAVESHARE_BUTTONS.md
+# Waveshare Button Mapping
 Date: 2025-11-24
 
 Summary of button mapping and UI behaviour changes

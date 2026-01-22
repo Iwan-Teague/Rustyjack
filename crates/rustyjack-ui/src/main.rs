@@ -13,8 +13,10 @@ mod core;
 mod display;
 mod input;
 mod menu;
+mod ops;
 mod stats;
 mod types;
+mod ui;
 mod util;
 
 use anyhow::Result;

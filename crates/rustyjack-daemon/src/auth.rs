@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use tracing::debug;
 use tokio::net::UnixStream;
 
-use rustyjack_ipc::{AuthorizationTier, Endpoint, JobKind};
+use rustyjack_ipc::{AuthorizationTier, Endpoint, JobKind, RequestBody, SystemCommand};
 
 use crate::config::DaemonConfig;
 
@@ -170,6 +170,8 @@ pub fn required_tier(endpoint: Endpoint) -> AuthorizationTier {
         Endpoint::Health => AuthorizationTier::ReadOnly,
         Endpoint::Version => AuthorizationTier::ReadOnly,
         Endpoint::Status => AuthorizationTier::ReadOnly,
+        Endpoint::OpsConfigGet => AuthorizationTier::Operator,
+        Endpoint::OpsConfigSet => AuthorizationTier::Operator,
         Endpoint::JobStart => AuthorizationTier::Operator,
         Endpoint::JobStatus => AuthorizationTier::Operator,
         Endpoint::JobCancel => AuthorizationTier::Operator,
@@ -224,6 +226,65 @@ pub fn required_tier(endpoint: Endpoint) -> AuthorizationTier {
     }
 }
 
+pub fn required_tier_for_request(endpoint: Endpoint, body: &RequestBody) -> AuthorizationTier {
+    use AuthorizationTier as T;
+    use Endpoint as E;
+    use RequestBody as B;
+
+    match endpoint {
+        E::Health
+        | E::Version
+        | E::Status
+        | E::OpsConfigGet
+        | E::SystemStatusGet
+        | E::SystemLogsGet
+        | E::InterfaceStatusGet
+        | E::WifiCapabilitiesGet
+        | E::WifiInterfacesList
+        | E::HotspotWarningsGet
+        | E::HotspotDiagnosticsGet
+        | E::HotspotClientsList
+        | E::GpioDiagnosticsGet
+        | E::LoggingConfigGet
+        | E::LogTailGet
+        | E::StatusCommand => return T::ReadOnly,
+        _ => {}
+    }
+
+    if endpoint == E::JobStart {
+        if let B::JobStart(req) = body {
+            return required_tier_for_jobkind(&req.job.kind);
+        }
+        return T::Admin;
+    }
+
+    if endpoint == E::SystemCommand {
+        if let B::SystemCommand(cmd) = body {
+            return required_tier_for_system_command(cmd);
+        }
+        return T::Admin;
+    }
+
+    if endpoint == E::CoreDispatch {
+        return T::Admin;
+    }
+
+    required_tier(endpoint)
+}
+
+fn required_tier_for_system_command(cmd: &SystemCommand) -> AuthorizationTier {
+    use AuthorizationTier as T;
+    use rustyjack_ipc::SystemCommand as SC;
+
+    match cmd {
+        SC::RandomizeHostname
+        | SC::UsbMount(_)
+        | SC::UsbUnmount(_)
+        | SC::ExportLogsToUsb(_) => T::Operator,
+        _ => T::Admin,
+    }
+}
+
 pub fn tier_allows(actual: AuthorizationTier, required: AuthorizationTier) -> bool {
     match (actual, required) {
         (AuthorizationTier::Admin, _) => true,
@@ -245,16 +306,152 @@ pub fn required_tier_for_jobkind(kind: &JobKind) -> AuthorizationTier {
         JobKind::MountStart { .. } => AuthorizationTier::Operator,
         JobKind::UnmountStart { .. } => AuthorizationTier::Operator,
         JobKind::InterfaceSelect { .. } => AuthorizationTier::Operator,
-        JobKind::ScanRun { .. } => AuthorizationTier::Operator,
-        JobKind::SystemUpdate { .. } => AuthorizationTier::Admin,
-        JobKind::CoreCommand { .. } => AuthorizationTier::Operator,
+        JobKind::ScanRun { .. } => AuthorizationTier::Admin,
+        JobKind::SystemUpdate { .. } => AuthorizationTier::Operator,
+        JobKind::CoreCommand { .. } => AuthorizationTier::Admin,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RequiredOps {
+    None,
+    Wifi,
+    Eth,
+    Hotspot,
+    Portal,
+    Storage,
+    System,
+    Update,
+    Dev,
+    Offensive,
+    Loot,
+    Process,
+}
+
+pub fn required_ops_for_request(endpoint: Endpoint, body: &RequestBody) -> RequiredOps {
+    use Endpoint as E;
+    use RequestBody as B;
+
+    match endpoint {
+        E::Health
+        | E::Version
+        | E::Status
+        | E::OpsConfigGet
+        | E::SystemStatusGet
+        | E::SystemLogsGet
+        | E::ActiveInterfaceGet
+        | E::InterfaceStatusGet
+        | E::WifiCapabilitiesGet
+        | E::WifiInterfacesList
+        | E::HotspotWarningsGet
+        | E::HotspotDiagnosticsGet
+        | E::HotspotClientsList
+        | E::GpioDiagnosticsGet
+        | E::LoggingConfigGet
+        | E::LogTailGet
+        | E::PortalStatus
+        | E::StatusCommand
+        | E::HardwareCommand
+        | E::JobStatus
+        | E::JobCancel => return RequiredOps::None,
+        _ => {}
+    }
+
+    match endpoint {
+        E::WifiDisconnect | E::WifiScanStart | E::WifiConnectStart => RequiredOps::Wifi,
+        E::WifiCommand => match body {
+            B::WifiCommand(cmd) => match cmd {
+                rustyjack_ipc::WifiCommand::Deauth(_)
+                | rustyjack_ipc::WifiCommand::EvilTwin(_)
+                | rustyjack_ipc::WifiCommand::PmkidCapture(_)
+                | rustyjack_ipc::WifiCommand::ProbeSniff(_)
+                | rustyjack_ipc::WifiCommand::Crack(_)
+                | rustyjack_ipc::WifiCommand::Karma(_) => RequiredOps::Offensive,
+                _ => RequiredOps::Wifi,
+            },
+            _ => RequiredOps::Wifi,
+        },
+        E::OpsConfigSet => RequiredOps::None,
+        E::EthernetCommand | E::SetActiveInterface | E::ActiveInterfaceClear => RequiredOps::Eth,
+        E::HotspotStart | E::HotspotStop | E::HotspotCommand => RequiredOps::Hotspot,
+        E::PortalStart | E::PortalStop => RequiredOps::Portal,
+        E::MountList
+        | E::MountStart
+        | E::UnmountStart
+        | E::BlockDevicesList
+        | E::DiskUsageGet => RequiredOps::Storage,
+        E::SystemReboot
+        | E::SystemShutdown
+        | E::SystemSync
+        | E::HostnameRandomizeNow
+        | E::LoggingConfigSet => RequiredOps::System,
+        E::JobStart => match body {
+            B::JobStart(req) => required_ops_for_jobkind(&req.job.kind),
+            _ => RequiredOps::Dev,
+        },
+        E::SystemCommand | E::NotifyCommand => match body {
+            B::SystemCommand(cmd) => required_ops_for_system_command(cmd),
+            _ => RequiredOps::System,
+        },
+        E::CoreDispatch => RequiredOps::Dev,
+        E::DnsSpoofCommand
+        | E::MitmCommand
+        | E::ReverseCommand
+        | E::ScanCommand
+        | E::BridgeCommand => RequiredOps::Offensive,
+        E::LootCommand => RequiredOps::Loot,
+        E::ProcessCommand => RequiredOps::Process,
+        E::HotplugNotify => RequiredOps::Eth,
+        _ => RequiredOps::Dev,
+    }
+}
+
+fn required_ops_for_system_command(cmd: &SystemCommand) -> RequiredOps {
+    use rustyjack_ipc::SystemCommand as SC;
+
+    match cmd {
+        SC::Update(_) => RequiredOps::Update,
+        SC::UsbMount(_) | SC::UsbUnmount(_) | SC::ExportLogsToUsb(_) => RequiredOps::Storage,
+        _ => RequiredOps::System,
+    }
+}
+
+pub fn required_ops_for_jobkind(kind: &JobKind) -> RequiredOps {
+    match kind {
+        JobKind::WifiScan { .. } | JobKind::WifiConnect { .. } => RequiredOps::Wifi,
+        JobKind::HotspotStart { .. } => RequiredOps::Hotspot,
+        JobKind::PortalStart { .. } => RequiredOps::Portal,
+        JobKind::MountStart { .. } | JobKind::UnmountStart { .. } => RequiredOps::Storage,
+        JobKind::SystemUpdate { .. } => RequiredOps::Update,
+        JobKind::ScanRun { .. } => RequiredOps::Offensive,
+        JobKind::CoreCommand { .. } => RequiredOps::Dev,
+        JobKind::InterfaceSelect { .. } => RequiredOps::Eth,
+        JobKind::Noop | JobKind::Sleep { .. } => RequiredOps::None,
+    }
+}
+
+pub fn ops_allows(cfg: &crate::ops::OpsConfig, required: RequiredOps) -> bool {
+    match required {
+        RequiredOps::None => true,
+        RequiredOps::Wifi => cfg.wifi_ops,
+        RequiredOps::Eth => cfg.eth_ops,
+        RequiredOps::Hotspot => cfg.hotspot_ops,
+        RequiredOps::Portal => cfg.portal_ops,
+        RequiredOps::Storage => cfg.storage_ops,
+        RequiredOps::System => cfg.system_ops,
+        RequiredOps::Update => cfg.update_ops,
+        RequiredOps::Dev => cfg.dev_ops,
+        RequiredOps::Offensive => cfg.offensive_ops,
+        RequiredOps::Loot => cfg.loot_ops,
+        RequiredOps::Process => cfg.process_ops,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustyjack_ipc::JobKind;
+    use rustyjack_ipc::{JobKind, SystemCommand, WifiCommand};
+    use rustyjack_commands::{UsbMountArgs, WifiDeauthArgs};
 
     #[test]
     fn test_tier_allows_admin_can_do_anything() {
@@ -305,22 +502,53 @@ mod tests {
     }
 
     #[test]
-    fn test_required_tier_for_jobkind_update_is_admin() {
+    fn test_required_tier_for_jobkind_update_is_operator() {
         let kind = JobKind::SystemUpdate {
             req: rustyjack_ipc::UpdateRequestIpc {
-                service: "rustyjack".to_string(),
-                remote: "origin".to_string(),
-                branch: "main".to_string(),
-                backup_dir: None,
+                url: "https://example.com/update.tar.zst".to_string(),
             },
         };
-        assert_eq!(required_tier_for_jobkind(&kind), AuthorizationTier::Admin);
+        assert_eq!(required_tier_for_jobkind(&kind), AuthorizationTier::Operator);
     }
 
     #[test]
     fn test_required_tier_system_reboot_is_admin() {
         assert_eq!(required_tier(Endpoint::SystemReboot), AuthorizationTier::Admin);
         assert_eq!(required_tier(Endpoint::SystemShutdown), AuthorizationTier::Admin);
+    }
+
+    #[test]
+    fn test_required_ops_for_wifi_command_offensive() {
+        let body = RequestBody::WifiCommand(WifiCommand::Deauth(WifiDeauthArgs {
+            bssid: "00:11:22:33:44:55".to_string(),
+            ssid: None,
+            interface: "wlan0".to_string(),
+            channel: 1,
+            duration: 1,
+            packets: 1,
+            client: None,
+            continuous: true,
+            interval: 1,
+        }));
+        assert_eq!(
+            required_ops_for_request(Endpoint::WifiCommand, &body),
+            RequiredOps::Offensive
+        );
+
+        let benign = RequestBody::WifiCommand(WifiCommand::List);
+        assert_eq!(
+            required_ops_for_request(Endpoint::WifiCommand, &benign),
+            RequiredOps::Wifi
+        );
+    }
+
+    #[test]
+    fn test_required_ops_opsconfig_get_is_none() {
+        let body = RequestBody::OpsConfigGet;
+        assert_eq!(
+            required_ops_for_request(Endpoint::OpsConfigGet, &body),
+            RequiredOps::None
+        );
     }
 
     #[test]
@@ -332,5 +560,89 @@ mod tests {
     #[test]
     fn test_required_tier_job_start_is_operator() {
         assert_eq!(required_tier(Endpoint::JobStart), AuthorizationTier::Operator);
+    }
+
+    #[test]
+    fn test_required_tier_for_request_system_command_update_is_admin() {
+        let tier = required_tier_for_request(
+            Endpoint::SystemCommand,
+            &RequestBody::SystemCommand(SystemCommand::Update(
+                rustyjack_commands::SystemUpdateArgs {
+                    url: "https://example.com/update.tar.zst".to_string(),
+                },
+            )),
+        );
+        assert_eq!(tier, AuthorizationTier::Admin);
+    }
+
+    #[test]
+    fn test_required_tier_for_request_system_command_randomize_is_operator() {
+        let tier = required_tier_for_request(
+            Endpoint::SystemCommand,
+            &RequestBody::SystemCommand(SystemCommand::RandomizeHostname),
+        );
+        assert_eq!(tier, AuthorizationTier::Operator);
+    }
+
+    #[test]
+    fn test_required_ops_for_request_update_job_is_update() {
+        let kind = JobKind::SystemUpdate {
+            req: rustyjack_ipc::UpdateRequestIpc {
+                url: "https://example.com/update.tar.zst".to_string(),
+            },
+        };
+        let body = RequestBody::JobStart(rustyjack_ipc::JobStartRequest {
+            job: rustyjack_ipc::JobSpec {
+                kind,
+                requested_by: None,
+            },
+        });
+        assert_eq!(
+            required_ops_for_request(Endpoint::JobStart, &body),
+            RequiredOps::Update
+        );
+    }
+
+    #[test]
+    fn test_required_ops_for_request_core_dispatch_is_dev() {
+        let body = RequestBody::CoreDispatch(rustyjack_ipc::CoreDispatchRequest {
+            legacy: rustyjack_ipc::LegacyCommand::CommandDispatch,
+            args: serde_json::json!({}),
+        });
+        assert_eq!(
+            required_ops_for_request(Endpoint::CoreDispatch, &body),
+            RequiredOps::Dev
+        );
+    }
+
+    #[test]
+    fn test_required_ops_for_request_system_command_mount_is_storage() {
+        let body = RequestBody::SystemCommand(SystemCommand::UsbMount(UsbMountArgs {
+            device: "/dev/sda1".to_string(),
+            mode: rustyjack_commands::UsbMountMode::ReadOnly,
+            name: None,
+        }));
+        assert_eq!(
+            required_ops_for_request(Endpoint::SystemCommand, &body),
+            RequiredOps::Storage
+        );
+    }
+
+    #[test]
+    fn test_required_ops_for_request_portal_status_is_none() {
+        let body = RequestBody::PortalStatus;
+        assert_eq!(
+            required_ops_for_request(Endpoint::PortalStatus, &body),
+            RequiredOps::None
+        );
+    }
+
+    #[test]
+    fn test_required_ops_for_request_active_interface_get_is_none() {
+        let body = RequestBody::ActiveInterfaceGet;
+        assert_eq!(
+            required_ops_for_request(Endpoint::ActiveInterfaceGet, &body),
+            RequiredOps::None
+        );
     }
 }

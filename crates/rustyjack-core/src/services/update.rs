@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -9,10 +9,7 @@ use rustyjack_commands::SystemUpdateArgs;
 
 #[derive(Debug, Clone)]
 pub struct UpdateRequest {
-    pub service: String,
-    pub remote: String,
-    pub branch: String,
-    pub backup_dir: Option<PathBuf>,
+    pub url: String,
 }
 
 pub fn run_update<F>(
@@ -24,12 +21,7 @@ pub fn run_update<F>(
 where
     F: FnMut(u8, &str),
 {
-    let args = SystemUpdateArgs {
-        service: req.service,
-        remote: req.remote,
-        branch: req.branch,
-        backup_dir: req.backup_dir,
-    };
+    let args = SystemUpdateArgs { url: req.url };
 
     let result = run_system_update_with_progress(root, args, cancel, |percent, message| {
         let clamped = percent.max(0.0).min(100.0);

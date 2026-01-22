@@ -8,7 +8,8 @@ use rustyjack_client::{ClientConfig, DaemonClient};
 use rustyjack_commands::Commands;
 use rustyjack_ipc::{
     BlockDeviceInfo, HotspotClient, HotspotDiagnosticsResponse, HotspotWarningsResponse,
-    InterfaceStatusResponse, JobId, JobInfo, JobKind, JobState, WifiCapabilitiesResponse,
+    InterfaceStatusResponse, JobId, JobInfo, JobKind, JobState, OpsConfig, StatusResponse,
+    UpdateRequestIpc, WifiCapabilitiesResponse,
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -102,6 +103,27 @@ impl CoreBridge {
             let mut client = self.create_client().await?;
             let response = client.system_logs().await?;
             Ok(response.content)
+        })
+    }
+
+    pub fn status(&self) -> Result<StatusResponse> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            client.status().await
+        })
+    }
+
+    pub fn ops_config_get(&self) -> Result<OpsConfig> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            client.ops_config_get().await
+        })
+    }
+
+    pub fn ops_config_set(&self, ops: OpsConfig) -> Result<OpsConfig> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            client.ops_config_set(ops).await
         })
     }
 
@@ -227,6 +249,19 @@ impl CoreBridge {
             let mut client = self.create_client().await?;
             let job = client
                 .job_start(JobKind::InterfaceSelect { interface })
+                .await?;
+            Ok(job.job_id)
+        })
+    }
+
+    pub fn start_system_update(&self, url: &str) -> Result<JobId> {
+        let url = url.to_string();
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            let job = client
+                .job_start(JobKind::SystemUpdate {
+                    req: UpdateRequestIpc { url },
+                })
                 .await?;
             Ok(job.job_id)
         })

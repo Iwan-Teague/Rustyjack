@@ -517,6 +517,22 @@ else
   fail "Failed to install binaries to /usr/local/bin/"
 fi
 
+# Configure regdom + forwarding sysctls (Rust-only, no external binaries)
+step "Configuring regulatory domain and forwarding sysctls..."
+if cmd rustyjack; then
+  CONFIG_ARGS=()
+  if [ -n "${RUSTYJACK_COUNTRY:-}" ]; then
+    CONFIG_ARGS+=(--country "$RUSTYJACK_COUNTRY")
+  fi
+  if RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack system configure-host "${CONFIG_ARGS[@]}"; then
+    info "[OK] Host configuration complete"
+  else
+    warn "[WARN] Host configuration failed; review output above"
+  fi
+else
+  warn "rustyjack CLI not found; skipping regdom/sysctl configuration"
+fi
+
 # ---- 4: WiFi attack setup -----------------------------------
 step "Setting up WiFi attack environment..."
 
@@ -693,7 +709,7 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 # Filesystem access restrictions
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack /etc
+ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack /etc/resolv.conf
 ReadOnlyPaths=/etc/wpa_supplicant
 PrivateTmp=true
 
@@ -718,7 +734,7 @@ MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 
 # Syscall filtering
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service @mount
 SystemCallFilter=~@clock @debug @module @mount @obsolete @raw-io @reboot @swap
 SystemCallArchitectures=native
 

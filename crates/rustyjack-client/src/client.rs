@@ -10,8 +10,8 @@ use rustyjack_ipc::{
     HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse, JobCancelRequest,
     JobCancelResponse, JobKind, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,
     JobStatusResponse, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk,
-    StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse, VersionResponse,
-    ActiveInterfaceClearResponse, ActiveInterfaceResponse, InterfaceStatusRequest,
+    OpsConfig, StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse,
+    VersionResponse, ActiveInterfaceClearResponse, ActiveInterfaceResponse, InterfaceStatusRequest,
     InterfaceStatusResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse, BridgeCommand,
     DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand, LootCommand, MitmCommand,
     NotifyCommand, ProcessCommand, ReverseCommand, ScanCommand, StatusCommand, SystemCommand,
@@ -307,6 +307,23 @@ impl DaemonClient {
     pub async fn status(&mut self) -> Result<StatusResponse> {
         match self.request(RequestBody::Status).await? {
             ResponseBody::Ok(ResponseOk::Status(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn ops_config_get(&mut self) -> Result<OpsConfig> {
+        match self.request(RequestBody::OpsConfigGet).await? {
+            ResponseBody::Ok(ResponseOk::OpsConfig(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn ops_config_set(&mut self, ops: OpsConfig) -> Result<OpsConfig> {
+        match self.request(RequestBody::OpsConfigSet(ops)).await? {
+            ResponseBody::Ok(ResponseOk::OpsConfigSetAck { ops }) => Ok(ops),
+            ResponseBody::Ok(ResponseOk::OpsConfig(ops)) => Ok(ops),
             ResponseBody::Err(err) => Err(daemon_error(err)),
             _ => Err(anyhow!("unexpected response body")),
         }

@@ -10,14 +10,13 @@ use tokio::time;
 use tracing::{debug, instrument, warn};
 
 use rustyjack_ipc::{
-    endpoint_for_body, AuthzSummary, ClientHello, DaemonError, Endpoint, ErrorCode, FeatureFlag,
-    HelloAck, JobStartRequest, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
-    PROTOCOL_VERSION,
+    endpoint_for_body, AuthzSummary, ClientHello, DaemonError, ErrorCode, FeatureFlag, HelloAck,
+    RequestEnvelope, ResponseBody, ResponseEnvelope, PROTOCOL_VERSION,
 };
 
 use crate::auth::{
-    authorization_for_peer, peer_credentials, required_tier, required_tier_for_jobkind,
-    tier_allows,
+    authorization_for_peer, ops_allows, peer_credentials, required_ops_for_request,
+    required_tier_for_request, tier_allows,
 };
 use crate::config::DaemonConfig;
 use crate::dispatch::handle_request;
@@ -27,18 +26,13 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PROTOCOL_VIOLATIONS: usize = 3;
 const ERROR_REQUEST_ID: u64 = 0;
 
-fn build_feature_list(config: &DaemonConfig) -> Vec<FeatureFlag> {
+fn build_feature_list(_config: &DaemonConfig) -> Vec<FeatureFlag> {
     let mut features = Vec::new();
 
     // Always enabled features
     features.push(FeatureFlag::JobProgress);
     features.push(FeatureFlag::UdsTimeouts);
     features.push(FeatureFlag::GroupBasedAuth);
-
-    // Conditionally enabled features
-    if config.dangerous_ops_enabled {
-        features.push(FeatureFlag::DangerousOpsEnabled);
-    }
 
     features
 }
@@ -323,7 +317,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
         
         debug!("Processing request");
 
-        let required = required_tier(request.endpoint);
+        let required = required_tier_for_request(request.endpoint, &request.body);
         if !tier_allows(authz, required) {
             let _ = send_error_timed(
                 &mut stream,
@@ -337,27 +331,25 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
             continue;
         }
 
-        if request.endpoint == Endpoint::JobStart {
-            if let RequestBody::JobStart(JobStartRequest { ref job }) = request.body {
-                let job_required = required_tier_for_jobkind(&job.kind);
-                if !tier_allows(authz, job_required) {
-                    let _ = send_error_timed(
-                        &mut stream,
-                        PROTOCOL_VERSION,
-                        request.request_id,
-                        DaemonError::new(
-                            ErrorCode::Forbidden,
-                            "insufficient privileges for this job type",
-                            false,
-                        ),
-                        state.config.max_frame,
-                        state.config.write_timeout,
-                    )
-                    .await;
-                    continue;
-                }
-            }
+        let required_ops = required_ops_for_request(request.endpoint, &request.body);
+        let ops = state.ops_runtime.read().await;
+        if !ops_allows(&ops, required_ops) {
+            let _ = send_error_timed(
+                &mut stream,
+                PROTOCOL_VERSION,
+                request.request_id,
+                DaemonError::new(
+                    ErrorCode::Forbidden,
+                    "operation disabled by ops config",
+                    false,
+                ),
+                state.config.max_frame,
+                state.config.write_timeout,
+            )
+            .await;
+            continue;
         }
+        drop(ops);
 
         let response = handle_request(&state, request, peer).await;
         let payload = match serde_json::to_vec(&response) {

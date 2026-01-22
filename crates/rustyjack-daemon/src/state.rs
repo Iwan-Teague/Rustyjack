@@ -3,10 +3,12 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
+use tokio::sync::RwLock;
 
 use crate::config::DaemonConfig;
 use crate::jobs::JobManager;
 use crate::locks::LockManager;
+use crate::ops::OpsConfig;
 
 #[derive(Debug, Clone)]
 pub struct DaemonState {
@@ -15,6 +17,7 @@ pub struct DaemonState {
     pub jobs: Arc<JobManager>,
     pub locks: Arc<LockManager>,
     pub version: String,
+    pub ops_runtime: Arc<RwLock<OpsConfig>>,
 }
 
 impl DaemonState {
@@ -22,6 +25,7 @@ impl DaemonState {
         let start_time = Instant::now();
         let jobs = Arc::new(JobManager::new(config.job_retention));
         let locks = Arc::new(LockManager::new());
+        let ops_runtime = Arc::new(RwLock::new(config.ops));
         let version = env!("CARGO_PKG_VERSION").to_string();
         Self {
             config,
@@ -29,6 +33,7 @@ impl DaemonState {
             jobs,
             locks,
             version,
+            ops_runtime,
         }
     }
 

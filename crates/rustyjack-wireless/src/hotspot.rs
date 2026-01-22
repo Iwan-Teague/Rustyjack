@@ -61,7 +61,7 @@ impl Default for HotspotConfig {
     fn default() -> Self {
         Self {
             ap_interface: "wlan0".to_string(),
-            upstream_interface: "eth0".to_string(),
+            upstream_interface: String::new(),
             ssid: "rustyjack".to_string(),
             password: "rustyjack".to_string(),
             channel: 6,
@@ -442,6 +442,11 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     }
 
     let regdom = read_regdom_info();
+    if let Some(raw) = regdom.raw.as_deref() {
+        info!("[HOTSPOT] Regulatory domain: {}", raw);
+    } else {
+        info!("[HOTSPOT] Regulatory domain: unset");
+    }
     if !regdom.valid {
         let note = match regdom.raw.as_deref() {
             Some(raw) => format!("Regdom unset/invalid ({}); set a country code", raw),
@@ -931,10 +936,25 @@ fn persist_state(state: &HotspotState) -> Result<()> {
 }
 
 fn enable_ip_forwarding() -> Result<()> {
-    fs::write("/proc/sys/net/ipv4/ip_forward", "1\n")
-        .map_err(|e| WirelessError::System(format!("Failed to enable ip_forward: {}", e)))?;
-    fs::write("/proc/sys/net/ipv4/conf/all/forwarding", "1\n")
-        .map_err(|e| WirelessError::System(format!("Failed to enable all/forwarding: {}", e)))?;
+    ensure_sysctl_enabled("/proc/sys/net/ipv4/ip_forward", "ip_forward")?;
+    ensure_sysctl_enabled("/proc/sys/net/ipv4/conf/all/forwarding", "all/forwarding")?;
+    Ok(())
+}
+
+fn ensure_sysctl_enabled(path: &str, label: &str) -> Result<()> {
+    if let Ok(current) = fs::read_to_string(path) {
+        if current.trim() == "1" {
+            return Ok(());
+        }
+    }
+
+    fs::write(path, "1\n").map_err(|e| {
+        WirelessError::System(format!(
+            "Failed to enable {}: {}. If running under systemd with ProtectKernelTunables=true, \
+             configure sysctls at install time.",
+            label, e
+        ))
+    })?;
     Ok(())
 }
 

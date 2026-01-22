@@ -29,7 +29,7 @@ use rustyjack_commands::{
     WifiProfileShowArgs,
 };
 use rustyjack_encryption::{clear_encryption_key, set_encryption_key};
-use rustyjack_ipc::{InterfaceSelectJobResult, JobState};
+use rustyjack_ipc::{InterfaceSelectJobResult, JobState, OpsConfig};
 use serde_json::{self, Value};
 use tempfile::{NamedTempFile, TempPath};
 use walkdir::WalkDir;
@@ -50,11 +50,18 @@ use crate::{
     },
     input::{Button, ButtonPad},
     menu::{
-        menu_title, ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, PipelineType,
-        TxPowerSetting,
+        menu_title, ColorTarget, LootSection, MenuAction, MenuEntry, MenuTree, OpsCategory,
+        PipelineType, TxPowerSetting,
+    },
+    ops::{
+        runner::OperationRunner,
+        wifi::{DeauthAttackOp, PmkidCaptureOp, ProbeSniffOp},
+        OperationContext,
     },
     stats::StatsSampler,
     types::*,
+    ui::layout::MENU_VISIBLE_ITEMS,
+    ui::UiContext,
     util::*,
 };
 
@@ -73,12 +80,19 @@ pub struct App {
     active_mitm: Option<MitmSession>,
 }
 
-/// Result of checking for cancel during an attack
+/// Result of checking for cancel during an operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CancelAction {
-    Continue,   // User wants to continue attack
-    GoBack,     // User wants to go back one menu
-    GoMainMenu, // User wants to go to main menu
+enum CancelDecision {
+    Continue,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmChoice {
+    Yes,
+    No,
+    Back,
+    Cancel,
 }
 
 /// Result from pipeline execution
@@ -114,9 +128,129 @@ impl App {
             Button::Left => ButtonAction::Back,
             Button::Right | Button::Select => ButtonAction::Select,
             Button::Key1 => ButtonAction::Refresh,
-            Button::Key2 => ButtonAction::MainMenu,
+            Button::Key2 => ButtonAction::Cancel,
             Button::Key3 => ButtonAction::Reboot,
         }
+    }
+
+    /// Reset UI state and return to Home with isolation cleanup.
+    /// This is the only place that clears global UI/daemon state for Home.
+    fn go_home(&mut self) -> Result<()> {
+        self.dashboard_view = None;
+        self.active_mitm = None;
+        self.menu_state.home();
+
+        if let Err(e) = self.core.clear_active_interface() {
+            tracing::warn!("clear_active_interface failed: {:#}", e);
+            if let Err(err) = self.show_error_dialog("Home cleanup failed", &e) {
+                tracing::warn!("Failed to show error dialog: {:#}", err);
+            }
+        }
+
+        self.config.settings.active_network_interface.clear();
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
+        Ok(())
+    }
+
+    fn save_config_file(&mut self, path: &Path) -> Result<()> {
+        self.config
+            .save(path)
+            .with_context(|| format!("saving {}", path.display()))
+    }
+
+    fn save_config_warn(&mut self, path: &Path, context: &str) {
+        if let Err(err) = self.save_config_file(path) {
+            tracing::warn!("{}: {:#}", context, err);
+        }
+    }
+
+    fn confirm_yes_no<I, S>(&mut self, title: &str, body: I) -> Result<ConfirmChoice>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut idx = 0usize;
+        let body_lines: Vec<String> = body
+            .into_iter()
+            .map(|line| line.as_ref().to_string())
+            .collect();
+
+        loop {
+            let overlay = self.stats.snapshot();
+            let mut content = Vec::with_capacity(body_lines.len() + 4);
+            content.push(title.to_string());
+            content.extend(body_lines.iter().cloned());
+            content.push(String::new());
+            content.push(format!("{}Yes", if idx == 0 { "> " } else { "  " }));
+            content.push(format!("{}No", if idx == 1 { "> " } else { "  " }));
+            self.display.draw_dialog(&content, &overlay)?;
+
+            let button = self.buttons.wait_for_press()?;
+            match self.map_button(button) {
+                ButtonAction::Up | ButtonAction::Down => idx ^= 1,
+                ButtonAction::Select => {
+                    return Ok(if idx == 0 {
+                        ConfirmChoice::Yes
+                    } else {
+                        ConfirmChoice::No
+                    })
+                }
+                ButtonAction::Back => return Ok(ConfirmChoice::Back),
+                ButtonAction::Cancel => return Ok(ConfirmChoice::Cancel),
+                ButtonAction::Refresh => {}
+                ButtonAction::Reboot => {
+                    self.confirm_reboot()?;
+                }
+            }
+        }
+    }
+
+    fn confirm_yes_no_bool<I, S>(&mut self, title: &str, body: I) -> Result<bool>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Ok(matches!(
+            self.confirm_yes_no(title, body)?,
+            ConfirmChoice::Yes
+        ))
+    }
+
+    fn confirm_cancel(&mut self, label: &str) -> Result<bool> {
+        let choice = self.confirm_yes_no(
+            &format!("Cancel {label}?"),
+            [
+                "Stop the operation?",
+                "Yes = stop now",
+                "No = keep running",
+            ],
+        )?;
+        Ok(matches!(choice, ConfirmChoice::Yes | ConfirmChoice::Cancel))
+    }
+
+    fn check_cancel_request(&mut self, label: &str) -> Result<CancelDecision> {
+        if let Some(button) = self.buttons.try_read()? {
+            if matches!(self.map_button(button), ButtonAction::Cancel) {
+                if self.confirm_cancel(label)? {
+                    return Ok(CancelDecision::Cancel);
+                }
+            }
+        }
+        Ok(CancelDecision::Continue)
+    }
+
+    fn show_error_dialog(&mut self, title: &str, err: &anyhow::Error) -> Result<()> {
+        let mut lines = Vec::new();
+        for (idx, cause) in err.chain().enumerate() {
+            if idx == 0 {
+                lines.push(format!("Error: {}", cause));
+            } else {
+                lines.push(format!("Cause: {}", cause));
+            }
+        }
+        lines.push("Press SELECT to continue".to_string());
+        self.show_message(title, lines)
     }
 
     fn try_load_saved_key(&mut self) {
@@ -130,7 +264,13 @@ impl App {
         }
         if let Ok(key) = self.parse_key_file(&key_path) {
             clear_encryption_key();
-            if set_encryption_key(&key).is_ok() {
+            if let Err(err) = set_encryption_key(&key) {
+                tracing::warn!(
+                    "Failed to load encryption key from {}: {:#}",
+                    key_path.display(),
+                    err
+                );
+            } else {
                 tracing::info!(
                     "Loaded encryption key from saved path {}",
                     key_path.display()
@@ -154,7 +294,13 @@ impl App {
             return;
         }
         if let Ok(key) = self.parse_key_file(&key_path) {
-            let _ = set_encryption_key(&key);
+            if let Err(err) = set_encryption_key(&key) {
+                tracing::warn!(
+                    "Failed to load encryption key from {}: {:#}",
+                    key_path.display(),
+                    err
+                );
+            }
         }
     }
 
@@ -352,6 +498,70 @@ impl App {
         status
     }
 
+    fn ops_category_label(category: OpsCategory) -> &'static str {
+        match category {
+            OpsCategory::Wifi => "WiFi Ops",
+            OpsCategory::Ethernet => "Ethernet Ops",
+            OpsCategory::Hotspot => "Hotspot Ops",
+            OpsCategory::Portal => "Portal Ops",
+            OpsCategory::Storage => "Storage Ops",
+            OpsCategory::Update => "Update Ops",
+            OpsCategory::System => "System Ops",
+            OpsCategory::Dev => "Dev Ops",
+            OpsCategory::Offensive => "Offensive Ops",
+            OpsCategory::Loot => "Loot Ops",
+            OpsCategory::Process => "Process Ops",
+        }
+    }
+
+    fn ops_enabled_in_overlay(status: &StatusOverlay, category: OpsCategory) -> bool {
+        match category {
+            OpsCategory::Wifi => status.ops_wifi,
+            OpsCategory::Ethernet => status.ops_ethernet,
+            OpsCategory::Hotspot => status.ops_hotspot,
+            OpsCategory::Portal => status.ops_portal,
+            OpsCategory::Storage => status.ops_storage,
+            OpsCategory::Update => status.ops_update,
+            OpsCategory::System => status.ops_system,
+            OpsCategory::Dev => status.ops_dev,
+            OpsCategory::Offensive => status.ops_offensive,
+            OpsCategory::Loot => status.ops_loot,
+            OpsCategory::Process => status.ops_process,
+        }
+    }
+
+    fn ops_enabled_in_config(config: &OpsConfig, category: OpsCategory) -> bool {
+        match category {
+            OpsCategory::Wifi => config.wifi_ops,
+            OpsCategory::Ethernet => config.eth_ops,
+            OpsCategory::Hotspot => config.hotspot_ops,
+            OpsCategory::Portal => config.portal_ops,
+            OpsCategory::Storage => config.storage_ops,
+            OpsCategory::Update => config.update_ops,
+            OpsCategory::System => config.system_ops,
+            OpsCategory::Dev => config.dev_ops,
+            OpsCategory::Offensive => config.offensive_ops,
+            OpsCategory::Loot => config.loot_ops,
+            OpsCategory::Process => config.process_ops,
+        }
+    }
+
+    fn set_ops_config_value(config: &mut OpsConfig, category: OpsCategory, enabled: bool) {
+        match category {
+            OpsCategory::Wifi => config.wifi_ops = enabled,
+            OpsCategory::Ethernet => config.eth_ops = enabled,
+            OpsCategory::Hotspot => config.hotspot_ops = enabled,
+            OpsCategory::Portal => config.portal_ops = enabled,
+            OpsCategory::Storage => config.storage_ops = enabled,
+            OpsCategory::Update => config.update_ops = enabled,
+            OpsCategory::System => config.system_ops = enabled,
+            OpsCategory::Dev => config.dev_ops = enabled,
+            OpsCategory::Offensive => config.offensive_ops = enabled,
+            OpsCategory::Loot => config.loot_ops = enabled,
+            OpsCategory::Process => config.process_ops = enabled,
+        }
+    }
+
     fn read_interface_mac(&self, interface: &str) -> Option<String> {
         if interface.is_empty() {
             return None;
@@ -454,7 +664,7 @@ impl App {
         let content = vec![
             "Confirm reboot".to_string(),
             "SELECT = Reboot".to_string(),
-            "LEFT = Cancel".to_string(),
+            "LEFT/KEY2 = Cancel".to_string(),
         ];
 
         self.display.draw_dialog(&content, &overlay)?;
@@ -473,7 +683,7 @@ impl App {
                         }
                     }
                 }
-                ButtonAction::Back | ButtonAction::MainMenu => {
+                ButtonAction::Back | ButtonAction::Cancel => {
                     // Cancel and return
                     break;
                 }
@@ -485,68 +695,6 @@ impl App {
             }
         }
         Ok(())
-    }
-
-    /// Check if user pressed cancel button during attack, show confirmation dialog
-    fn check_attack_cancel(&mut self, attack_name: &str) -> Result<CancelAction> {
-        // Non-blocking check for button press
-        if let Some(button) = self.buttons.try_read()? {
-            let action = self.map_button(button);
-            match action {
-                ButtonAction::Back => {
-                    return self.confirm_cancel_attack(attack_name, CancelAction::GoBack);
-                }
-                ButtonAction::MainMenu => {
-                    return self.confirm_cancel_attack(attack_name, CancelAction::GoMainMenu);
-                }
-                _ => {}
-            }
-        }
-        Ok(CancelAction::Continue)
-    }
-
-    /// Show cancel confirmation dialog
-    fn confirm_cancel_attack(
-        &mut self,
-        attack_name: &str,
-        cancel_to: CancelAction,
-    ) -> Result<CancelAction> {
-        let overlay = self.stats.snapshot();
-        let dest = match cancel_to {
-            CancelAction::GoBack => "previous menu",
-            CancelAction::GoMainMenu => "main menu",
-            CancelAction::Continue => return Ok(CancelAction::Continue),
-        };
-
-        let content = vec![
-            format!("Cancel {}?", attack_name),
-            "".to_string(),
-            format!("Return to {}", dest),
-            "".to_string(),
-            "SELECT = Cancel attack".to_string(),
-            "LEFT = Continue attack".to_string(),
-        ];
-
-        self.display.draw_dialog(&content, &overlay)?;
-
-        loop {
-            let button = self.buttons.wait_for_press()?;
-            match self.map_button(button) {
-                ButtonAction::Select => {
-                    // User confirmed cancel
-                    return Ok(cancel_to);
-                }
-                ButtonAction::Back | ButtonAction::Refresh => {
-                    // User wants to continue attack
-                    return Ok(CancelAction::Continue);
-                }
-                ButtonAction::MainMenu => {
-                    // Change to go to main menu instead
-                    return Ok(CancelAction::GoMainMenu);
-                }
-                _ => {}
-            }
-        }
     }
 
     /// Run a command with cancel support - shows progress and allows user to cancel
@@ -570,69 +718,40 @@ impl App {
             let elapsed = start.elapsed().as_secs();
 
             // Check for cancel (non-blocking button check)
-            match self.check_attack_cancel(attack_name)? {
-                CancelAction::Continue => {}
-                CancelAction::GoBack => {
-                    self.show_progress(
-                        attack_name,
-                        ["Cancelling...", "Please wait", ""],
-                    )?;
-                    let _ = self.core.cancel_job(job_id);
-
-                    let cancel_start = Instant::now();
-                    while cancel_start.elapsed() < Duration::from_secs(3) {
-                        let st = self.core.job_status(job_id)?;
-                        if matches!(
-                            st.state,
-                            JobState::Cancelled | JobState::Failed | JobState::Completed
-                        ) {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-
-                    self.show_message(
-                        &format!("{} Cancelled", attack_name),
-                        [
-                            "Attack stopped early",
-                            "",
-                            "Partial results may be",
-                            "saved in loot folder",
-                        ],
-                    )?;
+            if matches!(self.check_cancel_request(attack_name)?, CancelDecision::Cancel) {
+                self.show_progress(
+                    attack_name,
+                    ["Cancelling...", "Please wait", ""],
+                )?;
+                if let Err(e) = self.core.cancel_job(job_id) {
+                    self.show_error_dialog(&format!("Cancel failed: {attack_name}"), &e)?;
+                    self.go_home()?;
                     return Ok(None);
                 }
-                CancelAction::GoMainMenu => {
-                    self.menu_state.home();
-                    self.show_progress(
-                        attack_name,
-                        ["Cancelling...", "Please wait", ""],
-                    )?;
-                    let _ = self.core.cancel_job(job_id);
 
-                    let cancel_start = Instant::now();
-                    while cancel_start.elapsed() < Duration::from_secs(3) {
-                        let st = self.core.job_status(job_id)?;
-                        if matches!(
-                            st.state,
-                            JobState::Cancelled | JobState::Failed | JobState::Completed
-                        ) {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(100));
+                let cancel_start = Instant::now();
+                while cancel_start.elapsed() < Duration::from_secs(3) {
+                    let st = self.core.job_status(job_id)?;
+                    if matches!(
+                        st.state,
+                        JobState::Cancelled | JobState::Failed | JobState::Completed
+                    ) {
+                        break;
                     }
-
-                    self.show_message(
-                        &format!("{} Cancelled", attack_name),
-                        [
-                            "Attack stopped early",
-                            "",
-                            "Partial results may be",
-                            "saved in loot folder",
-                        ],
-                    )?;
-                    return Ok(None);
+                    std::thread::sleep(Duration::from_millis(100));
                 }
+
+                self.show_message(
+                    &format!("{attack_name} Cancelled"),
+                    [
+                        "Operation stopped early",
+                        "",
+                        "Partial results may be",
+                        "saved in loot folder",
+                    ],
+                )?;
+                self.go_home()?;
+                return Ok(None);
             }
 
             if last_status.is_none() || last_poll.elapsed() >= poll_interval {
@@ -699,11 +818,11 @@ impl App {
                 };
 
                 let msg = if duration_secs > 0 && elapsed < duration_secs {
-                    format!("{}s/{}s [LEFT=Cancel]", elapsed, duration_secs)
+                    format!("{}s/{}s [KEY2=Cancel]", elapsed, duration_secs)
                 } else if duration_secs > 0 {
-                    "Finalizing... [LEFT=Cancel]".to_string()
+                    "Finalizing... [KEY2=Cancel]".to_string()
                 } else {
-                    format!("Elapsed: {}s [LEFT/Main=Stop]", elapsed)
+                    format!("Elapsed: {}s [KEY2=Cancel]", elapsed)
                 };
 
                 let overlay = self.stats.snapshot();
@@ -766,11 +885,10 @@ impl MenuState {
             self.selection -= 1;
         }
         // Ensure selection is inside visible window
-        const VISIBLE: usize = 9;
         if self.selection < self.offset {
             self.offset = self.selection;
-        } else if self.selection >= self.offset + VISIBLE {
-            self.offset = self.selection.saturating_sub(VISIBLE - 1);
+        } else if self.selection >= self.offset + MENU_VISIBLE_ITEMS {
+            self.offset = self.selection.saturating_sub(MENU_VISIBLE_ITEMS - 1);
         }
     }
 
@@ -781,11 +899,10 @@ impl MenuState {
         }
         self.selection = (self.selection + 1) % total;
         // Ensure selection is inside visible window
-        const VISIBLE: usize = 9;
         if self.selection < self.offset {
             self.offset = self.selection;
-        } else if self.selection >= self.offset + VISIBLE {
-            self.offset = self.selection.saturating_sub(VISIBLE - 1);
+        } else if self.selection >= self.offset + MENU_VISIBLE_ITEMS {
+            self.offset = self.selection.saturating_sub(MENU_VISIBLE_ITEMS - 1);
         }
     }
 
@@ -803,7 +920,7 @@ enum ButtonAction {
     Back,
     Select,
     Refresh,
-    MainMenu,
+    Cancel,
     Reboot,
 }
 
@@ -855,13 +972,12 @@ impl App {
 
         // Show splash screen during initialization
         let splash_path = root.join("img").join("rustyjack.png");
-        let _ = display.show_splash_screen(&splash_path);
+        if let Err(err) = display.show_splash_screen(&splash_path) {
+            tracing::warn!("Splash screen failed: {:#}", err);
+        }
 
         // Let splash show while stats sampler starts up
         let stats = StatsSampler::spawn(core.clone(), config.pins.status_led_pin);
-
-        // Give splash screen time to be visible (1.5 seconds)
-        thread::sleep(Duration::from_millis(1500));
 
         let mut app = Self {
             core,
@@ -910,11 +1026,7 @@ impl App {
                     ButtonAction::Refresh => {
                         // force redraw; nothing else required (loop will redraw)
                     }
-                    ButtonAction::MainMenu => {
-                        // Exit dashboard and go to main menu
-                        self.dashboard_view = None;
-                        self.menu_state.home();
-                    }
+                    ButtonAction::Cancel => {}
                     ButtonAction::Reboot => {
                         self.confirm_reboot()?;
                     }
@@ -928,33 +1040,21 @@ impl App {
                     ButtonAction::Up => self.menu_state.move_up(entries.len()),
                     ButtonAction::Down => self.menu_state.move_down(entries.len()),
                     ButtonAction::Back => {
-                        // HARDWARE INTERFACE ISOLATION:
-                        // Clear active interface when returning to main menu
-                        let was_at_main = self.menu_state.path() == "a";
                         self.menu_state.back();
-                        let now_at_main = self.menu_state.path() == "a";
-                        
-                        if !was_at_main && now_at_main {
-                            // Returned to main menu - clear active interface (isolate all)
-                            if let Err(e) = self.core.clear_active_interface() {
-                                tracing::warn!("Failed to clear active interface on return to main: {}", e);
-                            }
-                        }
                     }
                     ButtonAction::Select => {
                         if let Some(entry) = entries.get(self.menu_state.selection) {
                             let action = entry.action.clone();
                             if let Err(e) = self.execute_action(action) {
                                 tracing::error!("Menu action failed: {:#}", e);
-                                let msg = shorten_for_display(&e.to_string(), 90);
-                                self.show_message("Error", ["Operation failed", &msg])?;
+                                self.show_error_dialog("Operation failed", &e)?;
                             }
                         }
                     }
                     ButtonAction::Refresh => {
                         // Force refresh — nothing required here because the loop redraws
                     }
-                    ButtonAction::MainMenu => self.menu_state.home(),
+                    ButtonAction::Cancel => {}
                     ButtonAction::Reboot => self.confirm_reboot()?,
                 }
             }
@@ -1015,6 +1115,11 @@ impl App {
                         "OFF"
                     };
                     entry.label = format!("Passive [{}]", state);
+                }
+                MenuAction::ToggleOps(category) => {
+                    let enabled = Self::ops_enabled_in_overlay(&status, *category);
+                    let state = if enabled { "ON" } else { "OFF" };
+                    entry.label = format!("{} [{}]", Self::ops_category_label(*category), state);
                 }
                 MenuAction::Submenu("aops") => {
                     entry.label = format!("Mode: {}", self.mode_display_name());
@@ -1092,7 +1197,6 @@ impl App {
         // When there are more entries than fit on-screen, show a sliding window
         // so the selected item is always visible. MenuState::offset tracks the
         // first item index in the current view.
-        const VISIBLE: usize = 9;
         let total = entries.len();
         if self.menu_state.selection >= total && total > 0 {
             self.menu_state.selection = total - 1;
@@ -1103,12 +1207,12 @@ impl App {
         }
 
         let start = self.menu_state.offset.min(total);
-        let _end = (start + VISIBLE).min(total);
+        let _end = (start + MENU_VISIBLE_ITEMS).min(total);
 
         let labels: Vec<String> = entries
             .iter()
             .skip(start)
-            .take(VISIBLE)
+            .take(MENU_VISIBLE_ITEMS)
             .map(|entry| entry.label.clone())
             .collect();
 
@@ -1135,6 +1239,7 @@ impl App {
             MenuAction::SaveConfig => self.save_config()?,
             MenuAction::SetColor(target) => self.pick_color(target)?,
             MenuAction::RestartSystem => self.restart_system()?,
+            MenuAction::SystemUpdate => self.system_update()?,
             MenuAction::SecureShutdown => self.secure_shutdown()?,
             MenuAction::Loot(section) => self.show_loot(section)?,
             MenuAction::DiscordUpload => self.discord_upload()?,
@@ -1150,11 +1255,11 @@ impl App {
             MenuAction::ViewInterfaceStatus => self.view_interface_status()?,
             MenuAction::InstallWifiDrivers => self.install_wifi_drivers()?,
             MenuAction::ScanNetworks => self.scan_wifi_networks()?,
-            MenuAction::DeauthAttack => self.launch_deauth_attack()?,
+            MenuAction::DeauthAttack => self.run_operation(DeauthAttackOp::new())?,
             MenuAction::ConnectKnownNetwork => self.connect_known_network()?,
             MenuAction::EvilTwinAttack => self.launch_evil_twin()?,
-            MenuAction::ProbeSniff => self.launch_probe_sniff()?,
-            MenuAction::PmkidCapture => self.launch_pmkid_capture()?,
+            MenuAction::ProbeSniff => self.run_operation(ProbeSniffOp::new())?,
+            MenuAction::PmkidCapture => self.run_operation(PmkidCaptureOp::new())?,
             MenuAction::CrackHandshake => self.launch_crack_handshake()?,
             MenuAction::KarmaAttack => self.launch_karma_attack()?,
             MenuAction::WifiStatus => self.show_wifi_status()?,
@@ -1186,6 +1291,7 @@ impl App {
             MenuAction::RestoreMac => self.restore_mac()?,
             MenuAction::SetTxPower(level) => self.set_tx_power(level)?,
             MenuAction::TogglePassiveMode => self.toggle_passive_mode()?,
+            MenuAction::ToggleOps(category) => self.toggle_ops(category)?,
             MenuAction::PassiveRecon => self.launch_passive_recon()?,
             MenuAction::EthernetDiscovery => self.launch_ethernet_discovery()?,
             MenuAction::EthernetPortScan => self.launch_ethernet_port_scan()?,
@@ -1213,6 +1319,23 @@ impl App {
             MenuAction::ShowInfo => {} // No-op for informational entries
         }
         Ok(())
+    }
+
+    fn run_operation<O: crate::ops::Operation>(&mut self, mut op: O) -> Result<()> {
+        let result = {
+            let mut ui = UiContext::new(
+                &mut self.display,
+                &mut self.buttons,
+                &self.stats,
+                &mut self.core,
+                &mut self.config,
+                &self.root,
+            );
+            let mut ctx = OperationContext::new(ui);
+            OperationRunner::run(&mut ctx, &mut op)
+        };
+        result?;
+        self.go_home()
     }
 
     #[allow(dead_code)]
@@ -1269,10 +1392,7 @@ impl App {
                     }
                 }
                 ButtonAction::Select | ButtonAction::Back => break,
-                ButtonAction::MainMenu => {
-                    self.menu_state.home();
-                    break;
-                }
+                ButtonAction::Cancel => {}
                 ButtonAction::Refresh => {
                     // redraw the dialog so user can refresh view content if desired
                     needs_redraw = true;
@@ -1377,7 +1497,7 @@ impl App {
         self.config.settings.logs_enabled = !self.config.settings.logs_enabled;
         self.apply_log_setting()?;
         let config_path = self.root.join("gui_conf.json");
-        let _ = self.config.save(&config_path);
+        self.save_config_file(&config_path)?;
         let state = if self.config.settings.logs_enabled {
             "ON"
         } else {
@@ -1682,7 +1802,7 @@ impl App {
         lines: &[String],
         truncated: bool,
     ) -> Result<()> {
-        const LINES_PER_PAGE: usize = 9; // Reduced slightly to fit position indicator
+        const LINES_PER_PAGE: usize = 7; // Fits below expanded header
         const MAX_TITLE_CHARS: usize = 15;
 
         let total_lines = lines.len();
@@ -1740,10 +1860,7 @@ impl App {
                     ButtonAction::Back => {
                         return Ok(());
                     }
-                    ButtonAction::MainMenu => {
-                        self.menu_state.home();
-                        return Ok(());
-                    }
+                    ButtonAction::Cancel => {}
                     ButtonAction::Refresh => {
                         needs_redraw = true;
                     }
@@ -1762,6 +1879,154 @@ impl App {
             Err(err) => {
                 let msg = shorten_for_display(&err.to_string(), 90);
                 self.show_message("Reboot Failed", [msg])
+            }
+        }
+    }
+
+    fn system_update(&mut self) -> Result<()> {
+        let options = vec![
+            "Update from USB bundle".to_string(),
+            "Use URL from USB file".to_string(),
+            "Cancel".to_string(),
+        ];
+
+        let choice = self.choose_from_list("System Update", &options)?;
+        let Some(choice) = choice else {
+            return Ok(());
+        };
+
+        let url = match choice {
+            0 => {
+                let Some(path) =
+                    self.browse_usb_for_file("Update Bundle", Some(&["zst"]))?
+                else {
+                    return Ok(());
+                };
+                format!("file://{}", path.display())
+            }
+            1 => {
+                let Some(path) =
+                    self.browse_usb_for_file("Update URL", Some(&["txt", "url"]))?
+                else {
+                    return Ok(());
+                };
+                let contents = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let url = contents.lines().next().unwrap_or("").trim().to_string();
+                if url.is_empty() {
+                    self.show_message("Update URL", ["URL file is empty"])?;
+                    return Ok(());
+                }
+                url
+            }
+            _ => return Ok(()),
+        };
+
+        let confirm_lines = vec![
+            format!("Source: {}", shorten_for_display(&url, 18)),
+            "Proceed with update?".to_string(),
+        ];
+        if !self.confirm_yes_no_bool("Apply update?", &confirm_lines)? {
+            self.go_home()?;
+            return Ok(());
+        }
+
+        let job_id = match self.core.start_system_update(&url) {
+            Ok(job_id) => job_id,
+            Err(err) => {
+                let msg = shorten_for_display(&err.to_string(), 90);
+                self.show_message("Update Error", [msg])?;
+                return Ok(());
+            }
+        };
+
+        self.run_update_job(job_id)
+    }
+
+    fn run_update_job(&mut self, job_id: u64) -> Result<()> {
+        let title = "System Update";
+        let mut last_msg: Option<String> = None;
+        let mut last_percent: Option<u8> = None;
+
+        loop {
+            let status = match self.core.job_status(job_id) {
+                Ok(status) => status,
+                Err(err) => {
+                    let msg = shorten_for_display(&err.to_string(), 90);
+                    self.show_message("Update Error", [msg])?;
+                    return Ok(());
+                }
+            };
+
+            let (percent, message) = if let Some(progress) = status.progress.clone() {
+                (
+                    progress.percent,
+                    format!("{}% {}", progress.percent, progress.message),
+                )
+            } else {
+                (0, "Queued...".to_string())
+            };
+
+            if last_msg.as_ref() != Some(&message) || last_percent != Some(percent) {
+                let overlay = self.stats.snapshot();
+                self.display
+                    .draw_progress_dialog(title, &message, percent as f32, &overlay)?;
+                last_msg = Some(message);
+                last_percent = Some(percent);
+            }
+
+            match status.state {
+                JobState::Queued | JobState::Running => {
+                    if matches!(
+                        self.check_cancel_request("Update")?,
+                        CancelDecision::Cancel
+                    ) {
+                        if let Err(err) = self.core.cancel_job(job_id) {
+                            self.show_error_dialog("Update cancel failed", &err)?;
+                            return Ok(());
+                        }
+                        let cancel_start = std::time::Instant::now();
+                        while cancel_start.elapsed() < Duration::from_secs(3) {
+                            let st = self.core.job_status(job_id)?;
+                            if matches!(
+                                st.state,
+                                JobState::Cancelled | JobState::Failed | JobState::Completed
+                            ) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        self.show_message("Update Cancelled", ["Update was cancelled"])?;
+                        self.go_home()?;
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                JobState::Completed => {
+                    self.show_message(
+                        "Update Applied",
+                        ["Update complete", "Daemon restart may take a moment"],
+                    )?;
+                    self.go_home()?;
+                    return Ok(());
+                }
+                JobState::Cancelled => {
+                    self.show_message("Update Cancelled", ["Update was cancelled"])?;
+                    self.go_home()?;
+                    return Ok(());
+                }
+                JobState::Failed => {
+                    let mut lines = vec!["Update failed".to_string()];
+                    if let Some(err) = status.error {
+                        lines.push(err.message);
+                        if let Some(detail) = err.detail {
+                            lines.push(shorten_for_display(&detail, 120));
+                        }
+                    }
+                    self.show_message("Update Error", lines.iter().map(|s| s.as_str()))?;
+                    self.go_home()?;
+                    return Ok(());
+                }
             }
         }
     }
@@ -1792,7 +2057,9 @@ impl App {
             "Secure Shutdown",
             ["Wiping memory...", "This may take a few seconds"],
         )?;
-        let _ = self.best_effort_ram_wipe();
+        if let Err(err) = self.best_effort_ram_wipe() {
+            tracing::warn!("RAM wipe failed: {:#}", err);
+        }
 
         // Power off
         self.show_progress("Secure Shutdown", ["Powering off now...", ""])?;
@@ -1855,7 +2122,6 @@ impl App {
             return Ok(None);
         }
 
-        const VISIBLE: usize = 9;
         let mut index: usize = 0;
         let mut offset: usize = 0;
 
@@ -1864,14 +2130,19 @@ impl App {
             // Clamp offset so selected is visible
             if index < offset {
                 offset = index;
-            } else if index >= offset + VISIBLE {
-                offset = index.saturating_sub(VISIBLE - 1);
+            } else if index >= offset + MENU_VISIBLE_ITEMS {
+                offset = index.saturating_sub(MENU_VISIBLE_ITEMS - 1);
             }
 
             let overlay = self.stats.snapshot();
 
             // Build window slice of labels
-            let slice: Vec<String> = items.iter().skip(offset).take(VISIBLE).cloned().collect();
+            let slice: Vec<String> = items
+                .iter()
+                .skip(offset)
+                .take(MENU_VISIBLE_ITEMS)
+                .cloned()
+                .collect();
             // Display menu with selected relative index
             let displayed_selected = index.saturating_sub(offset);
             self.display
@@ -1889,10 +2160,7 @@ impl App {
                 ButtonAction::Down => index = (index + 1) % total,
                 ButtonAction::Select => return Ok(Some(index)),
                 ButtonAction::Back => return Ok(None),
-                ButtonAction::MainMenu => {
-                    self.menu_state.home();
-                    return Ok(None);
-                }
+                ButtonAction::Cancel => return Ok(None),
                 ButtonAction::Reboot => {
                     self.confirm_reboot()?;
                 }
@@ -1918,10 +2186,7 @@ impl App {
                 ButtonAction::Down => value = (value - 1).max(0),
                 ButtonAction::Select => return Ok(Some(value as u8)),
                 ButtonAction::Back => return Ok(None),
-                ButtonAction::MainMenu => {
-                    self.menu_state.home();
-                    return Ok(None);
-                }
+                ButtonAction::Cancel => return Ok(None),
                 ButtonAction::Reboot => {
                     self.confirm_reboot()?;
                 }
@@ -2543,10 +2808,14 @@ impl App {
         let dest_plain = self.root.join("discord_webhook.txt");
         let dest_enc = self.root.join("discord_webhook.txt.enc");
         if dest_plain.exists() {
-            let _ = fs::remove_file(&dest_plain);
+            if let Err(err) = fs::remove_file(&dest_plain) {
+                tracing::warn!("Failed to remove {}: {:#}", dest_plain.display(), err);
+            }
         }
         if dest_enc.exists() {
-            let _ = fs::remove_file(&dest_enc);
+            if let Err(err) = fs::remove_file(&dest_enc) {
+                tracing::warn!("Failed to remove {}: {:#}", dest_enc.display(), err);
+            }
         }
 
         if enc {
@@ -2640,7 +2909,7 @@ impl App {
                 set_encryption_key(&key)?;
                 self.config.settings.encryption_key_path = file_path.to_string_lossy().to_string();
                 let config_path = self.root.join("gui_conf.json");
-                let _ = self.config.save(&config_path);
+                self.save_config_file(&config_path)?;
                 self.show_message(
                     "Encryption",
                     [
@@ -2676,12 +2945,16 @@ impl App {
         let mut data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         let dest = path.with_file_name(format!("{filename}.enc"));
         if dest.exists() {
-            let _ = fs::remove_file(&dest);
+            if let Err(err) = fs::remove_file(&dest) {
+                tracing::warn!("Failed to remove {}: {:#}", dest.display(), err);
+            }
         }
         rustyjack_encryption::encrypt_to_file(&dest, &data)
             .with_context(|| format!("encrypting {}", dest.display()))?;
         data.zeroize();
-        let _ = fs::remove_file(path);
+        if let Err(err) = fs::remove_file(path) {
+            tracing::warn!("Failed to remove {}: {:#}", path.display(), err);
+        }
         clear_encryption_key();
         Ok(dest)
     }
@@ -2733,7 +3006,7 @@ impl App {
         set_encryption_key(&key)?;
         self.config.settings.encryption_key_path = key_path.to_string_lossy().to_string();
         let config_path = self.root.join("gui_conf.json");
-        let _ = self.config.save(&config_path);
+        self.save_config_file(&config_path)?;
 
         let res = self.show_message(
             "Encryption",
@@ -2791,7 +3064,8 @@ impl App {
             self.config.settings.encryption_enabled = false;
         }
         rustyjack_encryption::set_wifi_profile_encryption(self.wifi_encryption_active());
-        let _ = self.config.save(&self.root.join("gui_conf.json"));
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
         let res = self.show_message(
             "Encryption",
             [format!(
@@ -2810,44 +3084,52 @@ impl App {
     fn ensure_keyfile_available(&mut self) -> bool {
         let path_str = self.config.settings.encryption_key_path.clone();
         if path_str.is_empty() {
-            let _ = self.show_message(
+            if let Err(err) = self.show_message(
                 "Encryption",
                 ["No keyfile path set", "Generate or load a key first"],
-            );
+            ) {
+                tracing::warn!("Failed to show encryption message: {:#}", err);
+            }
             return false;
         }
         let path = PathBuf::from(&path_str);
         if !path.exists() {
-            let _ = self.show_message(
+            if let Err(err) = self.show_message(
                 "Encryption",
                 [
                     "Keyfile missing at saved path",
                     &shorten_for_display(&path_str, 18),
                 ],
-            );
+            ) {
+                tracing::warn!("Failed to show encryption message: {:#}", err);
+            }
             return false;
         }
         match self.parse_key_file(&path) {
             Ok(key) => {
                 clear_encryption_key();
                 if let Err(e) = set_encryption_key(&key) {
-                    let _ = self.show_message(
+                    if let Err(err) = self.show_message(
                         "Encryption",
                         [
                             "Failed to load key",
                             &shorten_for_display(&e.to_string(), 90),
                         ],
-                    );
+                    ) {
+                        tracing::warn!("Failed to show encryption error: {:#}", err);
+                    }
                     false
                 } else {
                     true
                 }
             }
             Err(e) => {
-                let _ = self.show_message(
+                if let Err(err) = self.show_message(
                     "Encryption",
                     ["Invalid keyfile", &shorten_for_display(&e.to_string(), 90)],
-                );
+                ) {
+                    tracing::warn!("Failed to show encryption error: {:#}", err);
+                }
                 false
             }
         }
@@ -2926,7 +3208,7 @@ impl App {
                 pct,
                 &status,
             )?;
-            let _ = self.set_webhook_encryption(false, false);
+            self.set_webhook_encryption(false, false)?;
         }
 
         // Step 2: loot encryption
@@ -2939,7 +3221,7 @@ impl App {
                 pct,
                 &status,
             )?;
-            let _ = self.set_loot_encryption(false, false);
+            self.set_loot_encryption(false, false)?;
         }
 
         // Step 2: Wi-Fi profile encryption
@@ -2952,7 +3234,7 @@ impl App {
                 pct,
                 &status,
             )?;
-            let _ = self.set_wifi_encryption(false, false);
+            self.set_wifi_encryption(false, false)?;
         }
 
         // Final message
@@ -2969,7 +3251,8 @@ impl App {
         self.config.settings.encrypt_wifi_profiles = false;
         rustyjack_encryption::set_wifi_profile_encryption(false);
         rustyjack_encryption::set_loot_encryption(false);
-        let _ = self.config.save(&self.root.join("gui_conf.json"));
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
         clear_encryption_key();
         Ok(())
     }
@@ -3004,7 +3287,8 @@ impl App {
 
         let profiles_dir = self.root.join("wifi").join("profiles");
         if enable {
-            let _ = fs::create_dir_all(&profiles_dir);
+            fs::create_dir_all(&profiles_dir)
+                .with_context(|| format!("creating {}", profiles_dir.display()))?;
         }
 
         let mut changed = 0usize;
@@ -3036,7 +3320,13 @@ impl App {
                                 ) {
                                     errors.push(shorten_for_display(&e.to_string(), 80));
                                 } else {
-                                    let _ = fs::remove_file(&path);
+                                    if let Err(err) = fs::remove_file(&path) {
+                                        tracing::warn!(
+                                            "Failed to remove {}: {:#}",
+                                            path.display(),
+                                            err
+                                        );
+                                    }
                                     changed += 1;
                                 }
                                 contents.zeroize();
@@ -3054,7 +3344,13 @@ impl App {
                                 if let Err(e) = fs::write(&dest, &bytes) {
                                     errors.push(shorten_for_display(&e.to_string(), 80));
                                 } else {
-                                    let _ = fs::remove_file(&path);
+                                    if let Err(err) = fs::remove_file(&path) {
+                                        tracing::warn!(
+                                            "Failed to remove {}: {:#}",
+                                            path.display(),
+                                            err
+                                        );
+                                    }
                                     changed += 1;
                                 }
                                 bytes.zeroize();
@@ -3068,7 +3364,8 @@ impl App {
 
         self.config.settings.encrypt_wifi_profiles = enable;
         rustyjack_encryption::set_wifi_profile_encryption(self.wifi_encryption_active());
-        let _ = self.config.save(&self.root.join("gui_conf.json"));
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
 
         if interactive {
             if errors.is_empty() {
@@ -3194,12 +3491,16 @@ impl App {
                 let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
                 let dest = path.with_file_name(format!("{filename}.enc"));
                 if dest.exists() {
-                    let _ = fs::remove_file(&dest);
+                    if let Err(err) = fs::remove_file(&dest) {
+                        tracing::warn!("Failed to remove {}: {:#}", dest.display(), err);
+                    }
                 }
                 if let Err(e) = rustyjack_encryption::encrypt_to_file(&dest, &data) {
                     errors.push(shorten_for_display(&e.to_string(), 80));
                 } else {
-                    let _ = fs::remove_file(&path);
+                    if let Err(err) = fs::remove_file(&path) {
+                        tracing::warn!("Failed to remove {}: {:#}", path.display(), err);
+                    }
                 }
                 data.zeroize();
             } else {
@@ -3221,7 +3522,13 @@ impl App {
                         if let Err(e) = fs::write(&dest, &data) {
                             errors.push(shorten_for_display(&e.to_string(), 80));
                         } else {
-                            let _ = fs::remove_file(&path);
+                            if let Err(err) = fs::remove_file(&path) {
+                                tracing::warn!(
+                                    "Failed to remove {}: {:#}",
+                                    path.display(),
+                                    err
+                                );
+                            }
                         }
                         data.zeroize();
                     }
@@ -3232,7 +3539,8 @@ impl App {
 
         self.config.settings.encrypt_loot = enable;
         rustyjack_encryption::set_loot_encryption(self.loot_encryption_active());
-        let _ = self.config.save(&self.root.join("gui_conf.json"));
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
 
         if interactive {
             if errors.is_empty() {
@@ -3436,27 +3744,31 @@ impl App {
         if enable {
             self.config.settings.encrypt_discord_webhook = true;
             if plain.exists() {
-                if let Ok(content) = fs::read(&plain) {
-                    let _ = rustyjack_encryption::encrypt_to_file(&enc, &content);
-                    let mut content_mut = content.clone();
-                    content_mut.zeroize();
-                    let _ = fs::remove_file(&plain);
-                }
+                let content =
+                    fs::read(&plain).with_context(|| format!("reading {}", plain.display()))?;
+                rustyjack_encryption::encrypt_to_file(&enc, &content)
+                    .with_context(|| format!("encrypting {}", enc.display()))?;
+                let mut content_mut = content.clone();
+                content_mut.zeroize();
+                fs::remove_file(&plain)
+                    .with_context(|| format!("removing {}", plain.display()))?;
             }
         } else {
             self.config.settings.encrypt_discord_webhook = false;
             if enc.exists() {
-                if let Ok(bytes) = rustyjack_encryption::decrypt_file(&enc) {
-                    let _ = fs::write(&plain, &bytes);
-                    let mut tmp = bytes.clone();
-                    tmp.zeroize();
-                    let mut bytes_mut = bytes;
-                    bytes_mut.zeroize();
-                }
+                let bytes = rustyjack_encryption::decrypt_file(&enc)
+                    .with_context(|| format!("decrypting {}", enc.display()))?;
+                fs::write(&plain, &bytes)
+                    .with_context(|| format!("writing {}", plain.display()))?;
+                let mut tmp = bytes.clone();
+                tmp.zeroize();
+                let mut bytes_mut = bytes;
+                bytes_mut.zeroize();
             }
         }
 
-        let _ = self.config.save(&self.root.join("gui_conf.json"));
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
         if show_msg {
             let res = self.show_message(
                 "Encryption",
@@ -3771,15 +4083,7 @@ impl App {
                         }
                     }
                 }
-                ButtonAction::MainMenu => {
-                    let opts = vec!["Go to Main Menu".to_string(), "Stay".to_string()];
-                    if let Some(choice) = self.choose_from_list("Leave USB browser?", &opts)? {
-                        if choice == 0 {
-                            self.menu_state.home();
-                            return Ok(None);
-                        }
-                    }
-                }
+                ButtonAction::Cancel => return Ok(None),
                 ButtonAction::Reboot => {
                     self.confirm_reboot()?;
                 }
@@ -3858,12 +4162,19 @@ impl App {
                     .unwrap_or(false);
                 if let Some(mountpoint) = mountpoint {
                     if req.needs_write() && readonly {
-                        let _ = self.core.dispatch(Commands::System(
-                            SystemCommand::UsbUnmount(UsbUnmountArgs {
-                                mountpoint: mountpoint.to_string_lossy().to_string(),
-                                detach: false,
-                            }),
-                        ));
+                        self.core
+                            .dispatch(Commands::System(SystemCommand::UsbUnmount(
+                                UsbUnmountArgs {
+                                    mountpoint: mountpoint.to_string_lossy().to_string(),
+                                    detach: false,
+                                },
+                            )))
+                            .with_context(|| {
+                                format!(
+                                    "unmounting {} after readonly mount",
+                                    mountpoint.display()
+                                )
+                            })?;
                         return Ok(None);
                     }
                     if self.mount_access_ok(&mountpoint, req) {
@@ -4277,10 +4588,7 @@ impl App {
                                     break;
                                 }
                                 ButtonAction::Back => break,
-                                ButtonAction::MainMenu => {
-                                    self.menu_state.home();
-                                    break;
-                                }
+                                ButtonAction::Cancel => {}
                                 ButtonAction::Reboot => {
                                     self.confirm_reboot()?;
                                 }
@@ -4351,7 +4659,7 @@ impl App {
                     "",
                     "Querying network info...",
                     "",
-                    "Press Back to cancel",
+                    "Press KEY2 to cancel",
                 ],
             )?;
 
@@ -4453,7 +4761,7 @@ impl App {
                     "Scanning local network...",
                     "This may take 30 seconds",
                     "",
-                    "Press Back to cancel",
+                    "Press KEY2 to cancel",
                 ],
             )?;
 
@@ -4564,7 +4872,7 @@ impl App {
                     "Discovering devices...",
                     "Then scanning services...",
                     "",
-                    "Press Back to cancel",
+                    "Press KEY2 to cancel",
                 ],
             )?;
 
@@ -4660,7 +4968,7 @@ impl App {
                     "",
                     "Duration: 10 seconds",
                     "",
-                    "Press Back to cancel",
+                    "Press KEY2 to cancel",
                 ],
             )?;
 
@@ -4775,7 +5083,7 @@ impl App {
                     "Monitoring traffic...",
                     "Duration: 10 seconds",
                     "",
-                    "Press Back to cancel",
+                    "Press KEY2 to cancel",
                 ],
             )?;
 
@@ -4879,7 +5187,7 @@ impl App {
                     "Capturing DNS queries...",
                     "Duration: 30 seconds",
                     "",
-                    "Press Back to cancel",
+                    "Press KEY2 to cancel",
                 ],
             )?;
 
@@ -5168,7 +5476,7 @@ impl App {
                             self.config.settings.target_channel =
                                 network.channel.unwrap_or(0) as u8;
                             let config_path = self.root.join("gui_conf.json");
-                            let _ = self.config.save(&config_path);
+                            self.save_config_file(&config_path)?;
                             let mut result_lines = vec![
                                 format!("SSID: {}", ssid),
                                 format!("Channel: {}", self.config.settings.target_channel),
@@ -5251,200 +5559,48 @@ impl App {
             _ => return Ok(()),
         };
 
-        // Show attack configuration
-        self.show_message(
-            "Deauth Attack",
-            [
-                &format!(
-                    "Target: {}",
-                    if target_network.is_empty() {
-                        &target_bssid
-                    } else {
-                        &target_network
-                    }
-                ),
-                &format!("BSSID: {}", target_bssid),
-                &format!("Channel: {}", target_channel),
-                &format!("Interface: {}", active_interface),
-                &format!("Duration: {}s", duration_secs),
-                "Press SELECT to start",
-            ],
-        )?;
-        let confirm = self.choose_from_list(
-            "Start Deauth?",
-            &["Start".to_string(), "Cancel".to_string()],
-        )?;
-        if confirm != Some(0) {
-            return Ok(());
-        }
-
-        // Show progress stages (scaled to selected duration)
-        let quarter = duration_secs / 4;
-        let half = duration_secs / 2;
-        let three_quarter = (duration_secs * 3) / 4;
-
-        let progress_stages = vec![
-            (0, "Killing processes..."),
-            (2, "Monitor mode enabled"),
-            (5, "Setting channel..."),
-            (8, "Starting capture..."),
-            (10, "Sending deauth burst"),
-            (quarter, "Attack in progress..."),
-            (half, "Monitoring for handshake"),
-            (three_quarter, "Still capturing..."),
-            (duration_secs.saturating_sub(10), "Finalizing capture..."),
-            (duration_secs.saturating_sub(5), "Stopping monitor mode"),
+        let summary_lines = vec![
+            format!(
+                "Target: {}",
+                if target_network.is_empty() {
+                    &target_bssid
+                } else {
+                    &target_network
+                }
+            ),
+            format!("BSSID: {}", target_bssid),
+            format!("Channel: {}", target_channel),
+            format!("Interface: {}", active_interface),
+            format!("Duration: {}s", duration_secs),
         ];
 
-        // Show initial message
-        self.show_progress(
-            "Deauth Attack",
-            [
-                &format!(
-                    "Target: {}",
-                    if target_network.is_empty() {
-                        &target_bssid
-                    } else {
-                        &target_network
-                    }
-                ),
-                &format!("Channel: {} | {}", target_channel, active_interface),
-                "Preparing attack...",
-            ],
-        )?;
-
-        // Launch attack in background thread while showing progress
-        use std::sync::{Arc, Mutex};
-        use std::thread;
-        use std::time::Duration;
-
-        let core = self.core.clone();
-        let bssid = target_bssid.clone();
-        let ssid = if target_network.is_empty() {
-            None
-        } else {
-            Some(target_network.clone())
-        };
-        let channel = target_channel;
-        let iface = active_interface.clone();
-        let attack_duration = duration_secs;
-
-        let result = Arc::new(Mutex::new(None));
-        let result_clone = Arc::clone(&result);
-
-        // Spawn attack thread
-        thread::spawn(move || {
-            let command = Commands::Wifi(WifiCommand::Deauth(WifiDeauthArgs {
-                bssid,
-                ssid,
-                interface: iface,
-                channel,
-                duration: attack_duration as u32,
-                packets: 64,      // More packets per burst
-                client: None,     // Broadcast to all clients
-                continuous: true, // Keep sending deauth throughout
-                interval: 1,      // 1 second between bursts
-            }));
-
-            let r = core.dispatch(command);
-            if let Ok(mut guard) = result_clone.lock() {
-                *guard = Some(r);
-            } else {
-                eprintln!("[UI] Failed to lock result mutex (deauth dispatch)");
-                if let Ok(mut guard) = result_clone.lock() {
-                    *guard = Some(Err(anyhow::anyhow!(
-                        "Internal error: failed to capture deauth result"
-                    )));
-                }
-            }
-        });
-
-        // Show progress updates while attack runs
-        let start = std::time::Instant::now();
-        let mut cancelled = false;
-        let mut last_displayed_elapsed: u64 = u64::MAX; // Track to avoid redundant redraws
-
-        loop {
-            let elapsed = start.elapsed().as_secs();
-
-            // Check for cancel button press
-            match self.check_attack_cancel("Deauth")? {
-                CancelAction::Continue => {}
-                CancelAction::GoBack => {
-                    cancelled = true;
-                    break;
-                }
-                CancelAction::GoMainMenu => {
-                    cancelled = true;
-                    self.menu_state.home();
-                    break;
-                }
-            }
-
-            // Check if attack completed
-            if result
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))?
-                .is_some()
-            {
-                break;
-            }
-
-            // Only redraw when elapsed seconds changed
-            if elapsed != last_displayed_elapsed {
-                last_displayed_elapsed = elapsed;
-
-                // Update stage message if we've reached a new stage
-                let mut current_stage_msg = "Attack in progress...";
-                for (time, msg) in &progress_stages {
-                    if elapsed >= *time {
-                        current_stage_msg = msg;
-                    } else {
-                        break;
-                    }
-                }
-
-                let overlay = self.stats.snapshot();
-                let message = if elapsed < attack_duration {
-                    format!("{}s/{}s {}", elapsed, attack_duration, current_stage_msg)
-                } else {
-                    "Finalizing...".to_string()
-                };
-                self.display.draw_progress_dialog(
-                    "Deauth [LEFT=Cancel]",
-                    &message,
-                    (elapsed as f32 / attack_duration as f32).min(1.0) * 100.0,
-                    &overlay,
-                )?;
-            }
-
-            thread::sleep(Duration::from_millis(50));
-        }
-
-        // If cancelled, show message and return
-        if cancelled {
-            self.show_message(
-                "Deauth Cancelled",
-                [
-                    "Attack stopped early",
-                    "",
-                    "Partial results may be",
-                    "in loot/Wireless/",
-                ],
-            )?;
+        if !self.confirm_yes_no_bool("Start Deauth?", &summary_lines)? {
+            self.go_home()?;
             return Ok(());
         }
 
-        // Get result
-        let attack_result = result
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Result mutex poisoned: {}", e))?
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Attack result not available"))?;
+        let cmd = Commands::Wifi(WifiCommand::Deauth(WifiDeauthArgs {
+            bssid: target_bssid.clone(),
+            ssid: if target_network.is_empty() {
+                None
+            } else {
+                Some(target_network.clone())
+            },
+            interface: active_interface.clone(),
+            channel: target_channel,
+            duration: duration_secs as u32,
+            packets: 64,
+            client: None,
+            continuous: true,
+            interval: 1,
+        }));
 
-        match attack_result {
-            Ok((msg, data)) => {
-                let mut result_lines = vec![msg];
+        let result = self.dispatch_cancellable("Deauth", cmd, duration_secs)?;
+        let Some((msg, data)) = result else {
+            return Ok(());
+        };
+
+        let mut result_lines = vec![msg];
 
                 if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
                     if captured {
@@ -5483,12 +5639,8 @@ impl App {
 
                 result_lines.push("Check Loot > Wireless".to_string());
 
-                self.show_message("Deauth Complete", result_lines.iter().map(|s| s.as_str()))?;
-            }
-            Err(e) => {
-                self.show_message("Deauth Error", [format!("{}", e)])?;
-            }
-        }
+        self.show_message("Deauth Complete", result_lines.iter().map(|s| s.as_str()))?;
+        self.go_home()?;
 
         Ok(())
     }
@@ -5583,7 +5735,8 @@ impl App {
             if let Some(choice) = self.choose_wifi_interface("Pick WiFi interface")? {
                 attack_interface = choice;
                 self.config.settings.active_network_interface = attack_interface.clone();
-                let _ = self.config.save(&self.root.join("gui_conf.json"));
+                let config_path = self.root.join("gui_conf.json");
+                self.save_config_file(&config_path)?;
             } else {
                 return Ok(());
             }
@@ -5749,15 +5902,19 @@ impl App {
             _ => return Ok(()),
         };
 
-        if duration_secs == INDEFINITE_SECS {
-            self.show_message(
-                "Probe Sniff",
-                [
-                    "Running indefinitely.",
-                    "Press LEFT/Main Menu",
-                    "to stop. Elapsed shown.",
-                ],
-            )?;
+        let duration_label = if duration_secs == INDEFINITE_SECS {
+            "Indefinite".to_string()
+        } else {
+            format!("{}s", duration_secs)
+        };
+        let confirm_lines = vec![
+            format!("Interface: {}", active_interface),
+            format!("Duration: {}", duration_label),
+            "KEY2 cancels while running".to_string(),
+        ];
+        if !self.confirm_yes_no_bool("Start Probe Sniff?", &confirm_lines)? {
+            self.go_home()?;
+            return Ok(());
         }
 
         use rustyjack_commands::{Commands, WifiCommand, WifiProbeSniffArgs};
@@ -5799,6 +5956,7 @@ impl App {
         }
 
         self.show_message("Probe Sniff Done", lines.iter().map(|s| s.as_str()))?;
+        self.go_home()?;
 
         Ok(())
     }
@@ -5844,15 +6002,25 @@ impl App {
             _ => return Ok(()),
         };
 
-        if duration == INDEFINITE_SECS {
-            self.show_message(
-                "PMKID Capture",
-                [
-                    "Running indefinitely.",
-                    "Press LEFT/Main Menu",
-                    "to stop. Elapsed shown.",
-                ],
-            )?;
+        let duration_label = if duration == INDEFINITE_SECS {
+            "Indefinite".to_string()
+        } else {
+            format!("{}s", duration)
+        };
+        let target_label = if use_target {
+            format!("Target: {}", target_network)
+        } else {
+            "Target: Any".to_string()
+        };
+        let confirm_lines = vec![
+            target_label,
+            format!("Interface: {}", active_interface),
+            format!("Duration: {}", duration_label),
+            "KEY2 cancels while running".to_string(),
+        ];
+        if !self.confirm_yes_no_bool("Start PMKID?", &confirm_lines)? {
+            self.go_home()?;
+            return Ok(());
         }
 
         use rustyjack_commands::{Commands, WifiCommand, WifiPmkidArgs};
@@ -5894,6 +6062,7 @@ impl App {
         }
 
         self.show_message("PMKID Result", lines.iter().map(|s| s.as_str()))?;
+        self.go_home()?;
 
         Ok(())
     }
@@ -6133,12 +6302,17 @@ impl App {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let mut cb = |p: CrackProgress| {
-                let _ = tx.send(CrackUpdate::Progress {
-                    attempts: p.attempts,
-                    total: total_attempts,
-                    rate: p.rate,
-                    current: p.current.clone(),
-                });
+                if tx
+                    .send(CrackUpdate::Progress {
+                        attempts: p.attempts,
+                        total: total_attempts,
+                        rate: p.rate,
+                        current: p.current.clone(),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
             };
 
             let res = cracker.crack_passwords_with_progress(
@@ -6148,7 +6322,7 @@ impl App {
             );
 
             let final_attempts = cracker.attempts();
-            let _ = match res {
+            let send_res = match res {
                 Ok(CrackResult::Found(pw)) => tx.send(CrackUpdate::Done {
                     password: Some(pw),
                     attempts: final_attempts,
@@ -6169,6 +6343,9 @@ impl App {
                 }),
                 Err(e) => tx.send(CrackUpdate::Error(e.to_string())),
             };
+            if let Err(err) = send_res {
+                tracing::warn!("Crack update send failed: {:#}", err);
+            }
         });
 
         let mut attempts = 0u64;
@@ -6233,13 +6410,8 @@ impl App {
 
             if let Some(button) = self.buttons.try_read()? {
                 match self.map_button(button) {
-                    ButtonAction::Back | ButtonAction::MainMenu => {
-                        // Confirm cancel
-                        let confirm = self.choose_from_list(
-                            "Cancel crack?",
-                            &["Yes".to_string(), "No".to_string()],
-                        )?;
-                        if confirm == Some(0) {
+                    ButtonAction::Cancel => {
+                        if self.confirm_cancel("Crack")? {
                             stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
@@ -6471,7 +6643,7 @@ impl App {
                 "Karma Attack",
                 [
                     "Running indefinitely.",
-                    "Press LEFT/Main Menu",
+                    "Press KEY2",
                     "to stop. Elapsed shown.",
                 ],
             )?;
@@ -6647,15 +6819,12 @@ impl App {
             all_lines.push(step.to_string());
         }
         all_lines.push("".to_string());
-        all_lines.push("SELECT = Start".to_string());
+        all_lines.push("SELECT = Continue".to_string());
 
         self.show_message(title, all_lines.iter().map(|s| s.as_str()))?;
 
-        // Confirm
-        let options = vec!["Start Pipeline".to_string(), "Cancel".to_string()];
-        let choice = self.choose_from_list("Confirm", &options)?;
-
-        if choice != Some(0) {
+        if !self.confirm_yes_no_bool("Start Pipeline?", ["Run this pipeline now?"])? {
+            self.go_home()?;
             return Ok(());
         }
 
@@ -6670,7 +6839,10 @@ impl App {
         let indefinite_mode = match mode_choice {
             Some(0) => false,   // Standard
             Some(1) => true,    // Indefinite
-            _ => return Ok(()), // Cancel
+            _ => {
+                self.go_home()?;
+                return Ok(());
+            }
         };
 
         if indefinite_mode {
@@ -6749,7 +6921,8 @@ impl App {
             if let Some(detail) = loot_detail_line {
                 lines.push(detail);
             }
-            self.show_message("Pipeline Cancelled", lines)
+            self.show_message("Pipeline Cancelled", lines)?;
+            self.go_home()
         } else {
             let mut summary = vec![format!("{} finished", title), "".to_string()];
 
@@ -6775,7 +6948,8 @@ impl App {
                 summary.push(detail);
             }
 
-            self.show_message("Pipeline Complete", summary.iter().map(|s| s.as_str()))
+            self.show_message("Pipeline Complete", summary.iter().map(|s| s.as_str()))?;
+            self.go_home()
         }
     }
 
@@ -6907,12 +7081,9 @@ impl App {
 
         for (i, step) in steps.iter().enumerate() {
             // Check for cancel before each step
-            match self.check_attack_cancel(title)? {
-                CancelAction::Continue => {}
-                CancelAction::GoBack | CancelAction::GoMainMenu => {
-                    result.cancelled = true;
-                    return Ok(result);
-                }
+            if matches!(self.check_cancel_request(title)?, CancelDecision::Cancel) {
+                result.cancelled = true;
+                return Ok(result);
             }
 
             // In indefinite mode, retry steps until they produce results
@@ -6925,9 +7096,9 @@ impl App {
                 let progress = (i as f32 / total_steps as f32) * 100.0;
                 let overlay = self.stats.snapshot();
                 let status_text = if indefinite_mode && retry_count > 0 {
-                    format!("{} [Retry {}] [LEFT=Cancel]", step, retry_count)
+                    format!("{} [Retry {}] [KEY2=Cancel]", step, retry_count)
                 } else {
-                    format!("{} [LEFT=Cancel]", step)
+                    format!("{} [KEY2=Cancel]", step)
                 };
                 self.display
                     .draw_progress_dialog(title, &status_text, progress, &overlay)?;
@@ -7054,19 +7225,13 @@ impl App {
                     // Show brief message before retry
                     let retry_msg = format!("Retry {}/{}", retry_count, MAX_RETRIES);
                     eprintln!("[PIPELINE] {}", retry_msg);
-
-                    // Brief pause before retry
-                    std::thread::sleep(std::time::Duration::from_secs(2));
                 }
 
                 // Check for cancel during retries
                 if indefinite_mode && !step_successful {
-                    match self.check_attack_cancel(title)? {
-                        CancelAction::Continue => {}
-                        CancelAction::GoBack | CancelAction::GoMainMenu => {
-                            result.cancelled = true;
-                            return Ok(result);
-                        }
+                    if matches!(self.check_cancel_request(title)?, CancelDecision::Cancel) {
+                        result.cancelled = true;
+                        return Ok(result);
                     }
                 }
             }
@@ -7109,8 +7274,7 @@ impl App {
                     let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, count, 0))));
                 }
-                // If dispatch_cancellable returned None, the step was cancelled or failed
-                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             1 => {
                 // Step 2: PMKID capture
@@ -7137,8 +7301,7 @@ impl App {
                         .unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((pmkids, 0, None, 0, 0))));
                 }
-                // Step was cancelled or failed - return no results
-                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             2 => {
                 // Step 3: Deauth attack
@@ -7174,8 +7337,7 @@ impl App {
                     };
                     return Ok(StepOutcome::Completed(Some((0, handshakes, None, 0, 0))));
                 }
-                // Step was cancelled or failed - return no results
-                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             3 => {
                 // Step 4: Handshake capture (continuation of deauth with longer capture)
@@ -7211,8 +7373,7 @@ impl App {
                     };
                     return Ok(StepOutcome::Completed(Some((0, handshakes, None, 0, 0))));
                 }
-                // Step was cancelled or failed - return no results
-                return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             4 => {
                 // Step 5: Quick crack - look for handshake files and try to crack
@@ -7242,8 +7403,7 @@ impl App {
                             // Crack completed but no password found
                             return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
                         }
-                        // Crack was cancelled - return no results
-                        return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
+                        return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
                     }
                 }
                 return Ok(StepOutcome::Skipped(
@@ -7273,6 +7433,7 @@ impl App {
                     let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, count, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             1 => {
                 // Step 2: Channel hopping scan (longer passive scan)
@@ -7287,6 +7448,7 @@ impl App {
                     let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, count, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             2 => {
                 // Step 3: Multi-target PMKID capture (passive, all networks)
@@ -7308,6 +7470,7 @@ impl App {
                         .unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((pmkids, 0, None, 0, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             3 => {
                 // Step 4: Continuous capture (probe sniffing for client info)
@@ -7334,6 +7497,7 @@ impl App {
                         0, 0, None, networks, clients,
                     ))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             _ => {}
         }
@@ -7349,27 +7513,35 @@ impl App {
                 // Step 1: Randomize MAC
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
+                    if let Err(err) = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
                         WifiMacRandomizeArgs {
                             interface: interface.to_string(),
                         },
-                    )));
+                    ))) {
+                        return Ok(StepOutcome::Skipped(format!(
+                            "MAC randomize failed: {}",
+                            err
+                        )));
+                    }
                 }
-                thread::sleep(Duration::from_secs(2));
                 return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             1 => {
                 // Step 2: Minimum TX power
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = self.core.dispatch(Commands::Wifi(WifiCommand::TxPower(
+                    if let Err(err) = self.core.dispatch(Commands::Wifi(WifiCommand::TxPower(
                         WifiTxPowerArgs {
                             interface: interface.to_string(),
                             dbm: 1,
                         },
-                    )));
+                    ))) {
+                        return Ok(StepOutcome::Skipped(format!(
+                            "TX power set failed: {}",
+                            err
+                        )));
+                    }
                 }
-                thread::sleep(Duration::from_secs(1));
                 return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             2 => {
@@ -7391,6 +7563,7 @@ impl App {
                         .unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, networks, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             3 => {
                 // Step 4: Extended probe sniffing
@@ -7416,6 +7589,7 @@ impl App {
                         0, 0, None, networks, clients,
                     ))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             _ => {}
         }
@@ -7459,6 +7633,7 @@ impl App {
                         0, 0, None, networks, clients,
                     ))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             1 => {
                 // Step 2: Karma attack
@@ -7479,6 +7654,7 @@ impl App {
                     let clients = data.get("victims").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, 0, clients))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             2 => {
                 // Step 3: Evil Twin AP
@@ -7512,11 +7688,11 @@ impl App {
                         0, handshakes, None, 0, clients,
                     ))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             3 => {
                 // Step 4: Captive portal (continuation of Evil Twin)
                 // Evil Twin with open network serves as captive portal
-                thread::sleep(Duration::from_secs(5));
                 return Ok(StepOutcome::Completed(Some((0, 0, None, 0, 0))));
             }
             _ => {}
@@ -7543,11 +7719,16 @@ impl App {
                 // Step 1: Stealth recon - MAC randomization + passive scan
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
+                    if let Err(err) = self.core.dispatch(Commands::Wifi(WifiCommand::MacRandomize(
                         WifiMacRandomizeArgs {
                             interface: interface.to_string(),
                         },
-                    )));
+                    ))) {
+                        return Ok(StepOutcome::Skipped(format!(
+                            "MAC randomize failed: {}",
+                            err
+                        )));
+                    }
                 }
                 let preflight_error = self.preflight_probe_sniff(interface)?;
                 if let Some(error) = self.preflight_or_skip(preflight_error)? {
@@ -7571,6 +7752,7 @@ impl App {
                         0, 0, None, networks, clients,
                     ))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             1 => {
                 // Step 2: Network mapping (active scan)
@@ -7585,6 +7767,7 @@ impl App {
                     let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, count, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             2 => {
                 // Step 3: PMKID harvest
@@ -7614,6 +7797,7 @@ impl App {
                         .unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((pmkids, 0, None, 0, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             3 => {
                 // Step 4: Deauth attacks
@@ -7649,6 +7833,7 @@ impl App {
                     };
                     return Ok(StepOutcome::Completed(Some((0, handshakes, None, 0, 0))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             4 => {
                 // Step 5: Evil Twin/Karma
@@ -7669,6 +7854,7 @@ impl App {
                     let clients = data.get("victims").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     return Ok(StepOutcome::Completed(Some((0, 0, None, 0, clients))));
                 }
+                return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
             }
             5 => {
                 // Step 6: Crack passwords
@@ -7693,6 +7879,7 @@ impl App {
                                 ))));
                             }
                         }
+                        return Ok(StepOutcome::Skipped("Cancelled by user".to_string()));
                     }
                 }
                 return Ok(StepOutcome::Skipped(
@@ -7867,7 +8054,7 @@ impl App {
 
         #[cfg(target_os = "linux")]
         {
-            let _ = self.show_progress("Hostname", ["Randomizing...", ""]);
+            self.show_progress("Hostname", ["Randomizing...", ""])?;
             match self
                 .core
                 .dispatch(Commands::System(SystemCommand::RandomizeHostname))
@@ -7968,7 +8155,7 @@ impl App {
         }
 
         let config_path = self.root.join("gui_conf.json");
-        let _ = self.config.save(&config_path);
+        self.save_config_file(&config_path)?;
 
         if notify {
             self.show_message(
@@ -8017,7 +8204,8 @@ impl App {
         let mode = &self.config.settings.operation_mode;
         if mode.eq_ignore_ascii_case("default") || mode.eq_ignore_ascii_case("aggressive") {
             self.config.settings.operation_mode = "custom".to_string();
-            let _ = self.config.save(&self.root.join("gui_conf.json"));
+            let config_path = self.root.join("gui_conf.json");
+            self.save_config_warn(&config_path, "Saving config after mode change");
         }
     }
 
@@ -8034,9 +8222,12 @@ impl App {
                 )
             };
             if hostname_randomization {
-                let _ = self
-                    .core
-                    .dispatch(Commands::System(SystemCommand::RandomizeHostname));
+                if let Err(err) =
+                    self.core
+                        .dispatch(Commands::System(SystemCommand::RandomizeHostname))
+                {
+                    tracing::warn!("Hostname randomization failed: {:#}", err);
+                }
             }
             if active_interface.is_empty() {
                 return;
@@ -8149,7 +8340,8 @@ impl App {
                 }
 
                 if updated {
-                    let _ = self.config.save(&self.root.join("gui_conf.json"));
+                    let config_path = self.root.join("gui_conf.json");
+                    self.save_config_file(&config_path)?;
                 }
                 return Ok(());
             }
@@ -8194,7 +8386,8 @@ impl App {
             .entry(interface.to_string())
             .or_insert_with(HashMap::new)
             .insert(ssid.to_string(), applied_mac.clone());
-        let _ = self.config.save(&self.root.join("gui_conf.json"));
+        let config_path = self.root.join("gui_conf.json");
+        self.save_config_file(&config_path)?;
 
         tracing::info!(
             "[MAC] per-network MAC set on {} for {}: {} -> {} (vendor_reused={}, reconnect_ok={})",
@@ -8250,6 +8443,35 @@ impl App {
                 },
             ],
         )
+    }
+
+    fn toggle_ops(&mut self, category: OpsCategory) -> Result<()> {
+        let mut ops = self.core.ops_config_get().context("fetch ops config")?;
+        let current = Self::ops_enabled_in_config(&ops, category);
+        let next = !current;
+        let label = Self::ops_category_label(category);
+
+        let prompt = if next {
+            format!("Enable {}?", label)
+        } else {
+            format!("Disable {}?", label)
+        };
+        let options = vec!["Confirm".to_string(), "Cancel".to_string()];
+        if self.choose_from_list(&prompt, &options)? != Some(0) {
+            return Ok(());
+        }
+
+        Self::set_ops_config_value(&mut ops, category, next);
+        match self.core.ops_config_set(ops) {
+            Ok(_) => {
+                let state = if next { "ON" } else { "OFF" };
+                self.show_message("Ops Updated", [format!("{}: {}", label, state)])
+            }
+            Err(err) => {
+                let msg = shorten_for_display(&err.to_string(), 90);
+                self.show_message("Ops Error", [msg])
+            }
+        }
     }
 
     /// Launch passive reconnaissance mode
@@ -8344,7 +8566,7 @@ impl App {
             if let Ok(status) = self.fetch_wifi_status(Some(active_interface.clone())) {
                 if status.connected {
                     connected_warn = true;
-                    let _ = self.show_message(
+                    if let Err(err) = self.show_message(
                         "Randomize MAC",
                         [
                             &format!(
@@ -8359,7 +8581,9 @@ impl App {
                             "Changing MAC will force reconnect",
                             "Proceed?",
                         ],
-                    );
+                    ) {
+                        tracing::warn!("Failed to show MAC warning: {:#}", err);
+                    }
                     let opts = vec!["Proceed (reconnect)".to_string(), "Cancel".to_string()];
                     if self
                         .choose_from_list("Randomize MAC", &opts)?
@@ -8417,7 +8641,7 @@ impl App {
                         .current_macs
                         .insert(active_interface.clone(), new_mac.clone());
                     let config_path = self.root.join("gui_conf.json");
-                    let _ = self.config.save(&config_path);
+                    self.save_config_file(&config_path)?;
 
                     let mut lines = vec![
                         format!("Interface: {}", active_interface),
@@ -8445,7 +8669,7 @@ impl App {
                         lines.push("MAC change forced reconnect.".to_string());
                     }
 
-                    let _ = write_scoped_log(
+                    let _log_path = write_scoped_log(
                         &self.root,
                         "Wireless",
                         &active_interface,
@@ -8456,16 +8680,19 @@ impl App {
 
                     self.scrollable_text_viewer("MAC Randomized", &lines, false)
                 }
-                Err(e) => self.show_message(
-                    "MAC Error",
-                    [
-                        "Failed to randomize MAC",
-                        "",
-                        &format!("{}", e),
-                        "",
-                        "Check permissions/driver.",
-                    ],
-                ),
+                Err(e) => {
+                    let err_str = format!("{}", e);
+                    self.show_message(
+                        "MAC Error",
+                        [
+                            "Failed to randomize MAC",
+                            "",
+                            &err_str,
+                            "",
+                            mac_error_hint(&err_str),
+                        ],
+                    )
+                }
             }
         }
     }
@@ -8500,7 +8727,7 @@ impl App {
             sorted_vendors.sort_by_key(|v| v.name);
             let selected_vendor = sorted_vendors[idx];
 
-            let _ = self.show_progress("MAC Address", ["Setting vendor MAC...", "Please wait"]);
+            self.show_progress("MAC Address", ["Setting vendor MAC...", "Please wait"])?;
 
             let args = WifiMacSetVendorArgs {
                 interface: interface.clone(),
@@ -8544,7 +8771,7 @@ impl App {
                         .current_macs
                         .insert(interface.clone(), new_mac.clone());
                     let config_path = self.root.join("gui_conf.json");
-                    let _ = self.config.save(&config_path);
+                    self.save_config_file(&config_path)?;
 
                     let mut lines = vec![
                         format!("Set to {}", selected_vendor.name),
@@ -8629,7 +8856,7 @@ impl App {
                 self.config.settings.current_macs.remove(&active_interface);
                 self.config.settings.original_macs.remove(&active_interface);
                 let config_path = self.root.join("gui_conf.json");
-                let _ = self.config.save(&config_path);
+                self.save_config_file(&config_path)?;
 
                 let interface_line = format!("Interface: {}", active_interface);
                 let mac_line = format!("MAC: {}", restored_mac);
@@ -8699,7 +8926,8 @@ impl App {
             // Save selected power level
             let (_, key) = Self::tx_power_label(level);
             self.config.settings.tx_power_level = key.to_string();
-            let _ = self.config.save(&self.root.join("gui_conf.json"));
+            let config_path = self.root.join("gui_conf.json");
+            self.save_config_file(&config_path)?;
             self.show_message(
                 "TX Power Set",
                 [
@@ -8772,7 +9000,7 @@ impl App {
 
             self.show_progress(
                 "Ethernet Discovery",
-                ["ICMP sweep on wired LAN", "Press Back to cancel"],
+                ["ICMP sweep on wired LAN", "Press KEY2 to cancel"],
             )?;
 
             let args = EthernetDiscoverArgs {
@@ -9197,7 +9425,9 @@ impl App {
 
             let result = self.dispatch_cancellable("Ethernet MITM", cmd, 30)?;
             let Some((msg, data)) = result else {
-                let _ = self.core.dispatch(Commands::Mitm(MitmCommand::Stop));
+                if let Err(err) = self.core.dispatch(Commands::Mitm(MitmCommand::Stop)) {
+                    tracing::warn!("MITM stop after cancel failed: {:#}", err);
+                }
                 return Ok(());
             };
 
@@ -9286,9 +9516,9 @@ impl App {
 
         #[cfg(target_os = "linux")]
         {
-            let _ = self
-                .core
-                .dispatch(Commands::DnsSpoof(DnsSpoofCommand::Stop));
+            if let Err(err) = self.core.dispatch(Commands::DnsSpoof(DnsSpoofCommand::Stop)) {
+                self.show_error_dialog("DNS Spoof Stop Failed", &err)?;
+            }
             match self.core.dispatch(Commands::Mitm(MitmCommand::Stop)) {
                 Ok((msg, _)) => {
                     self.show_message("MITM Stopped", [msg, "IP forwarding disabled".to_string()])
@@ -9558,7 +9788,8 @@ impl App {
                 format!("Visits: {}", visits),
                 format!("Creds: {}", creds),
                 "".to_string(),
-                "Select=Stop  Back=Exit".to_string(),
+                "Select=Stop".to_string(),
+                "LEFT=Back  KEY2=Cancel".to_string(),
             ];
 
             // Highlight new events
@@ -9578,12 +9809,14 @@ impl App {
                 match self.map_button(button) {
                     ButtonAction::Back => return Ok(()),
                     ButtonAction::Select => {
-                        let _ = self.stop_ethernet_mitm();
+                        self.stop_ethernet_mitm()?;
                         return Ok(());
                     }
-                    ButtonAction::MainMenu => {
-                        self.menu_state.home();
-                        return Ok(());
+                    ButtonAction::Cancel => {
+                        if self.confirm_cancel("MITM")? {
+                            self.stop_ethernet_mitm()?;
+                            return Ok(());
+                        }
                     }
                     ButtonAction::Reboot => {
                         self.confirm_reboot()?;
@@ -11448,7 +11681,11 @@ impl App {
                     }
                     (true, Some(5)) => {
                         // Turn off hotspot
-                        let _ = self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop));
+                        if let Err(err) =
+                            self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop))
+                        {
+                            self.show_error_dialog("Hotspot Stop Failed", &err)?;
+                        }
                     }
                     (true, None) => {
                         // User is trying to exit while hotspot is running - confirm
@@ -11459,7 +11696,11 @@ impl App {
                         match confirm {
                             Some(0) => {
                                 // Turn off hotspot and exit
-                                let _ = self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop));
+                                if let Err(err) =
+                                    self.core.dispatch(Commands::Hotspot(HotspotCommand::Stop))
+                                {
+                                    self.show_error_dialog("Hotspot Stop Failed", &err)?;
+                                }
                                 return Ok(());
                             }
                             _ => {
@@ -11617,7 +11858,7 @@ impl App {
                                 self.config.settings.hotspot_ssid = ssid.clone();
                                 self.config.settings.hotspot_password = password.clone();
                                 let config_path = self.root.join("gui_conf.json");
-                                let _ = self.config.save(&config_path);
+                                self.save_config_file(&config_path)?;
 
                                 // Note: Interface isolation is handled by core operations during hotspot start.
                                 // We don't apply it here to avoid race conditions.
@@ -11701,7 +11942,7 @@ impl App {
                             if let Some(channel) = self.select_hotspot_channel(None)? {
                                 self.config.settings.hotspot_channel = channel;
                                 let config_path = self.root.join("gui_conf.json");
-                                let _ = self.config.save(&config_path);
+                                self.save_config_file(&config_path)?;
                                 self.show_message(
                                     "Hotspot",
                                     [format!("Channel set to {}", channel)],
@@ -11715,7 +11956,7 @@ impl App {
                             self.config.settings.hotspot_restore_nm =
                                 !self.config.settings.hotspot_restore_nm;
                             let config_path = self.root.join("gui_conf.json");
-                            let _ = self.config.save(&config_path);
+                            self.save_config_file(&config_path)?;
                             self.show_message(
                                 "Hotspot",
                                 [
@@ -11737,7 +11978,7 @@ impl App {
                             let ssid = random_hotspot_ssid();
                             self.config.settings.hotspot_ssid = ssid.clone();
                             let config_path = self.root.join("gui_conf.json");
-                            let _ = self.config.save(&config_path);
+                            self.save_config_file(&config_path)?;
                             self.show_message("Hotspot", ["SSID updated", &ssid])?;
                         }
                     }
@@ -11747,7 +11988,7 @@ impl App {
                             let pw = random_hotspot_password();
                             self.config.settings.hotspot_password = pw.clone();
                             let config_path = self.root.join("gui_conf.json");
-                            let _ = self.config.save(&config_path);
+                            self.save_config_file(&config_path)?;
                             self.show_message("Hotspot", ["Password updated", &pw])?;
                         }
                     }
@@ -12078,7 +12319,9 @@ impl App {
                     .append(true)
                     .open(&history_path)
                 {
-                    let _ = file.write_all(history_entry.as_bytes());
+                    if let Err(err) = file.write_all(history_entry.as_bytes()) {
+                        tracing::warn!("Failed to write hotspot history: {:#}", err);
+                    }
                 }
                 logged_devices.insert(mac.clone());
             }
@@ -12205,8 +12448,15 @@ impl App {
 
         loop {
             // Check for button press first (non-blocking)
-            if let Ok(Some(_)) = self.buttons.try_read() {
-                break;
+            if let Ok(Some(button)) = self.buttons.try_read() {
+                match self.map_button(button) {
+                    ButtonAction::Select | ButtonAction::Back => break,
+                    ButtonAction::Cancel => {}
+                    ButtonAction::Reboot => {
+                        self.confirm_reboot()?;
+                    }
+                    _ => {}
+                }
             }
 
             // Update stats if enough time has passed
@@ -12237,7 +12487,7 @@ impl App {
                     format!("Upload: {}", tx_display),
                     "".to_string(),
                     "Updates every 2 seconds".to_string(),
-                    "Press any button to exit".to_string(),
+                    "Press SELECT or LEFT".to_string(),
                 ];
 
                 // Draw dialog without blocking
@@ -12434,7 +12684,7 @@ impl App {
                         [
                             &format!("Interface: {}", selected_name),
                             &msg,
-                            "LEFT = Cancel",
+                            "KEY2 = Cancel",
                         ],
                     )?;
                     last_message = Some(msg);
@@ -12445,7 +12695,7 @@ impl App {
                     [
                         &format!("Interface: {}", selected_name),
                         "Queued...",
-                        "LEFT = Cancel",
+                        "KEY2 = Cancel",
                     ],
                 )?;
                 last_message = Some("Queued".to_string());
@@ -12455,7 +12705,10 @@ impl App {
                 JobState::Queued | JobState::Running => {
                     if let Some(button) = self.buttons.try_read()? {
                         match self.map_button(button) {
-                            ButtonAction::Back | ButtonAction::MainMenu => {
+                            ButtonAction::Cancel => {
+                                if !self.confirm_cancel("Interface selection")? {
+                                    continue;
+                                }
                                 self.show_progress(
                                     title,
                                     [
@@ -12464,7 +12717,10 @@ impl App {
                                         "Please wait",
                                     ],
                                 )?;
-                                let _ = self.core.cancel_job(job_id);
+                                if let Err(err) = self.core.cancel_job(job_id) {
+                                    self.show_error_dialog("Cancel failed: Interface selection", &err)?;
+                                    return Ok(None);
+                                }
 
                                 let cancel_start = std::time::Instant::now();
                                 while cancel_start.elapsed() < Duration::from_secs(3) {
@@ -12584,7 +12840,8 @@ impl App {
                 "brought DOWN and blocked.".to_string(),
                 "".to_string(),
                 "SELECT = Continue".to_string(),
-                "LEFT = Cancel".to_string(),
+                "LEFT = Back".to_string(),
+                "KEY2 = Cancel".to_string(),
             ];
             self.display.draw_dialog(&content, &overlay)?;
             
@@ -12594,8 +12851,13 @@ impl App {
                     ButtonAction::Select => {
                         break;
                     }
-                    ButtonAction::Back | ButtonAction::MainMenu => {
+                    ButtonAction::Back => {
                         return Ok(());
+                    }
+                    ButtonAction::Cancel => {
+                        if self.confirm_cancel("Interface selection")? {
+                            return Ok(());
+                        }
                     }
                     ButtonAction::Refresh => {
                         self.display.draw_dialog(&content, &overlay)?;
@@ -12738,6 +13000,20 @@ fn classify_start_ap_error(err: &str) -> Option<StartApErrorHint> {
         }),
         _ => None,
     }
+}
+
+fn mac_error_hint(err: &str) -> &'static str {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("busy") || lower.contains("resource busy") {
+        return "Stop hotspot or disconnect Wi-Fi, then retry.";
+    }
+    if lower.contains("permission") || lower.contains("not permitted") {
+        return "Check CAP_NET_ADMIN and systemd sandbox.";
+    }
+    if lower.contains("not supported") || lower.contains("operation not supported") {
+        return "Driver may not allow MAC changes in this mode.";
+    }
+    "Check permissions/driver."
 }
 
 // ===== Preflight Check Methods =====
@@ -13194,7 +13470,8 @@ impl App {
     fn show_preflight_error(&mut self, title: &str, error_msg: &str) -> Result<()> {
         use crate::display::{wrap_text, DIALOG_MAX_CHARS};
         let lines = wrap_text(error_msg, DIALOG_MAX_CHARS);
-        self.show_message(title, lines)
+        self.show_message(title, lines)?;
+        self.go_home()
     }
 
     fn preflight_or_skip(&mut self, error: Option<String>) -> Result<Option<String>> {

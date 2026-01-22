@@ -15,4 +15,4 @@ cargo build --target aarch64-unknown-linux-gnu -p rustyjack-ui -p rustyjack-core
 ```
 
 Notes
-- The Dockerfile uses `rust:1.84-bullseye` on `--platform linux/arm64`. Use the armv7 image for 32-bit Pi OS builds.
+- The Dockerfile uses `rust:1.85-bullseye` on `--platform linux/arm64`. Use the armv7 image for 32-bit Pi OS builds.

@@ -7,6 +7,8 @@ Wants=network.target
 
 [Service]
 Type=notify
+NotifyAccess=main
+WatchdogSec=20s
 ExecStart=/usr/local/bin/rustyjackd
 Restart=on-failure
 RestartSec=5
@@ -23,10 +25,21 @@ Group=rustyjack
 # Environment
 Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
-Environment=RUSTYJACKD_ALLOW_CORE_DISPATCH=true
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
-# Uncomment to enable dangerous operations (system updates)
-#Environment=RUSTYJACKD_DANGEROUS_OPS=true
+Environment=RUSTYJACKD_UPDATE_PUBKEY_FILE=/etc/rustyjack/update_pubkey.ed25519
+Environment=RUSTYJACK_WIFI_BACKEND=rust_wpa2
+Environment=RUSTYJACKD_OPS_PROFILE=appliance
+Environment=RUSTYJACKD_OPS_WIFI=true
+Environment=RUSTYJACKD_OPS_ETH=true
+Environment=RUSTYJACKD_OPS_HOTSPOT=true
+Environment=RUSTYJACKD_OPS_PORTAL=true
+Environment=RUSTYJACKD_OPS_STORAGE=true
+Environment=RUSTYJACKD_OPS_UPDATE=true
+Environment=RUSTYJACKD_OPS_SYSTEM=false
+Environment=RUSTYJACKD_OPS_DEV=false
+Environment=RUSTYJACKD_OPS_OFFENSIVE=false
+Environment=RUSTYJACKD_OPS_LOOT=false
+Environment=RUSTYJACKD_OPS_PROCESS=false
 
 # Privilege and capability management
 User=root
@@ -38,7 +51,7 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 # Filesystem access restrictions
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack
+ReadWritePaths=/var/lib/rustyjack /run/rustyjack /tmp/rustyjack /etc/resolv.conf /usr/local/bin
 ReadOnlyPaths=/etc/wpa_supplicant
 PrivateTmp=true
 
@@ -63,7 +76,7 @@ MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 
 # Syscall filtering
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service @mount
 SystemCallFilter=~@clock @debug @module @obsolete @raw-io @reboot @swap
 SystemCallArchitectures=native
 

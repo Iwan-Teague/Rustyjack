@@ -1,10 +1,11 @@
-use std::{fs, path::Path, process::Command, thread, time::Duration};
+use std::{fs, path::Path, thread, time::Duration};
 
 use anyhow::{anyhow, Result};
 use tracing::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use crate::redact;
+use crate::external_tools::system_shell;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WifiCredential {
@@ -213,9 +214,8 @@ fn extract_from_mdns(_gateway: &str) -> Result<Vec<WifiCredential>> {
     let mut creds = Vec::new();
 
     // Use avahi-browse to discover services
-    let output = Command::new("timeout")
-        .args(["10", "avahi-browse", "-at", "-r"])
-        .output();
+    let output =
+        system_shell::run_allow_failure("timeout", &["10", "avahi-browse", "-at", "-r"]);
 
     if let Ok(output) = output {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -442,17 +442,18 @@ fn try_wps_attack() -> Result<Vec<WifiCredential>> {
         info!("Attempting WPS PIN attack on {}", iface.name);
 
         // Use reaver for WPS attack (simplified - real impl would be more complex)
-        let output = Command::new("timeout")
-            .args([
+        let output = system_shell::run_allow_failure(
+            "timeout",
+            &[
                 "60",
                 "reaver",
                 "-i",
-                &iface.name,
+                iface.name.as_str(),
                 "-b",
                 "00:00:00:00:00:00",
                 "-vv",
-            ])
-            .output();
+            ],
+        );
 
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);

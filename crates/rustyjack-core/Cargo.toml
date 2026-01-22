@@ -4,8 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
+default = ["appliance"]
 cli = ["dep:clap", "dep:tracing-subscriber"]
+
+# Appliance forbids external process spawning.
+appliance = ["rustyjack-netlink/station_rust_wpa2"]
+
+# Lab enables external tooling and non-appliance features.
+lab = ["external_tools", "dev_tools", "offensive_tools", "rustyjack-netlink/station_external"]
+
+# External process spawning (lab only).
+external_tools = []
+
+dev_tools = []
+offensive_tools = []
 
 [dependencies]
 anyhow = "1.0"

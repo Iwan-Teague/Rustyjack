@@ -526,6 +526,22 @@ sudo install -Dm755 "$PREBUILT_CLI" /usr/local/bin/$CLI_NAME
 sudo install -Dm755 "$PREBUILT_DAEMON" /usr/local/bin/$DAEMON_NAME
 sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME
 
+# Configure regdom + forwarding sysctls (Rust-only, no external binaries)
+step "Configuring regulatory domain and forwarding sysctls..."
+if cmd "$CLI_NAME"; then
+  CONFIG_ARGS=()
+  if [ -n "${RUSTYJACK_COUNTRY:-}" ]; then
+    CONFIG_ARGS+=(--country "$RUSTYJACK_COUNTRY")
+  fi
+  if RUSTYJACK_ROOT="$RUNTIME_ROOT" "$CLI_NAME" system configure-host "${CONFIG_ARGS[@]}"; then
+    info "[OK] Host configuration complete"
+  else
+    warn "[WARN] Host configuration failed; review output above"
+  fi
+else
+  warn "rustyjack CLI not found; skipping regdom/sysctl configuration"
+fi
+
 # ---- 5: WiFi attack setup -----------------------------------
 step "Setting up WiFi attack environment..."
 
@@ -686,6 +702,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ReadWritePaths=$RUNTIME_ROOT /etc/resolv.conf
 RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true

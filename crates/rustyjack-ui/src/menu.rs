@@ -10,6 +10,7 @@ pub enum MenuAction {
     SaveConfig,
     SetColor(ColorTarget),
     RestartSystem,
+    SystemUpdate,
     SecureShutdown,
     Loot(LootSection),
     DiscordUpload,
@@ -76,6 +77,8 @@ pub enum MenuAction {
     SetTxPower(TxPowerSetting),
     /// Toggle passive mode
     TogglePassiveMode,
+    /// Toggle daemon ops categories
+    ToggleOps(OpsCategory),
     /// Enter passive recon mode
     PassiveRecon,
     /// Ethernet LAN discovery
@@ -147,6 +150,21 @@ pub enum TxPowerSetting {
     Maximum,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OpsCategory {
+    Wifi,
+    Ethernet,
+    Hotspot,
+    Portal,
+    Storage,
+    Update,
+    System,
+    Dev,
+    Offensive,
+    Loot,
+    Process,
+}
+
 #[derive(Clone)]
 pub struct MenuEntry {
     pub label: String,
@@ -177,7 +195,6 @@ impl MenuTree {
         nodes.insert("aea", MenuNode::Static(colors_menu));
         nodes.insert("af", MenuNode::Static(system_menu));
         nodes.insert("ah", MenuNode::Static(loot_menu));
-        nodes.insert("aw", MenuNode::Static(wifi_menu));
         nodes.insert("aw", MenuNode::Static(wireless_menu));
         nodes.insert("awa", MenuNode::Static(wifi_access_menu));
         nodes.insert("awar", MenuNode::Static(wifi_access_recon_menu));
@@ -186,6 +203,7 @@ impl MenuTree {
         nodes.insert("awcr", MenuNode::Static(wifi_connected_recon_menu));
         nodes.insert("awco", MenuNode::Static(wifi_connected_offence_menu));
         nodes.insert("aops", MenuNode::Static(operation_mode_menu));
+        nodes.insert("aopst", MenuNode::Static(ops_menu));
         nodes.insert("as", MenuNode::Static(settings_menu));
         nodes.insert("asl", MenuNode::Static(logs_menu));
         nodes.insert("asd", MenuNode::Static(discord_menu));
@@ -238,6 +256,7 @@ fn main_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new("Operation Mode", MenuAction::Submenu("aops")),
+        MenuEntry::new("Operations", MenuAction::Submenu("aopst")),
         MenuEntry::new("Hardware Detect", MenuAction::HardwareDetect),
         MenuEntry::new("Wireless", MenuAction::Submenu("aw")),
         MenuEntry::new("Ethernet", MenuAction::Submenu("aeth")),
@@ -248,6 +267,7 @@ fn main_menu() -> Vec<MenuEntry> {
     ]
 }
 
+#[allow(dead_code)]
 fn wifi_menu() -> Vec<MenuEntry> {
     // Legacy menu, kept for safety but replaced by awa/awc
     vec![
@@ -316,6 +336,22 @@ fn wifi_connected_offence_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("DNS Spoof [OFF]", MenuAction::ToggleDnsSpoof),
         MenuEntry::new("Reverse Shell", MenuAction::ReverseShell),
+    ]
+}
+
+fn ops_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new("WiFi Ops", MenuAction::ToggleOps(OpsCategory::Wifi)),
+        MenuEntry::new("Ethernet Ops", MenuAction::ToggleOps(OpsCategory::Ethernet)),
+        MenuEntry::new("Hotspot Ops", MenuAction::ToggleOps(OpsCategory::Hotspot)),
+        MenuEntry::new("Portal Ops", MenuAction::ToggleOps(OpsCategory::Portal)),
+        MenuEntry::new("Storage Ops", MenuAction::ToggleOps(OpsCategory::Storage)),
+        MenuEntry::new("Update Ops", MenuAction::ToggleOps(OpsCategory::Update)),
+        MenuEntry::new("System Ops", MenuAction::ToggleOps(OpsCategory::System)),
+        MenuEntry::new("Dev Ops", MenuAction::ToggleOps(OpsCategory::Dev)),
+        MenuEntry::new("Offensive Ops", MenuAction::ToggleOps(OpsCategory::Offensive)),
+        MenuEntry::new("Loot Ops", MenuAction::ToggleOps(OpsCategory::Loot)),
+        MenuEntry::new("Process Ops", MenuAction::ToggleOps(OpsCategory::Process)),
     ]
 }
 
@@ -466,7 +502,6 @@ fn settings_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Logs", MenuAction::Submenu("asl")),
         MenuEntry::new("Config", MenuAction::Submenu("asc")),
         MenuEntry::new("System", MenuAction::Submenu("af")),
-        MenuEntry::new("WiFi Drivers", MenuAction::InstallWifiDrivers),
     ]
 }
 
@@ -519,6 +554,7 @@ fn config_menu() -> Vec<MenuEntry> {
 fn system_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("Restart", MenuAction::RestartSystem),
+        MenuEntry::new("System Update", MenuAction::SystemUpdate),
         MenuEntry::new("Secure Shutdown", MenuAction::SecureShutdown),
         MenuEntry::new("Complete Purge", MenuAction::CompletePurge),
     ]
@@ -557,6 +593,7 @@ pub fn menu_title(id: &str) -> &'static str {
         "ao" => "Obfuscation & Evasion",
         "aom" => "MAC Address",
         "aopp" => "Operating Mode",
+        "aopst" => "Operations",
         "atx" => "TX Power",
         "enc" => "Encryption",
         "encusb" => "USB Settings",

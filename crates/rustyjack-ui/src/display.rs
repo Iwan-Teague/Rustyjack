@@ -1,4 +1,5 @@
-use crate::config::ColorScheme;
+use crate::config::{ColorScheme, PinConfig};
+use crate::input::ButtonPad;
 use anyhow::Result;
 use embedded_graphics::{
     image::Image,
@@ -10,7 +11,7 @@ use embedded_graphics::{
 };
 
 pub(crate) const DIALOG_MAX_CHARS: usize = 20;
-pub(crate) const DIALOG_VISIBLE_LINES: usize = 10;
+pub(crate) const DIALOG_VISIBLE_LINES: usize = 7;
 
 /// Wraps text at specified character width, breaking on word boundaries when possible
 pub(crate) fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
@@ -66,6 +67,27 @@ pub(crate) fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
         lines
     }
 }
+
+fn ellipsize(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return text.chars().take(max_chars).collect();
+    }
+    let keep = max_chars - 3;
+    let head: String = text.chars().take(keep).collect();
+    format!("{head}...")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn on_off(enabled: bool) -> &'static str {
+    if enabled {
+        "[ON]"
+    } else {
+        "[OFF]"
+    }
+}
 use image::GenericImageView;
 use std::path::Path;
 
@@ -104,6 +126,27 @@ const LCD_OFFSET_X: u16 = 0;
 // Use zero vertical offset to avoid leaving the bottom row unused; some
 // panels had a dead row when an offset of 1 was applied.
 const LCD_OFFSET_Y: u16 = 0;
+
+#[cfg(target_os = "linux")]
+const TOOLBAR_HEIGHT: u32 = 14;
+#[cfg(target_os = "linux")]
+const OPS_LINE_HEIGHT: u32 = 10;
+#[cfg(target_os = "linux")]
+const OPS_LINE_COUNT: usize = 3;
+#[cfg(target_os = "linux")]
+const HEADER_HEIGHT: u32 = TOOLBAR_HEIGHT + (OPS_LINE_HEIGHT * OPS_LINE_COUNT as u32);
+#[cfg(target_os = "linux")]
+const MENU_TOP: i32 = (HEADER_HEIGHT as i32) + 2;
+#[cfg(target_os = "linux")]
+const DIALOG_BODY_TOP: i32 = (HEADER_HEIGHT as i32) + 8;
+#[cfg(target_os = "linux")]
+const FILE_POS_TOP: i32 = (HEADER_HEIGHT as i32) + 2;
+#[cfg(target_os = "linux")]
+const FILE_BODY_TOP: i32 = (HEADER_HEIGHT as i32) + 14;
+#[cfg(target_os = "linux")]
+const OPS_MAX_CHARS: usize = 21;
+#[cfg(target_os = "linux")]
+const MENU_MAX_CHARS: usize = 20;
 
 #[cfg(target_os = "linux")]
 pub struct Display {
@@ -298,6 +341,7 @@ impl Display {
         println!("Starting display diagnostics — cycling init options.\nSet RUSTYJACK_DISPLAY_DIAG=1 to run this from the device.");
 
         let mut attempt = 0usize;
+        let mut buttons = ButtonPad::new(&PinConfig::default())?;
         // helper to print orientation as text — Orientation doesn't implement Debug
         fn orient_label(o: Orientation) -> &'static str {
             match o {
@@ -466,9 +510,16 @@ impl Display {
                             .build();
                         let _ = Text::with_baseline(&info, Point::new(2, 60), style, Baseline::Top)
                             .draw(&mut lcd);
+                        let _ = Text::with_baseline(
+                            "Press a button",
+                            Point::new(2, 75),
+                            style,
+                            Baseline::Top,
+                        )
+                        .draw(&mut lcd);
 
-                        // Wait so user can see the result
-                        sleep(StdDuration::from_millis(900));
+                        // Wait for input before advancing
+                        let _ = buttons.wait_for_press();
 
                         // Drop lcd, backlight and line handles on loop iteration end so
                         // they are released and can be requested again next iteration
@@ -618,7 +669,10 @@ impl Display {
         status: &StatusOverlay,
     ) -> Result<()> {
         let style = PrimitiveStyle::with_fill(self.palette.toolbar);
-        Rectangle::new(Point::new(0, 0), Size::new((LCD_WIDTH as u32) + 1, 14))
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new((LCD_WIDTH as u32) + 1, HEADER_HEIGHT),
+        )
             .into_styled(style)
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
@@ -627,10 +681,7 @@ impl Display {
         if let Some(t) = title {
             // Leave room for temp display but allow longer labels
             const MAX_TITLE_CHARS: usize = 16;
-            let mut title_text = t.to_string();
-            if title_text.len() > MAX_TITLE_CHARS {
-                title_text.truncate(MAX_TITLE_CHARS);
-            }
+            let title_text = ellipsize(t, MAX_TITLE_CHARS);
             Text::with_baseline(
                 &title_text,
                 Point::new(4, 4),
@@ -653,6 +704,38 @@ impl Display {
         .draw(&mut self.lcd)
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
+        let ops_tag = |enabled: bool| if enabled { "ON" } else { "OFF" };
+        let ops_text = format!(
+            "Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
+            ops_tag(status.ops_wifi),
+            ops_tag(status.ops_ethernet),
+            ops_tag(status.ops_hotspot),
+            ops_tag(status.ops_portal),
+            ops_tag(status.ops_storage),
+            ops_tag(status.ops_update),
+            ops_tag(status.ops_system),
+            ops_tag(status.ops_dev),
+            ops_tag(status.ops_offensive),
+            ops_tag(status.ops_loot),
+            ops_tag(status.ops_process),
+        );
+        let mut ops_lines = wrap_text(&ops_text, OPS_MAX_CHARS);
+        if ops_lines.len() > OPS_LINE_COUNT {
+            ops_lines.truncate(OPS_LINE_COUNT);
+        }
+        let mut ops_y = TOOLBAR_HEIGHT as i32;
+        for line in ops_lines {
+            Text::with_baseline(
+                &line,
+                Point::new(4, ops_y),
+                self.text_style_small,
+                Baseline::Top,
+            )
+            .draw(&mut self.lcd)
+            .map_err(|_| anyhow::anyhow!("Draw error"))?;
+            ops_y += OPS_LINE_HEIGHT as i32;
+        }
+
         Ok(())
     }
 
@@ -667,7 +750,7 @@ impl Display {
         self.draw_toolbar_with_title(Some(title), status)?;
 
         // Menu items start right below toolbar (y=16)
-        let mut y = 16;
+        let mut y = MENU_TOP;
         for (idx, label) in items.iter().enumerate() {
             if idx == selected {
                 Rectangle::new(Point::new(0, y - 2), Size::new((LCD_WIDTH as u32) + 1, 12))
@@ -680,7 +763,8 @@ impl Display {
             } else {
                 self.text_style_regular
             };
-            Text::with_baseline(label, Point::new(4, y), style, Baseline::Top)
+            let display_label = ellipsize(label, MENU_MAX_CHARS);
+            Text::with_baseline(&display_label, Point::new(4, y), style, Baseline::Top)
                 .draw(&mut self.lcd)
                 .map_err(|_| anyhow::anyhow!("Draw error"))?;
             y += 12;
@@ -719,7 +803,7 @@ impl Display {
         let clamped_offset = body_offset.min(max_offset);
 
         // Body content below the toolbar
-        let mut y = 22;
+        let mut y = DIALOG_BODY_TOP;
         let mut shown = 0usize;
         for line in wrapped.iter().skip(clamped_offset) {
             if shown >= DIALOG_VISIBLE_LINES {
@@ -755,7 +839,10 @@ impl Display {
 
         // Draw toolbar background
         let style = PrimitiveStyle::with_fill(Rgb565::new(20, 20, 20));
-        Rectangle::new(Point::new(0, 0), Size::new((LCD_WIDTH as u32) + 1, 14))
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new((LCD_WIDTH as u32) + 1, HEADER_HEIGHT),
+        )
             .into_styled(style)
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
@@ -805,11 +892,43 @@ impl Display {
         .draw(&mut self.lcd)
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
+        let ops_tag = |enabled: bool| if enabled { "ON" } else { "OFF" };
+        let ops_text = format!(
+            "Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
+            ops_tag(status.ops_wifi),
+            ops_tag(status.ops_ethernet),
+            ops_tag(status.ops_hotspot),
+            ops_tag(status.ops_portal),
+            ops_tag(status.ops_storage),
+            ops_tag(status.ops_update),
+            ops_tag(status.ops_system),
+            ops_tag(status.ops_dev),
+            ops_tag(status.ops_offensive),
+            ops_tag(status.ops_loot),
+            ops_tag(status.ops_process),
+        );
+        let mut ops_lines = wrap_text(&ops_text, OPS_MAX_CHARS);
+        if ops_lines.len() > OPS_LINE_COUNT {
+            ops_lines.truncate(OPS_LINE_COUNT);
+        }
+        let mut ops_y = TOOLBAR_HEIGHT as i32;
+        for line in ops_lines {
+            Text::with_baseline(
+                &line,
+                Point::new(4, ops_y),
+                self.text_style_small,
+                Baseline::Top,
+            )
+            .draw(&mut self.lcd)
+            .map_err(|_| anyhow::anyhow!("Draw error"))?;
+            ops_y += OPS_LINE_HEIGHT as i32;
+        }
+
         // Draw line position indicator below toolbar
         let pos_text = format!("{}/{}", line_offset + 1, total_lines);
         Text::with_baseline(
             &pos_text,
-            Point::new(4, 16),
+            Point::new(4, FILE_POS_TOP),
             self.text_style_small,
             Baseline::Top,
         )
@@ -817,7 +936,7 @@ impl Display {
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
         // Draw file content starting below position indicator
-        let mut y = 28;
+        let mut y = FILE_BODY_TOP;
         const MAX_CHARS: usize = 21;
 
         for line in lines {
@@ -959,7 +1078,7 @@ impl Display {
         let disk_percent = (status.disk_used_gb / status.disk_total_gb.max(0.1)) * 100.0;
         let disk_bar_len = ((disk_percent / 100.0) * 100.0).min(100.0) as u32;
 
-        let mut y = 16;
+        let mut y = MENU_TOP;
 
         let cpu_text = format!("CPU:{:.0}C {:.0}%", status.temp_c, status.cpu_percent);
         if y <= 119 {
@@ -1068,7 +1187,7 @@ impl Display {
             format!("Module: {}", interface_label),
         ];
 
-        let mut y = 16;
+        let mut y = MENU_TOP;
         const MAX_CHARS: usize = 21;
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
@@ -1126,7 +1245,7 @@ impl Display {
             format!("Current: {}", current_mac),
         ];
 
-        let mut y = 16;
+        let mut y = MENU_TOP;
         const MAX_CHARS: usize = 21;
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
@@ -1240,7 +1359,7 @@ impl Display {
             entries.push("No interfaces found".to_string());
         }
 
-        let mut y = 16;
+        let mut y = MENU_TOP;
         const MAX_CHARS: usize = 21;
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
@@ -1328,6 +1447,20 @@ impl Display {
         println!(
             "[status] {:.0} °C | {}",
             status.temp_c, status.text.as_str()
+        );
+        println!(
+            "[ops] Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
+            on_off(status.ops_wifi),
+            on_off(status.ops_ethernet),
+            on_off(status.ops_hotspot),
+            on_off(status.ops_portal),
+            on_off(status.ops_storage),
+            on_off(status.ops_update),
+            on_off(status.ops_system),
+            on_off(status.ops_dev),
+            on_off(status.ops_offensive),
+            on_off(status.ops_loot),
+            on_off(status.ops_process),
         );
         Ok(())
     }
@@ -1524,6 +1657,17 @@ pub struct StatusOverlay {
     pub temp_c: f32,
     pub text: String,
     pub dns_spoof_running: bool,
+    pub ops_wifi: bool,
+    pub ops_ethernet: bool,
+    pub ops_hotspot: bool,
+    pub ops_portal: bool,
+    pub ops_storage: bool,
+    pub ops_update: bool,
+    pub ops_system: bool,
+    pub ops_dev: bool,
+    pub ops_offensive: bool,
+    pub ops_loot: bool,
+    pub ops_process: bool,
     pub cpu_percent: f32,
     pub mem_used_mb: u64,
     pub mem_total_mb: u64,

@@ -11,10 +11,6 @@ const MAX_TIMEOUT_MS: u64 = 3_600_000;
 const MAX_SLEEP_SECONDS: u64 = 86400;
 const MAX_SCAN_TARGET_LEN: usize = 256;
 const MAX_SCAN_PORTS: usize = 128;
-const MAX_SERVICE_NAME_LEN: usize = 64;
-const MAX_GIT_REMOTE_LEN: usize = 512;
-const MAX_GIT_REF_LEN: usize = 128;
-const MAX_BACKUP_DIR_LEN: usize = 256;
 
 pub fn validate_interface_name(interface: &str) -> Result<(), DaemonError> {
     if interface.is_empty() {
@@ -271,135 +267,33 @@ pub fn validate_scan_ports(mode: ScanModeIpc, ports: Option<&[u16]>) -> Result<(
     Ok(())
 }
 
-pub fn validate_update_service(service: &str) -> Result<(), DaemonError> {
-    if service.is_empty() {
+pub fn validate_update_url(url: &str) -> Result<(), DaemonError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
         return Err(DaemonError::new(
             ErrorCode::BadRequest,
-            "service name cannot be empty",
+            "update url cannot be empty",
             false,
         ));
     }
-    if service.len() > MAX_SERVICE_NAME_LEN {
+    if trimmed.len() > 2048 {
         return Err(DaemonError::new(
             ErrorCode::BadRequest,
-            "service name too long",
+            "update url too long",
             false,
         ));
     }
-    let allowed_services = ["rustyjack", "rustyjack-ui", "rustyjackd"];
-    if !allowed_services.contains(&service) {
+    if !trimmed.starts_with("https://") {
         return Err(DaemonError::new(
             ErrorCode::BadRequest,
-            "unsupported service name",
+            "update url must use https://",
             false,
         ));
     }
-    if service.chars().any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == '\\') {
+    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(DaemonError::new(
             ErrorCode::BadRequest,
-            "service name contains invalid characters",
-            false,
-        ));
-    }
-    Ok(())
-}
-
-pub fn validate_git_remote(remote: &str) -> Result<(), DaemonError> {
-    if remote.is_empty() {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git remote cannot be empty",
-            false,
-        ));
-    }
-    if remote.len() > MAX_GIT_REMOTE_LEN {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git remote too long",
-            false,
-        ));
-    }
-    if remote == "origin" {
-        return Ok(());
-    }
-    if remote.starts_with("https://") || remote.starts_with("git@") {
-        if remote.chars().any(|c| c.is_control() || c.is_whitespace()) {
-            return Err(DaemonError::new(
-                ErrorCode::BadRequest,
-                "git remote contains invalid characters",
-                false,
-            ));
-        }
-        Ok(())
-    } else {
-        Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git remote must be 'origin' or start with https:// or git@",
-            false,
-        ))
-    }
-}
-
-pub fn validate_git_ref(branch: &str) -> Result<(), DaemonError> {
-    if branch.is_empty() {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git ref cannot be empty",
-            false,
-        ));
-    }
-    if branch.len() > MAX_GIT_REF_LEN {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git ref too long",
-            false,
-        ));
-    }
-    let invalid_chars = ['~', '^', ':', '?', '*', '[', ']', ' ', '\t', '\r', '\n'];
-    if branch.chars().any(|c| invalid_chars.contains(&c) || c.is_control()) {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git ref contains invalid characters",
-            false,
-        ));
-    }
-    if branch.contains("..") {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "git ref contains directory traversal",
-            false,
-        ));
-    }
-    Ok(())
-}
-
-pub fn validate_backup_dir(path: &str) -> Result<(), DaemonError> {
-    if path.is_empty() {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "backup dir cannot be empty",
-            false,
-        ));
-    }
-    if path.len() > MAX_BACKUP_DIR_LEN {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "backup dir too long",
-            false,
-        ));
-    }
-    if path.contains("..") {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "backup dir contains directory traversal",
-            false,
-        ));
-    }
-    let rustyjack_roots = ["/var/lib/rustyjack/backups", "/tmp/rustyjack/backups"];
-    if !rustyjack_roots.iter().any(|root| path.starts_with(root)) {
-        return Err(DaemonError::new(
-            ErrorCode::BadRequest,
-            "backup dir must be under /var/lib/rustyjack/backups or /tmp/rustyjack/backups",
+            "update url contains invalid characters",
             false,
         ));
     }
@@ -503,12 +397,7 @@ pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
             Ok(())
         }
         JobKind::SystemUpdate { req } => {
-            validate_update_service(&req.service)?;
-            validate_git_remote(&req.remote)?;
-            validate_git_ref(&req.branch)?;
-            if let Some(dir) = &req.backup_dir {
-                validate_backup_dir(dir)?;
-            }
+            validate_update_url(&req.url)?;
             Ok(())
         }
         JobKind::WifiScan { req } => {
@@ -555,7 +444,7 @@ pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustyjack_ipc::{JobKind, MountStartRequestIpc, ScanModeIpc, ScanRequestIpc, UpdateRequestIpc, WifiConnectRequestIpc};
+    use rustyjack_ipc::{JobKind, MountStartRequestIpc, ScanModeIpc, ScanRequestIpc, WifiConnectRequestIpc};
 
     #[test]
     fn test_validate_mount_device_rejects_mmcblk() {
@@ -720,31 +609,14 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_update_service_only_allows_known_services() {
-        assert!(validate_update_service("rustyjack").is_ok());
-        assert!(validate_update_service("rustyjack-ui").is_ok());
-        assert!(validate_update_service("rustyjackd").is_ok());
-        
-        let result = validate_update_service("arbitrary-service");
-        assert!(result.is_err());
+    fn test_validate_update_url_requires_https() {
+        assert!(validate_update_url("https://example.com/update.tar.zst").is_ok());
+        assert!(validate_update_url("http://example.com/update.tar.zst").is_err());
+        assert!(validate_update_url("").is_err());
     }
 
     #[test]
-    fn test_validate_git_remote_requires_https_or_git() {
-        assert!(validate_git_remote("origin").is_ok());
-        assert!(validate_git_remote("https://github.com/user/repo").is_ok());
-        assert!(validate_git_remote("git@github.com:user/repo").is_ok());
-        
-        let result = validate_git_remote("http://insecure.com/repo");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_backup_dir_requires_rustyjack_prefix() {
-        assert!(validate_backup_dir("/var/lib/rustyjack/backups/test").is_ok());
-        assert!(validate_backup_dir("/tmp/rustyjack/backups/test").is_ok());
-        
-        let result = validate_backup_dir("/tmp/evil");
-        assert!(result.is_err());
+    fn test_validate_update_url_rejects_whitespace() {
+        assert!(validate_update_url("https://example.com/space here").is_err());
     }
 }

@@ -2,7 +2,7 @@
 
 This project targets a Raspberry Pi Zero 2 W equipped with an Ethernet HAT and a Waveshare 128×128 LCD HAT (ST7735S). The UI is rendered in landscape by default via `RUSTYJACK_DISPLAY_ROTATION=landscape` and the installer sets that environment variable for the systemd service.
 
-Hardware specifics drawn from WAVESHARE_PINS.md and WAVESHARE_BUTTONS.md:
+Hardware specifics drawn from waveshare_gpio_pin_mapping.md and waveshare_button_mapping.md:
 - Display pins (BCM): DC=25, RST=27, BL=24; SPI: SCLK=11, MOSI=10, CS=8. Backlight lives on BCM24 and can be toggled with `gpioset gpiochip0 24=1`.
 - Input pins (BCM): UP=6, DOWN=19, LEFT=5, RIGHT=26, PRESS=13; KEY1=21, KEY2=20, KEY3=16. Button mapping in the UI: Up/Down move selection, Left is back, Right/Select accepts, Key1 refreshes, Key2 returns to main menu, Key3 opens reboot confirmation.
 - GPIO pull-ups are expected in `/boot/firmware/config.txt` (or `/boot/config.txt`), using `gpio=6,19,5,26,13,21,20,16=pu`; the installers write this line and request a reboot so input remains stable.
@@ -47,7 +47,7 @@ Project structure (14 workspace crates):
 - `DNSSpoof/` — Captive portal HTML/JS templates (not a Rust crate).
 - `scripts/` — WiFi driver installer (`wifi_driver_installer.sh`), FDE scripts (`fde_prepare_usb.sh`, `fde_migrate_root.sh`), USB hotplug helper.
 - `install_rustyjack.sh`, `install_rustyjack_dev.sh`, `install_rustyjack_prebuilt.sh` — Production, debug, and prebuilt installers.
-- `WAVESHARE_PINS.md`, `WAVESHARE_BUTTONS.md` — Validated pinout and button behavior references.
+- `waveshare_gpio_pin_mapping.md`, `waveshare_button_mapping.md` — Validated pinout and button behavior references.
 
 Loot storage:
 - Wireless captures: `loot/Wireless/<target>/` (target = SSID, else BSSID).

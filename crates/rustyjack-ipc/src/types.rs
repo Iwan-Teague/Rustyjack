@@ -42,6 +42,8 @@ pub enum Endpoint {
     Health,
     Version,
     Status,
+    OpsConfigGet,
+    OpsConfigSet,
     CoreDispatch,
     StatusCommand,
     WifiCommand,
@@ -116,6 +118,8 @@ pub enum RequestBody {
     Health,
     Version,
     Status,
+    OpsConfigGet,
+    OpsConfigSet(OpsConfig),
     CoreDispatch(CoreDispatchRequest),
     StatusCommand(StatusCommand),
     WifiCommand(WifiCommand),
@@ -183,6 +187,8 @@ pub enum ResponseOk {
     Health(HealthResponse),
     Version(VersionResponse),
     Status(StatusResponse),
+    OpsConfig(OpsConfig),
+    OpsConfigSetAck { ops: OpsConfig },
     CoreDispatch(CoreDispatchResponse),
     StatusCommand(CoreDispatchResponse),
     WifiCommand(CoreDispatchResponse),
@@ -246,6 +252,55 @@ pub struct StatusResponse {
     pub uptime_ms: u64,
     pub jobs_active: usize,
     pub jobs_total: usize,
+    pub ops: OpsStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpsConfig {
+    pub wifi_ops: bool,
+    pub eth_ops: bool,
+    pub hotspot_ops: bool,
+    pub portal_ops: bool,
+    pub storage_ops: bool,
+    pub system_ops: bool,
+    pub update_ops: bool,
+    pub dev_ops: bool,
+    pub offensive_ops: bool,
+    pub loot_ops: bool,
+    pub process_ops: bool,
+}
+
+impl OpsConfig {
+    pub fn appliance_defaults() -> Self {
+        Self {
+            wifi_ops: true,
+            eth_ops: true,
+            hotspot_ops: true,
+            portal_ops: true,
+            storage_ops: true,
+            system_ops: false,
+            update_ops: true,
+            dev_ops: false,
+            offensive_ops: false,
+            loot_ops: false,
+            process_ops: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpsStatus {
+    pub wifi_ops: bool,
+    pub eth_ops: bool,
+    pub hotspot_ops: bool,
+    pub portal_ops: bool,
+    pub storage_ops: bool,
+    pub system_ops: bool,
+    pub update_ops: bool,
+    pub dev_ops: bool,
+    pub offensive_ops: bool,
+    pub loot_ops: bool,
+    pub process_ops: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -659,11 +714,13 @@ pub enum DaemonEvent {
     JobUpdate(JobEvent),
 }
 
-    pub fn endpoint_for_body(body: &RequestBody) -> Endpoint {
+pub fn endpoint_for_body(body: &RequestBody) -> Endpoint {
     match body {
         RequestBody::Health => Endpoint::Health,
         RequestBody::Version => Endpoint::Version,
         RequestBody::Status => Endpoint::Status,
+        RequestBody::OpsConfigGet => Endpoint::OpsConfigGet,
+        RequestBody::OpsConfigSet(_) => Endpoint::OpsConfigSet,
         RequestBody::CoreDispatch(_) => Endpoint::CoreDispatch,
         RequestBody::StatusCommand(_) => Endpoint::StatusCommand,
         RequestBody::WifiCommand(_) => Endpoint::WifiCommand,

@@ -17,7 +17,7 @@ How Rustyjack stores, browses, exports, and reports loot.
 - USB export: copies loot to the first writable USB mount (`Rustyjack_Loot`).
 
 ## Encryption
-- Controlled via `rustyjack-encryption`: process-wide key must be set; toggles for Wi‑Fi profiles and loot encryption. See `loot_encryption.md`.
+- Controlled via `rustyjack-encryption`: process-wide key must be set; toggles for Wi‑Fi profiles and loot encryption. See `loot_profile_encryption.md`.
 
 ## Notes
 - Loot purge/log purge available via UI (anti-forensics); use carefully.

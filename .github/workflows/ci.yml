@@ -10,10 +10,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check no new Command::new callsites
+      - name: Check Command::new allowlist
         run: |
-          rustc ci/no_new_command_new.rs -o /tmp/no_new_command_new
-          /tmp/no_new_command_new
+          rustc ci/forbid_command_new.rs -o /tmp/forbid_command_new
+          /tmp/forbid_command_new
       - name: Check no new unwrap/expect callsites
         run: |
           rustc ci/no_new_unwrap_expect.rs -o /tmp/no_new_unwrap_expect

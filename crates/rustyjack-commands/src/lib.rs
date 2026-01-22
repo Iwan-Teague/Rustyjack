@@ -871,10 +871,12 @@ pub struct ReverseLaunchArgs {
 
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SystemCommand {
-    /// Backup, update from git, and restart the Rustyjack service
+    /// Apply a signed update bundle over HTTPS and restart the daemon
     Update(SystemUpdateArgs),
     /// Randomize hostname to a plausible, non-identifying value
     RandomizeHostname,
+    /// Configure regulatory domain and forwarding sysctls
+    ConfigureHost(SystemConfigureHostArgs),
     /// Prepare a USB key for full disk encryption (formats device)
     FdePrepare(SystemFdePrepareArgs),
     /// Migrate root into encrypted volume (destructive; defaults to dry run)
@@ -896,22 +898,17 @@ pub enum SystemCommand {
 }
 
 #[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SystemUpdateArgs {
-    /// Systemd service to restart after updating
-    #[arg(long, default_value = "rustyjack-ui")]
-    pub service: String,
-
-    /// Git remote to fetch/reset
-    #[arg(long, default_value = "origin")]
-    pub remote: String,
-
-    /// Git branch to reset to
-    #[arg(long, default_value = "main")]
-    pub branch: String,
-
-    /// Directory where the backup archive should be written
+pub struct SystemConfigureHostArgs {
+    /// Optional ISO3166 alpha-2 country code override (e.g., IE, US)
     #[arg(long)]
-    pub backup_dir: Option<PathBuf>,
+    pub country: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SystemUpdateArgs {
+    /// HTTPS URL for the signed update bundle
+    #[arg(long)]
+    pub url: String,
 }
 
 #[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -16,7 +16,7 @@ use std::future::Future;
 use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
 
-use rustyjack_ipc::{DaemonError, JobKind};
+use rustyjack_ipc::{DaemonError, ErrorCode, JobKind};
 use crate::state::DaemonState;
 
 pub async fn execute<F, Fut>(
@@ -32,8 +32,31 @@ where
     match kind {
         JobKind::Noop => noop::run().await,
         JobKind::Sleep { seconds } => sleep::run(*seconds, cancel).await,
-        JobKind::ScanRun { req } => scan::run(req.clone(), cancel, &mut progress).await,
-        JobKind::SystemUpdate { req } => update::run(req.clone(), cancel, &mut progress).await,
+        JobKind::ScanRun { req } => {
+            #[cfg(feature = "offensive_ops")]
+            {
+                scan::run(req.clone(), cancel, &mut progress).await
+            }
+            #[cfg(not(feature = "offensive_ops"))]
+            {
+                let _ = req;
+                Err(DaemonError::new(
+                    ErrorCode::Forbidden,
+                    "ScanRun disabled in this build",
+                    false,
+                ))
+            }
+        }
+        JobKind::SystemUpdate { req } => {
+            update::run(
+                req.clone(),
+                cancel,
+                &mut progress,
+                state.config.root_path.clone(),
+                state.config.update_pubkey,
+            )
+            .await
+        }
         JobKind::WifiScan { req } => wifi_scan::run(req.clone(), cancel, &mut progress).await,
         JobKind::WifiConnect { req } => wifi_connect::run(req.clone(), cancel, &mut progress).await,
         JobKind::HotspotStart { req } => hotspot_start::run(req.clone(), cancel, &mut progress).await,
@@ -41,6 +64,20 @@ where
         JobKind::MountStart { req } => mount_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::UnmountStart { req } => unmount_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::InterfaceSelect { interface } => interface_select::run(interface.clone(), Arc::clone(state), cancel, &mut progress).await,
-        JobKind::CoreCommand { command } => core_command::run(command.clone(), Arc::clone(state), cancel, &mut progress).await,
+        JobKind::CoreCommand { command } => {
+            #[cfg(feature = "core_dispatch")]
+            {
+                core_command::run(command.clone(), Arc::clone(state), cancel, &mut progress).await
+            }
+            #[cfg(not(feature = "core_dispatch"))]
+            {
+                let _ = command;
+                Err(DaemonError::new(
+                    ErrorCode::Forbidden,
+                    "CoreCommand disabled in this build",
+                    false,
+                ))
+            }
+        }
     }
 }

@@ -4,7 +4,13 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
+#[cfg(target_os = "linux")]
+use std::os::unix::io::{AsRawFd, RawFd};
+#[cfg(target_os = "linux")]
+use tokio::io::unix::AsyncFd;
+
 use crate::state::DaemonState;
+use crate::ops::OpsConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnforcementSnapshot {
@@ -20,6 +26,64 @@ impl EnforcementSnapshot {
         blocked.sort();
         Self { allowed, blocked }
     }
+}
+
+#[cfg(target_os = "linux")]
+struct NetlinkSocket {
+    fd: RawFd,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for NetlinkSocket {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl AsRawFd for NetlinkSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
+    let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_ROUTE) };
+    if fd < 0 {
+        return Err(anyhow::Error::new(std::io::Error::last_os_error()));
+    }
+
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        unsafe { libc::close(fd) };
+        return Err(anyhow::Error::new(std::io::Error::last_os_error()));
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        unsafe { libc::close(fd) };
+        return Err(anyhow::Error::new(std::io::Error::last_os_error()));
+    }
+
+    let groups = (libc::RTMGRP_LINK | libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
+    let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+    addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+    addr.nl_pid = unsafe { libc::getpid() as u32 };
+    addr.nl_groups = groups;
+    let rc = unsafe {
+        libc::bind(
+            fd,
+            &addr as *const libc::sockaddr_nl as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+        )
+    };
+    if rc < 0 {
+        unsafe { libc::close(fd) };
+        return Err(anyhow::Error::new(std::io::Error::last_os_error()));
+    }
+
+    Ok(AsyncFd::new(NetlinkSocket { fd })?)
 }
 
 #[cfg(target_os = "linux")]
@@ -69,64 +133,50 @@ async fn watch_netlink_events(
     debounce_duration: Duration,
     enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>>,
 ) -> anyhow::Result<()> {
-    use futures::stream::StreamExt;
-    use rtnetlink::new_connection;
-
-    // RC6: Subscribe to netlink events for real-time link state notifications
-    // This allows daemon to detect carrier up/down events automatically
-    let (connection, handle, _messages) = new_connection()?;
-
-    // Keep the connection alive in the background
-    // This enables receiving RTM_NEWLINK/RTM_NEWADDR messages from kernel
-    tokio::spawn(connection);
-
-    // Get streams for link and address changes
-    // These will be triggered when interface state changes occur
-    let mut link_stream = handle.link().get().execute();
-    let mut address_stream = handle.address().get().execute();
+    let socket = open_netlink_socket()?;
+    let mut buf = vec![0u8; 8192];
 
     loop {
-        enum Event { Link, Address, End }
-        
-        let event = tokio::select! {
-            biased;
-            link_result = link_stream.next() => {
-                if link_result.is_some() { Event::Link } else { Event::End }
-            }
-            addr_result = address_stream.next() => {
-                if addr_result.is_some() { Event::Address } else { Event::End }
-            }
-        };
-        
-        match event {
-            Event::Link => {
-                debug!("Netlink link event");
-                schedule_enforcement(
-                    Arc::clone(&state),
-                    Arc::clone(&last_event),
-                    debounce_duration,
-                    Arc::clone(&enforcement_snapshot),
+        let mut received = false;
+        let mut guard = socket.readable().await?;
+        loop {
+            let len = unsafe {
+                libc::recv(
+                    socket.as_raw_fd(),
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    0,
                 )
-                .await;
+            };
+            if len > 0 {
+                received = true;
+                continue;
             }
-            Event::Address => {
-                debug!("Netlink address event");
-                schedule_enforcement(
-                    Arc::clone(&state),
-                    Arc::clone(&last_event),
-                    debounce_duration,
-                    Arc::clone(&enforcement_snapshot),
-                )
-                .await;
-            }
-            Event::End => {
-                debug!("Netlink stream ended");
+            if len == 0 {
                 break;
             }
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                break;
+            }
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(anyhow::Error::new(err));
+        }
+        guard.clear_ready();
+
+        if received {
+            debug!("Netlink event");
+            schedule_enforcement(
+                Arc::clone(&state),
+                Arc::clone(&last_event),
+                debounce_duration,
+                Arc::clone(&enforcement_snapshot),
+            )
+            .await;
         }
     }
-
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -156,20 +206,13 @@ async fn schedule_enforcement(
         let _lock = state_clone.locks.acquire_uplink().await;
         
         let root = state_clone.config.root_path.clone();
+        let ops_cfg = *state_clone.ops_runtime.read().await;
         let snapshot = Arc::clone(&enforcement_snapshot);
         tokio::task::spawn_blocking(move || {
-            use rustyjack_core::system::{IsolationEngine, RealNetOps};
-            use std::sync::Arc;
-            
-            let ops = Arc::new(RealNetOps);
-            let engine = IsolationEngine::new(ops, root);
-            
-            match engine.enforce() {
+            match run_ops_enforcement(root, ops_cfg) {
                 Ok(outcome) => log_enforcement_outcome("Netlink enforcement", &outcome, &snapshot),
-                Err(e) => {
-                    warn!("Netlink event enforcement failed: {}", e);
-                }
-            }
+                Err(e) => warn!("Netlink event enforcement failed: {}", e),
+            };
         })
         .await
         .ok();
@@ -188,23 +231,16 @@ fn start_periodic_enforcement(
 
             let _lock = state.locks.acquire_uplink().await;
             let root = state.config.root_path.clone();
+            let ops_cfg = *state.ops_runtime.read().await;
             let snapshot = Arc::clone(&enforcement_snapshot);
 
             tokio::task::spawn_blocking(move || {
-                use rustyjack_core::system::{IsolationEngine, RealNetOps};
-                use std::sync::Arc;
-
-                let ops = Arc::new(RealNetOps);
-                let engine = IsolationEngine::new(ops, root);
-
-                match engine.enforce() {
+                match run_ops_enforcement(root, ops_cfg) {
                     Ok(outcome) => {
                         log_enforcement_outcome("Periodic enforcement", &outcome, &snapshot)
                     }
-                    Err(e) => {
-                        warn!("Periodic enforcement failed: {}", e);
-                    }
-                }
+                    Err(e) => warn!("Periodic enforcement failed: {}", e),
+                };
             })
             .await
             .ok();
@@ -233,4 +269,48 @@ fn log_enforcement_outcome(
             warn!("  {}: {}", err.interface, err.message);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn run_ops_enforcement(
+    root: std::path::PathBuf,
+    ops_cfg: OpsConfig,
+) -> anyhow::Result<rustyjack_core::system::IsolationOutcome> {
+    use rustyjack_core::system::ops::NetOps;
+    use rustyjack_core::system::{
+        apply_interface_isolation_with_ops_block_all, apply_interface_isolation_with_ops_strict,
+        IsolationEngine, RealNetOps,
+    };
+    use std::sync::Arc;
+
+    let ops: Arc<dyn NetOps> = Arc::new(RealNetOps);
+    if ops_cfg.wifi_ops && ops_cfg.eth_ops {
+        let engine = IsolationEngine::new(Arc::clone(&ops), root);
+        return engine.enforce();
+    }
+
+    let interfaces = ops.list_interfaces()?;
+    let allowed: Vec<String> = interfaces
+        .into_iter()
+        .filter(|iface| (iface.is_wireless && ops_cfg.wifi_ops) || (!iface.is_wireless && ops_cfg.eth_ops))
+        .map(|iface| iface.name)
+        .collect();
+
+    if allowed.is_empty() {
+        apply_interface_isolation_with_ops_block_all(Arc::clone(&ops))
+    } else {
+        apply_interface_isolation_with_ops_strict(Arc::clone(&ops), &allowed)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_ops_enforcement(
+    _root: std::path::PathBuf,
+    _ops_cfg: OpsConfig,
+) -> anyhow::Result<rustyjack_core::system::IsolationOutcome> {
+    Ok(rustyjack_core::system::IsolationOutcome {
+        allowed: Vec::new(),
+        blocked: Vec::new(),
+        errors: Vec::new(),
+    })
 }

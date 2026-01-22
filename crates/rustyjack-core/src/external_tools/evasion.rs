@@ -1,10 +1,12 @@
-use std::{fs, path::Path, process::Command, thread, time::Duration};
+use std::{fs, path::Path, thread, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use tracing::{debug, info, warn};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use rustyjack_evasion::{MacAddress, MacManager};
+
+use crate::external_tools::system_shell;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvasionConfig {
@@ -97,12 +99,11 @@ pub fn spoof_os_fingerprint(os_type: &str) -> Result<()> {
 
 /// Set a sysctl parameter
 fn set_sysctl(param: &str, value: &str) -> Result<()> {
-    let status = Command::new("sysctl")
-        .args(["-w", &format!("{}={}", param, value)])
-        .status()
+    let arg = format!("{}={}", param, value);
+    let output = system_shell::run_allow_failure("sysctl", &["-w", arg.as_str()])
         .context("setting sysctl parameter")?;
 
-    if !status.success() {
+    if !output.status.success() {
         warn!("Failed to set sysctl {} = {}", param, value);
     }
 

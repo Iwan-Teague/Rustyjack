@@ -188,6 +188,19 @@ fn sample_once(
             overlay.dns_spoof_running = running;
         }
     }
+    if let Ok(status) = core.status() {
+        overlay.ops_wifi = status.ops.wifi_ops;
+        overlay.ops_ethernet = status.ops.eth_ops;
+        overlay.ops_hotspot = status.ops.hotspot_ops;
+        overlay.ops_portal = status.ops.portal_ops;
+        overlay.ops_storage = status.ops.storage_ops;
+        overlay.ops_update = status.ops.update_ops;
+        overlay.ops_system = status.ops.system_ops;
+        overlay.ops_dev = status.ops.dev_ops;
+        overlay.ops_offensive = status.ops.offensive_ops;
+        overlay.ops_loot = status.ops.loot_ops;
+        overlay.ops_process = status.ops.process_ops;
+    }
 
     if let Ok((_, data)) = core.dispatch(Commands::Wifi(WifiCommand::List)) {
         if let Ok(list) = serde_json::from_value::<WifiListResponse>(data) {

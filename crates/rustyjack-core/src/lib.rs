@@ -8,7 +8,6 @@ compile_error!(
 	"rustyjack-core is intended to be built on Linux only. Build with a Linux target (e.g. target_os = \"linux\") or develop on a Linux machine."
 );
 
-pub mod anti_forensics;
 pub mod mount;
 
 pub mod arp_helpers;
@@ -25,8 +24,8 @@ pub mod system;
 pub mod services;
 pub mod wireless_native;
 
-pub mod evasion;
-pub mod physical_access;
+#[cfg(feature = "external_tools")]
+pub mod external_tools;
 
 // Re-export encryption helpers from dedicated crate.
 pub use rustyjack_encryption as crypto;

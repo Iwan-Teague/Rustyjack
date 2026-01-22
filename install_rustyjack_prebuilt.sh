@@ -688,6 +688,22 @@ else
   info "[OK] All daemon binary dependencies satisfied"
 fi
 
+# Configure regdom + forwarding sysctls (Rust-only, no external binaries)
+step "Configuring regulatory domain and forwarding sysctls..."
+if cmd "$CLI_NAME"; then
+  CONFIG_ARGS=()
+  if [ -n "${RUSTYJACK_COUNTRY:-}" ]; then
+    CONFIG_ARGS+=(--country "$RUSTYJACK_COUNTRY")
+  fi
+  if RUSTYJACK_ROOT="$RUNTIME_ROOT" "$CLI_NAME" system configure-host "${CONFIG_ARGS[@]}"; then
+    info "[OK] Host configuration complete"
+  else
+    warn "[WARN] Host configuration failed; review output above"
+  fi
+else
+  warn "rustyjack CLI not found; skipping regdom/sysctl configuration"
+fi
+
 # Create necessary directories
 step "Creating runtime directories"
 sudo mkdir -p "$RUNTIME_ROOT"
@@ -864,7 +880,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${RUNTIME_ROOT} /etc
+ReadWritePaths=${RUNTIME_ROOT} /etc/resolv.conf
 RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true

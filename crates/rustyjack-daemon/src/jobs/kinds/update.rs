@@ -1,14 +1,16 @@
-use std::sync::atomic::Ordering;
-use tokio::sync::mpsc;
+use std::path::PathBuf;
+
 use tokio_util::sync::CancellationToken;
 
 use rustyjack_ipc::{DaemonError, ErrorCode, UpdateRequestIpc};
-use crate::jobs::cancel_bridge::create_cancel_flag;
+use rustyjack_updater::{apply_update, UpdatePolicy};
 
 pub async fn run<F, Fut>(
     req: UpdateRequestIpc,
     cancel: &CancellationToken,
     progress: &mut F,
+    root: PathBuf,
+    update_pubkey: Option<[u8; 32]>,
 ) -> Result<serde_json::Value, DaemonError>
 where
     F: FnMut(&str, u8, &str) -> Fut,
@@ -18,55 +20,47 @@ where
         return Err(DaemonError::new(ErrorCode::Cancelled, "Job cancelled", false));
     }
 
-    let root = rustyjack_core::resolve_root(None).map_err(|err| {
-        DaemonError::new(ErrorCode::Internal, "resolve root failed", false)
-            .with_detail(err.to_string())
-    })?;
+    let url = req.url.trim();
+    if url.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "update url is required",
+            false,
+        ));
+    }
 
-    let request = rustyjack_core::services::update::UpdateRequest {
-        service: req.service,
-        remote: req.remote,
-        branch: req.branch,
-        backup_dir: req.backup_dir.map(std::path::PathBuf::from),
+    let public_key = update_pubkey.ok_or_else(|| {
+        DaemonError::new(
+            ErrorCode::Internal,
+            "update public key not configured",
+            false,
+        )
+    })?;
+    let policy = UpdatePolicy {
+        public_key_ed25519: public_key,
+        stage_dir: root.join("update").join("stage"),
+        install_dir: PathBuf::from("/usr/local/bin"),
+        unit_restart: "rustyjackd.service".to_string(),
     };
 
-    let cancel_flag = create_cancel_flag(cancel);
-    let cancel_flag_for_task = cancel_flag.clone();
+    progress("update", 5, "Starting update...").await;
 
-    let (tx, mut rx) = mpsc::channel::<(u8, String)>(64);
-    let mut handle = tokio::task::spawn_blocking(move || {
-        rustyjack_core::services::update::run_update(&root, request, Some(&cancel_flag_for_task), |percent, message| {
-            let _ = tx.try_send((percent, message.to_string()));
-        })
-    });
-
-    let mut cancel_notified = false;
-    let result = loop {
-        tokio::select! {
-            _ = cancel.cancelled(), if !cancel_notified => {
-                cancel_flag.store(true, Ordering::Relaxed);
-                cancel_notified = true;
-                progress("update", 90, "Cancelling...").await;
-            }
-            res = &mut handle => {
-                break res;
-            }
-            Some((percent, message)) = rx.recv() => {
-                progress("update", percent, &message).await;
-            }
+    let result = tokio::select! {
+        _ = cancel.cancelled() => Err(DaemonError::new(ErrorCode::Cancelled, "Job cancelled", false)),
+        res = apply_update(&policy, url) => {
+            res.map_err(|err| {
+                DaemonError::new(ErrorCode::UpdateFailed, "update failed", false)
+                    .with_detail(err.to_string())
+                    .with_source("daemon.jobs.update")
+            })
         }
     };
 
-    match result {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(err.to_daemon_error_with_code(
-            ErrorCode::UpdateFailed,
-            "daemon.jobs.update",
-        )),
-        Err(err) => Err(
-            DaemonError::new(ErrorCode::Internal, "update job panicked", false)
-                .with_detail(err.to_string())
-                .with_source("daemon.jobs.update"),
-        ),
-    }
+    result?;
+
+    progress("update", 100, "Update applied").await;
+
+    Ok(serde_json::json!({
+        "status": "applied",
+    }))
 }

@@ -34,9 +34,9 @@ pub use types::{
     LogLevel, LogTailRequest, LogTailResponse, MountInfo, MountListResponse, MountStartRequest,
     PortalActionResponse, PortalStartRequest, PortalStatusResponse, RequestBody, RequestEnvelope,
     ResponseBody, ResponseEnvelope, ResponseOk, RfkillEntry, SetActiveInterfaceRequest,
-    SetActiveInterfaceResponse, StatusResponse, SystemActionResponse, SystemLogsResponse,
-    SystemStatusResponse, UnmountStartRequest, VersionResponse, WifiCapabilitiesRequest,
-    WifiCapabilitiesResponse, WifiConnectStartRequest, WifiDisconnectRequest,
+    SetActiveInterfaceResponse, OpsConfig, OpsStatus, StatusResponse, SystemActionResponse,
+    SystemLogsResponse, SystemStatusResponse, UnmountStartRequest, VersionResponse,
+    WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiConnectStartRequest, WifiDisconnectRequest,
     WifiDisconnectResponse, WifiInterfacesResponse, WifiScanStartRequest,
 };
 pub use wire::{decode_frame_length, encode_frame, FrameError};

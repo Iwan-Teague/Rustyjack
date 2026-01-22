@@ -220,6 +220,18 @@ impl JobManager {
         }
     }
 
+    pub async fn cancel_where<F>(&self, predicate: F)
+    where
+        F: Fn(&JobKind) -> bool,
+    {
+        let jobs = self.jobs.lock().await;
+        for record in jobs.values() {
+            if predicate(&record.info.kind) {
+                record.cancel.cancel();
+            }
+        }
+    }
+
     pub async fn job_counts(&self) -> (usize, usize) {
         let jobs = self.jobs.lock().await;
         let total = jobs.len();
@@ -362,12 +374,6 @@ mod tests {
 
     fn create_fake_state() -> Arc<DaemonState> {
         use crate::config::DaemonConfig;
-        use crate::locks::LockManager;
-
-        Arc::new(DaemonState {
-            version: "test".to_string(),
-            config: DaemonConfig::from_env(),
-            locks: Arc::new(LockManager::new()),
-        })
+        Arc::new(DaemonState::new(DaemonConfig::from_env()))
     }
 }

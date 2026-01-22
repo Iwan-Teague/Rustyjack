@@ -11,10 +11,13 @@ mod dispatch;
 mod jobs;
 mod locks;
 mod netlink_watcher;
+mod ops;
+mod ops_apply;
 mod server;
 mod state;
 mod systemd;
 mod telemetry;
+mod tail;
 mod validation;
 
 use config::DaemonConfig;
@@ -32,6 +35,17 @@ async fn main() -> Result<()> {
             None
         }
     };
+    if config.update_pubkey.is_some() {
+        info!(
+            "update_pubkey loaded from {}",
+            config.update_pubkey_path.display()
+        );
+    } else {
+        warn!(
+            "update_pubkey missing or invalid at {}",
+            config.update_pubkey_path.display()
+        );
+    }
 
     // Wrap entire daemon execution in a component span for log identity
     let span = tracing::info_span!("rustyjackd", component = "rustyjackd");

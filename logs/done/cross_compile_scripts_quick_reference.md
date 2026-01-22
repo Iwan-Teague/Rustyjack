@@ -152,6 +152,6 @@ ARM binary → target-XX/[arch]/debug/rustyjack-ui
 
 ## See Also
 
-- Full documentation: `BUILD_WINDOWS.md`
+- Full documentation: `windows_arm_cross_compile_scripts.md`
 - Docker configurations: `docker/arm64/Dockerfile`, `docker/arm32/Dockerfile`
 - Bash script equivalents: `build_arm64.sh`, `build_arm32.sh`

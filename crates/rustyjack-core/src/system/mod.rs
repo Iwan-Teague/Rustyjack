@@ -34,6 +34,7 @@ pub mod interface_selection;
 pub mod isolation_policy;
 pub mod isolation_guard;
 pub mod loot_session;
+pub mod setup;
 
 pub use ops::{
     ErrorEntry, IsolationOutcome, NetOps, RealNetOps, RouteOutcome, RouteEntry,
@@ -57,7 +58,6 @@ use std::{
     net::{IpAddr, Ipv4Addr, ToSocketAddrs},
     os::unix::io::RawFd,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
@@ -663,17 +663,7 @@ pub fn kill_process(name: &str) -> Result<KillResult> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let status = Command::new("pkill")
-            .args(["-9", "-x", name])
-            .status()
-            .with_context(|| format!("terminating process {name}"))?;
-        if status.success() {
-            Ok(KillResult::Terminated)
-        } else if status.code() == Some(1) {
-            Ok(KillResult::NotFound)
-        } else {
-            bail!("pkill returned status {status}", status = status);
-        }
+        bail!("process control supported on Linux only");
     }
 }
 
@@ -696,11 +686,7 @@ pub fn process_running_exact(name: &str) -> Result<bool> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let status = Command::new("pgrep")
-            .args(["-x", name])
-            .status()
-            .with_context(|| format!("checking for process {name}"))?;
-        Ok(status.success())
+        bail!("process inspection supported on Linux only");
     }
 }
 
@@ -1505,13 +1491,23 @@ pub fn randomize_hostname() -> Result<String> {
     let suffix_short = &suffix[..suffix.len().min(6)];
     let new_hostname = format!("{}-{}", prefixes[idx], suffix_short);
 
-    // Try hostnamectl first; fall back to hostname
-    let _ = Command::new("hostnamectl")
-        .args(["set-hostname", &new_hostname])
-        .status();
-    let _ = Command::new("hostname").arg(&new_hostname).status();
+    #[cfg(target_os = "linux")]
+    {
+        let cstr = CString::new(new_hostname.clone())
+            .map_err(|_| anyhow!("hostname contains interior null"))?;
+        let rc = unsafe { libc::sethostname(cstr.as_ptr(), cstr.as_bytes().len()) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            bail!("sethostname failed: {}", err);
+        }
+        let _ = fs::write("/etc/hostname", format!("{}\n", new_hostname));
+        return Ok(new_hostname);
+    }
 
-    Ok(new_hostname)
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("hostname randomization supported on Linux only");
+    }
 }
 
 pub fn current_mac(interface: &str) -> Option<String> {
@@ -2172,7 +2168,7 @@ pub fn apply_interface_isolation_with_ops_strict(
     apply_interface_isolation_with_ops_strict_impl(ops, allowed, false)
 }
 
-pub(crate) fn apply_interface_isolation_with_ops_block_all(
+pub fn apply_interface_isolation_with_ops_block_all(
     ops: Arc<dyn crate::system::ops::NetOps>,
 ) -> Result<crate::system::ops::IsolationOutcome> {
     apply_interface_isolation_with_ops_strict_impl(ops, &[], true)
@@ -2710,55 +2706,24 @@ pub fn write_interface_preference(root: &Path, key: &str, interface: &str) -> Re
     Ok(())
 }
 
+#[cfg(feature = "external_tools")]
 pub fn backup_repository(root: &Path, backup_dir: Option<&Path>) -> Result<PathBuf> {
-    let dir = backup_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("/root"));
-    fs::create_dir_all(&dir)?;
-    let ts = Local::now().format("%Y-%m-%d_%H-%M-%S");
-    let archive = dir.join(format!("rustyjack_backup_{ts}.tar.gz"));
-    let parent = root
-        .parent()
-        .ok_or_else(|| anyhow!("Root path must have a parent directory"))?;
-    let name = root
-        .file_name()
-        .ok_or_else(|| anyhow!("Root path must end with a directory component"))?;
-    Command::new("tar")
-        .arg("-czf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(parent)
-        .arg(name)
-        .status()
-        .context("creating backup archive")?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("tar command failed"))?;
-    Ok(archive)
+    crate::external_tools::archive_ops::backup_repository(root, backup_dir)
 }
 
+#[cfg(not(feature = "external_tools"))]
+pub fn backup_repository(_root: &Path, _backup_dir: Option<&Path>) -> Result<PathBuf> {
+    bail!("backup_repository disabled (external_tools)")
+}
+
+#[cfg(feature = "external_tools")]
 pub fn git_reset_to_remote(root: &Path, remote: &str, branch: &str) -> Result<()> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("fetch")
-        .arg(remote)
-        .status()
-        .context("git fetch")?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("git fetch failed"))?;
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("reset")
-        .arg("--hard")
-        .arg(format!("{remote}/{branch}"))
-        .status()
-        .context("git reset")?
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("git reset failed"))
+    crate::external_tools::git_ops::git_reset_to_remote(root, remote, branch)
+}
+
+#[cfg(not(feature = "external_tools"))]
+pub fn git_reset_to_remote(_root: &Path, _remote: &str, _branch: &str) -> Result<()> {
+    bail!("git_reset_to_remote disabled (external_tools)")
 }
 
 pub fn restart_system_service(service: &str) -> Result<()> {

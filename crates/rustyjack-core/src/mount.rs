@@ -152,6 +152,7 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
     if !policy.allowed_fs.contains(&fs_type) {
         bail!("filesystem not allowed: {:?}", fs_type);
     }
+    ensure_fs_supported(&fs_type)?;
 
     let existing = list_mounts_under(policy)?;
     for entry in &existing {
@@ -571,6 +572,41 @@ fn detect_fs_type(device: &Path) -> Result<FsType> {
     }
 
     Err(anyhow!("unsupported or unknown filesystem"))
+}
+
+fn ensure_fs_supported(fs: &FsType) -> Result<()> {
+    let supported = kernel_supported_filesystems()?;
+    let (display, candidates): (&str, &[&str]) = match fs {
+        FsType::Vfat => ("vfat", &["vfat", "fat", "msdos"]),
+        FsType::Ext2 => ("ext2", &["ext2"]),
+        FsType::Ext3 => ("ext3", &["ext3"]),
+        FsType::Ext4 => ("ext4", &["ext4"]),
+        FsType::Exfat => ("exfat", &["exfat"]),
+        FsType::Unknown(_) => bail!("fs type not allowed"),
+    };
+
+    if candidates.iter().any(|fs| supported.contains(*fs)) {
+        return Ok(());
+    }
+
+    bail!(
+        "filesystem {} detected but not supported by kernel. Use FAT32 (vfat) or ext4, or enable kernel support for {}.",
+        display,
+        display
+    );
+}
+
+fn kernel_supported_filesystems() -> Result<BTreeSet<String>> {
+    let contents = fs::read_to_string("/proc/filesystems")
+        .context("reading /proc/filesystems")?;
+    let mut supported = BTreeSet::new();
+    for line in contents.lines() {
+        let fs_name = line.split_whitespace().last().unwrap_or("");
+        if !fs_name.is_empty() {
+            supported.insert(fs_name.to_string());
+        }
+    }
+    Ok(supported)
 }
 
 fn detect_ext_family(buf: &[u8]) -> Option<FsType> {

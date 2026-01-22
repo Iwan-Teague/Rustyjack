@@ -8,8 +8,18 @@ name = "rustyjackd"
 path = "src/main.rs"
 
 [features]
-default = []
-dangerous_ops = []
+default = ["appliance"]
+
+# Production profile (appliance-safe).
+appliance = ["rustyjack-core/appliance"]
+
+# Explicit opt-in for lab/dev builds.
+lab = ["rustyjack-core/lab"]
+
+core_dispatch = []
+offensive_ops = []
+loot_ops = []
+process_ops = []
 
 [dependencies]
 anyhow = "1.0"
@@ -21,11 +31,18 @@ tracing = "0.1"
 futures = "0.3"
 rustyjack-logging = { path = "../rustyjack-logging" }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-rtnetlink = "0.14"
-
 [dependencies.rustyjack-ipc]
 path = "../rustyjack-ipc"
 
 [dependencies.rustyjack-core]
 path = "../rustyjack-core"
+
+[dependencies.rustyjack-netlink]
+path = "../rustyjack-netlink"
+
+[dependencies.rustyjack-updater]
+path = "../rustyjack-updater"
+
+[dev-dependencies]
+rustyjack-client = { path = "../rustyjack-client" }
+rustyjack-commands = { path = "../rustyjack-commands" }

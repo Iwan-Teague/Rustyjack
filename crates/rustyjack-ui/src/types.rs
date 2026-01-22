@@ -210,15 +210,6 @@ pub enum StepOutcome {
     Skipped(String),
 }
 
-/// Result of checking for cancel during an attack
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CancelAction {
-    Continue,   // User wants to continue attack
-    GoBack,     // User wants to go back one menu
-    GoMainMenu, // User wants to go to main menu
-}
-
 // ==================== System Operation Types ====================
 
 #[allow(dead_code)]

@@ -3,23 +3,27 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rustyjack_ipc::{
-    is_dangerous_job, ActiveInterfaceClearResponse, ActiveInterfaceResponse, BlockDeviceInfo,
-    BlockDevicesResponse, CoreDispatchRequest, CoreDispatchResponse, DaemonError, DiskUsageRequest,
-    DiskUsageResponse, ErrorCode, GpioDiagnosticsResponse, HealthResponse, HostnameResponse,
-    HotspotClientsResponse, HotspotDiagnosticsRequest, HotspotDiagnosticsResponse,
-    HotspotWarningsResponse, InterfaceCapabilities, InterfaceStatusRequest, InterfaceStatusResponse,
-    JobCancelRequest, JobCancelResponse, JobSpec, JobStarted, JobStartRequest, JobStatusRequest,
-    JobStatusResponse, LegacyCommand, LogComponent, LogLevel, RequestBody, RequestEnvelope,
-    ResponseBody, ResponseEnvelope, ResponseOk, StatusResponse, SystemActionResponse,
-    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
-    WifiCapabilitiesResponse, PROTOCOL_VERSION,
+    ActiveInterfaceClearResponse, ActiveInterfaceResponse, BlockDeviceInfo, BlockDevicesResponse,
+    CoreDispatchResponse, DaemonError, DiskUsageRequest, DiskUsageResponse, ErrorCode,
+    GpioDiagnosticsResponse, HealthResponse, HostnameResponse, HotspotClientsResponse,
+    HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse,
+    InterfaceCapabilities, InterfaceStatusRequest, InterfaceStatusResponse, JobCancelRequest,
+    JobCancelResponse, JobSpec, JobStarted, JobStartRequest, JobStatusRequest, JobStatusResponse,
+    LogComponent, LogLevel, OpsStatus, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
+    ResponseOk, StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse,
+    VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse, PROTOCOL_VERSION,
 };
+
+#[cfg(feature = "core_dispatch")]
+use rustyjack_ipc::{CoreDispatchRequest, LegacyCommand};
 use tokio::task;
 
 use crate::auth::PeerCred;
+use crate::ops_apply::{apply_ops_delta, write_ops_override};
 use crate::state::DaemonState;
 use crate::telemetry::log_request;
 use crate::validation;
+use rustyjack_updater::{apply_update, UpdatePolicy};
 
 async fn run_blocking<T, E, F>(label: &'static str, f: F) -> Result<T, DaemonError>
 where
@@ -42,6 +46,7 @@ where
 }
 
 const MAX_LOG_TAIL_LINES: usize = 5000;
+const MAX_LOG_TAIL_BYTES: usize = 1024 * 1024;
 
 fn log_path_for(root: &PathBuf, component: &LogComponent) -> PathBuf {
     match component {
@@ -58,6 +63,53 @@ fn log_path_for(root: &PathBuf, component: &LogComponent) -> PathBuf {
 
 fn normalize_log_level(value: &str) -> LogLevel {
     value.parse().unwrap_or(LogLevel::Info)
+}
+
+fn update_policy_for(config: &crate::config::DaemonConfig) -> Result<UpdatePolicy, DaemonError> {
+    let public_key = config.update_pubkey.ok_or_else(|| {
+        DaemonError::new(
+            ErrorCode::Internal,
+            "update public key not configured",
+            false,
+        )
+        .with_detail(format!(
+            "missing or invalid {}",
+            config.update_pubkey_path.display()
+        ))
+    })?;
+
+    Ok(UpdatePolicy {
+        public_key_ed25519: public_key,
+        stage_dir: config.root_path.join("update").join("stage"),
+        install_dir: PathBuf::from("/usr/local/bin"),
+        unit_restart: "rustyjackd.service".to_string(),
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InterfaceKind {
+    Wired,
+    Wireless,
+}
+
+fn classify_interface_kind(interface: &str) -> Result<InterfaceKind, DaemonError> {
+    let list = rustyjack_core::system::list_interface_summaries().map_err(|err| {
+        DaemonError::new(ErrorCode::Netlink, "failed to list interfaces", false)
+            .with_detail(err.to_string())
+            .with_source("daemon.dispatch.interface_kind")
+    })?;
+    let Some(entry) = list.into_iter().find(|item| item.name == interface) else {
+        return Err(
+            DaemonError::new(ErrorCode::NotFound, "interface not found", false)
+                .with_detail(interface.to_string())
+                .with_source("daemon.dispatch.interface_kind"),
+        );
+    };
+    if entry.is_wireless {
+        Ok(InterfaceKind::Wireless)
+    } else {
+        Ok(InterfaceKind::Wired)
+    }
 }
 
 async fn dispatch_core_command(
@@ -106,11 +158,61 @@ pub async fn handle_request(
         })),
         RequestBody::Status => {
             let (total, active) = state.jobs.job_counts().await;
+            let ops_cfg = state.ops_runtime.read().await;
+            let ops = OpsStatus {
+                wifi_ops: ops_cfg.wifi_ops,
+                eth_ops: ops_cfg.eth_ops,
+                hotspot_ops: ops_cfg.hotspot_ops,
+                portal_ops: ops_cfg.portal_ops,
+                storage_ops: ops_cfg.storage_ops,
+                system_ops: ops_cfg.system_ops,
+                update_ops: ops_cfg.update_ops,
+                dev_ops: ops_cfg.dev_ops,
+                offensive_ops: ops_cfg.offensive_ops,
+                loot_ops: ops_cfg.loot_ops,
+                process_ops: ops_cfg.process_ops,
+            };
             ResponseBody::Ok(ResponseOk::Status(StatusResponse {
                 uptime_ms: state.uptime_ms(),
                 jobs_active: active,
                 jobs_total: total,
+                ops,
             }))
+        }
+        RequestBody::OpsConfigGet => {
+            let ops = *state.ops_runtime.read().await;
+            ResponseBody::Ok(ResponseOk::OpsConfig(ops))
+        }
+        RequestBody::OpsConfigSet(next_ops) => {
+            let previous = *state.ops_runtime.read().await;
+            {
+                let mut ops = state.ops_runtime.write().await;
+                *ops = next_ops;
+            }
+
+            if let Err(err) = write_ops_override(&state.config.root_path, next_ops) {
+                let mut daemon_err = DaemonError::new(
+                    ErrorCode::Internal,
+                    "failed to persist ops config",
+                    false,
+                );
+                daemon_err = daemon_err
+                    .with_detail(err.to_string())
+                    .with_source("daemon.dispatch.ops_config_set");
+                ResponseBody::Err(daemon_err)
+            } else if let Err(err) = apply_ops_delta(previous, next_ops, state).await {
+                let mut daemon_err = DaemonError::new(
+                    ErrorCode::Internal,
+                    "failed to apply ops changes",
+                    false,
+                );
+                daemon_err = daemon_err
+                    .with_detail(err.to_string())
+                    .with_source("daemon.dispatch.ops_config_set");
+                ResponseBody::Err(daemon_err)
+            } else {
+                ResponseBody::Ok(ResponseOk::OpsConfigSetAck { ops: next_ops })
+            }
         }
         RequestBody::StatusCommand(command) => {
             let root = state.config.root_path.clone();
@@ -151,6 +253,7 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(feature = "loot_ops")]
         RequestBody::LootCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -164,6 +267,12 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "loot_ops"))]
+        RequestBody::LootCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "Loot disabled in this build",
+            false,
+        )),
         RequestBody::NotifyCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -178,16 +287,49 @@ pub async fn handle_request(
             }
         }
         RequestBody::SystemCommand(command) => {
-            let root = state.config.root_path.clone();
-            match dispatch_core_command(
-                "system_command",
-                root,
-                rustyjack_core::Commands::System(command),
-            )
-            .await
-            {
-                Ok(resp) => ResponseBody::Ok(ResponseOk::SystemCommand(resp)),
-                Err(err) => ResponseBody::Err(err),
+            match command {
+                rustyjack_ipc::SystemCommand::Update(args) => {
+                    let url = args.url.trim();
+                    if let Err(err) = validation::validate_update_url(url) {
+                        ResponseBody::Err(err)
+                    } else {
+                        let policy = match update_policy_for(&state.config) {
+                            Ok(policy) => policy,
+                            Err(err) => {
+                                return ResponseEnvelope {
+                                    v: PROTOCOL_VERSION,
+                                    request_id: request.request_id,
+                                    body: ResponseBody::Err(err),
+                                };
+                            }
+                        };
+                        match apply_update(&policy, url).await {
+                            Ok(()) => ResponseBody::Ok(ResponseOk::SystemCommand(
+                                CoreDispatchResponse {
+                                    message: "Update applied".to_string(),
+                                    data: serde_json::json!({ "status": "applied" }),
+                                },
+                            )),
+                            Err(err) => ResponseBody::Err(
+                                DaemonError::new(ErrorCode::UpdateFailed, "update failed", false)
+                                    .with_detail(err.to_string()),
+                            ),
+                        }
+                    }
+                }
+                _ => {
+                    let root = state.config.root_path.clone();
+                    match dispatch_core_command(
+                        "system_command",
+                        root,
+                        rustyjack_core::Commands::System(command),
+                    )
+                    .await
+                    {
+                        Ok(resp) => ResponseBody::Ok(ResponseOk::SystemCommand(resp)),
+                        Err(err) => ResponseBody::Err(err),
+                    }
+                }
             }
         }
         RequestBody::HardwareCommand(command) => {
@@ -203,6 +345,7 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(feature = "offensive_ops")]
         RequestBody::DnsSpoofCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -216,6 +359,13 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "offensive_ops"))]
+        RequestBody::DnsSpoofCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "DnsSpoof disabled in this build",
+            false,
+        )),
+        #[cfg(feature = "offensive_ops")]
         RequestBody::MitmCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -229,6 +379,13 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "offensive_ops"))]
+        RequestBody::MitmCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "Mitm disabled in this build",
+            false,
+        )),
+        #[cfg(feature = "offensive_ops")]
         RequestBody::ReverseCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -242,6 +399,12 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "offensive_ops"))]
+        RequestBody::ReverseCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "Reverse disabled in this build",
+            false,
+        )),
         RequestBody::HotspotCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -255,6 +418,7 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(feature = "offensive_ops")]
         RequestBody::ScanCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -268,6 +432,13 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "offensive_ops"))]
+        RequestBody::ScanCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "Scan disabled in this build",
+            false,
+        )),
+        #[cfg(feature = "offensive_ops")]
         RequestBody::BridgeCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -281,6 +452,13 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "offensive_ops"))]
+        RequestBody::BridgeCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "Bridge disabled in this build",
+            false,
+        )),
+        #[cfg(feature = "process_ops")]
         RequestBody::ProcessCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -294,6 +472,12 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
+        #[cfg(not(feature = "process_ops"))]
+        RequestBody::ProcessCommand(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "Process command disabled in this build",
+            false,
+        )),
         RequestBody::SystemStatusGet => {
             let result = run_blocking("system_status_get", || {
                 let hostname = std::fs::read_to_string("/etc/hostname")
@@ -755,19 +939,11 @@ pub async fn handle_request(
                 },
                 requested_by: Some(format!("uid={}", peer.uid)),
             };
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::WifiConnectStart(rustyjack_ipc::WifiConnectStartRequest {
             interface,
@@ -814,19 +990,11 @@ pub async fn handle_request(
                 },
                 requested_by: Some(format!("uid={}", peer.uid)),
             };
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::HotspotStart(rustyjack_ipc::HotspotStartRequest {
             interface,
@@ -884,19 +1052,11 @@ pub async fn handle_request(
                 },
                 requested_by: Some(format!("uid={}", peer.uid)),
             };
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::HotspotStop => {
             let result = run_blocking("hotspot_stop", || {
@@ -935,19 +1095,11 @@ pub async fn handle_request(
                 },
                 requested_by: Some(format!("uid={}", peer.uid)),
             };
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::PortalStop => {
             let result = run_blocking("portal_stop", || {
@@ -1036,19 +1188,11 @@ pub async fn handle_request(
                 },
                 requested_by: Some(format!("uid={}", peer.uid)),
             };
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::UnmountStart(rustyjack_ipc::UnmountStartRequest { device }) => {
             if let Err(err) = validation::validate_mount_device_hint(&device) {
@@ -1064,21 +1208,51 @@ pub async fn handle_request(
                 },
                 requested_by: Some(format!("uid={}", peer.uid)),
             };
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::SetActiveInterface(rustyjack_ipc::SetActiveInterfaceRequest { interface }) => {
+            let ops = state.ops_runtime.read().await;
+            let allow_wifi = ops.wifi_ops;
+            let allow_eth = ops.eth_ops;
+            drop(ops);
+
+            match classify_interface_kind(&interface) {
+                Ok(InterfaceKind::Wireless) if !allow_wifi => {
+                    return ResponseEnvelope {
+                        v: PROTOCOL_VERSION,
+                        request_id: request.request_id,
+                        body: ResponseBody::Err(DaemonError::new(
+                            ErrorCode::Forbidden,
+                            "wifi ops disabled",
+                            false,
+                        )),
+                    };
+                }
+                Ok(InterfaceKind::Wired) if !allow_eth => {
+                    return ResponseEnvelope {
+                        v: PROTOCOL_VERSION,
+                        request_id: request.request_id,
+                        body: ResponseBody::Err(DaemonError::new(
+                            ErrorCode::Forbidden,
+                            "ethernet ops disabled",
+                            false,
+                        )),
+                    };
+                }
+                Err(err) => {
+                    return ResponseEnvelope {
+                        v: PROTOCOL_VERSION,
+                        request_id: request.request_id,
+                        body: ResponseBody::Err(err),
+                    };
+                }
+                _ => {}
+            }
+
             let root = state.config.root_path.clone();
             let iface = interface.clone();
             let result = run_blocking("set_active_interface", move || {
@@ -1159,38 +1333,20 @@ pub async fn handle_request(
             let component_clone = component.clone();
 
             let result = run_blocking("log_tail", move || {
-                use std::fs::File;
-                use std::io::{BufRead, BufReader};
-                use std::collections::VecDeque;
-
                 let log_path = log_path_for(&root, &component_clone);
 
                 if !log_path.exists() {
                     return Ok((Vec::new(), false));
                 }
+                let (content, truncated) =
+                    crate::tail::tail_lines_with_truncation(&log_path, max_lines, MAX_LOG_TAIL_BYTES)
+                        .map_err(|e| {
+                            DaemonError::new(ErrorCode::Io, "failed to tail log file", false)
+                                .with_detail(e.to_string())
+                        })?;
+                let lines = content.lines().map(|line| line.to_string()).collect();
 
-                let file = File::open(&log_path).map_err(|e| {
-                    DaemonError::new(ErrorCode::Io, "failed to open log file", false)
-                        .with_detail(e.to_string())
-                })?;
-
-                let reader = BufReader::new(file);
-                let mut buf: VecDeque<String> = VecDeque::with_capacity(max_lines.saturating_add(1));
-                let mut truncated = false;
-
-                for line in reader.lines() {
-                    let line = line.map_err(|e| {
-                        DaemonError::new(ErrorCode::Io, "failed to read log file", false)
-                            .with_detail(e.to_string())
-                    })?;
-                    if buf.len() == max_lines {
-                        buf.pop_front();
-                        truncated = true;
-                    }
-                    buf.push_back(line);
-                }
-
-                Ok::<(Vec<String>, bool), DaemonError>((buf.into_iter().collect(), truncated))
+                Ok::<(Vec<String>, bool), DaemonError>((lines, truncated))
             })
             .await;
 
@@ -1274,6 +1430,7 @@ pub async fn handle_request(
                 }))
             }
         }
+        #[cfg(feature = "core_dispatch")]
         RequestBody::CoreDispatch(CoreDispatchRequest { legacy, args }) => {
             if !state.config.allow_core_dispatch {
                 return ResponseEnvelope {
@@ -1328,6 +1485,12 @@ pub async fn handle_request(
                 )),
             }
         }
+        #[cfg(not(feature = "core_dispatch"))]
+        RequestBody::CoreDispatch(_) => ResponseBody::Err(DaemonError::new(
+            ErrorCode::Forbidden,
+            "CoreDispatch disabled in this build",
+            false,
+        )),
         RequestBody::JobStart(JobStartRequest { job }) => {
             if let Err(err) = validation::validate_job_kind(&job.kind) {
                 return ResponseEnvelope {
@@ -1336,19 +1499,11 @@ pub async fn handle_request(
                     body: ResponseBody::Err(err),
                 };
             }
-            if !state.config.dangerous_ops_enabled && is_dangerous_job(&job.kind) {
-                ResponseBody::Err(DaemonError::new(
-                    ErrorCode::Forbidden,
-                    "dangerous operations disabled",
-                    false,
-                ))
-            } else {
-                let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
-                ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
-                    job_id,
-                    accepted_at_ms: DaemonState::now_ms(),
-                }))
-            }
+            let job_id = state.jobs.start_job(job, Arc::clone(state)).await;
+            ResponseBody::Ok(ResponseOk::JobStarted(JobStarted {
+                job_id,
+                accepted_at_ms: DaemonState::now_ms(),
+            }))
         }
         RequestBody::JobStatus(JobStatusRequest { job_id }) => {
             match state.jobs.job_status(job_id).await {
