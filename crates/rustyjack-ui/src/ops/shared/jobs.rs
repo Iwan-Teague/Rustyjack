@@ -120,3 +120,29 @@ pub fn dispatch_cancellable(
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+/// Helper for Operation trait implementors - dispatches a job and returns OperationOutcome
+pub fn run_cancellable_job(
+    ctx: &mut OperationContext,
+    cmd: &Commands,
+    title: &str,
+    _running_message: &str,
+) -> Result<crate::ops::OperationOutcome> {
+    use crate::ops::OperationOutcome;
+
+    // Duration is not used for progress display in new pattern - the job's state is
+    let duration = 0; // 0 means show elapsed time only
+
+    match dispatch_cancellable(ctx, title, cmd.clone(), duration)? {
+        JobRunResult::Completed { message, .. } => {
+            Ok(OperationOutcome::Success {
+                summary: vec![message],
+            })
+        }
+        JobRunResult::Cancelled => {
+            Ok(OperationOutcome::Cancelled {
+                summary: vec!["Operation cancelled by user".to_string()],
+            })
+        }
+    }
+}

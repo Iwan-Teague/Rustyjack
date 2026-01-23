@@ -1,3 +1,5 @@
+pub mod ethernet;
+pub mod recon;
 pub mod runner;
 pub mod shared;
 pub mod wifi;
