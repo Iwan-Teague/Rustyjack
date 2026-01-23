@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 
 use rustyjack_commands::{
-    Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiProbeSniffArgs,
+    Commands, WifiCommand, WifiDeauthArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiPmkidArgs,
+    WifiProbeSniffArgs,
 };
 
 use crate::ops::{
@@ -395,6 +396,269 @@ impl Operation for PmkidCaptureOp {
                         .unwrap_or("pmkid.hc22000");
                     lines.push(format!("File: {}", name));
                 }
+                Ok(OperationOutcome::Success { summary: lines })
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Evil Twin Attack Operation
+// ============================================================================
+
+pub struct EvilTwinAttackOp {
+    interface: String,
+    target_network: String,
+    target_bssid: String,
+    target_channel: u8,
+    duration_secs: u64,
+}
+
+impl EvilTwinAttackOp {
+    pub fn new() -> Self {
+        Self {
+            interface: String::new(),
+            target_network: String::new(),
+            target_bssid: String::new(),
+            target_channel: 0,
+            duration_secs: 0,
+        }
+    }
+}
+
+impl Operation for EvilTwinAttackOp {
+    fn id(&self) -> &'static str {
+        "evil_twin_attack"
+    }
+
+    fn title(&self) -> &'static str {
+        "Evil Twin"
+    }
+
+    fn preflight(&mut self, ctx: &mut OperationContext) -> Result<()> {
+        preflight::require_not_stealth(ctx.ui.config, "Evil Twin blocked in stealth")?;
+        preflight::require_active_interface(ctx.ui.config)?;
+
+        let target_network = ctx.ui.config.settings.target_network.clone();
+        let target_bssid = ctx.ui.config.settings.target_bssid.clone();
+
+        if target_network.is_empty() || target_bssid.is_empty() {
+            bail!("No target network set. Scan networks first and select 'Set as Target'.");
+        }
+
+        self.interface = ctx.ui.config.settings.active_network_interface.clone();
+        self.target_network = target_network;
+        self.target_bssid = target_bssid;
+        self.target_channel = ctx.ui.config.settings.target_channel;
+
+        Ok(())
+    }
+
+    fn setup(&mut self, ctx: &mut OperationContext) -> Result<bool> {
+        let durations = vec![
+            "1 minute".to_string(),
+            "5 minutes".to_string(),
+            "10 minutes".to_string(),
+            "30 minutes".to_string(),
+        ];
+
+        match picker::choose(&mut ctx.ui, "Attack Duration", &durations, "Evil Twin")? {
+            PickerChoice::Selected(0) => self.duration_secs = 60,
+            PickerChoice::Selected(1) => self.duration_secs = 300,
+            PickerChoice::Selected(2) => self.duration_secs = 600,
+            PickerChoice::Selected(3) => self.duration_secs = 1800,
+            PickerChoice::Back | PickerChoice::Cancel => return Ok(false),
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn confirm_lines(&self) -> Vec<String> {
+        vec![
+            format!("Target: {}", self.target_network),
+            format!("BSSID: {}", self.target_bssid),
+            format!("Channel: {}", self.target_channel),
+            format!("Interface: {}", self.interface),
+            format!("Duration: {}s", self.duration_secs),
+            "".to_string(),
+            "Creates open AP copy to".to_string(),
+            "capture connecting clients".to_string(),
+            "KEY2 cancels while running".to_string(),
+        ]
+    }
+
+    fn run(&mut self, ctx: &mut OperationContext) -> Result<OperationOutcome> {
+        let cmd = Commands::Wifi(WifiCommand::EvilTwin(WifiEvilTwinArgs {
+            ssid: self.target_network.clone(),
+            target_bssid: Some(self.target_bssid.clone()),
+            channel: self.target_channel,
+            interface: self.interface.clone(),
+            duration: self.duration_secs as u32,
+            open: true,
+        }));
+
+        let result = jobs::dispatch_cancellable(ctx, "Evil Twin", cmd, self.duration_secs)?;
+
+        match result {
+            jobs::JobRunResult::Cancelled => Ok(OperationOutcome::Cancelled {
+                summary: vec![
+                    "Cancelled by user".to_string(),
+                    "Check loot/Wireless/".to_string(),
+                ],
+            }),
+            jobs::JobRunResult::Completed { message, data } => {
+                let mut lines = vec![message];
+
+                if let Some(clients) = data.get("clients_connected").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Clients: {}", clients));
+                }
+
+                if let Some(pcap) = data.get("pcap_file").and_then(|v| v.as_str()) {
+                    let name = std::path::Path::new(pcap)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("capture.pcap");
+                    lines.push(format!("PCAP: {}", name));
+                }
+
+                Ok(OperationOutcome::Success { summary: lines })
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Karma Attack Operation
+// ============================================================================
+
+pub struct KarmaAttackOp {
+    interface: String,
+    duration_secs: u64,
+    with_ap: bool,
+}
+
+impl KarmaAttackOp {
+    pub fn new() -> Self {
+        Self {
+            interface: String::new(),
+            duration_secs: 0,
+            with_ap: false,
+        }
+    }
+}
+
+impl Operation for KarmaAttackOp {
+    fn id(&self) -> &'static str {
+        "karma_attack"
+    }
+
+    fn title(&self) -> &'static str {
+        "Karma Attack"
+    }
+
+    fn preflight(&mut self, ctx: &mut OperationContext) -> Result<()> {
+        preflight::require_not_stealth(ctx.ui.config, "Karma blocked in stealth")?;
+        preflight::require_active_interface(ctx.ui.config)?;
+        self.interface = ctx.ui.config.settings.active_network_interface.clone();
+        Ok(())
+    }
+
+    fn setup(&mut self, ctx: &mut OperationContext) -> Result<bool> {
+        // Choose mode
+        let modes = vec!["Passive (sniff only)".to_string(), "With AP".to_string()];
+
+        match picker::choose(&mut ctx.ui, "Karma Mode", &modes, "Karma Attack")? {
+            PickerChoice::Selected(0) => self.with_ap = false,
+            PickerChoice::Selected(1) => self.with_ap = true,
+            PickerChoice::Back | PickerChoice::Cancel => return Ok(false),
+            _ => return Ok(false),
+        }
+
+        // Choose duration
+        let durations = vec![
+            "5 minutes".to_string(),
+            "10 minutes".to_string(),
+            "30 minutes".to_string(),
+            "Indefinite".to_string(),
+        ];
+
+        match picker::choose(&mut ctx.ui, "Duration", &durations, "Karma Attack")? {
+            PickerChoice::Selected(0) => self.duration_secs = 300,
+            PickerChoice::Selected(1) => self.duration_secs = 600,
+            PickerChoice::Selected(2) => self.duration_secs = 1800,
+            PickerChoice::Selected(3) => self.duration_secs = INDEFINITE_SECS as u64,
+            PickerChoice::Back | PickerChoice::Cancel => return Ok(false),
+            _ => return Ok(false),
+        }
+
+        Ok(true)
+    }
+
+    fn confirm_lines(&self) -> Vec<String> {
+        let duration_str = if self.duration_secs >= INDEFINITE_SECS as u64 {
+            "Indefinite".to_string()
+        } else {
+            format!("{}s", self.duration_secs)
+        };
+
+        let mode = if self.with_ap {
+            "With fake AP"
+        } else {
+            "Passive sniff"
+        };
+
+        vec![
+            format!("Interface: {}", self.interface),
+            format!("Mode: {}", mode),
+            format!("Duration: {}", duration_str),
+            "".to_string(),
+            "Responds to ALL probe".to_string(),
+            "requests from devices".to_string(),
+            "KEY2 cancels while running".to_string(),
+        ]
+    }
+
+    fn run(&mut self, ctx: &mut OperationContext) -> Result<OperationOutcome> {
+        let cmd = Commands::Wifi(WifiCommand::Karma(WifiKarmaArgs {
+            interface: self.interface.clone(),
+            ap_interface: if self.with_ap {
+                Some(self.interface.clone())
+            } else {
+                None
+            },
+            duration: self.duration_secs as u32,
+            channel: 0, // hop channels
+            with_ap: self.with_ap,
+            ssid_whitelist: None,
+            ssid_blacklist: None,
+        }));
+
+        let result = jobs::dispatch_cancellable(ctx, "Karma Attack", cmd, self.duration_secs)?;
+
+        match result {
+            jobs::JobRunResult::Cancelled => Ok(OperationOutcome::Cancelled {
+                summary: vec![
+                    "Cancelled by user".to_string(),
+                    "Check loot/Wireless/".to_string(),
+                ],
+            }),
+            jobs::JobRunResult::Completed { message, data } => {
+                let mut lines = vec![message];
+
+                if let Some(probes) = data.get("probes_captured").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Probes: {}", probes));
+                }
+
+                if let Some(devices) = data.get("unique_devices").and_then(|v| v.as_u64()) {
+                    lines.push(format!("Devices: {}", devices));
+                }
+
+                if let Some(clients) = data.get("clients_connected").and_then(|v| v.as_u64()) {
+                    if clients > 0 {
+                        lines.push(format!("Clients connected: {}", clients));
+                    }
+                }
+
                 Ok(OperationOutcome::Success { summary: lines })
             }
         }

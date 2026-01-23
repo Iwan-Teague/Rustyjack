@@ -19,7 +19,8 @@
       "Bash(pwsh:*)",
       "Bash(find:*)",
       "Bash(powershell -NoProfile -Command:*)",
-      "Bash(docker:*)"
+      "Bash(docker:*)",
+      "Bash(powershell -Command \"Get-Process | Where-Object {$_ProcessName -like ''*cargo*'' -or $_ProcessName -like ''*rustc*''} | Select-Object -First 5 ProcessName,Id\")"
     ]
   },
   "enableAllProjectMcpServers": true,
