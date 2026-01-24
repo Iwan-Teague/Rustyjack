@@ -11,6 +11,7 @@ libc = "0.2"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 rustyjack-netlink = { path = "../rustyjack-netlink" }
+tokio = { version = "1.0", features = ["rt"] }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["rt", "macros"] }
