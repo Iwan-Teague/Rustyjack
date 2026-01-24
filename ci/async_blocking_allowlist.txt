@@ -1,0 +1,26 @@
+# Async Blocking Allowlist
+# ========================
+# Files listed here are allowed to contain blocking operations in async contexts.
+# Add entries as full paths relative to repo root, one per line.
+# Comments start with #
+#
+# Before adding an entry, consider:
+# 1. Can the blocking code be wrapped in spawn_blocking()?
+# 2. Can an async alternative be used (tokio::fs, tokio::net)?
+# 3. Is this truly necessary for the architecture?
+#
+# Format: crates/crate-name/src/path/to/file.rs
+
+# =============================================================================
+# PERMANENT ALLOWLIST (architecturally acceptable)
+# =============================================================================
+
+# Portal startup - reads config before async event loop starts (acceptable)
+# The std::fs and std::net calls happen during initialization before serving
+crates/rustyjack-portal/src/bin/main.rs
+
+# =============================================================================
+# TEMPORARY ALLOWLIST (TODO: These should be fixed)
+# =============================================================================
+
+# (All issues fixed - section kept for future use)

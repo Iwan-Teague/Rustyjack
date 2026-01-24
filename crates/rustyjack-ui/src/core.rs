@@ -1,6 +1,7 @@
 use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -12,8 +13,13 @@ use rustyjack_ipc::{
     UpdateRequestIpc, WifiCapabilitiesResponse,
 };
 use serde_json::Value;
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, Runtime};
 use tokio::time::sleep;
+
+/// Cached tokio runtime for the UI process.
+/// Using OnceLock ensures the runtime is created exactly once and reused for all
+/// daemon client calls, avoiding the overhead of creating a new runtime per call.
+static UI_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 pub type HandlerResult = (String, Value);
 
@@ -513,16 +519,19 @@ impl CoreBridge {
     where
         F: Future<Output = Result<T>>,
     {
-        match Handle::try_current() {
-            Ok(handle) => handle.block_on(fut),
-            Err(_) => {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .context("building tokio runtime for daemon client")?;
-                rt.block_on(fut)
-            }
+        // If we're already in an async context, use the existing runtime
+        if let Ok(handle) = Handle::try_current() {
+            return handle.block_on(fut);
         }
+
+        // Otherwise, use the cached UI runtime (created once, reused for all calls)
+        let rt = UI_RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build UI tokio runtime")
+        });
+        rt.block_on(fut)
     }
 }
 

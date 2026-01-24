@@ -541,8 +541,29 @@ pub async fn discover_hosts_arp(
     rate_limit_pps: Option<u32>,
     timeout: Duration,
 ) -> Result<LanDiscoveryResult> {
+    // Async setup: read interface info
     let local_mac = read_iface_mac(interface)?;
     let local_ip = read_iface_ipv4(interface).await?;
+    let interface = interface.to_string();
+
+    // Blocking operations wrapped in spawn_blocking to avoid blocking the async runtime
+    tokio::task::spawn_blocking(move || {
+        discover_hosts_arp_blocking(&interface, network, &local_mac, local_ip, rate_limit_pps, timeout)
+    })
+    .await
+    .context("ARP discovery task panicked")?
+}
+
+/// Internal blocking implementation of ARP discovery.
+#[cfg(target_os = "linux")]
+fn discover_hosts_arp_blocking(
+    interface: &str,
+    network: Ipv4Net,
+    local_mac: &[u8; 6],
+    local_ip: Ipv4Addr,
+    rate_limit_pps: Option<u32>,
+    timeout: Duration,
+) -> Result<LanDiscoveryResult> {
     let ifindex = unsafe { libc::if_nametoindex(CString::new(interface)?.as_ptr()) };
     if ifindex == 0 {
         return Err(anyhow!("failed to resolve ifindex for {}", interface));
@@ -570,7 +591,7 @@ pub async fn discover_hosts_arp(
         sll_halen: 6,
         sll_addr: [0; 8],
     };
-    sll.sll_addr[..6].copy_from_slice(&local_mac);
+    sll.sll_addr[..6].copy_from_slice(local_mac);
     let bind_res = unsafe {
         libc::bind(
             sock.as_raw_fd(),
@@ -588,7 +609,7 @@ pub async fn discover_hosts_arp(
     let mut inflight: HashSet<Ipv4Addr> = HashSet::new();
 
     for ip in &targets {
-        let frame = build_arp_request(&local_mac, &local_ip, ip);
+        let frame = build_arp_request(local_mac, &local_ip, ip);
         let sent = unsafe {
             libc::send(
                 sock.as_raw_fd(),
@@ -685,8 +706,37 @@ pub async fn discover_hosts_arp_cancellable(
     timeout: Duration,
     cancel: &Arc<AtomicBool>,
 ) -> Result<LanDiscoveryResult> {
+    // Async setup: read interface info
     let local_mac = read_iface_mac(interface)?;
     let local_ip = read_iface_ipv4(interface).await?;
+    let interface = interface.to_string();
+    let cancel = Arc::clone(cancel);
+
+    // Blocking operations wrapped in spawn_blocking to avoid blocking the async runtime
+    tokio::task::spawn_blocking(move || {
+        discover_hosts_arp_cancellable_blocking(
+            &interface, network, &local_mac, local_ip, rate_limit_pps, timeout, &cancel
+        )
+    })
+    .await
+    .context("ARP discovery task panicked")?
+}
+
+/// Internal blocking implementation of cancellable ARP discovery.
+#[cfg(target_os = "linux")]
+fn discover_hosts_arp_cancellable_blocking(
+    interface: &str,
+    network: Ipv4Net,
+    local_mac: &[u8; 6],
+    local_ip: Ipv4Addr,
+    rate_limit_pps: Option<u32>,
+    timeout: Duration,
+    cancel: &Arc<AtomicBool>,
+) -> Result<LanDiscoveryResult> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CancelledError.into());
+    }
+
     let ifindex = unsafe { libc::if_nametoindex(CString::new(interface)?.as_ptr()) };
     if ifindex == 0 {
         return Err(anyhow!("failed to resolve ifindex for {}", interface));
@@ -713,7 +763,7 @@ pub async fn discover_hosts_arp_cancellable(
         sll_halen: 6,
         sll_addr: [0; 8],
     };
-    sll.sll_addr[..6].copy_from_slice(&local_mac);
+    sll.sll_addr[..6].copy_from_slice(local_mac);
     let bind_res = unsafe {
         libc::bind(
             sock.as_raw_fd(),
@@ -735,8 +785,8 @@ pub async fn discover_hosts_arp_cancellable(
         if cancel.load(Ordering::Relaxed) {
             return Err(CancelledError.into());
         }
-        
-        let frame = build_arp_request(&local_mac, &local_ip, ip);
+
+        let frame = build_arp_request(local_mac, &local_ip, ip);
         let sent = unsafe {
             libc::send(
                 sock.as_raw_fd(),
@@ -767,13 +817,13 @@ pub async fn discover_hosts_arp_cancellable(
 
     sock.set_read_timeout(Some(timeout))?;
     let mut buf = [MaybeUninit::<u8>::uninit(); 1500];
-    
+
     // Receive with cancellation checks
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(CancelledError.into());
         }
-        
+
         match sock.recv(&mut buf) {
             Ok(n) => {
                 if n < 42 {

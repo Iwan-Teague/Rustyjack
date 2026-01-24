@@ -220,6 +220,31 @@ impl JobManager {
         }
     }
 
+    /// Cancel all jobs and wait for them to complete, with a timeout.
+    /// Returns the number of jobs that were still active when timeout expired.
+    pub async fn shutdown_gracefully(&self, timeout: std::time::Duration) -> usize {
+        // First, cancel all jobs
+        self.cancel_all().await;
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        let poll_interval = std::time::Duration::from_millis(100);
+
+        loop {
+            let (_, active) = self.job_counts().await;
+            if active == 0 {
+                info!("All jobs completed gracefully");
+                return 0;
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                warn!("Shutdown timeout: {} jobs still active", active);
+                return active;
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
     pub async fn cancel_where<F>(&self, predicate: F)
     where
         F: Fn(&JobKind) -> bool,

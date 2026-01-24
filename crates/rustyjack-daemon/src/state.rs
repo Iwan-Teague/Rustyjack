@@ -49,29 +49,30 @@ impl DaemonState {
     }
 
     pub async fn reconcile_on_startup(&self) {
-        match fs::read_to_string("/proc/mounts") {
-            Ok(contents) => {
-                let count = contents.lines().count();
-                info!("Startup mount table entries: {}", count);
-            }
-            Err(err) => warn!("Failed to read /proc/mounts: {}", err),
-        }
-        
         let root = self.config.root_path.clone();
         tokio::task::spawn_blocking(move || {
             use rustyjack_core::system::{IsolationEngine, RealNetOps};
             use std::sync::Arc;
-            
+
+            // Read mount table (moved inside spawn_blocking to avoid blocking async runtime)
+            match fs::read_to_string("/proc/mounts") {
+                Ok(contents) => {
+                    let count = contents.lines().count();
+                    info!("Startup mount table entries: {}", count);
+                }
+                Err(err) => warn!("Failed to read /proc/mounts: {}", err),
+            }
+
             let ops = Arc::new(RealNetOps);
             let engine = IsolationEngine::new(ops, root);
-            
+
             let mut retries = 0;
             let max_retries = 3;
-            
+
             loop {
                 match engine.enforce() {
                     Ok(outcome) => {
-                        info!("Startup enforcement succeeded: allowed={:?}, blocked={:?}", 
+                        info!("Startup enforcement succeeded: allowed={:?}, blocked={:?}",
                             outcome.allowed, outcome.blocked);
                         if !outcome.errors.is_empty() {
                             warn!("Enforcement had {} non-fatal errors", outcome.errors.len());
@@ -82,15 +83,15 @@ impl DaemonState {
                         break;
                     }
                     Err(e) => {
-                        warn!("Startup enforcement failed (attempt {}/{}): {}", 
+                        warn!("Startup enforcement failed (attempt {}/{}): {}",
                             retries + 1, max_retries, e);
-                        
+
                         retries += 1;
                         if retries >= max_retries {
                             tracing::error!("Startup enforcement failed after {} attempts, continuing anyway", max_retries);
                             break;
                         }
-                        
+
                         std::thread::sleep(std::time::Duration::from_secs(2));
                     }
                 }
