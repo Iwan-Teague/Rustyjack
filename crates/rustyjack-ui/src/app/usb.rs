@@ -273,7 +273,7 @@ impl App {
                                     [
                                         "Unsupported file type",
                                         &format!("{}", shorten_for_display(name, 18)),
-                                        &format!("Allowed: {}", allowed.join(\", \")),
+                                        &format!("Allowed: {}", allowed.join(", ")),
                                     ],
                                 )?;
                                 continue;

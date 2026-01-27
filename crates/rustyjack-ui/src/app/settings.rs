@@ -12,7 +12,7 @@ use crate::{
     util::shorten_for_display,
 };
 
-use super::state::{App, ButtonAction};
+use super::state::App;
 
 impl App {
     pub(crate) fn reload_config(&mut self) -> Result<()> {

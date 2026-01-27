@@ -1,10 +1,12 @@
 use std::{
     collections::HashSet,
+    fs,
+    io::Write,
     thread,
     time::{Duration, UNIX_EPOCH},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Local;
 use rustyjack_commands::{
     Commands, HardwareCommand, HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs,
@@ -14,7 +16,7 @@ use rustyjack_commands::{
 use crate::{
     config::BlacklistedDevice,
     types::InterfaceSummary,
-    util::shorten_for_display,
+    util::{random_hotspot_password, random_hotspot_ssid, shorten_for_display},
 };
 
 use super::{

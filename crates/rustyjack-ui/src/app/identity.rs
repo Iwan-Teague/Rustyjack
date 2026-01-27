@@ -1,4 +1,6 @@
-use anyhow::Result;
+use std::collections::HashMap;
+
+use anyhow::{Context, Result};
 use rustyjack_commands::{
     Commands, SystemCommand, WifiCommand, WifiMacRandomizeArgs, WifiMacRestoreArgs, WifiMacSetArgs,
     WifiMacSetVendorArgs, WifiTxPowerArgs,
@@ -6,7 +8,7 @@ use rustyjack_commands::{
 
 use crate::{
     menu::{OpsCategory, TxPowerSetting},
-    util::shorten_for_display,
+    util::{generate_vendor_aware_mac, shorten_for_display, write_scoped_log},
 };
 
 use super::{error::mac_error_hint, state::App};

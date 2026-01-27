@@ -5,7 +5,7 @@ use rustyjack_commands::{Commands, SystemCommand, WifiCommand, WifiDeauthArgs};
 
 use crate::util::shorten_for_display;
 
-use super::state::{App, INDEFINITE_SECS};
+use super::super::state::{App, INDEFINITE_SECS};
 
 impl App {
     pub(crate) fn scan_wifi_networks(&mut self) -> Result<()> {

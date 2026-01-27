@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use rustyjack_commands::{
@@ -6,7 +10,7 @@ use rustyjack_commands::{
     EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs, MitmCommand, MitmStartArgs,
 };
 
-use crate::util::shorten_for_display;
+use crate::util::{count_lines, shorten_for_display};
 
 use super::state::{App, ButtonAction, MitmSession};
 

@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 
 #[cfg(target_os = "linux")]
 use rustyjack_wpa::crack::{
@@ -20,7 +20,7 @@ use crate::types::{CrackOutcome, CrackUpdate, DictionaryOption, HandshakeBundle}
 
 use crate::util::shorten_for_display;
 
-use super::state::{App, ButtonAction};
+use super::super::state::{App, ButtonAction};
 
 impl App {
     pub(crate) fn launch_crack_handshake(&mut self) -> Result<()> {
@@ -415,5 +415,4 @@ impl App {
         Ok(())
     }
 
-    /// Install WiFi drivers for USB dongles
-    /// Keeps user on screen until installation completes or fails}
+}

@@ -69,9 +69,9 @@ pub(crate) struct MitmSession {
 
 pub(crate) struct MenuState {
     stack: Vec<String>,
-    selection: usize,
+    pub(crate) selection: usize,
     // Scroll offset for current menu view — ensures selection stays visible
-    offset: usize,
+    pub(crate) offset: usize,
 }
 
 impl MenuState {

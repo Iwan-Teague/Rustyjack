@@ -10,7 +10,7 @@ use walkdir::WalkDir;
 
 use crate::menu::PipelineType;
 
-use super::state::{App, CancelDecision, PipelineResult, StepOutcome};
+use super::super::state::{App, CancelDecision, PipelineResult, StepOutcome};
 
 impl App {
     /// Launch an attack pipeline
@@ -811,7 +811,9 @@ impl App {
 
     /// Execute a step in the StealthRecon pipeline
     pub(crate) fn execute_stealth_recon_step(&mut self, step: usize, interface: &str) -> Result<StepOutcome> {
-        use rustyjack_commands::{Commands, WifiCommand, WifiProbeSniffArgs};
+        use rustyjack_commands::{
+            Commands, WifiCommand, WifiMacRandomizeArgs, WifiProbeSniffArgs, WifiTxPowerArgs,
+        };
 
         match step {
             0 => {
@@ -1015,8 +1017,8 @@ impl App {
         ssid: &str,
     ) -> Result<StepOutcome> {
         use rustyjack_commands::{
-            Commands, WifiCommand, WifiDeauthArgs, WifiKarmaArgs, WifiPmkidArgs,
-            WifiProbeSniffArgs, WifiScanArgs,
+            Commands, WifiCommand, WifiDeauthArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
+            WifiPmkidArgs, WifiProbeSniffArgs, WifiScanArgs,
         };
 
         match step {

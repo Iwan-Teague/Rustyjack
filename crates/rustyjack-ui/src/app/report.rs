@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 
 use crate::{
     types::{ArtifactItem, MacUsageRecord, PipelineStats, TraversalResult},
-    util::{dir_has_files, port_role, shorten_for_display},
+    util::{count_lines, dir_has_files, port_role, shorten_for_display},
 };
 
 use super::state::App;
