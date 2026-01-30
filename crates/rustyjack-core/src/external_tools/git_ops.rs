@@ -1,20 +1,21 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
-
-use crate::external_tools::system_shell;
+use anyhow::{Context, Result};
+use git2::{Repository, ResetType};
 
 pub fn git_reset_to_remote(root: &Path, remote: &str, branch: &str) -> Result<()> {
-    let root_str = root
-        .to_str()
-        .ok_or_else(|| anyhow!("Root path must be valid UTF-8"))?;
-
-    system_shell::run("git", &["-C", root_str, "fetch", remote])
+    let repo = Repository::open(root).context("opening git repository")?;
+    let mut remote_ref = repo
+        .find_remote(remote)
+        .context("finding git remote")?;
+    remote_ref
+        .fetch(&[branch], None, None)
         .context("git fetch")?;
-
-    let target = format!("{remote}/{branch}");
-    system_shell::run("git", &["-C", root_str, "reset", "--hard", target.as_str()])
-        .context("git reset")?;
+    let refname = format!("refs/remotes/{remote}/{branch}");
+    let oid = repo.refname_to_id(&refname).context("resolving remote ref")?;
+    let object = repo.find_object(oid, None).context("loading target commit")?;
+    repo.reset(&object, ResetType::Hard, None)
+        .context("git hard reset")?;
 
     Ok(())
 }

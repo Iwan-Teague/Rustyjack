@@ -11,10 +11,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let repo = env::current_dir().map_err(|e| format!("cwd: {e}"))?;
-    let allow = [
-        repo.join("crates/rustyjack-core/src/external_tools"),
-        repo.join("crates/rustyjack-netlink/src/station/external"),
-    ];
+    let allow: [PathBuf; 0] = [];
 
     let mut violations = Vec::new();
     visit_rs(&repo, &allow, &mut violations)?;

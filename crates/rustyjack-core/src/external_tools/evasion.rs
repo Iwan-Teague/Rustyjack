@@ -6,8 +6,6 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use rustyjack_evasion::{MacAddress, MacManager};
 
-use crate::external_tools::system_shell;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvasionConfig {
     pub mac_randomization: bool,
@@ -99,12 +97,13 @@ pub fn spoof_os_fingerprint(os_type: &str) -> Result<()> {
 
 /// Set a sysctl parameter
 fn set_sysctl(param: &str, value: &str) -> Result<()> {
-    let arg = format!("{}={}", param, value);
-    let output = system_shell::run_allow_failure("sysctl", &["-w", arg.as_str()])
-        .context("setting sysctl parameter")?;
-
-    if !output.status.success() {
-        warn!("Failed to set sysctl {} = {}", param, value);
+    let path = format!("/proc/sys/{}", param.replace('.', "/"));
+    let mut value = value.to_string();
+    if !value.ends_with('\n') {
+        value.push('\n');
+    }
+    if let Err(err) = fs::write(&path, value) {
+        warn!("Failed to set sysctl {}: {}", param, err);
     }
 
     Ok(())

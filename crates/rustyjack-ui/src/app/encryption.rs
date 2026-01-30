@@ -813,9 +813,23 @@ impl App {
         {
             Ok(result) => result,
             Err(err) => {
+                let err_text = err.to_string();
+                if err_text.contains("FDE prepare disabled")
+                    || err_text.contains("external scripts removed")
+                {
+                    return self.show_message(
+                        "Full Disk Encryption",
+                        [
+                            "Feature disabled",
+                            "Rust-only build",
+                            "",
+                            "No Rust implementation yet",
+                        ],
+                    );
+                }
                 return self.show_message(
                     "Full Disk Encryption",
-                    ["Failed to start", &shorten_for_display(&err.to_string(), 90)],
+                    ["Failed to start", &shorten_for_display(&err_text, 90)],
                 );
             }
         };

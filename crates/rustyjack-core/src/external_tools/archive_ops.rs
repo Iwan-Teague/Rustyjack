@@ -1,9 +1,11 @@
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
-
-use crate::external_tools::system_shell;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use tar::Builder;
 
 pub fn backup_repository(root: &Path, backup_dir: Option<&Path>) -> Result<PathBuf> {
     let dir = backup_dir
@@ -13,27 +15,20 @@ pub fn backup_repository(root: &Path, backup_dir: Option<&Path>) -> Result<PathB
 
     let ts = Local::now().format("%Y-%m-%d_%H-%M-%S");
     let archive = dir.join(format!("rustyjack_backup_{ts}.tar.gz"));
-    let parent = root
-        .parent()
-        .ok_or_else(|| anyhow!("Root path must have a parent directory"))?;
     let name = root
         .file_name()
         .ok_or_else(|| anyhow!("Root path must end with a directory component"))?;
     let name_str = name
         .to_str()
         .ok_or_else(|| anyhow!("Root path must be valid UTF-8"))?;
-    let parent_str = parent
-        .to_str()
-        .ok_or_else(|| anyhow!("Root parent must be valid UTF-8"))?;
-    let archive_str = archive
-        .to_str()
-        .ok_or_else(|| anyhow!("Archive path must be valid UTF-8"))?;
 
-    system_shell::run(
-        "tar",
-        &["-czf", archive_str, "-C", parent_str, name_str],
-    )
-    .context("creating backup archive")?;
+    let tar_gz = File::create(&archive).context("creating backup archive file")?;
+    let enc = GzEncoder::new(tar_gz, Compression::default());
+    let mut tar = Builder::new(enc);
+    tar.append_dir_all(name_str, root)
+        .context("adding repository to backup archive")?;
+    let enc = tar.into_inner().context("finalizing backup archive")?;
+    enc.finish().context("writing backup archive")?;
 
     Ok(archive)
 }

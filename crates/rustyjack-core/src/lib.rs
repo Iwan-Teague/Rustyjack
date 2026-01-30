@@ -8,6 +8,20 @@ compile_error!(
 	"rustyjack-core is intended to be built on Linux only. Build with a Linux target (e.g. target_os = \"linux\") or develop on a Linux machine."
 );
 
+// Production guardrail: forbid lab/external tooling features in release builds.
+#[cfg(all(
+    not(debug_assertions),
+    any(
+        feature = "lab",
+        feature = "external_tools",
+        feature = "dev_tools",
+        feature = "offensive_tools"
+    )
+))]
+compile_error!(
+    "rustyjack-core: lab/dev/offensive/external_tools features are not allowed in release builds. Use the default appliance build for production."
+);
+
 pub mod mount;
 
 pub mod arp_helpers;

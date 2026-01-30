@@ -42,6 +42,12 @@
 //! }
 //! ```
 
+// Production guardrail: never allow station_external in release builds.
+#[cfg(all(not(debug_assertions), feature = "station_external"))]
+compile_error!(
+    "rustyjack-netlink: station_external is not allowed in release builds. Use station_rust_wpa2 for production."
+);
+
 #[cfg(target_os = "linux")]
 pub mod arp;
 #[cfg(target_os = "linux")]

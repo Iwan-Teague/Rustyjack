@@ -737,9 +737,23 @@ impl App {
         {
             Ok(result) => result,
             Err(e) => {
+                let err_text = e.to_string();
+                if err_text.contains("driver install disabled")
+                    || err_text.contains("external scripts removed")
+                {
+                    return self.show_message(
+                        "Driver Install",
+                        [
+                            "Feature disabled",
+                            "Rust-only build",
+                            "",
+                            "No Rust installer yet",
+                        ],
+                    );
+                }
                 return self.show_message(
                     "Driver Error",
-                    ["Installer failed", "", &shorten_for_display(&e.to_string(), 90)],
+                    ["Installer failed", "", &shorten_for_display(&err_text, 90)],
                 );
             }
         };

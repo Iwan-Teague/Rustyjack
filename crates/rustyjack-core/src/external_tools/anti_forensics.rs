@@ -1,15 +1,37 @@
 use std::{
+    ffi::CString,
     fs,
+    io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
+use aes::Aes256;
+use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Context, Result};
+use cbc::{Decryptor, Encryptor};
+use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use pbkdf2::pbkdf2_hmac;
+use rand::RngCore;
+use sha2::Sha256;
+use tar::{Archive, Builder};
 use tracing::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
+use zeroize::Zeroize;
 
-use crate::external_tools::system_shell;
+const ENC_MAGIC: &[u8; 6] = b"RJENC1";
+const ENC_SALT_LEN_GCM: usize = 16;
+const ENC_NONCE_LEN_GCM: usize = 12;
+const ENC_PBKDF2_ITERS: u32 = 10_000;
+const OPENSSL_MAGIC: &[u8; 8] = b"Salted__";
+const OPENSSL_SALT_LEN: usize = 8;
+const OPENSSL_KEY_LEN: usize = 32;
+const OPENSSL_IV_LEN: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AntiForensicsConfig {
@@ -52,28 +74,8 @@ pub fn secure_delete(path: &Path, passes: u8) -> Result<()> {
         passes
     );
 
-    // Use shred if available (better than our implementation)
-    let shred_available = system_shell::run_allow_failure("which", &["shred"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if shred_available {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| anyhow!("path must be valid UTF-8"))?;
-        let mut args = vec![
-            "-n".to_string(),
-            passes.to_string(),
-            "-z".to_string(),
-            "-u".to_string(),
-            path_str.to_string(),
-        ];
-        let arg_refs: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
-        system_shell::run("shred", &arg_refs).context("running shred")?;
-    } else {
-        // Fallback: manual overwrite
-        manual_secure_delete(path, passes)?;
-    }
+    // Use Rust-only overwrite to avoid external binaries.
+    manual_secure_delete(path, passes)?;
 
     info!("File securely deleted: {}", path.display());
     Ok(())
@@ -170,9 +172,7 @@ pub fn clear_system_logs() -> Result<()> {
         }
     }
 
-    // Clear systemd journal
-    let _ = system_shell::run_allow_failure("journalctl", &["--rotate"]);
-    let _ = system_shell::run_allow_failure("journalctl", &["--vacuum-time=1s"]);
+    warn!("Skipping systemd journal vacuum in rust-only mode");
 
     info!("System logs cleared");
     Ok(())
@@ -255,15 +255,6 @@ pub fn perform_complete_purge(root: &Path) -> PurgeReport {
         }
     };
 
-    // Disable service first before using delete_path closure
-    if let Ok(output) =
-        system_shell::run_allow_failure("systemctl", &["disable", "rustyjack.service"])
-    {
-        if output.status.success() {
-            service_disabled = true;
-        }
-    }
-
     let system_paths = [
         PathBuf::from("/usr/local/bin/rustyjack-ui"),
         PathBuf::from("/etc/systemd/system/rustyjack.service"),
@@ -288,9 +279,10 @@ pub fn perform_complete_purge(root: &Path) -> PurgeReport {
     // Drop closure to release borrow on errors
     drop(delete_path);
 
-    // Add service error if it failed
+    service_disabled = !Path::new("/etc/systemd/system/multi-user.target.wants/rustyjack.service")
+        .exists();
     if !service_disabled {
-        errors.push("systemctl disable rustyjack.service failed".to_string());
+        errors.push("systemd unit link still present (manual disable required)".to_string());
     }
 
     for entry in WalkDir::new("/var/log").into_iter().filter_map(|e| e.ok()) {
@@ -303,15 +295,9 @@ pub fn perform_complete_purge(root: &Path) -> PurgeReport {
         }
     }
 
-    let _ = system_shell::run_allow_failure("journalctl", &["--rotate"]);
-    let _ = system_shell::run_allow_failure("journalctl", &["--vacuum-time=1s"]);
-    let _ = system_shell::run_allow_failure("journalctl", &["--vacuum-size=1K"]);
-    let _ = system_shell::run_allow_failure("systemctl", &["daemon-reload"]);
-    let _ = system_shell::run_allow_failure(
-        "systemctl",
-        &["reset-failed", "rustyjack.service"],
-    );
-    let _ = system_shell::run_allow_failure("sync", &[]);
+    unsafe {
+        libc::sync();
+    }
 
     PurgeReport {
         removed,
@@ -323,15 +309,7 @@ pub fn perform_complete_purge(root: &Path) -> PurgeReport {
 /// Clear DNS cache
 pub fn clear_dns_cache() -> Result<()> {
     info!("Clearing DNS cache");
-
-    // systemd-resolved
-    let _ = system_shell::run_allow_failure(
-        "systemctl",
-        &["restart", "systemd-resolved"],
-    );
-
-    // nscd
-    let _ = system_shell::run_allow_failure("nscd", &["-i", "hosts"]);
+    warn!("DNS cache clearing requires systemd DBus integration; skipping in rust-only mode");
 
     Ok(())
 }
@@ -348,18 +326,25 @@ pub fn enable_ram_only_mode(_root: &Path) -> Result<()> {
     let ram_dir_str = ram_dir
         .to_str()
         .ok_or_else(|| anyhow!("ram dir must be valid UTF-8"))?;
-    system_shell::run(
-        "mount",
-        &[
-            "-t",
-            "tmpfs",
-            "-o",
-            "size=500M,mode=0700",
-            "tmpfs",
-            ram_dir_str,
-        ],
-    )
-    .context("mounting tmpfs")?;
+    let source = CString::new("tmpfs")?;
+    let target = CString::new(ram_dir_str)?;
+    let fstype = CString::new("tmpfs")?;
+    let data = CString::new("size=500M,mode=0700")?;
+    let res = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            fstype.as_ptr(),
+            0,
+            data.as_ptr() as *const _,
+        )
+    };
+    if res != 0 {
+        return Err(anyhow!(
+            "mount tmpfs failed: {}",
+            io::Error::last_os_error()
+        ));
+    }
 
     info!("RAM-only mode enabled at {}", ram_dir.display());
     Ok(())
@@ -378,7 +363,14 @@ pub fn disable_ram_only_mode() -> Result<()> {
         let ram_dir_str = ram_dir
             .to_str()
             .ok_or_else(|| anyhow!("ram dir must be valid UTF-8"))?;
-        system_shell::run("umount", &[ram_dir_str]).context("unmounting tmpfs")?;
+        let target = CString::new(ram_dir_str)?;
+        let res = unsafe { libc::umount2(target.as_ptr(), 0) };
+        if res != 0 {
+            return Err(anyhow!(
+                "unmount tmpfs failed: {}",
+                io::Error::last_os_error()
+            ));
+        }
     }
 
     Ok(())
@@ -395,35 +387,11 @@ pub fn encrypt_loot(root: &Path, password: &str) -> Result<()> {
 
     let archive = root.join("loot.tar.gz.enc");
 
-    let loot_dir_str = loot_dir
-        .to_str()
-        .ok_or_else(|| anyhow!("loot dir must be valid UTF-8"))?;
-    let archive_str = archive
-        .to_str()
-        .ok_or_else(|| anyhow!("archive path must be valid UTF-8"))?;
     let tar_path = root.join("loot.tar.gz");
-    let tar_str = tar_path
-        .to_str()
-        .ok_or_else(|| anyhow!("tar path must be valid UTF-8"))?;
-    system_shell::run("tar", &["-czf", tar_str, loot_dir_str])
-        .context("creating loot archive")?;
-    let pass_arg = format!("pass:{}", password);
-    system_shell::run(
-        "openssl",
-        &[
-            "enc",
-            "-aes-256-cbc",
-            "-salt",
-            "-pbkdf2",
-            "-pass",
-            pass_arg.as_str(),
-            "-in",
-            tar_str,
-            "-out",
-            archive_str,
-        ],
-    )
-    .context("encrypting loot")?;
+    create_tar_gz(&loot_dir, &tar_path).context("creating loot archive")?;
+    let tar_bytes = fs::read(&tar_path).context("reading loot archive")?;
+    let enc = encrypt_bytes_with_password(password, &tar_bytes)?;
+    fs::write(&archive, enc).context("writing encrypted loot")?;
     let _ = fs::remove_file(&tar_path);
 
     // Securely delete original
@@ -442,35 +410,11 @@ pub fn decrypt_loot(root: &Path, password: &str) -> Result<()> {
         return Err(anyhow!("Encrypted loot not found"));
     }
 
-    let archive_str = archive
-        .to_str()
-        .ok_or_else(|| anyhow!("archive path must be valid UTF-8"))?;
-    let root_str = root
-        .to_str()
-        .ok_or_else(|| anyhow!("root path must be valid UTF-8"))?;
     let tar_path = root.join("loot.tar.gz");
-    let tar_str = tar_path
-        .to_str()
-        .ok_or_else(|| anyhow!("tar path must be valid UTF-8"))?;
-    let pass_arg = format!("pass:{}", password);
-    system_shell::run(
-        "openssl",
-        &[
-            "enc",
-            "-aes-256-cbc",
-            "-d",
-            "-pbkdf2",
-            "-pass",
-            pass_arg.as_str(),
-            "-in",
-            archive_str,
-            "-out",
-            tar_str,
-        ],
-    )
-    .context("decrypting loot")?;
-    system_shell::run("tar", &["-xzf", tar_str, "-C", root_str])
-        .context("extracting loot archive")?;
+    let enc = fs::read(&archive).context("reading encrypted loot")?;
+    let tar_bytes = decrypt_bytes_with_password(password, &enc)?;
+    fs::write(&tar_path, tar_bytes).context("writing loot archive")?;
+    extract_tar_gz(&tar_path, root).context("extracting loot archive")?;
     let _ = fs::remove_file(&tar_path);
 
     info!("Loot decrypted successfully");
@@ -482,7 +426,19 @@ pub fn enable_anti_dump_protection() -> Result<()> {
     info!("Enabling anti-memory dump protection");
 
     // Prevent core dumps
-    let _ = system_shell::run_allow_failure("ulimit", &["-c", "0"]);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::setrlimit(libc::RLIMIT_CORE, &lim) != 0 {
+            warn!(
+                "Failed to set RLIMIT_CORE: {}",
+                io::Error::last_os_error()
+            );
+        }
+    }
 
     // Disable ptrace for this process (prevents debugging)
     #[cfg(target_os = "linux")]
@@ -527,14 +483,7 @@ pub fn hide_process() -> Result<()> {
 pub fn sanitize_file_metadata(path: &Path) -> Result<()> {
     info!("Sanitizing metadata for {}", path.display());
 
-    // Use exiftool to strip metadata
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| anyhow!("path must be valid UTF-8"))?;
-    let _ = system_shell::run_allow_failure(
-        "exiftool",
-        &["-all=", "-overwrite_original", path_str],
-    );
+    warn!("Metadata stripping skipped (exiftool removed). Only timestamps will be reset.");
 
     // Reset timestamps to epoch
     let epoch = SystemTime::UNIX_EPOCH;
@@ -623,7 +572,7 @@ pub fn check_dead_mans_switch(root: &Path, trigger_file: &Path) -> Result<()> {
         emergency_wipe(root)?;
 
         // Shutdown system
-        let _ = system_shell::run_allow_failure("shutdown", &["-h", "now"]);
+        poweroff_now();
     }
 
     Ok(())
@@ -700,35 +649,11 @@ pub fn create_safety_backup(root: &Path, password: &str) -> Result<PathBuf> {
     let backup_file = root.join(format!("backup_{}.enc", timestamp));
 
     let loot_dir = root.join("loot");
-    let loot_dir_str = loot_dir
-        .to_str()
-        .ok_or_else(|| anyhow!("loot dir must be valid UTF-8"))?;
-    let backup_str = backup_file
-        .to_str()
-        .ok_or_else(|| anyhow!("backup path must be valid UTF-8"))?;
     let tar_path = root.join("backup.tar.gz");
-    let tar_str = tar_path
-        .to_str()
-        .ok_or_else(|| anyhow!("tar path must be valid UTF-8"))?;
-    system_shell::run("tar", &["-czf", tar_str, loot_dir_str])
-        .context("creating backup archive")?;
-    let pass_arg = format!("pass:{}", password);
-    system_shell::run(
-        "openssl",
-        &[
-            "enc",
-            "-aes-256-cbc",
-            "-salt",
-            "-pbkdf2",
-            "-pass",
-            pass_arg.as_str(),
-            "-in",
-            tar_str,
-            "-out",
-            backup_str,
-        ],
-    )
-    .context("creating backup")?;
+    create_tar_gz(&loot_dir, &tar_path).context("creating backup archive")?;
+    let tar_bytes = fs::read(&tar_path).context("reading backup archive")?;
+    let enc = encrypt_bytes_with_password(password, &tar_bytes)?;
+    fs::write(&backup_file, enc).context("writing encrypted backup")?;
     let _ = fs::remove_file(&tar_path);
 
     info!("Safety backup created: {}", backup_file.display());
@@ -752,11 +677,8 @@ pub fn verify_clean() -> Result<Vec<String>> {
         }
     }
 
-    // Check for suspicious processes
-    let output = system_shell::run_allow_failure("ps", &["aux"])?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.contains("rustyjack") {
+    // Check for suspicious processes without spawning ps.
+    if process_list_contains("rustyjack")? {
         artifacts.push("Suspicious processes found".to_string());
     }
 
@@ -782,9 +704,10 @@ pub fn randomize_hostname() -> Result<String> {
     let suffix: u32 = rng.gen_range(1000..9999);
     let new_hostname = format!("{}-{}", prefix, suffix);
 
-    // Set hostname
-    system_shell::run("hostnamectl", &["set-hostname", new_hostname.as_str()])
-        .context("setting hostname via hostnamectl")?;
+    // Set hostname without spawning hostnamectl.
+    set_hostname(&new_hostname).context("setting hostname")?;
+    fs::write("/etc/hostname", format!("{new_hostname}\n"))
+        .context("writing /etc/hostname")?;
 
     // Update /etc/hosts to prevent sudo warnings
     let hosts_path = Path::new("/etc/hosts");
@@ -843,11 +766,180 @@ pub fn disable_leds() -> Result<()> {
 pub fn disable_swap() -> Result<()> {
     info!("Disabling swap");
 
-    // Try swapoff -a
-    let _ = system_shell::run_allow_failure("swapoff", &["-a"]);
-
-    // Try dphys-swapfile if on Raspbian
-    let _ = system_shell::run_allow_failure("dphys-swapfile", &["swapoff"]);
+    disable_swap_all();
 
     Ok(())
+}
+
+fn create_tar_gz(src_dir: &Path, out_path: &Path) -> Result<()> {
+    let tar_gz = fs::File::create(out_path).context("creating tarball")?;
+    let enc = GzEncoder::new(tar_gz, Compression::default());
+    let mut tar = Builder::new(enc);
+    let archive_root = archive_root_name(src_dir)?;
+    tar.append_dir_all(&archive_root, src_dir)
+        .context("adding directory to tarball")?;
+    let enc = tar.into_inner().context("finalizing tarball")?;
+    enc.finish().context("writing tarball")?;
+    Ok(())
+}
+
+fn extract_tar_gz(archive_path: &Path, dest: &Path) -> Result<()> {
+    let tar_gz = fs::File::open(archive_path).context("opening tarball")?;
+    let dec = GzDecoder::new(tar_gz);
+    let mut archive = Archive::new(dec);
+    archive.unpack(dest).context("extracting tarball")?;
+    Ok(())
+}
+
+fn archive_root_name(dir: &Path) -> Result<PathBuf> {
+    let name = dir
+        .file_name()
+        .ok_or_else(|| anyhow!("archive source must have a terminal directory name"))?;
+    Ok(PathBuf::from(name))
+}
+
+fn encrypt_bytes_with_password(password: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+    // OpenSSL-compatible AES-256-CBC with PBKDF2 and "Salted__" header.
+    let mut salt = [0u8; OPENSSL_SALT_LEN];
+    let mut rng = OsRng;
+    rng.fill_bytes(&mut salt);
+    let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, ENC_PBKDF2_ITERS, &mut key_iv);
+    let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
+    let ciphertext = Encryptor::<Aes256>::new_from_slices(key, iv)
+        .map_err(|_| anyhow!("Invalid encryption key/iv"))?
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+    key_iv.zeroize();
+
+    let mut out = Vec::with_capacity(OPENSSL_MAGIC.len() + OPENSSL_SALT_LEN + ciphertext.len());
+    out.extend_from_slice(OPENSSL_MAGIC);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+fn decrypt_bytes_with_password(password: &str, data: &[u8]) -> Result<Vec<u8>> {
+    if data.starts_with(OPENSSL_MAGIC) {
+        return decrypt_openssl_bytes(password, data);
+    }
+    if data.starts_with(ENC_MAGIC) {
+        return decrypt_rjenc_bytes(password, data);
+    }
+    Err(anyhow!("Invalid encrypted data header"))
+}
+
+fn decrypt_openssl_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
+    let header_len = OPENSSL_MAGIC.len() + OPENSSL_SALT_LEN;
+    if data.len() < header_len {
+        return Err(anyhow!("Encrypted data too short"));
+    }
+    let salt = &data[OPENSSL_MAGIC.len()..header_len];
+    let ct = &data[header_len..];
+    let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ENC_PBKDF2_ITERS, &mut key_iv);
+    let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
+    let mut buf = ct.to_vec();
+    let plaintext = Decryptor::<Aes256>::new_from_slices(key, iv)
+        .map_err(|_| anyhow!("Invalid decryption key/iv"))?
+        .decrypt_padded_vec_mut::<Pkcs7>(&mut buf)
+        .map_err(|_| anyhow!("Decryption failed: wrong password or corrupted data"))?;
+    key_iv.zeroize();
+    Ok(plaintext)
+}
+
+fn decrypt_rjenc_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
+    let header_len = ENC_MAGIC.len() + ENC_SALT_LEN_GCM + ENC_NONCE_LEN_GCM;
+    if data.len() < header_len {
+        return Err(anyhow!("Encrypted data too short"));
+    }
+    let salt_start = ENC_MAGIC.len();
+    let nonce_start = salt_start + ENC_SALT_LEN_GCM;
+    let ct_start = nonce_start + ENC_NONCE_LEN_GCM;
+    let salt = &data[salt_start..nonce_start];
+    let nonce_bytes = &data[nonce_start..ct_start];
+    let ct = &data[ct_start..];
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ENC_PBKDF2_ITERS, &mut key);
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ct)
+        .map_err(|e| anyhow!("Decryption failed: {e}"))?;
+    key.zeroize();
+    Ok(plaintext)
+}
+
+fn poweroff_now() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::sync();
+        if libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF) != 0 {
+            warn!("Poweroff failed: {}", io::Error::last_os_error());
+        }
+    }
+}
+
+fn process_list_contains(needle: &str) -> Result<bool> {
+    let proc_dir = fs::read_dir("/proc").context("reading /proc")?;
+    for entry in proc_dir.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if !name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+
+        let cmdline_path = entry.path().join("cmdline");
+        let Ok(cmdline) = fs::read(cmdline_path) else {
+            continue;
+        };
+        let mut text = String::from_utf8_lossy(&cmdline).to_string();
+        if text.is_empty() {
+            let comm_path = entry.path().join("comm");
+            if let Ok(comm) = fs::read_to_string(comm_path) {
+                text = comm;
+            }
+        }
+        let text = text.replace('\0', " ");
+        if text.contains(needle) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn set_hostname(name: &str) -> Result<()> {
+    let cname = CString::new(name)?;
+    let res = unsafe { libc::sethostname(cname.as_ptr(), name.len()) };
+    if res != 0 {
+        return Err(anyhow!(
+            "sethostname failed: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+fn disable_swap_all() {
+    let Ok(contents) = fs::read_to_string("/proc/swaps") else {
+        return;
+    };
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        let Ok(cpath) = CString::new(path) else {
+            continue;
+        };
+        unsafe {
+            if libc::swapoff(cpath.as_ptr()) != 0 {
+                warn!("swapoff {} failed: {}", path, io::Error::last_os_error());
+            }
+        }
+    }
 }

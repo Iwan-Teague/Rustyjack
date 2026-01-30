@@ -1,4 +1,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+
+// Production guardrail: forbid lab builds in release profile.
+#[cfg(all(not(debug_assertions), feature = "lab"))]
+compile_error!(
+    "rustyjack-daemon: the lab feature is not allowed in release builds. Use the default appliance build for production."
+);
 use anyhow::Result;
 use std::panic;
 use std::sync::Arc;

