@@ -1,11 +1,10 @@
 use std::{fs, path::Path, thread, time::Duration};
 
 use anyhow::{anyhow, Result};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use crate::redact;
-use crate::external_tools::system_shell;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WifiCredential {
@@ -211,45 +210,8 @@ fn extract_ssid_from_dhcp(content: &str) -> Option<String> {
 
 /// Extract WiFi creds from mDNS/Bonjour
 fn extract_from_mdns(_gateway: &str) -> Result<Vec<WifiCredential>> {
-    let mut creds = Vec::new();
-
-    // Use avahi-browse to discover services
-    let output =
-        system_shell::run_allow_failure("timeout", &["10", "avahi-browse", "-at", "-r"]);
-
-    if let Ok(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Look for AirPort/AirPlay services that might expose SSID
-        for line in stdout.lines() {
-            if line.contains("TXT") && (line.contains("waMA") || line.contains("srcvers")) {
-                // Parse TXT record
-                if let Some(ssid) = extract_ssid_from_txt(line) {
-                    creds.push(WifiCredential {
-                        ssid,
-                        password: None,
-                        security: "unknown".to_string(),
-                        source: "mdns".to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(creds)
-}
-
-fn extract_ssid_from_txt(line: &str) -> Option<String> {
-    // Parse mDNS TXT records
-    let re = Regex::new(r#"ssid=([^\s"]+)"#).ok()?;
-
-    if let Some(caps) = re.captures(line) {
-        if let Some(ssid) = caps.get(1) {
-            return Some(ssid.as_str().to_string());
-        }
-    }
-
-    None
+    warn!("mDNS extraction disabled (avahi-browse removed, no Rust replacement yet)");
+    Ok(Vec::new())
 }
 
 /// Extract WiFi creds from UPnP IGD (Internet Gateway Device)
@@ -432,71 +394,12 @@ fn get_default_credentials(model: Option<&str>) -> Vec<(String, String)> {
 
 /// Try WPS PIN attack if wireless interface available
 fn try_wps_attack() -> Result<Vec<WifiCredential>> {
-    let mut creds = Vec::new();
-
-    // Check if we have a wireless interface
     let interfaces = crate::system::list_interface_summaries()?;
     let wireless = interfaces.iter().find(|i| i.kind == "wireless");
-
-    if let Some(iface) = wireless {
-        info!("Attempting WPS PIN attack on {}", iface.name);
-
-        // Use reaver for WPS attack (simplified - real impl would be more complex)
-        let output = system_shell::run_allow_failure(
-            "timeout",
-            &[
-                "60",
-                "reaver",
-                "-i",
-                iface.name.as_str(),
-                "-b",
-                "00:00:00:00:00:00",
-                "-vv",
-            ],
-        );
-
-        if let Ok(output) = output {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            // Parse reaver output for credentials
-            if let Some((ssid, password)) = parse_reaver_output(&stdout) {
-                creds.push(WifiCredential {
-                    ssid,
-                    password: Some(password),
-                    security: "WPA/WPA2".to_string(),
-                    source: "wps_attack".to_string(),
-                });
-            }
-        }
+    if wireless.is_some() {
+        warn!("WPS attack disabled (reaver removed, no Rust replacement)");
     }
-
-    Ok(creds)
-}
-
-fn parse_reaver_output(output: &str) -> Option<(String, String)> {
-    let mut ssid = None;
-    let mut password = None;
-
-    for line in output.lines() {
-        if line.contains("WPS PIN:") || line.contains("WPA PSK:") {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 {
-                password = Some(parts[1].trim().to_string());
-            }
-        }
-        if line.contains("ESSID:") {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 {
-                ssid = Some(parts[1].trim().to_string());
-            }
-        }
-    }
-
-    if let (Some(s), Some(p)) = (ssid, password) {
-        Some((s, p))
-    } else {
-        None
-    }
+    Ok(Vec::new())
 }
 
 /// Try to extract credentials from router config backup

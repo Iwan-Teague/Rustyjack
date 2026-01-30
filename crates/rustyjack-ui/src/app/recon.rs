@@ -785,7 +785,18 @@ impl App {
                     format!("Iface: {}", iface),
                 ],
             ),
-            Err(e) => self.show_message("Reverse Shell", [format!("Launch failed: {}", e)]),
+            Err(e) => {
+                let err_text = e.to_string();
+                if err_text.contains("reverse shell disabled")
+                    || err_text.contains("external shell spawn removed")
+                {
+                    return self.show_message(
+                        "Reverse Shell",
+                        ["Feature disabled", "Rust-only build"],
+                    );
+                }
+                self.show_message("Reverse Shell", [format!("Launch failed: {}", err_text)])
+            }
         }
     }
 }

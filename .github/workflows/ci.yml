@@ -26,3 +26,19 @@ jobs:
         run: |
           rustc ci/no_blocking_in_async.rs -o /tmp/no_blocking_in_async
           /tmp/no_blocking_in_async
+
+      - name: Guard against lab features in release builds
+        run: |
+          set +e
+          output=$(cargo check --release -p rustyjack-daemon --features lab 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "ERROR: lab feature built in release; guardrail missing"
+            exit 1
+          fi
+          echo "$output" | rg -q "not allowed in release builds" || {
+            echo "ERROR: release guardrail did not trigger"
+            echo "$output"
+            exit 1
+          }
