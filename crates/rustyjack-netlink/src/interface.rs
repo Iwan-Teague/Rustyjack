@@ -186,7 +186,7 @@ impl InterfaceManager {
     /// # Errors
     ///
     /// * `InterfaceNotFound` - Interface does not exist
-    /// * `AddAddressError` - Invalid prefix length or address already exists
+    /// * `AddAddressError` - Invalid prefix length or failure to add address
     ///
     /// # Examples
     ///
@@ -228,20 +228,52 @@ impl InterfaceManager {
         }
         let index = self.get_interface_index(interface).await?;
 
-        self.handle
+        let existing = self.get_interface_addresses(index).await?;
+        if existing
+            .iter()
+            .any(|entry| entry.address == addr && entry.prefix_len == prefix_len)
+        {
+            tracing::info!(
+                "Address {}/{} already present on {}, skipping",
+                addr,
+                prefix_len,
+                interface
+            );
+            return Ok(());
+        }
+
+        match self
+            .handle
             .address()
             .add(index, addr, prefix_len)
             .execute()
             .await
-            .map_err(|e| NetlinkError::AddAddressError {
-                address: addr.to_string(),
-                prefix: prefix_len,
-                interface: interface.to_string(),
-                reason: e.to_string(),
-            })?;
-
-        tracing::info!("Added address {}/{} to {}", addr, prefix_len, interface);
-        Ok(())
+        {
+            Ok(()) => {
+                tracing::info!("Added address {}/{} to {}", addr, prefix_len, interface);
+                Ok(())
+            }
+            Err(err) => {
+                if let rtnetlink::Error::NetlinkError(msg) = &err {
+                    let io_err = msg.to_io();
+                    if io_err.raw_os_error() == Some(libc::EEXIST) {
+                        tracing::info!(
+                            "Address {}/{} already present on {} (netlink EEXIST), skipping",
+                            addr,
+                            prefix_len,
+                            interface
+                        );
+                        return Ok(());
+                    }
+                }
+                Err(NetlinkError::AddAddressError {
+                    address: addr.to_string(),
+                    prefix: prefix_len,
+                    interface: interface.to_string(),
+                    reason: err.to_string(),
+                })
+            }
+        }
     }
 
     /// Remove an IP address from an interface.

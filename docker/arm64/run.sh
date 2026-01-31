@@ -17,10 +17,24 @@ fi
 build_docker_image() {
     if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
         # Image exists - check if Dockerfile has changed since image was built
-        IMAGE_CREATED=$(docker inspect "$IMAGE_NAME" --format='{{.Created}}')
-        DOCKERFILE_MODIFIED=$(stat -f%Sm -t '%Y-%m-%d %H:%M:%S' "$DOCKERFILE" 2>/dev/null || stat -c%y "$DOCKERFILE" | cut -d' ' -f1-2)
+        IMAGE_CREATED_RAW=$(docker inspect "$IMAGE_NAME" --format='{{.Created}}')
+        DOCKERFILE_MODIFIED_EPOCH=$(stat -f%m "$DOCKERFILE" 2>/dev/null || stat -c%Y "$DOCKERFILE")
 
-        if [ "$DOCKERFILE_MODIFIED" -gt "$IMAGE_CREATED" ]; then
+        parse_epoch() {
+            local raw="$1"
+            local trimmed="${raw%%.*}"
+            trimmed="${trimmed%Z}"
+            date -u -d "$raw" +%s 2>/dev/null \
+                || date -u -d "$trimmed" +%s 2>/dev/null \
+                || date -u -j -f "%Y-%m-%dT%H:%M:%S" "$trimmed" +%s 2>/dev/null
+        }
+
+        IMAGE_CREATED_EPOCH=$(parse_epoch "$IMAGE_CREATED_RAW")
+
+        if [ -z "$IMAGE_CREATED_EPOCH" ] || [ -z "$DOCKERFILE_MODIFIED_EPOCH" ]; then
+            echo "Timestamp parse failed; rebuilding docker image..."
+            docker build --platform linux/arm64 -t "$IMAGE_NAME" "$SCRIPT_DIR"
+        elif [ "$DOCKERFILE_MODIFIED_EPOCH" -gt "$IMAGE_CREATED_EPOCH" ]; then
             echo "Dockerfile changed; rebuilding docker image..."
             docker build --platform linux/arm64 -t "$IMAGE_NAME" "$SCRIPT_DIR"
         else

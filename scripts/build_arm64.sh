@@ -9,6 +9,8 @@ HOST_TARGET_DIR="$REPO_ROOT/target-64"
 DOCKER_RUN_SCRIPT="$REPO_ROOT/docker/arm64/run.sh"
 DEFAULT_BUILD=0
 CMD=()
+BUILD_RAN=0
+LAST_BUILD_STAMP="$HOST_TARGET_DIR/.last_build_stamp"
 
 # Ensure target directory exists on host (for docker volume mount)
 mkdir -p "$HOST_TARGET_DIR"
@@ -25,29 +27,18 @@ else
     )
 
     changed=()
-    if por="$(git status --porcelain 2>/dev/null)"; then
-        while IFS= read -r line; do
-            if [ "${#line}" -gt 3 ]; then
-                file="${line:3}"
-                if [[ "$file" == *" -> "* ]]; then
-                    file="${file##* -> }"
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        if por="$(git status --porcelain 2>/dev/null)"; then
+            while IFS= read -r line; do
+                if [ "${#line}" -gt 3 ]; then
+                    file="${line:3}"
+                    if [[ "$file" == *" -> "* ]]; then
+                        file="${file##* -> }"
+                    fi
+                    changed+=("$file")
                 fi
-                changed+=("$file")
-            fi
-        done <<< "$por"
-    fi
-
-    upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-    if [ -n "$upstream" ]; then
-        diff="$(git diff --name-only "$upstream...HEAD" 2>/dev/null || true)"
-    else
-        diff="$(git diff --name-only HEAD~1..HEAD 2>/dev/null || true)"
-    fi
-    if [ -n "$diff" ]; then
-        while IFS= read -r file; do
-            file="${file#"${file%%[![:space:]]*}"}"
-            [ -n "$file" ] && changed+=("$file")
-        done <<< "$diff"
+            done <<< "$por"
+        fi
     fi
 
     if [ "${#changed[@]}" -gt 0 ]; then
@@ -61,8 +52,39 @@ else
     BUILD_PARTS=()
     BUILD_CMDS=()
 
-    if [ "${#changed[@]}" -eq 0 ]; then
-        echo "No changed files detected via git; falling back to artifact existence check."
+    if [ ! -f "$LAST_BUILD_STAMP" ]; then
+        echo "No build stamp found; rebuilding all packages."
+        workspace_changed=1
+    else
+        workspace_changed=0
+
+        for f in Cargo.toml Cargo.lock .cargo/config.toml .cargo/config; do
+            if [ -f "$REPO_ROOT/$f" ] && [ "$REPO_ROOT/$f" -nt "$LAST_BUILD_STAMP" ]; then
+                workspace_changed=1
+                break
+            fi
+        done
+
+        if [ "$workspace_changed" -eq 0 ] && [ -d "$REPO_ROOT/crates" ]; then
+            for dir in "$REPO_ROOT"/crates/*; do
+                [ -d "$dir" ] || continue
+                case "$dir" in
+                    "$REPO_ROOT/crates/rustyjack-ui"|\
+                    "$REPO_ROOT/crates/rustyjack-daemon"|\
+                    "$REPO_ROOT/crates/rustyjack-portal") ;;
+                    *)
+                        if find "$dir" -type f -newer "$LAST_BUILD_STAMP" -print -quit | grep -q .; then
+                            workspace_changed=1
+                            break
+                        fi
+                        ;;
+                esac
+            done
+        fi
+    fi
+
+    if [ "${#changed[@]}" -eq 0 ] && [ "$workspace_changed" -eq 0 ]; then
+        echo "No local changes detected; falling back to artifact existence check."
         for entry in "${PACKAGES[@]}"; do
             IFS="|" read -r bin cmd dir <<< "$entry"
             src="$HOST_TARGET_DIR/$TARGET/debug/$bin"
@@ -77,18 +99,8 @@ else
             echo "All target binaries exist - skipping docker build."
         fi
     else
-        workspace_changed=0
-        for f in "${changed[@]}"; do
-            case "$f" in
-                Cargo.toml|Cargo.lock|*/Cargo.toml|*/Cargo.lock)
-                    workspace_changed=1
-                    break
-                    ;;
-            esac
-        done
-
         if [ "$workspace_changed" -eq 1 ]; then
-            echo "Workspace Cargo files changed; rebuilding all packages"
+            echo "Workspace changes detected; rebuilding all packages"
             for entry in "${PACKAGES[@]}"; do
                 IFS="|" read -r _bin cmd _dir <<< "$entry"
                 BUILD_PARTS+=("$cmd")
@@ -97,6 +109,16 @@ else
         else
             for entry in "${PACKAGES[@]}"; do
                 IFS="|" read -r _bin cmd dir <<< "$entry"
+                if [ ! -f "$LAST_BUILD_STAMP" ]; then
+                    BUILD_PARTS+=("$cmd")
+                    BUILD_CMDS+=("$cmd")
+                    continue
+                fi
+                if find "$REPO_ROOT/$dir" -type f -newer "$LAST_BUILD_STAMP" -print -quit | grep -q .; then
+                    BUILD_PARTS+=("$cmd")
+                    BUILD_CMDS+=("$cmd")
+                    continue
+                fi
                 for f in "${changed[@]}"; do
                     if [[ "$f" == "$dir/"* || "$f" == */"$dir/"* ]]; then
                         BUILD_PARTS+=("$cmd")
@@ -139,6 +161,7 @@ if [ "$DEFAULT_BUILD" -eq 0 ]; then
 elif [ "${#CMD[@]}" -gt 0 ]; then
     echo "Running build in Docker container..."
     echo "Building: ${#BUILD_PARTS[@]} package(s)"
+    BUILD_RAN=1
     # Pass cargo target cache volume to docker run script
     export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
     bash "$DOCKER_RUN_SCRIPT" "${CMD[@]}"
@@ -165,6 +188,7 @@ if [ "$DEFAULT_BUILD" -eq 1 ]; then
 
         # Pass cargo target cache volume to docker run script
         export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
+        BUILD_RAN=1
         bash "$DOCKER_RUN_SCRIPT" bash -c "$BUILD_CMD"
 
         if [ $? -ne 0 ]; then
@@ -173,6 +197,10 @@ if [ "$DEFAULT_BUILD" -eq 1 ]; then
         fi
 
         echo "Fallback build completed successfully"
+    fi
+
+    if [ "$BUILD_RAN" -eq 1 ]; then
+        date +%s > "$LAST_BUILD_STAMP" 2>/dev/null || touch "$LAST_BUILD_STAMP"
     fi
 
     DEST_DIR="$REPO_ROOT/prebuilt/arm64"
