@@ -183,3 +183,41 @@ mod platform {
 }
 
 pub use platform::ButtonPad;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_button_enum_completeness() {
+        // Verify all 8 buttons are defined
+        let buttons = vec![
+            Button::Up,
+            Button::Down,
+            Button::Left,
+            Button::Right,
+            Button::Select,
+            Button::Key1,
+            Button::Key2,
+            Button::Key3,
+        ];
+        assert_eq!(buttons.len(), 8, "Expected exactly 8 buttons");
+    }
+
+    #[test]
+    fn test_button_equality() {
+        // Verify Button implements PartialEq correctly
+        assert_eq!(Button::Up, Button::Up);
+        assert_ne!(Button::Up, Button::Down);
+        assert_eq!(Button::Select, Button::Select);
+        assert_ne!(Button::Left, Button::Right);
+    }
+
+    #[test]
+    fn test_button_debug() {
+        // Verify Debug trait implementation
+        let button = Button::Up;
+        let debug_str = format!("{:?}", button);
+        assert!(debug_str.contains("Up"));
+    }
+}

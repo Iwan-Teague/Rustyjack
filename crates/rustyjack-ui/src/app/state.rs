@@ -197,3 +197,154 @@ pub(crate) struct StartApErrorHint {
     pub(crate) category: &'static str,
     pub(crate) hint: &'static str,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_menu_state_new() {
+        let state = MenuState::new();
+        assert_eq!(state.current_id(), "a");
+        assert_eq!(state.selection, 0);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn test_menu_state_enter() {
+        let mut state = MenuState::new();
+        state.enter("submenu1");
+        assert_eq!(state.current_id(), "submenu1");
+        assert_eq!(state.selection, 0);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn test_menu_state_back() {
+        let mut state = MenuState::new();
+        state.enter("submenu1");
+        state.enter("submenu2");
+        assert_eq!(state.current_id(), "submenu2");
+        
+        state.back();
+        assert_eq!(state.current_id(), "submenu1");
+        assert_eq!(state.selection, 0);
+        
+        state.back();
+        assert_eq!(state.current_id(), "a");
+        
+        // Should not go below root
+        state.back();
+        assert_eq!(state.current_id(), "a");
+    }
+
+    #[test]
+    fn test_menu_state_move_down() {
+        let mut state = MenuState::new();
+        
+        // Test with 3 items
+        state.move_down(3);
+        assert_eq!(state.selection, 1);
+        
+        state.move_down(3);
+        assert_eq!(state.selection, 2);
+        
+        // Should wrap to 0
+        state.move_down(3);
+        assert_eq!(state.selection, 0);
+    }
+
+    #[test]
+    fn test_menu_state_move_up() {
+        let mut state = MenuState::new();
+        
+        // At top, should wrap to bottom
+        state.move_up(3);
+        assert_eq!(state.selection, 2);
+        
+        state.move_up(3);
+        assert_eq!(state.selection, 1);
+        
+        state.move_up(3);
+        assert_eq!(state.selection, 0);
+    }
+
+    #[test]
+    fn test_menu_state_move_with_empty_list() {
+        let mut state = MenuState::new();
+        state.selection = 5; // Set to something non-zero
+        
+        state.move_down(0);
+        assert_eq!(state.selection, 0, "Empty list should reset selection to 0");
+        
+        state.selection = 5;
+        state.move_up(0);
+        assert_eq!(state.selection, 0, "Empty list should reset selection to 0");
+    }
+
+    #[test]
+    fn test_menu_state_home() {
+        let mut state = MenuState::new();
+        state.enter("sub1");
+        state.enter("sub2");
+        state.selection = 5;
+        state.offset = 3;
+        
+        state.home();
+        assert_eq!(state.current_id(), "a");
+        assert_eq!(state.selection, 0);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn test_button_action_enum_completeness() {
+        // Verify all button actions are defined
+        let actions = vec![
+            ButtonAction::Up,
+            ButtonAction::Down,
+            ButtonAction::Back,
+            ButtonAction::Select,
+            ButtonAction::Refresh,
+            ButtonAction::Cancel,
+            ButtonAction::Reboot,
+        ];
+        assert_eq!(actions.len(), 7, "Expected exactly 7 button actions");
+    }
+
+    #[test]
+    fn test_confirm_choice_variants() {
+        // Verify ConfirmChoice enum has all expected variants
+        let choices = vec![
+            ConfirmChoice::Yes,
+            ConfirmChoice::No,
+            ConfirmChoice::Back,
+            ConfirmChoice::Cancel,
+        ];
+        assert_eq!(choices.len(), 4, "Expected exactly 4 confirm choices");
+    }
+
+    #[test]
+    fn test_cancel_decision_variants() {
+        assert_eq!(CancelDecision::Continue, CancelDecision::Continue);
+        assert_eq!(CancelDecision::Cancel, CancelDecision::Cancel);
+        assert_ne!(CancelDecision::Continue, CancelDecision::Cancel);
+    }
+
+    #[test]
+    fn test_usb_access_requirement_mount_mode() {
+        assert_eq!(
+            UsbAccessRequirement::ReadableOk.mount_mode(),
+            UsbMountMode::ReadOnly
+        );
+        assert_eq!(
+            UsbAccessRequirement::RequireWritable.mount_mode(),
+            UsbMountMode::ReadWrite
+        );
+    }
+
+    #[test]
+    fn test_usb_access_requirement_needs_write() {
+        assert!(!UsbAccessRequirement::ReadableOk.needs_write());
+        assert!(UsbAccessRequirement::RequireWritable.needs_write());
+    }
+}

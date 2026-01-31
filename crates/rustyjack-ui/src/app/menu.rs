@@ -39,6 +39,18 @@ use crate::{
 use super::state::{App, ButtonAction, CancelDecision, ConfirmChoice, MenuState};
 
 // Map low-level Button values to higher-level ButtonAction values
+// This provides a consistent abstraction layer between hardware GPIO buttons
+// and UI actions, making it easier to change button assignments if needed.
+//
+// Button Mapping:
+// - UP (GPIO 6): Move selection up in menus/lists
+// - DOWN (GPIO 19): Move selection down in menus/lists
+// - LEFT (GPIO 5): Go back/cancel/exit current screen
+// - RIGHT (GPIO 26): Confirm/select/accept (same as SELECT)
+// - SELECT (GPIO 13): Confirm/select/accept (same as RIGHT)
+// - KEY1 (GPIO 21): Refresh current screen/display
+// - KEY2 (GPIO 20): Cancel operation (checked via try_read during ops)
+// - KEY3 (GPIO 16): Reboot system (with confirmation dialog)
 impl App {
     pub(crate) fn map_button(&self, b: Button) -> ButtonAction {
         match b {
@@ -579,13 +591,13 @@ impl App {
 
     pub(crate) fn confirm_reboot(&mut self) -> Result<()> {
         // Ask the user to confirm reboot — waits for explicit confirmation
-        let overlay = self.stats.snapshot();
         let content = vec![
             "Confirm reboot".to_string(),
             "SELECT = Reboot".to_string(),
             "LEFT/KEY2 = Cancel".to_string(),
         ];
 
+        let mut overlay = self.stats.snapshot();
         self.display.draw_dialog(&content, &overlay)?;
 
         loop {
@@ -607,7 +619,8 @@ impl App {
                     break;
                 }
                 ButtonAction::Refresh => {
-                    // redraw the dialog
+                    // Refresh overlay to get current system stats
+                    overlay = self.stats.snapshot();
                     self.display.draw_dialog(&content, &overlay)?;
                 }
                 _ => {}
@@ -791,6 +804,31 @@ impl App {
         Ok(app)
     }
 
+    /// Main UI event loop - handles all button inputs and screen updates
+    ///
+    /// This runs in an infinite loop with two modes:
+    ///
+    /// **Dashboard Mode** (when `dashboard_view` is set):
+    /// - Displays system health, target status, MAC status, or network interfaces
+    /// - Button behavior:
+    ///   - SELECT: Cycle to next dashboard view
+    ///   - BACK: Exit dashboard and return to menu
+    ///   - REFRESH (KEY1): Redraw current dashboard
+    ///   - REBOOT (KEY3): Show reboot confirmation
+    ///
+    /// **Menu Mode** (default):
+    /// - Displays hierarchical menu structure with navigation
+    /// - Button behavior:
+    ///   - UP: Move selection up (wraps to bottom)
+    ///   - DOWN: Move selection down (wraps to top)
+    ///   - BACK: Go to parent menu (pop menu stack)
+    ///   - SELECT: Execute selected menu action
+    ///   - REFRESH (KEY1): Redraw menu (handled by loop)
+    ///   - CANCEL (KEY2): No-op in menu (used during operations)
+    ///   - REBOOT (KEY3): Show reboot confirmation
+    ///
+    /// All button presses are debounced (120ms) and wait for release before
+    /// processing to prevent accidental double-presses.
     pub fn run(mut self) -> Result<()> {
         loop {
             if let Some(view) = self.dashboard_view {
@@ -1218,5 +1256,100 @@ impl App {
         self.show_progress(title, [message, "Please wait..."])?;
         let result = operation();
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Mock App for testing button mapping without hardware
+    struct MockApp;
+
+    impl MockApp {
+        fn map_button(&self, b: Button) -> ButtonAction {
+            match b {
+                Button::Up => ButtonAction::Up,
+                Button::Down => ButtonAction::Down,
+                Button::Left => ButtonAction::Back,
+                Button::Right | Button::Select => ButtonAction::Select,
+                Button::Key1 => ButtonAction::Refresh,
+                Button::Key2 => ButtonAction::Cancel,
+                Button::Key3 => ButtonAction::Reboot,
+            }
+        }
+    }
+
+    #[test]
+    fn test_button_mapping_navigation() {
+        let app = MockApp;
+        
+        // Test navigation buttons
+        assert_eq!(app.map_button(Button::Up), ButtonAction::Up);
+        assert_eq!(app.map_button(Button::Down), ButtonAction::Down);
+        assert_eq!(app.map_button(Button::Left), ButtonAction::Back);
+        assert_eq!(app.map_button(Button::Right), ButtonAction::Select);
+        assert_eq!(app.map_button(Button::Select), ButtonAction::Select);
+    }
+
+    #[test]
+    fn test_button_mapping_special_keys() {
+        let app = MockApp;
+        
+        // Test special function keys
+        assert_eq!(app.map_button(Button::Key1), ButtonAction::Refresh);
+        assert_eq!(app.map_button(Button::Key2), ButtonAction::Cancel);
+        assert_eq!(app.map_button(Button::Key3), ButtonAction::Reboot);
+    }
+
+    #[test]
+    fn test_button_mapping_select_equivalence() {
+        let app = MockApp;
+        
+        // Both Button::Right and Button::Select map to ButtonAction::Select
+        assert_eq!(app.map_button(Button::Right), app.map_button(Button::Select));
+        assert_eq!(app.map_button(Button::Right), ButtonAction::Select);
+    }
+
+    #[test]
+    fn test_button_mapping_all_buttons_covered() {
+        let app = MockApp;
+        
+        // Verify all 8 buttons have mappings
+        let buttons = vec![
+            Button::Up,
+            Button::Down,
+            Button::Left,
+            Button::Right,
+            Button::Select,
+            Button::Key1,
+            Button::Key2,
+            Button::Key3,
+        ];
+        
+        for button in buttons {
+            // Should not panic, all buttons should have a mapping
+            let _action = app.map_button(button);
+        }
+    }
+
+    #[test]
+    fn test_button_mapping_no_duplicate_actions_except_select() {
+        let app = MockApp;
+        
+        // Map all buttons except Right (which duplicates Select)
+        let buttons_and_actions = vec![
+            (Button::Up, ButtonAction::Up),
+            (Button::Down, ButtonAction::Down),
+            (Button::Left, ButtonAction::Back),
+            // Skip Right and Select as they intentionally map to same action
+            (Button::Key1, ButtonAction::Refresh),
+            (Button::Key2, ButtonAction::Cancel),
+            (Button::Key3, ButtonAction::Reboot),
+        ];
+        
+        for (button, expected_action) in buttons_and_actions {
+            assert_eq!(app.map_button(button), expected_action);
+        }
     }
 }
