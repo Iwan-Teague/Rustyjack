@@ -71,8 +71,7 @@ else
                 case "$dir" in
                     "$REPO_ROOT/crates/rustyjack-ui"|\
                     "$REPO_ROOT/crates/rustyjack-daemon"|\
-                    "$REPO_ROOT/crates/rustyjack-portal"|\
-                    "$REPO_ROOT/crates/rustyjack-core") ;;
+                    "$REPO_ROOT/crates/rustyjack-portal") ;;
                     *)
                         if find "$dir" -type f -newer "$LAST_BUILD_STAMP" -print -quit | grep -q .; then
                             workspace_changed=1
