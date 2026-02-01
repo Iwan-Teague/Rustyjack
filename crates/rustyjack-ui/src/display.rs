@@ -134,7 +134,7 @@ const OPS_LINE_HEIGHT: u32 = 10;
 #[cfg(target_os = "linux")]
 const OPS_LINE_COUNT: usize = 3;
 #[cfg(target_os = "linux")]
-const HEADER_HEIGHT: u32 = TOOLBAR_HEIGHT + (OPS_LINE_HEIGHT * OPS_LINE_COUNT as u32);
+const HEADER_HEIGHT: u32 = TOOLBAR_HEIGHT;
 #[cfg(target_os = "linux")]
 const MENU_TOP: i32 = (HEADER_HEIGHT as i32) + 2;
 #[cfg(target_os = "linux")]
@@ -143,6 +143,11 @@ const DIALOG_BODY_TOP: i32 = (HEADER_HEIGHT as i32) + 8;
 const FILE_POS_TOP: i32 = (HEADER_HEIGHT as i32) + 2;
 #[cfg(target_os = "linux")]
 const FILE_BODY_TOP: i32 = (HEADER_HEIGHT as i32) + 14;
+#[cfg(target_os = "linux")]
+const DASHBOARD_OPS_TOP: i32 = TOOLBAR_HEIGHT as i32;
+#[cfg(target_os = "linux")]
+const DASHBOARD_BODY_TOP: i32 =
+    (TOOLBAR_HEIGHT + (OPS_LINE_HEIGHT * OPS_LINE_COUNT as u32)) as i32 + 2;
 #[cfg(target_os = "linux")]
 const OPS_MAX_CHARS: usize = 21;
 #[cfg(target_os = "linux")]
@@ -704,6 +709,10 @@ impl Display {
         .draw(&mut self.lcd)
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
+        Ok(())
+    }
+
+    fn draw_ops_status(&mut self, status: &StatusOverlay) -> Result<()> {
         let ops_tag = |enabled: bool| if enabled { "ON" } else { "OFF" };
         let ops_text = format!(
             "Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
@@ -723,7 +732,7 @@ impl Display {
         if ops_lines.len() > OPS_LINE_COUNT {
             ops_lines.truncate(OPS_LINE_COUNT);
         }
-        let mut ops_y = TOOLBAR_HEIGHT as i32;
+        let mut ops_y = DASHBOARD_OPS_TOP;
         for line in ops_lines {
             Text::with_baseline(
                 &line,
@@ -735,7 +744,6 @@ impl Display {
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
             ops_y += OPS_LINE_HEIGHT as i32;
         }
-
         Ok(())
     }
 
@@ -892,38 +900,6 @@ impl Display {
         .draw(&mut self.lcd)
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
-        let ops_tag = |enabled: bool| if enabled { "ON" } else { "OFF" };
-        let ops_text = format!(
-            "Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
-            ops_tag(status.ops_wifi),
-            ops_tag(status.ops_ethernet),
-            ops_tag(status.ops_hotspot),
-            ops_tag(status.ops_portal),
-            ops_tag(status.ops_storage),
-            ops_tag(status.ops_update),
-            ops_tag(status.ops_system),
-            ops_tag(status.ops_dev),
-            ops_tag(status.ops_offensive),
-            ops_tag(status.ops_loot),
-            ops_tag(status.ops_process),
-        );
-        let mut ops_lines = wrap_text(&ops_text, OPS_MAX_CHARS);
-        if ops_lines.len() > OPS_LINE_COUNT {
-            ops_lines.truncate(OPS_LINE_COUNT);
-        }
-        let mut ops_y = TOOLBAR_HEIGHT as i32;
-        for line in ops_lines {
-            Text::with_baseline(
-                &line,
-                Point::new(4, ops_y),
-                self.text_style_small,
-                Baseline::Top,
-            )
-            .draw(&mut self.lcd)
-            .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            ops_y += OPS_LINE_HEIGHT as i32;
-        }
-
         // Draw line position indicator below toolbar
         let pos_text = format!("{}/{}", line_offset + 1, total_lines);
         Text::with_baseline(
@@ -1071,6 +1047,7 @@ impl Display {
 
     fn draw_system_health(&mut self, status: &StatusOverlay) -> Result<()> {
         self.draw_toolbar_with_title(Some("SYSTEM HEALTH"), status)?;
+        self.draw_ops_status(status)?;
 
         let cpu_bar_len = ((status.cpu_percent / 100.0) * 100.0).min(100.0) as u32;
         let mem_percent = (status.mem_used_mb as f32 / status.mem_total_mb.max(1) as f32) * 100.0;
@@ -1078,7 +1055,7 @@ impl Display {
         let disk_percent = (status.disk_used_gb / status.disk_total_gb.max(0.1)) * 100.0;
         let disk_bar_len = ((disk_percent / 100.0) * 100.0).min(100.0) as u32;
 
-        let mut y = MENU_TOP;
+        let mut y = DASHBOARD_BODY_TOP;
 
         let cpu_text = format!("CPU:{:.0}C {:.0}%", status.temp_c, status.cpu_percent);
         if y <= 119 {
@@ -1153,6 +1130,7 @@ impl Display {
 
     fn draw_target_status(&mut self, status: &StatusOverlay) -> Result<()> {
         self.draw_toolbar_with_title(Some("TARGET STATUS"), status)?;
+        self.draw_ops_status(status)?;
 
         let target_label = if !status.target_network.is_empty() {
             status.target_network.clone()
@@ -1187,7 +1165,7 @@ impl Display {
             format!("Module: {}", interface_label),
         ];
 
-        let mut y = MENU_TOP;
+        let mut y = DASHBOARD_BODY_TOP;
         const MAX_CHARS: usize = 21;
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
@@ -1220,6 +1198,7 @@ impl Display {
 
     fn draw_mac_status(&mut self, status: &StatusOverlay) -> Result<()> {
         self.draw_toolbar_with_title(Some("MAC STATUS"), status)?;
+        self.draw_ops_status(status)?;
 
         let interface_label = if status.active_interface.is_empty() {
             "None".to_string()
@@ -1245,7 +1224,7 @@ impl Display {
             format!("Current: {}", current_mac),
         ];
 
-        let mut y = MENU_TOP;
+        let mut y = DASHBOARD_BODY_TOP;
         const MAX_CHARS: usize = 21;
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
@@ -1277,6 +1256,7 @@ impl Display {
 
     fn draw_network_interfaces(&mut self, status: &StatusOverlay) -> Result<()> {
         self.draw_toolbar_with_title(Some("NETWORK IFS"), status)?;
+        self.draw_ops_status(status)?;
 
         let mut entries = Vec::new();
 
@@ -1359,7 +1339,7 @@ impl Display {
             entries.push("No interfaces found".to_string());
         }
 
-        let mut y = MENU_TOP;
+        let mut y = DASHBOARD_BODY_TOP;
         const MAX_CHARS: usize = 21;
         for line in entries.iter() {
             for wrapped in wrap_text(line, MAX_CHARS) {
@@ -1448,20 +1428,6 @@ impl Display {
             "[status] {:.0} °C | {}",
             status.temp_c, status.text.as_str()
         );
-        println!(
-            "[ops] Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
-            on_off(status.ops_wifi),
-            on_off(status.ops_ethernet),
-            on_off(status.ops_hotspot),
-            on_off(status.ops_portal),
-            on_off(status.ops_storage),
-            on_off(status.ops_update),
-            on_off(status.ops_system),
-            on_off(status.ops_dev),
-            on_off(status.ops_offensive),
-            on_off(status.ops_loot),
-            on_off(status.ops_process),
-        );
         Ok(())
     }
 
@@ -1533,6 +1499,20 @@ impl Display {
 
     pub fn draw_dashboard(&mut self, view: DashboardView, status: &StatusOverlay) -> Result<()> {
         println!("=== DASHBOARD: {:?} ===", view);
+        println!(
+            "[ops] Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
+            on_off(status.ops_wifi),
+            on_off(status.ops_ethernet),
+            on_off(status.ops_hotspot),
+            on_off(status.ops_portal),
+            on_off(status.ops_storage),
+            on_off(status.ops_update),
+            on_off(status.ops_system),
+            on_off(status.ops_dev),
+            on_off(status.ops_offensive),
+            on_off(status.ops_loot),
+            on_off(status.ops_process),
+        );
         match view {
             DashboardView::SystemHealth => {
                 println!("CPU: {:.0}% ({:.0}°C)", status.cpu_percent, status.temp_c);

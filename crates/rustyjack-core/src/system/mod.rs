@@ -1850,7 +1850,7 @@ fn interface_exists(interface: &str) -> bool {
 }
 
 fn fallback_preferred_interface() -> Option<String> {
-    for name in ["wlan0", "wlan1", "eth0"] {
+    for name in ["eth0", "wlan0", "wlan1"] {
         if interface_exists(name) {
             return Some(name.to_string());
         }
