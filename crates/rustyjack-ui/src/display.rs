@@ -715,12 +715,13 @@ impl Display {
     fn draw_ops_status(&mut self, status: &StatusOverlay) -> Result<()> {
         let ops_tag = |enabled: bool| if enabled { "ON" } else { "OFF" };
         let ops_text = format!(
-            "Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
+            "Wi{} Et{} Hs{} Po{} St{} Pw{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
             ops_tag(status.ops_wifi),
             ops_tag(status.ops_ethernet),
             ops_tag(status.ops_hotspot),
             ops_tag(status.ops_portal),
             ops_tag(status.ops_storage),
+            ops_tag(status.ops_power),
             ops_tag(status.ops_update),
             ops_tag(status.ops_system),
             ops_tag(status.ops_dev),
@@ -1500,12 +1501,13 @@ impl Display {
     pub fn draw_dashboard(&mut self, view: DashboardView, status: &StatusOverlay) -> Result<()> {
         println!("=== DASHBOARD: {:?} ===", view);
         println!(
-            "[ops] Wi{} Et{} Hs{} Po{} St{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
+            "[ops] Wi{} Et{} Hs{} Po{} St{} Pw{} Up{} Sy{} Dv{} Of{} Lo{} Pr{}",
             on_off(status.ops_wifi),
             on_off(status.ops_ethernet),
             on_off(status.ops_hotspot),
             on_off(status.ops_portal),
             on_off(status.ops_storage),
+            on_off(status.ops_power),
             on_off(status.ops_update),
             on_off(status.ops_system),
             on_off(status.ops_dev),
@@ -1642,6 +1644,7 @@ pub struct StatusOverlay {
     pub ops_hotspot: bool,
     pub ops_portal: bool,
     pub ops_storage: bool,
+    pub ops_power: bool,
     pub ops_update: bool,
     pub ops_system: bool,
     pub ops_dev: bool,

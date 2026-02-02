@@ -119,6 +119,9 @@ impl Operation for DeauthAttackOp {
                 ],
             }),
             jobs::JobRunResult::Completed { message, data } => {
+                if let Some(lines) = preflight::preflight_only_summary(&data) {
+                    return Ok(OperationOutcome::Success { summary: lines });
+                }
                 let mut lines = vec![message];
 
                 if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
@@ -244,6 +247,9 @@ impl Operation for ProbeSniffOp {
                 ],
             }),
             jobs::JobRunResult::Completed { message, data } => {
+                if let Some(lines) = preflight::preflight_only_summary(&data) {
+                    return Ok(OperationOutcome::Success { summary: lines });
+                }
                 let mut lines = vec![message];
                 if let Some(probes) = data.get("total_probes").and_then(|v| v.as_u64()) {
                     lines.push(format!("Probes: {}", probes));
@@ -385,6 +391,9 @@ impl Operation for PmkidCaptureOp {
                 ],
             }),
             jobs::JobRunResult::Completed { message, data } => {
+                if let Some(lines) = preflight::preflight_only_summary(&data) {
+                    return Ok(OperationOutcome::Success { summary: lines });
+                }
                 let mut lines = vec![message];
                 if let Some(pmkids) = data.get("pmkids_captured").and_then(|v| v.as_u64()) {
                     lines.push(format!("PMKIDs: {}", pmkids));
@@ -507,6 +516,9 @@ impl Operation for EvilTwinAttackOp {
                 ],
             }),
             jobs::JobRunResult::Completed { message, data } => {
+                if let Some(lines) = preflight::preflight_only_summary(&data) {
+                    return Ok(OperationOutcome::Success { summary: lines });
+                }
                 let mut lines = vec![message];
 
                 if let Some(clients) = data.get("clients_connected").and_then(|v| v.as_u64()) {
@@ -643,6 +655,9 @@ impl Operation for KarmaAttackOp {
                 ],
             }),
             jobs::JobRunResult::Completed { message, data } => {
+                if let Some(lines) = preflight::preflight_only_summary(&data) {
+                    return Ok(OperationOutcome::Success { summary: lines });
+                }
                 let mut lines = vec![message];
 
                 if let Some(probes) = data.get("probes_captured").and_then(|v| v.as_u64()) {

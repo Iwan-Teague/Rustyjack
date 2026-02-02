@@ -15,6 +15,8 @@ use crate::system::{
     dns::DnsManager, ops::ErrorEntry, preference::PreferenceManager, routing::RouteManager, NetOps,
     RealNetOps,
 };
+use crate::system::wifi_backend_from_env;
+use rustyjack_netlink::{station_disconnect_with_backend, StationBackendKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionDhcpInfo {
@@ -117,6 +119,11 @@ where
     // Step 2: deactivate others
     for other in &other_ifaces {
         check_cancel(cancel)?;
+        if ops.is_wireless(other) {
+            if let Err(err) = disconnect_station_backend(other) {
+                warn!(target: "net", iface = %other, error = %err, "wpa_disconnect_failed");
+            }
+        }
         if let Err(e) = ops.release_dhcp(other) {
             warn!(target: "net", iface = %other, error = %e, "dhcp_release_failed");
         }
@@ -296,6 +303,27 @@ where
     Ok(outcome)
 }
 
+fn disconnect_station_backend(interface: &str) -> Result<()> {
+    let mut backend = wifi_backend_from_env();
+    if let Err(err) = station_disconnect_with_backend(interface, backend) {
+        if backend == StationBackendKind::WpaSupplicantDbus {
+            backend = StationBackendKind::RustWpa2;
+            station_disconnect_with_backend(interface, backend).map_err(|fallback_err| {
+                anyhow!(
+                    "disconnect failed via {:?}: {}; fallback {:?} failed: {}",
+                    StationBackendKind::WpaSupplicantDbus,
+                    err,
+                    backend,
+                    fallback_err
+                )
+            })?;
+        } else {
+            return Err(anyhow!("disconnect failed: {}", err));
+        }
+    }
+    Ok(())
+}
+
 fn emit_progress<F>(progress: &mut Option<&mut F>, phase: &str, percent: u8, message: &str)
 where
     F: FnMut(&str, u8, &str),
@@ -468,6 +496,7 @@ fn wait_for_admin_state(
 #[derive(Debug)]
 struct LinkState {
     admin_up: bool,
+    #[allow(dead_code)]
     carrier: Option<bool>,
 }
 
@@ -525,6 +554,7 @@ impl LinkEventWatcher {
         Ok(Self { socket })
     }
 
+    #[allow(dead_code)]
     fn fd(&self) -> i32 {
         self.socket.as_raw_fd()
     }

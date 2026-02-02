@@ -228,6 +228,16 @@ pub fn station_disconnect(interface: &str) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+pub fn station_disconnect_with_backend(
+    interface: &str,
+    backend: station::backend::StationBackendKind,
+) -> Result<()> {
+    let station = StationManager::new_with_backend(interface, backend)?;
+    station.disconnect()?;
+    station.cleanup()
+}
+
+#[cfg(target_os = "linux")]
 pub fn scan_wifi_networks(interface: &str, timeout: std::time::Duration) -> Result<Vec<WifiScanResult>> {
     let mut mgr = WirelessManager::new()?;
     mgr.scan_wifi(interface, timeout)

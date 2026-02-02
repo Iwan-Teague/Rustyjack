@@ -194,6 +194,7 @@ fn sample_once(
         overlay.ops_hotspot = status.ops.hotspot_ops;
         overlay.ops_portal = status.ops.portal_ops;
         overlay.ops_storage = status.ops.storage_ops;
+        overlay.ops_power = status.ops.power_ops;
         overlay.ops_update = status.ops.update_ops;
         overlay.ops_system = status.ops.system_ops;
         overlay.ops_dev = status.ops.dev_ops;

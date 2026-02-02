@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs::{self, File},
     io::Write,
-    net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     sync::{Mutex as StdMutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -13,9 +13,9 @@ use chrono::Local;
 use ipnet::Ipv4Net;
 use regex::Regex;
 use rustyjack_ethernet::{
-    build_device_inventory, build_device_inventory_cancellable, connect_tcp_with_source,
-    discover_hosts, discover_hosts_arp, discover_hosts_arp_cancellable, discover_hosts_cancellable,
-    quick_port_scan, quick_port_scan_cancellable, DeviceInfo, LanDiscoveryResult,
+    build_device_inventory, build_device_inventory_cancellable, discover_hosts, discover_hosts_arp,
+    discover_hosts_arp_cancellable, discover_hosts_cancellable, quick_port_scan,
+    quick_port_scan_cancellable, DeviceInfo, LanDiscoveryResult,
 };
 use rustyjack_evasion::{
     MacAddress, MacGenerationStrategy, MacManager, MacMode, MacPolicyConfig, MacPolicyEngine,
@@ -30,6 +30,9 @@ use rustyjack_wireless::{
     start_hotspot, status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
 };
 use serde_json::{json, Map, Value};
+use serde::Serialize;
+
+use crate::audit::{AuditEvent, AuditResult};
 
 use walkdir::WalkDir;
 #[cfg(target_os = "linux")]
@@ -48,7 +51,8 @@ use crate::cli::{
     UsbUnmountArgs, WifiBestArgs, WifiCommand,
     WifiCrackArgs,
     WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
-    WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPmkidArgs, WifiProbeSniffArgs,
+    WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPipelinePreflightArgs,
+    WifiPmkidArgs, WifiProbeSniffArgs,
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
     WifiProfileShowArgs,
     WifiReconArpScanArgs, WifiReconBandwidthArgs, WifiReconCommand, WifiReconDnsCaptureArgs,
@@ -72,8 +76,8 @@ use crate::system::{
     process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
     read_dns_servers, read_interface_preference, read_interface_preference_with_mac,
     read_interface_stats, read_wifi_link_info, restore_routing_state,
-    sanitize_label, save_wifi_profile, scan_local_hosts, scan_local_hosts_cancellable,
-    scan_wifi_networks, scan_wifi_networks_with_timeout_cancel, select_active_uplink,
+    sanitize_label, save_wifi_profile, scan_local_hosts_cancellable,
+    scan_wifi_networks_with_timeout_cancel, select_active_uplink,
     select_best_interface, select_wifi_interface, send_discord_payload, send_scan_to_discord,
     set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof,
     start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
@@ -235,6 +239,7 @@ pub fn dispatch_command_with_cancel(
             WifiCommand::ProbeSniff(args) => handle_wifi_probe_sniff(root, args, cancel),
             WifiCommand::Crack(args) => handle_wifi_crack(root, args, cancel),
             WifiCommand::Karma(args) => handle_wifi_karma(root, args, cancel),
+            WifiCommand::PipelinePreflight(args) => handle_wifi_pipeline_preflight(root, args),
             WifiCommand::Recon(recon) => match recon {
                 WifiReconCommand::Gateway(args) => handle_wifi_recon_gateway(args, cancel),
                 WifiReconCommand::ArpScan(args) => handle_wifi_recon_arp_scan(args, cancel),
@@ -265,9 +270,6 @@ pub fn dispatch_command_with_cancel(
         Commands::System(SystemCommand::Reboot) => handle_system_reboot(),
         Commands::System(SystemCommand::Poweroff) => handle_system_poweroff(),
         Commands::System(SystemCommand::Purge) => handle_system_purge(root),
-        Commands::System(SystemCommand::InstallWifiDrivers) => {
-            handle_system_install_wifi_drivers(root)
-        }
         Commands::System(SystemCommand::UsbMount(args)) => handle_system_usb_mount(root, args),
         Commands::System(SystemCommand::UsbUnmount(args)) => handle_system_usb_unmount(root, args),
         Commands::System(SystemCommand::ExportLogsToUsb(args)) => {
@@ -298,6 +300,38 @@ pub fn dispatch_command_with_cancel(
 }
 
 fn handle_scan_run(root: &Path, args: ScanRunArgs) -> Result<HandlerResult> {
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let warnings = Vec::new();
+        if let Some(ref iface) = args.interface {
+            let sys = Path::new("/sys/class/net").join(iface);
+            if !sys.exists() {
+                errors.push(format!("Interface {} not found", iface));
+            }
+        }
+        if let Some(ref target) = args.target {
+            if target.parse::<Ipv4Net>().is_err() {
+                errors.push(format!("Invalid target CIDR: {}", target));
+            }
+        }
+        let checks = json!({
+            "label": args.label,
+            "interface": args.interface,
+            "target": args.target,
+            "ports": args.ports,
+            "top_ports": args.top_ports,
+            "timeout_ms": args.timeout_ms,
+            "discovery": format!("{:?}", args.discovery),
+            "no_discovery": args.no_discovery,
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::SCAN_RUN,
+            checks,
+            errors,
+            warnings,
+        );
+    }
     run_scan_with_progress(root, args, None, |_, _| {})
 }
 
@@ -1834,6 +1868,42 @@ fn handle_mitm_start(
         max_hosts,
         label,
     } = args;
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let interface_info = match detect_interface(interface.clone()) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                errors.push(format!("Interface detection failed: {}", e));
+                None
+            }
+        };
+        let gateway = match default_gateway_ip() {
+            Ok(ip) => Some(ip.to_string()),
+            Err(e) => {
+                warnings.push(format!("Gateway detection failed: {}", e));
+                None
+            }
+        };
+        let checks = json!({
+            "interface": interface_info
+                .as_ref()
+                .map(|i| i.name.clone())
+                .or_else(|| interface.clone()),
+            "network": network,
+            "gateway": gateway,
+            "max_hosts": max_hosts,
+            "label": label,
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::MITM_START,
+            checks,
+            errors,
+            warnings,
+        );
+    }
+
     let interface_info = detect_interface(interface)?;
 
     enforce_single_interface(&interface_info.name)?;
@@ -2028,6 +2098,45 @@ fn handle_eth_site_cred_capture(
         max_hosts,
         timeout_ms,
     } = args;
+
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let warnings = Vec::new();
+        let site_dir = root.join("DNSSpoof").join("sites").join(&site);
+        if !site_dir.exists() {
+            errors.push(format!("DNS spoof site not found: {}", site_dir.display()));
+        }
+        let interface_info = match detect_ethernet_interface(interface.clone()) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                errors.push(format!("Interface detection failed: {}", e));
+                None
+            }
+        };
+        if let Some(ref cidr) = target {
+            if cidr.parse::<Ipv4Net>().is_err() {
+                errors.push(format!("Invalid target CIDR: {}", cidr));
+            }
+        }
+        let checks = json!({
+            "interface": interface_info
+                .as_ref()
+                .map(|i| i.name.clone())
+                .or_else(|| interface.clone()),
+            "target": target,
+            "site": site,
+            "max_hosts": max_hosts,
+            "timeout_ms": timeout_ms,
+            "site_dir": site_dir.display().to_string(),
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::SITE_CRED_CAPTURE,
+            checks,
+            errors,
+            warnings,
+        );
+    }
 
     let site_dir = root.join("DNSSpoof").join("sites").join(&site);
     if !site_dir.exists() {
@@ -2245,6 +2354,40 @@ fn handle_dnsspoof_start(root: &Path, args: DnsSpoofStartArgs) -> Result<Handler
         interface,
         loot_dir,
     } = args;
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let interface_info = match detect_interface(interface.clone()) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                errors.push(format!("Interface detection failed: {}", e));
+                None
+            }
+        };
+        let site_dir = root.join("DNSSpoof").join("sites").join(&site);
+        if !site_dir.exists() {
+            warnings.push(format!(
+                "Site template missing: {}",
+                site_dir.display()
+            ));
+        }
+        let checks = json!({
+            "site": site,
+            "interface": interface_info
+                .as_ref()
+                .map(|i| i.name.clone())
+                .or_else(|| interface.clone()),
+            "loot_dir": loot_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+            "site_dir": site_dir.display().to_string(),
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::DNS_SPOOF,
+            checks,
+            errors,
+            warnings,
+        );
+    }
     let interface_info = detect_interface(interface)?;
     let site_dir = root.join("DNSSpoof").join("sites").join(&site);
     if !site_dir.exists() {
@@ -2796,7 +2939,6 @@ fn handle_network_status() -> Result<HandlerResult> {
     Ok(("Network health collected".to_string(), Value::Object(data)))
 }
 
-#[cfg(feature = "external_tools")]
 fn handle_reverse_launch(root: &Path, args: ReverseLaunchArgs) -> Result<HandlerResult> {
     let ReverseLaunchArgs {
         target,
@@ -2804,75 +2946,37 @@ fn handle_reverse_launch(root: &Path, args: ReverseLaunchArgs) -> Result<Handler
         shell,
         interface,
     } = args;
-
-    let interface_info = detect_interface(interface)?;
-    let pid = spawn_reverse_shell(&target, port, &shell, interface_info.address)
-        .context("launching reverse shell")?;
-
-    let log_entry = format!(
-        "[{}] reverse-shell -> {}:{} via {} (pid {})",
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-        target,
-        port,
-        interface_info.name,
-        pid,
-    );
-    let _ = append_payload_log(root, &log_entry);
-
-    let data = json!({
+    let mut errors = Vec::new();
+    let warnings = Vec::new();
+    if target.parse::<Ipv4Addr>().is_err() {
+        errors.push("Target must be an IPv4 address".to_string());
+    }
+    if port == 0 {
+        errors.push("Port must be greater than 0".to_string());
+    }
+    let interface_info = match detect_interface(interface.clone()) {
+        Ok(info) => Some(info),
+        Err(e) => {
+            errors.push(format!("Interface detection failed: {}", e));
+            None
+        }
+    };
+    let checks = json!({
         "target": target,
         "port": port,
-        "interface": interface_info.name,
-        "pid": pid,
         "shell": shell,
+        "interface": interface_info
+            .as_ref()
+            .map(|i| i.name.clone())
+            .or(interface),
     });
-    Ok(("Reverse shell launched".to_string(), data))
-}
-
-#[cfg(not(feature = "external_tools"))]
-fn handle_reverse_launch(_root: &Path, _args: ReverseLaunchArgs) -> Result<HandlerResult> {
-    bail!("reverse shell disabled (external_tools)")
-}
-
-#[cfg(feature = "external_tools")]
-fn spawn_reverse_shell(
-    target: &str,
-    port: u16,
-    shell: &str,
-    source_ip: Ipv4Addr,
-) -> Result<u32> {
-    let _ = (target, port, shell, source_ip);
-    bail!("reverse shell disabled (external shell spawn removed)")
-}
-
-#[cfg(not(feature = "external_tools"))]
-fn spawn_reverse_shell(
-    _target: &str,
-    _port: u16,
-    _shell: &str,
-    _source_ip: Ipv4Addr,
-) -> Result<u32> {
-    bail!("reverse shell disabled (external_tools)")
-}
-
-fn resolve_target_ipv4(target: &str, port: u16) -> Result<SocketAddr> {
-    if let Ok(ip) = target.parse::<Ipv4Addr>() {
-        return Ok(SocketAddr::new(ip.into(), port));
-    }
-    let mut addrs = (target, port)
-        .to_socket_addrs()
-        .with_context(|| format!("resolving {}", target))?;
-    addrs
-        .find(|addr| matches!(addr, SocketAddr::V4(_)))
-        .ok_or_else(|| anyhow!("no IPv4 address resolved for {}", target))
-}
-
-fn parse_shell_command(shell: &str) -> Result<(String, Vec<String>)> {
-    let mut parts = shell.split_whitespace();
-    let program = parts
-        .next()
-        .ok_or_else(|| anyhow!("shell command cannot be empty"))?;
-    Ok((program.to_string(), parts.map(|s| s.to_string()).collect()))
+    preflight_only_response(
+        root,
+        crate::audit::operations::REVERSE_SHELL,
+        checks,
+        errors,
+        warnings,
+    )
 }
 
 fn handle_wifi_list() -> Result<HandlerResult> {
@@ -3242,24 +3346,67 @@ fn handle_system_configure_host(args: SystemConfigureHostArgs) -> Result<Handler
     Ok((message, data))
 }
 
-#[cfg(feature = "external_tools")]
-fn handle_system_fde_prepare(_root: &Path, _args: SystemFdePrepareArgs) -> Result<HandlerResult> {
-    bail!("FDE prepare disabled (external scripts removed; no Rust implementation yet)")
+fn handle_system_fde_prepare(root: &Path, args: SystemFdePrepareArgs) -> Result<HandlerResult> {
+    let mut errors = Vec::new();
+    let warnings = Vec::new();
+    let device = args.device.trim();
+    if device.is_empty() {
+        errors.push("Device path is required".to_string());
+    }
+    let usb_devices = crate::mount::enumerate_usb_block_devices().unwrap_or_default();
+    let allowed = usb_devices.iter().any(|dev| {
+        dev.devnode.to_string_lossy() == device || format!("/dev/{}", dev.name) == device
+    });
+    if !allowed {
+        errors.push(format!("Device {} is not a detected USB block device", device));
+    }
+    let checks = json!({
+        "device": device,
+        "usb_devices": usb_devices.iter().map(|d| d.devnode.to_string_lossy().to_string()).collect::<Vec<_>>(),
+    });
+    preflight_only_response(
+        root,
+        crate::audit::operations::FDE_PREPARE,
+        checks,
+        errors,
+        warnings,
+    )
 }
 
-#[cfg(not(feature = "external_tools"))]
-fn handle_system_fde_prepare(_root: &Path, _args: SystemFdePrepareArgs) -> Result<HandlerResult> {
-    bail!("FDE prepare disabled (external_tools)")
-}
+fn handle_system_fde_migrate(root: &Path, args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let target = args.target.trim();
+    let keyfile = args.keyfile.trim();
 
-#[cfg(feature = "external_tools")]
-fn handle_system_fde_migrate(_root: &Path, _args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
-    bail!("FDE migrate disabled (external scripts removed; no Rust implementation yet)")
-}
+    if target.is_empty() {
+        errors.push("Target device is required".to_string());
+    }
+    if keyfile.is_empty() {
+        errors.push("Keyfile path is required".to_string());
+    }
+    if !Path::new(target).exists() {
+        errors.push(format!("Target device not found: {}", target));
+    }
+    if !Path::new(keyfile).exists() {
+        errors.push(format!("Keyfile not found: {}", keyfile));
+    }
+    if args.execute {
+        warnings.push("Execute=true would perform destructive actions".to_string());
+    }
 
-#[cfg(not(feature = "external_tools"))]
-fn handle_system_fde_migrate(_root: &Path, _args: SystemFdeMigrateArgs) -> Result<HandlerResult> {
-    bail!("FDE migrate disabled (external_tools)")
+    let checks = json!({
+        "target": target,
+        "keyfile": keyfile,
+        "execute": args.execute,
+    });
+    preflight_only_response(
+        root,
+        crate::audit::operations::FDE_MIGRATE,
+        checks,
+        errors,
+        warnings,
+    )
 }
 
 pub(crate) fn handle_system_reboot() -> Result<HandlerResult> {
@@ -3322,30 +3469,52 @@ fn system_reboot_cmd(cmd: libc::c_int) -> Result<()> {
     bail!("Reboot syscall failed: {}", err);
 }
 
-#[cfg(feature = "external_tools")]
 fn handle_system_purge(root: &Path) -> Result<HandlerResult> {
-    let report = crate::external_tools::anti_forensics::perform_complete_purge(root);
-    let data = json!({
-        "removed": report.removed,
-        "service_disabled": report.service_disabled,
-        "errors": report.errors,
+    let mut errors = Vec::new();
+    let warnings = Vec::new();
+    let loot_path = root.join("loot").display().to_string();
+    let wifi_path = root.join("wifi").display().to_string();
+    let scripts_path = root.join("scripts").display().to_string();
+    let target_path = root.join("target").display().to_string();
+    let root_path = root.display().to_string();
+    let purge_paths = vec![
+        "/usr/local/bin/rustyjack-ui".to_string(),
+        "/etc/systemd/system/rustyjack.service".to_string(),
+        "/etc/systemd/system/multi-user.target.wants/rustyjack.service".to_string(),
+        "/etc/udev/rules.d/99-rustyjack-wifi.rules".to_string(),
+        "/var/log/rustyjack".to_string(),
+        "/tmp/rustyjack".to_string(),
+        loot_path,
+        wifi_path,
+        scripts_path,
+        target_path,
+        root_path,
+    ];
+    let existing: Vec<String> = purge_paths
+        .iter()
+        .filter_map(|p| {
+            let path = Path::new(p);
+            if path.exists() {
+                Some(p.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if existing.is_empty() {
+        errors.push("No purge targets found".to_string());
+    }
+    let checks = json!({
+        "paths": purge_paths,
+        "existing": existing,
     });
-    Ok(("Purge completed".to_string(), data))
-}
-
-#[cfg(not(feature = "external_tools"))]
-fn handle_system_purge(_root: &Path) -> Result<HandlerResult> {
-    bail!("Purge disabled (external_tools)")
-}
-
-#[cfg(feature = "external_tools")]
-fn handle_system_install_wifi_drivers(_root: &Path) -> Result<HandlerResult> {
-    bail!("WiFi driver install disabled (external scripts removed; no Rust implementation yet)")
-}
-
-#[cfg(not(feature = "external_tools"))]
-fn handle_system_install_wifi_drivers(_root: &Path) -> Result<HandlerResult> {
-    bail!("WiFi driver install disabled (external_tools)")
+    preflight_only_response(
+        root,
+        crate::audit::operations::SYSTEM_PURGE,
+        checks,
+        errors,
+        warnings,
+    )
 }
 
 fn handle_system_usb_mount(root: &Path, args: UsbMountArgs) -> Result<HandlerResult> {
@@ -3458,6 +3627,32 @@ fn handle_system_export_logs_to_usb(
 }
 
 fn handle_bridge_start(root: &Path, args: BridgeStartArgs) -> Result<HandlerResult> {
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let warnings = Vec::new();
+        let iface_a = Path::new("/sys/class/net").join(&args.interface_a);
+        let iface_b = Path::new("/sys/class/net").join(&args.interface_b);
+        if !iface_a.exists() {
+            errors.push(format!("Interface {} not found", args.interface_a));
+        }
+        if !iface_b.exists() {
+            errors.push(format!("Interface {} not found", args.interface_b));
+        }
+        if args.interface_a == args.interface_b {
+            errors.push("Interface A and B must be different".to_string());
+        }
+        let checks = json!({
+            "interface_a": args.interface_a,
+            "interface_b": args.interface_b,
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::BRIDGE_START,
+            checks,
+            errors,
+            warnings,
+        );
+    }
     let backup = backup_routing_state(root)?;
     start_bridge_pair(&args.interface_a, &args.interface_b)?;
     let label = format!("bridge_{}_{}", args.interface_a, args.interface_b);
@@ -3941,6 +4136,60 @@ fn handle_wifi_deauth(
 
     // Validate BSSID format (XX:XX:XX:XX:XX:XX)
     let mac_regex = Regex::new(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").unwrap();
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        if !mac_regex.is_match(&args.bssid) {
+            errors.push("Invalid BSSID format (expected AA:BB:CC:DD:EE:FF)".to_string());
+        }
+        if let Some(ref client) = args.client {
+            if !mac_regex.is_match(client) {
+                errors.push("Invalid client MAC format".to_string());
+            }
+        }
+        if args.channel == 0 || (args.channel > 14 && args.channel < 36) || args.channel > 165 {
+            errors.push(format!(
+                "Invalid channel {} (use 1-14 for 2.4GHz or 36-165 for 5GHz)",
+                args.channel
+            ));
+        }
+
+        let caps = wireless_native::check_capabilities(&args.interface);
+        if !caps.interface_exists {
+            errors.push(format!("Interface {} does not exist", args.interface));
+        }
+        if !caps.interface_is_wireless {
+            errors.push(format!("Interface {} is not wireless", args.interface));
+        }
+        if !caps.supports_monitor_mode {
+            warnings.push("Monitor mode not supported".to_string());
+        }
+
+        let checks = json!({
+            "interface": args.interface,
+            "bssid": args.bssid,
+            "ssid": args.ssid,
+            "channel": args.channel,
+            "capabilities": {
+                "native_available": caps.native_available,
+                "has_root": caps.has_root,
+                "interface_exists": caps.interface_exists,
+                "interface_is_wireless": caps.interface_is_wireless,
+                "supports_monitor_mode": caps.supports_monitor_mode,
+                "supports_injection": caps.supports_injection,
+            }
+        });
+
+        return preflight_only_response(
+            root,
+            crate::audit::operations::WIFI_DEAUTH,
+            checks,
+            errors,
+            warnings,
+        );
+    }
+
     if !mac_regex.is_match(&args.bssid) {
         bail!("Invalid BSSID format. Expected MAC address like AA:BB:CC:DD:EE:FF");
     }
@@ -4112,6 +4361,51 @@ fn handle_wifi_evil_twin(
 
     tracing::info!("Starting Evil Twin attack on SSID: {}", args.ssid);
 
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let caps = wireless_native::check_capabilities(&args.interface);
+        if !caps.interface_exists {
+            errors.push(format!("Interface {} does not exist", args.interface));
+        }
+        if !caps.interface_is_wireless {
+            errors.push(format!("Interface {} is not wireless", args.interface));
+        }
+
+        let mut supports_ap = false;
+        if let Ok(mut mgr) = WirelessManager::new() {
+            if let Ok(phy_caps) = mgr.get_phy_capabilities(&args.interface) {
+                supports_ap = phy_caps.supports_ap;
+            }
+        }
+        if !supports_ap {
+            warnings.push("AP mode not supported on this interface".to_string());
+        }
+
+        let checks = json!({
+            "interface": args.interface,
+            "ssid": args.ssid,
+            "channel": args.channel,
+            "capabilities": {
+                "native_available": caps.native_available,
+                "has_root": caps.has_root,
+                "interface_exists": caps.interface_exists,
+                "interface_is_wireless": caps.interface_is_wireless,
+                "supports_monitor_mode": caps.supports_monitor_mode,
+                "supports_injection": caps.supports_injection,
+                "supports_ap": supports_ap,
+            }
+        });
+
+        return preflight_only_response(
+            root,
+            crate::audit::operations::WIFI_EVIL_TWIN,
+            checks,
+            errors,
+            warnings,
+        );
+    }
+
     // Check if we have root privileges
     if !wireless_native::native_available() {
         bail!("Evil Twin attacks require root privileges. Run with sudo.");
@@ -4266,6 +4560,42 @@ fn handle_wifi_pmkid(
 
     tracing::info!("Starting PMKID capture on interface: {}", args.interface);
 
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let caps = wireless_native::check_capabilities(&args.interface);
+        if !caps.interface_exists {
+            errors.push(format!("Interface {} does not exist", args.interface));
+        }
+        if !caps.interface_is_wireless {
+            errors.push(format!("Interface {} is not wireless", args.interface));
+        }
+        if !caps.supports_monitor_mode {
+            warnings.push("Monitor mode not supported".to_string());
+        }
+        let checks = json!({
+            "interface": args.interface,
+            "ssid": args.ssid,
+            "bssid": args.bssid,
+            "channel": args.channel,
+            "capabilities": {
+                "native_available": caps.native_available,
+                "has_root": caps.has_root,
+                "interface_exists": caps.interface_exists,
+                "interface_is_wireless": caps.interface_is_wireless,
+                "supports_monitor_mode": caps.supports_monitor_mode,
+                "supports_injection": caps.supports_injection,
+            }
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::WIFI_PMKID,
+            checks,
+            errors,
+            warnings,
+        );
+    }
+
     // Check privileges
     if !wireless_native::native_available() {
         bail!("PMKID capture requires root privileges. Run with sudo.");
@@ -4382,6 +4712,41 @@ fn handle_wifi_probe_sniff(
         args.interface
     );
 
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let caps = wireless_native::check_capabilities(&args.interface);
+        if !caps.interface_exists {
+            errors.push(format!("Interface {} does not exist", args.interface));
+        }
+        if !caps.interface_is_wireless {
+            errors.push(format!("Interface {} is not wireless", args.interface));
+        }
+        if !caps.supports_monitor_mode {
+            warnings.push("Monitor mode not supported".to_string());
+        }
+        let checks = json!({
+            "interface": args.interface,
+            "channel": args.channel,
+            "duration": args.duration,
+            "capabilities": {
+                "native_available": caps.native_available,
+                "has_root": caps.has_root,
+                "interface_exists": caps.interface_exists,
+                "interface_is_wireless": caps.interface_is_wireless,
+                "supports_monitor_mode": caps.supports_monitor_mode,
+                "supports_injection": caps.supports_injection,
+            }
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::WIFI_PROBE_SNIFF,
+            checks,
+            errors,
+            warnings,
+        );
+    }
+
     // Check privileges
     if !wireless_native::native_available() {
         bail!("Probe sniffing requires root privileges. Run with sudo.");
@@ -4474,6 +4839,46 @@ fn handle_wifi_karma(
     use crate::wireless_native::{self, KarmaAttackConfig};
 
     tracing::info!("Starting Karma attack on interface: {}", args.interface);
+
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let caps = wireless_native::check_capabilities(&args.interface);
+        if !caps.interface_exists {
+            errors.push(format!("Interface {} does not exist", args.interface));
+        }
+        if !caps.interface_is_wireless {
+            errors.push(format!("Interface {} is not wireless", args.interface));
+        }
+        if !caps.supports_monitor_mode {
+            warnings.push("Monitor mode not supported".to_string());
+        }
+        if args.with_ap && args.ap_interface.as_deref().unwrap_or("").is_empty() {
+            warnings.push("AP interface not specified for Karma AP mode".to_string());
+        }
+        let checks = json!({
+            "interface": args.interface,
+            "ap_interface": args.ap_interface,
+            "channel": args.channel,
+            "duration": args.duration,
+            "with_ap": args.with_ap,
+            "capabilities": {
+                "native_available": caps.native_available,
+                "has_root": caps.has_root,
+                "interface_exists": caps.interface_exists,
+                "interface_is_wireless": caps.interface_is_wireless,
+                "supports_monitor_mode": caps.supports_monitor_mode,
+                "supports_injection": caps.supports_injection,
+            }
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::WIFI_KARMA,
+            checks,
+            errors,
+            warnings,
+        );
+    }
 
     // Check privileges
     if !wireless_native::native_available() {
@@ -4599,6 +5004,79 @@ fn handle_wifi_karma(
     ))
 }
 
+fn handle_wifi_pipeline_preflight(
+    root: &Path,
+    args: WifiPipelinePreflightArgs,
+) -> Result<HandlerResult> {
+    let mut errors = Vec::new();
+    let warnings = Vec::new();
+
+    let interface = if let Some(ref iface) = args.interface {
+        iface.clone()
+    } else {
+        get_active_interface(root)?
+            .unwrap_or_default()
+    };
+
+    if interface.trim().is_empty() {
+        errors.push("No active Wi-Fi interface set".to_string());
+    }
+
+    let caps = if interface.trim().is_empty() {
+        crate::wireless_native::WirelessCapabilities {
+            native_available: false,
+            has_root: false,
+            interface_exists: false,
+            interface_is_wireless: false,
+            supports_monitor_mode: false,
+            supports_injection: false,
+        }
+    } else {
+        crate::wireless_native::check_capabilities(&interface)
+    };
+
+    if !caps.native_available {
+        errors.push("Native wireless operations unavailable on this platform".to_string());
+    }
+    if !caps.has_root {
+        errors.push("Root privileges required for wireless operations".to_string());
+    }
+    if !caps.interface_exists {
+        errors.push(format!("Interface {} does not exist", interface));
+    }
+    if !caps.interface_is_wireless {
+        errors.push(format!("Interface {} is not wireless", interface));
+    }
+    if args.requires_monitor && !caps.supports_monitor_mode {
+        errors.push("Monitor mode not supported by interface".to_string());
+    }
+    if args.requires_monitor && !caps.supports_injection {
+        errors.push("Frame injection not supported by interface".to_string());
+    }
+
+    let checks = json!({
+        "interface": interface,
+        "pipeline": args.pipeline,
+        "requires_monitor": args.requires_monitor,
+        "capabilities": {
+            "native_available": caps.native_available,
+            "has_root": caps.has_root,
+            "interface_exists": caps.interface_exists,
+            "interface_is_wireless": caps.interface_is_wireless,
+            "supports_monitor_mode": caps.supports_monitor_mode,
+            "supports_injection": caps.supports_injection,
+        }
+    });
+
+    preflight_only_response(
+        root,
+        crate::audit::operations::WIFI_PIPELINE,
+        checks,
+        errors,
+        warnings,
+    )
+}
+
 fn handle_wifi_crack(
     root: &Path,
     args: WifiCrackArgs,
@@ -4611,13 +5089,46 @@ fn handle_wifi_crack(
 
     tracing::info!("Starting handshake crack on file: {}", args.file);
 
+    let file_path = PathBuf::from(&args.file);
+    if !offensive_review_approved(root) {
+        let mut errors = Vec::new();
+        let warnings = Vec::new();
+        if !file_path.exists() {
+            errors.push(format!("Handshake file not found: {}", args.file));
+        }
+        if file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            != "json"
+        {
+            errors.push("Unsupported handshake format (expected JSON export)".to_string());
+        }
+        if args.mode == "wordlist" && args.wordlist.as_deref().unwrap_or("").is_empty() {
+            errors.push("wordlist mode requires --wordlist".to_string());
+        }
+        let checks = json!({
+            "file": args.file,
+            "ssid": args.ssid,
+            "mode": args.mode,
+            "wordlist": args.wordlist,
+        });
+        return preflight_only_response(
+            root,
+            crate::audit::operations::WIFI_CRACK,
+            checks,
+            errors,
+            warnings,
+        );
+    }
+
     #[derive(serde::Deserialize)]
     struct HandshakeBundle {
         ssid: String,
         handshake: HandshakeExport,
     }
 
-    let file_path = PathBuf::from(&args.file);
     if !file_path.exists() {
         bail!("Handshake file not found: {}", args.file);
     }
@@ -5190,6 +5701,196 @@ fn resolve_loot_path(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+fn review_artifact_path(root: &Path) -> PathBuf {
+    root.join("REVIEW_APPROVED.md")
+}
+
+fn offensive_review_approved(root: &Path) -> bool {
+    review_artifact_path(root).exists()
+}
+
+fn preflight_only_response(
+    root: &Path,
+    op: &str,
+    checks: Value,
+    errors: Vec<String>,
+    warnings: Vec<String>,
+) -> Result<HandlerResult> {
+    let review_path = review_artifact_path(root);
+    let status = if errors.is_empty() { "OK" } else { "FAIL" };
+    let reason = format!("review approval missing ({})", review_path.display());
+    let audit = AuditEvent::new(op)
+        .with_result(AuditResult::Denied { reason: reason.clone() })
+        .with_context(json!({
+            "status": status,
+            "errors": errors,
+            "warnings": warnings,
+        }));
+    let _ = audit.log(root);
+
+    let message = if status == "OK" {
+        "Preflight OK (authorization required)".to_string()
+    } else {
+        "Preflight failed (authorization required)".to_string()
+    };
+    let data = json!({
+        "mode": "preflight_only",
+        "authorized": false,
+        "review_artifact": review_path.display().to_string(),
+        "status": status,
+        "errors": errors,
+        "warnings": warnings,
+        "checks": checks,
+    });
+
+    Ok((message, data))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SanityCheck {
+    name: String,
+    status: String,
+    details: Vec<String>,
+    missing_paths: Vec<String>,
+    remediation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SanityReport {
+    overall: String,
+    checks: Vec<SanityCheck>,
+}
+
+fn record_status(overall: &mut String, status: &str) {
+    if overall == "FAIL" {
+        return;
+    }
+    if status == "FAIL" {
+        *overall = "FAIL".to_string();
+    } else if status == "WARN" && overall != "FAIL" {
+        *overall = "WARN".to_string();
+    }
+}
+
+fn check_interface_sanity(iface: &str, required: bool) -> SanityCheck {
+    let mut details = Vec::new();
+    let mut missing_paths = Vec::new();
+    let mut status = "OK";
+
+    let sys_iface = Path::new("/sys/class/net").join(iface);
+    if !sys_iface.exists() {
+        missing_paths.push(sys_iface.display().to_string());
+        status = if required { "FAIL" } else { "WARN" };
+        return SanityCheck {
+            name: format!("interface:{iface}"),
+            status: status.to_string(),
+            details: vec!["Interface missing".to_string()],
+            missing_paths,
+            remediation: Some("Check hardware or image platform target".to_string()),
+        };
+    }
+
+    let driver_link = sys_iface.join("device").join("driver");
+    if !driver_link.exists() {
+        missing_paths.push(driver_link.display().to_string());
+        status = if required { "FAIL" } else { "WARN" };
+        details.push("Driver binding missing".to_string());
+    } else if let Ok(target) = fs::read_link(&driver_link) {
+        if let Some(name) = target.file_name().and_then(|n| n.to_str()) {
+            details.push(format!("Driver: {}", name));
+        }
+    }
+
+    let operstate_path = sys_iface.join("operstate");
+    if let Ok(state) = fs::read_to_string(&operstate_path) {
+        details.push(format!("Operstate: {}", state.trim()));
+    } else {
+        missing_paths.push(operstate_path.display().to_string());
+        if status == "OK" {
+            status = "WARN";
+        }
+        details.push("Operstate unavailable".to_string());
+    }
+
+    let wireless_path = sys_iface.join("wireless");
+    if wireless_path.exists() {
+        if !Path::new("/dev/rfkill").exists() {
+            missing_paths.push("/dev/rfkill".to_string());
+            if status == "OK" {
+                status = "WARN";
+            }
+            details.push("rfkill device missing".to_string());
+        }
+        if crate::system::rfkill_index_for_interface(iface).is_none() {
+            if status == "OK" {
+                status = "WARN";
+            }
+            details.push("rfkill index not found".to_string());
+        }
+    }
+
+    SanityCheck {
+        name: format!("interface:{iface}"),
+        status: status.to_string(),
+        details,
+        missing_paths,
+        remediation: None,
+    }
+}
+
+fn check_wifi_firmware_sanity() -> SanityCheck {
+    let mut missing = Vec::new();
+    let mut details = Vec::new();
+    let mut status = "OK";
+
+    let required_bin = Path::new("/lib/firmware/brcm/brcmfmac43436-sdio.bin");
+    if !required_bin.exists() {
+        missing.push(required_bin.display().to_string());
+        status = "WARN";
+    } else {
+        details.push(format!("Firmware: {}", required_bin.display()));
+    }
+
+    let optional_paths = [
+        "/lib/firmware/brcm/brcmfmac43436-sdio.txt",
+        "/lib/firmware/brcm/brcmfmac43436-sdio.clm_blob",
+    ];
+    for path in optional_paths {
+        if Path::new(path).exists() {
+            details.push(format!("Firmware: {path}"));
+        } else {
+            missing.push(path.to_string());
+        }
+    }
+
+    SanityCheck {
+        name: "wifi_firmware".to_string(),
+        status: status.to_string(),
+        details,
+        missing_paths: missing,
+        remediation: Some("Ensure Pi Zero 2 W firmware bundle is installed".to_string()),
+    }
+}
+
+fn build_hardware_sanity_report() -> SanityReport {
+    let mut overall = "OK".to_string();
+    let mut checks = Vec::new();
+
+    let wlan = check_interface_sanity("wlan0", true);
+    record_status(&mut overall, &wlan.status);
+    checks.push(wlan);
+
+    let eth = check_interface_sanity("eth0", false);
+    record_status(&mut overall, &eth.status);
+    checks.push(eth);
+
+    let fw = check_wifi_firmware_sanity();
+    record_status(&mut overall, &fw.status);
+    checks.push(fw);
+
+    SanityReport { overall, checks }
+}
+
 fn handle_hardware_detect() -> Result<HandlerResult> {
     tracing::info!("Scanning hardware interfaces");
 
@@ -5232,6 +5933,7 @@ fn handle_hardware_detect() -> Result<HandlerResult> {
         }
     }
 
+    let sanity = build_hardware_sanity_report();
     let data = json!({
         "ethernet_count": ethernet_ports.len(),
         "wifi_count": wifi_modules.len(),
@@ -5240,13 +5942,20 @@ fn handle_hardware_detect() -> Result<HandlerResult> {
         "wifi_modules": wifi_modules,
         "other_interfaces": other_interfaces,
         "total_interfaces": interfaces.len() - 1, // Exclude loopback
+        "sanity": sanity,
     });
 
+    let sanity_status = data
+        .get("sanity")
+        .and_then(|s| s.get("overall"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("UNKNOWN");
     let summary = format!(
-        "Found {} ethernet, {} wifi, {} other",
+        "Found {} ethernet, {} wifi, {} other (Sanity: {})",
         ethernet_ports.len(),
         wifi_modules.len(),
-        other_interfaces.len()
+        other_interfaces.len(),
+        sanity_status
     );
 
     tracing::info!("Hardware scan complete: {summary}");

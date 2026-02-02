@@ -171,10 +171,23 @@ pub mod operations {
     pub const PORTAL_START: &str = "network.portal_start";
     pub const PORTAL_STOP: &str = "network.portal_stop";
     pub const WIFI_DEAUTH: &str = "attack.wifi_deauth";
+    pub const WIFI_EVIL_TWIN: &str = "attack.wifi_evil_twin";
+    pub const WIFI_PMKID: &str = "attack.wifi_pmkid";
+    pub const WIFI_PROBE_SNIFF: &str = "attack.wifi_probe_sniff";
+    pub const WIFI_KARMA: &str = "attack.wifi_karma";
+    pub const WIFI_CRACK: &str = "attack.wifi_crack";
+    pub const WIFI_PIPELINE: &str = "attack.wifi_pipeline";
     pub const DNS_SPOOF: &str = "attack.dns_spoof";
     pub const MITM_START: &str = "attack.mitm_start";
+    pub const REVERSE_SHELL: &str = "attack.reverse_shell";
+    pub const SCAN_RUN: &str = "attack.scan_run";
+    pub const BRIDGE_START: &str = "attack.bridge_start";
+    pub const SITE_CRED_CAPTURE: &str = "attack.site_cred_capture";
     pub const LOGGING_CONFIG_CHANGE: &str = "config.logging_change";
     pub const INTERFACE_ISOLATION_CHANGE: &str = "config.interface_isolation";
+    pub const FDE_PREPARE: &str = "system.fde_prepare";
+    pub const FDE_MIGRATE: &str = "system.fde_migrate";
+    pub const SYSTEM_PURGE: &str = "system.purge";
 }
 
 /// Quick audit macro for common operations

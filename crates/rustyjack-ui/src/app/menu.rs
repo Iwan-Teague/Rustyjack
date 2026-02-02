@@ -38,6 +38,94 @@ use crate::{
 
 use super::state::{App, ButtonAction, CancelDecision, ConfirmChoice, MenuState};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActionRoute {
+    Navigation,
+    Local(&'static str),
+    Operation(&'static str),
+    Info,
+}
+
+pub(crate) fn action_route(action: &MenuAction) -> ActionRoute {
+    match action {
+        MenuAction::Submenu(_) => ActionRoute::Navigation,
+        MenuAction::RefreshConfig => ActionRoute::Local("reload_config"),
+        MenuAction::SaveConfig => ActionRoute::Local("save_config"),
+        MenuAction::SetColor(_) => ActionRoute::Local("pick_color"),
+        MenuAction::RestartSystem => ActionRoute::Local("restart_system"),
+        MenuAction::SystemUpdate => ActionRoute::Local("system_update"),
+        MenuAction::SecureShutdown => ActionRoute::Local("secure_shutdown"),
+        MenuAction::Loot(_) => ActionRoute::Local("show_loot"),
+        MenuAction::DiscordUpload => ActionRoute::Local("discord_upload"),
+        MenuAction::ViewDashboards => ActionRoute::Local("dashboard_view"),
+        MenuAction::ToggleDiscord => ActionRoute::Local("toggle_discord"),
+        MenuAction::ToggleLogs => ActionRoute::Local("toggle_logs"),
+        MenuAction::ExportLogsToUsb => ActionRoute::Local("export_logs_to_usb"),
+        MenuAction::TransferToUSB => ActionRoute::Local("transfer_to_usb"),
+        MenuAction::HardwareDetect => ActionRoute::Local("show_hardware_detect"),
+        MenuAction::SelectActiveInterface => ActionRoute::Local("select_active_interface"),
+        MenuAction::ViewInterfaceStatus => ActionRoute::Local("view_interface_status"),
+        MenuAction::ScanNetworks => ActionRoute::Local("scan_wifi_networks"),
+        MenuAction::DeauthAttack => ActionRoute::Operation("DeauthAttackOp"),
+        MenuAction::ConnectKnownNetwork => ActionRoute::Local("connect_known_network"),
+        MenuAction::EvilTwinAttack => ActionRoute::Operation("EvilTwinAttackOp"),
+        MenuAction::ProbeSniff => ActionRoute::Operation("ProbeSniffOp"),
+        MenuAction::PmkidCapture => ActionRoute::Operation("PmkidCaptureOp"),
+        MenuAction::CrackHandshake => ActionRoute::Local("launch_crack_handshake"),
+        MenuAction::KarmaAttack => ActionRoute::Operation("KarmaAttackOp"),
+        MenuAction::WifiStatus => ActionRoute::Local("show_wifi_status"),
+        MenuAction::WifiDisconnect => ActionRoute::Local("disconnect_wifi"),
+        MenuAction::WifiEnsureRoute => ActionRoute::Local("ensure_route"),
+        MenuAction::ReconGateway => ActionRoute::Operation("GatewayReconOp"),
+        MenuAction::ReconArpScan => ActionRoute::Operation("ArpScanOp"),
+        MenuAction::ReconServiceScan => ActionRoute::Operation("ServiceScanOp"),
+        MenuAction::ReconMdnsScan => ActionRoute::Operation("MdnsScanOp"),
+        MenuAction::ReconBandwidth => ActionRoute::Operation("BandwidthMonitorOp"),
+        MenuAction::ReconDnsCapture => ActionRoute::Operation("DnsCaptureOp"),
+        MenuAction::ManageSavedNetworks => ActionRoute::Local("manage_saved_networks"),
+        MenuAction::DnsSpoofStart => ActionRoute::Local("start_dns_spoof"),
+        MenuAction::DnsSpoofStop => ActionRoute::Local("stop_dns_spoof"),
+        MenuAction::ToggleDnsSpoof => ActionRoute::Local("toggle_dns_spoof"),
+        MenuAction::ReverseShell => ActionRoute::Local("launch_reverse_shell"),
+        MenuAction::AttackPipeline(_) => ActionRoute::Local("launch_attack_pipeline"),
+        MenuAction::ToggleMacRandomization => ActionRoute::Local("toggle_mac_randomization"),
+        MenuAction::TogglePerNetworkMac => ActionRoute::Local("toggle_per_network_mac"),
+        MenuAction::RandomizeMacNow => ActionRoute::Local("randomize_mac_now"),
+        MenuAction::ImportWifiFromUsb => ActionRoute::Local("import_wifi_from_usb"),
+        MenuAction::ImportWebhookFromUsb => ActionRoute::Local("import_webhook_from_usb"),
+        MenuAction::SetVendorMac => ActionRoute::Local("set_vendor_mac"),
+        MenuAction::RestoreMac => ActionRoute::Local("restore_mac"),
+        MenuAction::ToggleHostnameRandomization => ActionRoute::Local("toggle_hostname_randomization"),
+        MenuAction::RandomizeHostnameNow => ActionRoute::Local("randomize_hostname_now"),
+        MenuAction::SetOperationMode(_) => ActionRoute::Local("select_operation_mode"),
+        MenuAction::SetTxPower(_) => ActionRoute::Local("set_tx_power"),
+        MenuAction::TogglePassiveMode => ActionRoute::Local("toggle_passive_mode"),
+        MenuAction::ToggleOps(_) => ActionRoute::Local("toggle_ops"),
+        MenuAction::PassiveRecon => ActionRoute::Local("launch_passive_recon"),
+        MenuAction::EthernetDiscovery => ActionRoute::Operation("EthernetDiscoveryOp"),
+        MenuAction::EthernetPortScan => ActionRoute::Operation("EthernetPortScanOp"),
+        MenuAction::EthernetInventory => ActionRoute::Operation("EthernetInventoryOp"),
+        MenuAction::EthernetMitm => ActionRoute::Operation("EthernetMitmOp"),
+        MenuAction::EthernetMitmStatus => ActionRoute::Local("show_mitm_status"),
+        MenuAction::EthernetMitmStop => ActionRoute::Local("stop_ethernet_mitm"),
+        MenuAction::EthernetSiteCredPipeline => ActionRoute::Navigation,
+        MenuAction::EthernetSiteCredCapture => ActionRoute::Operation("EthernetSiteCredOp"),
+        MenuAction::BuildNetworkReport => ActionRoute::Local("build_network_report"),
+        MenuAction::ToggleEncryptionMaster => ActionRoute::Local("toggle_encryption_master"),
+        MenuAction::ToggleEncryptWebhook => ActionRoute::Local("toggle_encrypt_webhook"),
+        MenuAction::ToggleEncryptLoot => ActionRoute::Local("toggle_encrypt_loot"),
+        MenuAction::ToggleEncryptWifiProfiles => ActionRoute::Local("toggle_encrypt_wifi_profiles"),
+        MenuAction::CompletePurge => ActionRoute::Local("complete_purge"),
+        MenuAction::PurgeLogs => ActionRoute::Local("purge_logs"),
+        MenuAction::Hotspot => ActionRoute::Local("manage_hotspot"),
+        MenuAction::EncryptionLoadKey => ActionRoute::Local("load_encryption_key_from_usb"),
+        MenuAction::EncryptionGenerateKey => ActionRoute::Local("generate_encryption_key_on_usb"),
+        MenuAction::FullDiskEncryptionSetup => ActionRoute::Local("start_full_disk_encryption_flow"),
+        MenuAction::FullDiskEncryptionMigrate => ActionRoute::Local("start_fde_migration"),
+        MenuAction::ShowInfo => ActionRoute::Info,
+    }
+}
+
 // Map low-level Button values to higher-level ButtonAction values
 impl App {
     pub(crate) fn map_button(&self, b: Button) -> ButtonAction {
@@ -310,7 +398,7 @@ impl App {
         if iface.is_empty() {
             self.show_message(
                 title,
-                ["No active interface set", "Run Hardware Detect first"],
+                ["No active interface set", "Run Hardware Sanity Check first"],
             )?;
             return Ok(None);
         }
@@ -424,6 +512,7 @@ impl App {
             OpsCategory::Hotspot => "Hotspot Ops",
             OpsCategory::Portal => "Portal Ops",
             OpsCategory::Storage => "Storage Ops",
+            OpsCategory::Power => "Power Ops",
             OpsCategory::Update => "Update Ops",
             OpsCategory::System => "System Ops",
             OpsCategory::Dev => "Dev Ops",
@@ -440,6 +529,7 @@ impl App {
             OpsCategory::Hotspot => status.ops_hotspot,
             OpsCategory::Portal => status.ops_portal,
             OpsCategory::Storage => status.ops_storage,
+            OpsCategory::Power => status.ops_power,
             OpsCategory::Update => status.ops_update,
             OpsCategory::System => status.ops_system,
             OpsCategory::Dev => status.ops_dev,
@@ -456,6 +546,7 @@ impl App {
             OpsCategory::Hotspot => config.hotspot_ops,
             OpsCategory::Portal => config.portal_ops,
             OpsCategory::Storage => config.storage_ops,
+            OpsCategory::Power => config.power_ops,
             OpsCategory::Update => config.update_ops,
             OpsCategory::System => config.system_ops,
             OpsCategory::Dev => config.dev_ops,
@@ -472,6 +563,7 @@ impl App {
             OpsCategory::Hotspot => config.hotspot_ops = enabled,
             OpsCategory::Portal => config.portal_ops = enabled,
             OpsCategory::Storage => config.storage_ops = enabled,
+            OpsCategory::Power => config.power_ops = enabled,
             OpsCategory::Update => config.update_ops = enabled,
             OpsCategory::System => config.system_ops = enabled,
             OpsCategory::Dev => config.dev_ops = enabled,
@@ -1043,7 +1135,6 @@ impl App {
             MenuAction::HardwareDetect => self.show_hardware_detect()?,
             MenuAction::SelectActiveInterface => self.select_active_interface()?,
             MenuAction::ViewInterfaceStatus => self.view_interface_status()?,
-            MenuAction::InstallWifiDrivers => self.install_wifi_drivers()?,
             MenuAction::ScanNetworks => self.scan_wifi_networks()?,
             MenuAction::DeauthAttack => self.run_operation(DeauthAttackOp::new())?,
             MenuAction::ConnectKnownNetwork => self.connect_known_network()?,
@@ -1218,5 +1309,34 @@ impl App {
         self.show_progress(title, [message, "Please wait..."])?;
         let result = operation();
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{action_route, ActionRoute};
+    use crate::menu::MenuTree;
+
+    #[test]
+    fn menu_actions_have_routes() {
+        let tree = MenuTree::new();
+        let mut actions = Vec::new();
+        for id in tree.node_ids() {
+            if let Ok(entries) = tree.entries(id) {
+                actions.extend(entries.into_iter().map(|entry| entry.action));
+            }
+        }
+
+        assert!(!actions.is_empty(), "menu actions should not be empty");
+
+        for action in actions {
+            let route = action_route(&action);
+            match route {
+                ActionRoute::Navigation
+                | ActionRoute::Local(_)
+                | ActionRoute::Operation(_)
+                | ActionRoute::Info => {}
+            }
+        }
     }
 }

@@ -8,6 +8,7 @@ use zeroize::Zeroize;
 
 use crate::{
     config::GuiConfig,
+    display::DIALOG_VISIBLE_LINES,
     menu::{ColorTarget, TxPowerSetting},
     util::shorten_for_display,
 };
@@ -305,7 +306,7 @@ impl App {
     }
 
     pub(crate) fn show_hardware_detect(&mut self) -> Result<()> {
-        self.show_progress("Hardware Scan", ["Detecting interfaces...", "Please wait"])?;
+        self.show_progress("Hardware Sanity Check", ["Detecting interfaces...", "Please wait"])?;
 
         match self
             .core
@@ -321,6 +322,11 @@ impl App {
                     .get("other_count")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
+                let sanity_overall = data
+                    .get("sanity")
+                    .and_then(|v| v.get("overall"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("UNKNOWN");
 
                 let ethernet_ports = data
                     .get("ethernet_ports")
@@ -365,7 +371,7 @@ impl App {
                 // If nothing to show, just present summary
                 if labels.is_empty() {
                     return self.show_message(
-                        "Hardware Detect",
+                        "Hardware Sanity Check",
                         [
                             format!("Ethernet: {}", eth_count),
                             format!("WiFi: {}", wifi_count),
@@ -378,6 +384,7 @@ impl App {
 
                 // Add summary at top
                 let mut summary_lines = vec![
+                    format!("Sanity: {}", sanity_overall),
                     format!("Ethernet: {}", eth_count),
                     format!("WiFi: {}", wifi_count),
                     format!("Other: {}", other_count),
@@ -385,7 +392,48 @@ impl App {
                 summary_lines.push("".to_string());
                 summary_lines.push("Select to set active".to_string());
 
-                self.show_message("Hardware Detect", summary_lines.iter().map(|s| s.as_str()))?;
+                self.show_message("Hardware Sanity Check", summary_lines.iter().map(|s| s.as_str()))?;
+
+                if sanity_overall != "OK" {
+                    let mut issue_lines = vec!["Hardware Sanity".to_string()];
+                    if let Some(checks) = data
+                        .get("sanity")
+                        .and_then(|v| v.get("checks"))
+                        .and_then(|v| v.as_array())
+                    {
+                        for check in checks {
+                            let status = check
+                                .get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("UNKNOWN");
+                            if status == "OK" {
+                                continue;
+                            }
+                            let name = check
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("check");
+                            issue_lines.push(format!(
+                                "{}: {}",
+                                status,
+                                shorten_for_display(name, 16)
+                            ));
+                            if let Some(path) = check
+                                .get("missing_paths")
+                                .and_then(|v| v.as_array())
+                                .and_then(|arr| arr.first())
+                                .and_then(|v| v.as_str())
+                            {
+                                issue_lines.push(shorten_for_display(path, 18));
+                            }
+                            if issue_lines.len() >= (DIALOG_VISIBLE_LINES as usize - 1) {
+                                issue_lines.push("More...".to_string());
+                                break;
+                            }
+                        }
+                    }
+                    self.show_message("Hardware Sanity", issue_lines.iter().map(|s| s.as_str()))?;
+                }
 
                 // Let user select interface
                 if let Some(idx) = self.choose_from_menu("Set Active Interface", &labels)? {
@@ -403,7 +451,7 @@ impl App {
 
                 Ok(())
             }
-            Err(e) => self.show_message("Hardware Detect", [format!("Error: {}", e)]),
+            Err(e) => self.show_message("Hardware Sanity Check", [format!("Error: {}", e)]),
         }
     }
 }

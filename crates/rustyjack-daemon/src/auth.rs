@@ -320,6 +320,7 @@ pub enum RequiredOps {
     Hotspot,
     Portal,
     Storage,
+    Power,
     System,
     Update,
     Dev,
@@ -366,7 +367,8 @@ pub fn required_ops_for_request(endpoint: Endpoint, body: &RequestBody) -> Requi
                 | rustyjack_ipc::WifiCommand::PmkidCapture(_)
                 | rustyjack_ipc::WifiCommand::ProbeSniff(_)
                 | rustyjack_ipc::WifiCommand::Crack(_)
-                | rustyjack_ipc::WifiCommand::Karma(_) => RequiredOps::Offensive,
+                | rustyjack_ipc::WifiCommand::Karma(_)
+                | rustyjack_ipc::WifiCommand::PipelinePreflight(_) => RequiredOps::Offensive,
                 _ => RequiredOps::Wifi,
             },
             _ => RequiredOps::Wifi,
@@ -382,9 +384,8 @@ pub fn required_ops_for_request(endpoint: Endpoint, body: &RequestBody) -> Requi
         | E::DiskUsageGet => RequiredOps::Storage,
         E::SystemReboot
         | E::SystemShutdown
-        | E::SystemSync
-        | E::HostnameRandomizeNow
-        | E::LoggingConfigSet => RequiredOps::System,
+        | E::SystemSync => RequiredOps::Power,
+        E::HostnameRandomizeNow | E::LoggingConfigSet => RequiredOps::System,
         E::JobStart => match body {
             B::JobStart(req) => required_ops_for_jobkind(&req.job.kind),
             _ => RequiredOps::Dev,
@@ -412,6 +413,7 @@ fn required_ops_for_system_command(cmd: &SystemCommand) -> RequiredOps {
     match cmd {
         SC::Update(_) => RequiredOps::Update,
         SC::UsbMount(_) | SC::UsbUnmount(_) | SC::ExportLogsToUsb(_) => RequiredOps::Storage,
+        SC::Reboot | SC::Poweroff => RequiredOps::Power,
         _ => RequiredOps::System,
     }
 }
@@ -438,6 +440,7 @@ pub fn ops_allows(cfg: &crate::ops::OpsConfig, required: RequiredOps) -> bool {
         RequiredOps::Hotspot => cfg.hotspot_ops,
         RequiredOps::Portal => cfg.portal_ops,
         RequiredOps::Storage => cfg.storage_ops,
+        RequiredOps::Power => cfg.power_ops,
         RequiredOps::System => cfg.system_ops,
         RequiredOps::Update => cfg.update_ops,
         RequiredOps::Dev => cfg.dev_ops,
@@ -451,6 +454,7 @@ pub fn ops_allows(cfg: &crate::ops::OpsConfig, required: RequiredOps) -> bool {
 mod tests {
     use super::*;
     use rustyjack_ipc::{JobKind, SystemCommand, WifiCommand};
+    use rustyjack_ipc::WifiPipelinePreflightArgs;
     use rustyjack_commands::{UsbMountArgs, WifiDeauthArgs};
 
     #[test]
@@ -532,6 +536,18 @@ mod tests {
         }));
         assert_eq!(
             required_ops_for_request(Endpoint::WifiCommand, &body),
+            RequiredOps::Offensive
+        );
+
+        let preflight = RequestBody::WifiCommand(WifiCommand::PipelinePreflight(
+            WifiPipelinePreflightArgs {
+                interface: Some("wlan0".to_string()),
+                pipeline: "get_password".to_string(),
+                requires_monitor: true,
+            },
+        ));
+        assert_eq!(
+            required_ops_for_request(Endpoint::WifiCommand, &preflight),
             RequiredOps::Offensive
         );
 
@@ -629,11 +645,44 @@ mod tests {
     }
 
     #[test]
+    fn test_required_ops_for_request_system_command_reboot_is_power() {
+        let body = RequestBody::SystemCommand(SystemCommand::Reboot);
+        assert_eq!(
+            required_ops_for_request(Endpoint::SystemCommand, &body),
+            RequiredOps::Power
+        );
+        let body = RequestBody::SystemCommand(SystemCommand::Poweroff);
+        assert_eq!(
+            required_ops_for_request(Endpoint::SystemCommand, &body),
+            RequiredOps::Power
+        );
+    }
+
+    #[test]
     fn test_required_ops_for_request_portal_status_is_none() {
         let body = RequestBody::PortalStatus;
         assert_eq!(
             required_ops_for_request(Endpoint::PortalStatus, &body),
             RequiredOps::None
+        );
+    }
+
+    #[test]
+    fn test_required_ops_for_power_endpoints() {
+        let body = RequestBody::SystemReboot;
+        assert_eq!(
+            required_ops_for_request(Endpoint::SystemReboot, &body),
+            RequiredOps::Power
+        );
+        let body = RequestBody::SystemShutdown;
+        assert_eq!(
+            required_ops_for_request(Endpoint::SystemShutdown, &body),
+            RequiredOps::Power
+        );
+        let body = RequestBody::SystemSync;
+        assert_eq!(
+            required_ops_for_request(Endpoint::SystemSync, &body),
+            RequiredOps::Power
         );
     }
 

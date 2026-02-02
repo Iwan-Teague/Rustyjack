@@ -1,0 +1,49 @@
+[Unit]
+Description=Rustyjack wpa_supplicant (D-Bus) for %i
+After=network.target dbus.service
+Wants=dbus.service
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=simple
+ExecStart=/sbin/wpa_supplicant -u -s -i %i -D nl80211 -c /etc/rustyjack/wpa_supplicant.conf
+Restart=on-failure
+RestartSec=3
+
+RuntimeDirectory=wpa_supplicant
+RuntimeDirectoryMode=0755
+
+User=root
+Group=root
+
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/wpa_supplicant
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+MemoryDenyWriteExecute=true
+
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+
+SystemCallFilter=@system-service
+SystemCallFilter=~@clock @debug @module @obsolete @raw-io @reboot @swap
+
+PrivateDevices=false
+
+[Install]
+WantedBy=multi-user.target

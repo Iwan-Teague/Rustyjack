@@ -7,6 +7,7 @@ use crate::{
     ops::OperationContext,
     ui::{input::UiInput, screens::cancel_confirm, screens::progress},
 };
+use crate::ops::shared::preflight::preflight_only_summary;
 use rustyjack_ipc::JobState;
 use rustyjack_commands::Commands;
 
@@ -134,7 +135,10 @@ pub fn run_cancellable_job(
     let duration = 0; // 0 means show elapsed time only
 
     match dispatch_cancellable(ctx, title, cmd.clone(), duration)? {
-        JobRunResult::Completed { message, .. } => {
+        JobRunResult::Completed { message, data } => {
+            if let Some(lines) = preflight_only_summary(&data) {
+                return Ok(OperationOutcome::Success { summary: lines });
+            }
             Ok(OperationOutcome::Success {
                 summary: vec![message],
             })

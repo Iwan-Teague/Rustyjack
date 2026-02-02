@@ -2979,6 +2979,7 @@ pub fn scan_wifi_networks_with_timeout_cancel(
     Ok(networks)
 }
 
+#[allow(dead_code)]
 fn runtime_sleep(duration: Duration) {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.block_on(tokio::time::sleep(duration));
@@ -3064,6 +3065,7 @@ fn log_wifi_preflight(interface: &str) {
 
 }
 
+#[allow(dead_code)]
 fn freq_to_channel(freq: u32) -> Option<u8> {
     match freq {
         2412 => Some(1),
@@ -3703,22 +3705,21 @@ pub fn write_wifi_profile(path: &Path, profile: &WifiProfile) -> Result<()> {
     Ok(())
 }
 
-fn wifi_backend_from_env() -> StationBackendKind {
+pub(crate) fn wifi_backend_from_env() -> StationBackendKind {
     match env::var("RUSTYJACK_WIFI_BACKEND")
         .ok()
         .map(|v| v.trim().to_lowercase())
         .as_deref()
     {
+        Some("dbus") | Some("wpa_dbus") | Some("supplicant_dbus") | Some("wpa_supplicant_dbus") => {
+            StationBackendKind::WpaSupplicantDbus
+        }
         Some("external") | Some("wpa") | Some("wpa_supplicant") => {
-            tracing::warn!(
-                target: "wifi",
-                "wpa_supplicant_backend_disabled"
-            );
-            StationBackendKind::RustWpa2
+            StationBackendKind::WpaSupplicantDbus
         }
         Some("rust_open") | Some("open") => StationBackendKind::RustOpen,
         Some("rust_wpa2") | Some("wpa2") => StationBackendKind::RustWpa2,
-        _ => StationBackendKind::RustWpa2,
+        _ => StationBackendKind::WpaSupplicantDbus,
     }
 }
 
@@ -3766,7 +3767,7 @@ pub fn connect_wifi_network_with_cancel(
     let rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for WiFi connect")?;
 
-    let backend = wifi_backend_from_env();
+    let mut backend = wifi_backend_from_env();
     tracing::info!(target: "wifi", backend = ?backend, "wifi_backend_selected");
 
     // Release DHCP lease
@@ -3816,8 +3817,41 @@ pub fn connect_wifi_network_with_cancel(
 
     // Keep the interface managed entirely in-process (no NetworkManager dependency).
 
-    let station = StationManager::new_with_backend(interface, backend)
-        .with_context(|| format!("Failed to initialize WiFi backend {:?}", backend))?;
+    let mut station = match StationManager::new_with_backend(interface, backend) {
+        Ok(station) => station,
+        Err(err) if backend == StationBackendKind::WpaSupplicantDbus => {
+            tracing::warn!(
+                target: "wifi",
+                error = %err,
+                "wpa_supplicant_dbus_unavailable_fallback"
+            );
+            backend = StationBackendKind::RustWpa2;
+            tracing::info!(target: "wifi", backend = ?backend, "wifi_backend_selected_fallback");
+            StationManager::new_with_backend(interface, backend)
+                .with_context(|| "Failed to initialize RustWpa2 fallback backend")?
+        }
+        Err(err) => {
+            return Err(anyhow!(err))
+                .with_context(|| format!("Failed to initialize WiFi backend {:?}", backend));
+        }
+    };
+
+    if let Err(err) = station.ensure_ready() {
+        if backend == StationBackendKind::WpaSupplicantDbus {
+            tracing::warn!(
+                target: "wifi",
+                error = %err,
+                "wpa_supplicant_dbus_unavailable_fallback"
+            );
+            backend = StationBackendKind::RustWpa2;
+            tracing::info!(target: "wifi", backend = ?backend, "wifi_backend_selected_fallback");
+            station = StationManager::new_with_backend(interface, backend)
+                .with_context(|| "Failed to initialize RustWpa2 fallback backend")?;
+        } else {
+            return Err(anyhow!(err))
+                .with_context(|| format!("Failed to initialize WiFi backend {:?}", backend));
+        }
+    }
     let password = password
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
@@ -3915,14 +3949,36 @@ pub fn disconnect_wifi_interface(interface: Option<String>) -> Result<String> {
 
     let _rt = crate::runtime::shared_runtime()
         .with_context(|| "Failed to use tokio runtime for disconnect")?;
-    if let Err(e) = rustyjack_netlink::station_disconnect(&iface) {
-        tracing::error!(
-            target: "wifi",
-            iface = %iface,
-            error = %e,
-            "wifi_disconnect_failed"
-        );
-        bail!("Failed to disconnect {iface}: {e}");
+    let mut backend = wifi_backend_from_env();
+    match rustyjack_netlink::station_disconnect_with_backend(&iface, backend) {
+        Ok(()) => {}
+        Err(e) if backend == StationBackendKind::WpaSupplicantDbus => {
+            tracing::warn!(
+                target: "wifi",
+                iface = %iface,
+                error = %e,
+                "wifi_disconnect_dbus_unavailable_fallback"
+            );
+            backend = StationBackendKind::RustWpa2;
+            rustyjack_netlink::station_disconnect_with_backend(&iface, backend).map_err(|err| {
+                tracing::error!(
+                    target: "wifi",
+                    iface = %iface,
+                    error = %err,
+                    "wifi_disconnect_failed"
+                );
+                anyhow!("Failed to disconnect {iface}: {err}")
+            })?;
+        }
+        Err(e) => {
+            tracing::error!(
+                target: "wifi",
+                iface = %iface,
+                error = %e,
+                "wifi_disconnect_failed"
+            );
+            bail!("Failed to disconnect {iface}: {e}");
+        }
     }
 
     tracing::info!(target: "net", iface = %iface, "dhcp_release_start");

@@ -5,6 +5,7 @@ use crate::wpa::WpaStatus;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StationBackendKind {
     ExternalWpa,
+    WpaSupplicantDbus,
     RustOpen,
     RustWpa2,
 }

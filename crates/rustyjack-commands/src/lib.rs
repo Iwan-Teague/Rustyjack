@@ -396,6 +396,8 @@ pub enum WifiCommand {
     Crack(WifiCrackArgs),
     /// Launch Karma attack (respond to all probe requests)
     Karma(WifiKarmaArgs),
+    /// Preflight-only pipeline safety checks (no active behavior)
+    PipelinePreflight(WifiPipelinePreflightArgs),
     /// Post-connection reconnaissance
     #[command(subcommand)]
     Recon(WifiReconCommand),
@@ -722,6 +724,19 @@ pub struct WifiDisconnectArgs {
     pub interface: Option<String>,
 }
 
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WifiPipelinePreflightArgs {
+    /// Interface to check (defaults to active Wi-Fi)
+    #[arg(long)]
+    pub interface: Option<String>,
+    /// Pipeline identifier (e.g., get_password, mass_capture)
+    #[arg(long)]
+    pub pipeline: String,
+    /// Whether the pipeline requires monitor/injection support
+    #[arg(long, default_value_t = false)]
+    pub requires_monitor: bool,
+}
+
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WifiRouteCommand {
     /// Show default route and DNS information
@@ -887,8 +902,6 @@ pub enum SystemCommand {
     Poweroff,
     /// Remove Rustyjack artifacts and disable services
     Purge,
-    /// Install USB WiFi drivers using the bundled installer script
-    InstallWifiDrivers,
     /// Mount a USB device for file transfers
     UsbMount(UsbMountArgs),
     /// Unmount a USB device

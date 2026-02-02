@@ -692,14 +692,19 @@ impl App {
             .core
             .dispatch(Commands::DnsSpoof(DnsSpoofCommand::Start(args)))
         {
-            Ok((msg, _)) => self.show_message(
-                "DNS Spoof",
-                [
-                    msg,
-                    format!("Site: {}", site),
-                    format!("Interface: {}", iface),
-                ],
-            ),
+            Ok((msg, data)) => {
+                if let Some(lines) = crate::ops::shared::preflight::preflight_only_summary(&data) {
+                    return self.show_message("DNS Spoof", lines.iter().map(|s| s.as_str()));
+                }
+                self.show_message(
+                    "DNS Spoof",
+                    [
+                        msg,
+                        format!("Site: {}", site),
+                        format!("Interface: {}", iface),
+                    ],
+                )
+            }
             Err(e) => self.show_message("DNS Spoof", [format!("Start failed: {}", e)]),
         }
     }
@@ -776,27 +781,21 @@ impl App {
             .core
             .dispatch(Commands::Reverse(ReverseCommand::Launch(args)))
         {
-            Ok((msg, _)) => self.show_message(
-                "Reverse Shell",
-                [
-                    msg,
-                    format!("Target: {}", target_ip),
-                    format!("Port: {}", port),
-                    format!("Iface: {}", iface),
-                ],
-            ),
-            Err(e) => {
-                let err_text = e.to_string();
-                if err_text.contains("reverse shell disabled")
-                    || err_text.contains("external shell spawn removed")
-                {
-                    return self.show_message(
-                        "Reverse Shell",
-                        ["Feature disabled", "Rust-only build"],
-                    );
+            Ok((msg, data)) => {
+                if let Some(lines) = crate::ops::shared::preflight::preflight_only_summary(&data) {
+                    return self.show_message("Reverse Shell", lines.iter().map(|s| s.as_str()));
                 }
-                self.show_message("Reverse Shell", [format!("Launch failed: {}", err_text)])
+                self.show_message(
+                    "Reverse Shell",
+                    [
+                        msg,
+                        format!("Target: {}", target_ip),
+                        format!("Port: {}", port),
+                        format!("Iface: {}", iface),
+                    ],
+                )
             }
+            Err(e) => self.show_message("Reverse Shell", [format!("Launch failed: {}", e)]),
         }
     }
 }

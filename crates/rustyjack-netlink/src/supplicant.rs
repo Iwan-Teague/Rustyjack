@@ -105,6 +105,9 @@ impl StationManager {
                     ));
                 }
             }
+            StationBackendKind::WpaSupplicantDbus => {
+                Box::new(crate::station::dbus::WpaSupplicantDbusBackend::new(interface)?)
+            }
             StationBackendKind::RustOpen => {
                 #[cfg(feature = "station_rust_open")]
                 {
@@ -135,6 +138,22 @@ impl StationManager {
             interface: interface.to_string(),
             backend,
         })
+    }
+
+    pub fn disconnect(&self) -> Result<()> {
+        self.backend.disconnect()
+    }
+
+    pub fn ensure_ready(&self) -> Result<()> {
+        self.backend.ensure_ready()
+    }
+
+    pub fn status(&self) -> Result<WpaStatus> {
+        self.backend.status()
+    }
+
+    pub fn cleanup(&self) -> Result<()> {
+        self.backend.cleanup()
     }
 
     pub fn connect(&self, config: &StationConfig) -> Result<StationOutcome> {
@@ -227,10 +246,12 @@ pub(crate) struct ScanEntry {
     pub(crate) bssid: String,
     pub(crate) frequency: Option<u32>,
     pub(crate) signal_dbm: Option<i32>,
+    #[allow(dead_code)]
     pub(crate) flags: String,
     pub(crate) ssid: String,
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_scan_results(results: Vec<HashMap<String, String>>) -> Vec<ScanEntry> {
     let mut entries = Vec::new();
     for net in results {
@@ -397,6 +418,7 @@ impl CipherSuite {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn runtime_sleep(duration: Duration) {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.block_on(tokio::time::sleep(duration));
@@ -656,6 +678,7 @@ fn parse_rsn_like_ie(body: &[u8], expected_oui: &[u8; 3]) -> Option<RsnInfo> {
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn security_from_flags(flags: &str) -> SecurityInfo {
     let mut security = SecurityInfo::default();
     if flags.contains("WPA2") || flags.contains("RSN") {

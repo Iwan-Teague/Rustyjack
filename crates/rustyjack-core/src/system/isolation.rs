@@ -635,6 +635,7 @@ impl IsolationEngine {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn try_auto_connect_wifi(&self, iface: &str) -> Result<bool> {
         use crate::system::{list_wifi_profiles, load_wifi_profile, connect_wifi_network};
 

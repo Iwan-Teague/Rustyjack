@@ -19,6 +19,8 @@ use rustyjack_wpa::crack::{
 use crate::types::{CrackOutcome, CrackUpdate, DictionaryOption, HandshakeBundle};
 
 use crate::util::shorten_for_display;
+use crate::ops::shared::preflight::preflight_only_summary;
+use rustyjack_commands::{Commands, WifiCommand, WifiCrackArgs};
 
 use super::super::state::{App, ButtonAction};
 
@@ -124,6 +126,31 @@ impl App {
                 return Ok(());
             };
             let dictionary = dictionaries[selection].clone();
+
+            let review_path = self.root.join("REVIEW_APPROVED.md");
+            if !review_path.exists() {
+                let (mode, wordlist) = match &dictionary {
+                    DictionaryOption::Quick { .. } => ("quick".to_string(), None),
+                    DictionaryOption::SsidPatterns { .. } => ("ssid".to_string(), None),
+                    DictionaryOption::Bundled { path, .. } => {
+                        ("wordlist".to_string(), Some(path.to_string_lossy().to_string()))
+                    }
+                };
+
+                let args = WifiCrackArgs {
+                    file: file_path.to_string_lossy().to_string(),
+                    ssid: Some(bundle.ssid.clone()),
+                    mode,
+                    wordlist,
+                };
+                let (msg, data) = self
+                    .core
+                    .dispatch(Commands::Wifi(WifiCommand::Crack(args)))?;
+                if let Some(lines) = preflight_only_summary(&data) {
+                    return self.show_message("Crack", lines.iter().map(|s| s.as_str()));
+                }
+                return self.show_message("Crack", [msg]);
+            }
 
             let result = self.crack_handshake_with_progress(bundle, dictionary)?;
 

@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use rustyjack_commands::{Commands, SystemCommand, WifiCommand, WifiDeauthArgs};
-
-use crate::util::shorten_for_display;
+use rustyjack_commands::{Commands, WifiCommand, WifiDeauthArgs};
 
 use super::super::state::{App, INDEFINITE_SECS};
 
@@ -17,7 +15,7 @@ impl App {
         if active_interface.is_empty() {
             return self.show_message(
                 "WiFi Scan",
-                ["No active interface", "", "Run Hardware Detect first"],
+                ["No active interface", "", "Run Hardware Sanity Check first"],
             );
         }
         
@@ -142,7 +140,7 @@ impl App {
                 [
                     "No WiFi interface set",
                     "",
-                    "Run Hardware Detect",
+                    "Run Hardware Sanity Check",
                     "to configure interface",
                 ],
             );
@@ -496,7 +494,7 @@ impl App {
                 [
                     "No WiFi interface set",
                     "",
-                    "Run Hardware Detect",
+                    "Run Hardware Sanity Check",
                     "to configure interface",
                 ],
             );
@@ -594,7 +592,7 @@ impl App {
         if active_interface.is_empty() {
             return self.show_message(
                 "PMKID Capture",
-                ["No WiFi interface set", "", "Run Hardware Detect first"],
+                ["No WiFi interface set", "", "Run Hardware Sanity Check first"],
             );
         }
 
@@ -688,140 +686,6 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn install_wifi_drivers(&mut self) -> Result<()> {
-        let script_path = self.root.join("scripts/wifi_driver_installer.sh");
-
-        // Check if script exists
-        if !script_path.exists() {
-            return self.show_message(
-                "Driver Install",
-                [
-                    "Installer script not found",
-                    "",
-                    "Missing:",
-                    "scripts/wifi_driver_installer.sh",
-                    "",
-                    "Please reinstall RustyJack",
-                ],
-            );
-        }
-
-        // Initial screen - explain what we're doing
-        self.show_message(
-            "WiFi Driver Install",
-            [
-                "This will scan for USB WiFi",
-                "adapters and install any",
-                "required drivers.",
-                "",
-                "Internet required for",
-                "driver downloads.",
-                "",
-                "Press SELECT to continue",
-            ],
-        )?;
-
-        // Confirm
-        let options = vec!["Start Scan".to_string(), "Cancel".to_string()];
-        let choice = self.choose_from_list("Install Drivers?", &options)?;
-
-        if choice != Some(0) {
-            return Ok(());
-        }
-
-        self.show_progress("WiFi Driver", ["Running installer...", "Please wait"])?;
-
-        let (msg, data) = match self
-            .core
-            .dispatch(Commands::System(SystemCommand::InstallWifiDrivers))
-        {
-            Ok(result) => result,
-            Err(e) => {
-                let err_text = e.to_string();
-                if err_text.contains("driver install disabled")
-                    || err_text.contains("external scripts removed")
-                {
-                    return self.show_message(
-                        "Driver Install",
-                        [
-                            "Feature disabled",
-                            "Rust-only build",
-                            "",
-                            "No Rust installer yet",
-                        ],
-                    );
-                }
-                return self.show_message(
-                    "Driver Error",
-                    ["Installer failed", "", &shorten_for_display(&err_text, 90)],
-                );
-            }
-        };
-
-        let status = data
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("UNKNOWN");
-        let details = data.get("details").and_then(|v| v.as_str()).unwrap_or("");
-        let interfaces = data.get("interfaces").and_then(|v| v.as_array());
-
-        match status {
-            "SUCCESS" => {
-                let mut lines = vec!["Driver installed!".to_string(), "".to_string()];
-                if let Some(ifaces) = interfaces {
-                    lines.push("Available interfaces:".to_string());
-                    for iface in ifaces {
-                        if let Some(name) = iface.as_str() {
-                            lines.push(format!("  - {}", name));
-                        }
-                    }
-                }
-                lines.push("".to_string());
-                lines.push("Ready to use!".to_string());
-                self.show_message("Driver Success", lines.iter().map(|s| s.as_str()))
-            }
-            "REBOOT_REQUIRED" => self.show_message(
-                "Reboot Required",
-                [
-                    "Driver installed but",
-                    "reboot is required.",
-                    "",
-                    "Please restart the",
-                    "device to complete",
-                    "installation.",
-                    "",
-                    "Press KEY3 to reboot",
-                ],
-            ),
-            "NO_DEVICES" => self.show_message(
-                "No Devices",
-                [
-                    "No USB WiFi adapters",
-                    "were detected.",
-                    "",
-                    "Please plug in a USB",
-                    "WiFi adapter and try",
-                    "again.",
-                ],
-            ),
-            "FAILED" => self.show_message(
-                "Driver Failed",
-                [
-                    "Failed to install drivers",
-                    "",
-                    details,
-                    "",
-                    "Check internet connection",
-                    "and try again.",
-                    "",
-                    "Some adapters may not",
-                    "be supported.",
-                ],
-            ),
-            _ => self.show_message("Driver Install", vec![msg, details.to_string()]),
-        }
-    }
-
     /// Launch Karma attack
     pub(crate) fn launch_karma_attack(&mut self) -> Result<()> {
         if !self.mode_allows_active("Karma attack blocked in Stealth mode")? {
@@ -835,7 +699,7 @@ impl App {
                 [
                     "No WiFi interface set",
                     "",
-                    "Run Hardware Detect",
+                    "Run Hardware Sanity Check",
                     "to configure interface",
                 ],
             );

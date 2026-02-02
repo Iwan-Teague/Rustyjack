@@ -287,6 +287,10 @@ impl App {
             }
         };
 
+        if let Some(lines) = crate::ops::shared::preflight::preflight_only_summary(&data) {
+            return self.show_message("Complete Purge", lines.iter().map(|s| s.as_str()));
+        }
+
         let removed = data.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
         let service_disabled = data
             .get("service_disabled")

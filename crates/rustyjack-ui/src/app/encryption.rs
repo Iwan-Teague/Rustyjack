@@ -787,15 +787,56 @@ impl App {
     }
 
     pub(crate) fn start_fde_migration(&mut self) -> Result<()> {
-        // FDE migration feature not yet implemented
+        let devices = self.core.block_devices()?;
+        if devices.is_empty() {
+            return self.show_message(
+                "FDE Migration",
+                [
+                    "No USB devices detected",
+                    "",
+                    "Insert USB media and retry",
+                ],
+            );
+        }
+
+        let labels: Vec<String> = devices
+            .iter()
+            .map(|d| format!("{}  {}  {}", d.name, d.size, d.model))
+            .collect();
+        let Some(choice) = self.choose_from_list("Select Target Device", &labels)? else {
+            return Ok(());
+        };
+        let target = devices[choice].name.clone();
+
+        let keyfiles = self.find_fde_keyfiles();
+        if keyfiles.is_empty() {
+            return self.show_message(
+                "FDE Migration",
+                [
+                    "No rustyjack.key found",
+                    "Mount USB and ensure",
+                    "rustyjack.key exists",
+                ],
+            );
+        }
+        let key_labels: Vec<String> = keyfiles
+            .iter()
+            .map(|p| shorten_for_display(&p.display().to_string(), 20))
+            .collect();
+        let Some(key_choice) = self.choose_from_list("Select Keyfile", &key_labels)? else {
+            return Ok(());
+        };
+        let keyfile = keyfiles[key_choice].display().to_string();
+
         self.show_message(
             "FDE Migration",
             [
-                "Feature not yet implemented",
-                "Use command line tools instead",
+                "Dry-run preflight only.",
+                "Execute requires review.",
             ],
         )?;
-        Ok(())
+
+        self.run_fde_migrate(&target, &keyfile, false)
     }
 
     pub(crate) fn run_usb_prepare(&mut self, device: &str) -> Result<()> {
@@ -813,26 +854,16 @@ impl App {
         {
             Ok(result) => result,
             Err(err) => {
-                let err_text = err.to_string();
-                if err_text.contains("FDE prepare disabled")
-                    || err_text.contains("external scripts removed")
-                {
-                    return self.show_message(
-                        "Full Disk Encryption",
-                        [
-                            "Feature disabled",
-                            "Rust-only build",
-                            "",
-                            "No Rust implementation yet",
-                        ],
-                    );
-                }
                 return self.show_message(
                     "Full Disk Encryption",
-                    ["Failed to start", &shorten_for_display(&err_text, 90)],
+                    ["Failed to start", &shorten_for_display(&err.to_string(), 90)],
                 );
             }
         };
+
+        if let Some(lines) = crate::ops::shared::preflight::preflight_only_summary(&data) {
+            return self.show_message("Full Disk Encryption", lines.iter().map(|s| s.as_str()));
+        }
 
         let stdout = data
             .get("stdout")
@@ -873,6 +904,10 @@ impl App {
             }
         };
 
+        if let Some(lines) = crate::ops::shared::preflight::preflight_only_summary(&data) {
+            return self.show_message("Full Disk Encryption", lines.iter().map(|s| s.as_str()));
+        }
+
         let stderr = data
             .get("stderr")
             .and_then(|v| v.as_str())
@@ -889,6 +924,26 @@ impl App {
             lines.push("Reboot required".to_string());
         }
         self.show_message("Full Disk Encryption", lines)
+    }
+
+    fn find_fde_keyfiles(&self) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let roots = [
+            PathBuf::from("/mnt"),
+            PathBuf::from("/media"),
+            PathBuf::from("/run/media"),
+        ];
+        for root in roots {
+            if !root.exists() {
+                continue;
+            }
+            for entry in WalkDir::new(root).max_depth(4).into_iter().flatten() {
+                if entry.file_type().is_file() && entry.file_name() == "rustyjack.key" {
+                    found.push(entry.path().to_path_buf());
+                }
+            }
+        }
+        found
     }
 
     pub(crate) fn set_webhook_encryption(&mut self, enable: bool, show_msg: bool) -> Result<()> {

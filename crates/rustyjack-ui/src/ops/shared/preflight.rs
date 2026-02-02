@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
+use serde_json::Value;
 
 use crate::{config::GuiConfig, core::CoreBridge};
+use crate::util::shorten_for_display;
 
 pub fn require_not_stealth(config: &GuiConfig, context: &str) -> Result<()> {
     if config
@@ -15,7 +17,7 @@ pub fn require_not_stealth(config: &GuiConfig, context: &str) -> Result<()> {
 
 pub fn require_active_interface(config: &GuiConfig) -> Result<()> {
     if config.settings.active_network_interface.is_empty() {
-        bail!("No Wi-Fi interface set. Run Hardware Detect first.");
+        bail!("No Wi-Fi interface set. Run Hardware Sanity Check first.");
     }
     Ok(())
 }
@@ -117,4 +119,36 @@ pub fn probe_sniff(core: &CoreBridge, iface: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn preflight_only_summary(data: &Value) -> Option<Vec<String>> {
+    let mode = data.get("mode").and_then(|v| v.as_str())?;
+    if mode != "preflight_only" {
+        return None;
+    }
+    let status = data
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("UNKNOWN");
+    let mut lines = vec![
+        format!("Preflight: {}", status),
+        "Authorization required".to_string(),
+    ];
+    if let Some(errors) = data.get("errors").and_then(|v| v.as_array()) {
+        for err in errors.iter().filter_map(|v| v.as_str()) {
+            lines.push(shorten_for_display(err, 22));
+            if lines.len() >= 6 {
+                break;
+            }
+        }
+    }
+    if let Some(warnings) = data.get("warnings").and_then(|v| v.as_array()) {
+        for warn in warnings.iter().filter_map(|v| v.as_str()) {
+            lines.push(shorten_for_display(warn, 22));
+            if lines.len() >= 6 {
+                break;
+            }
+        }
+    }
+    Some(lines)
 }

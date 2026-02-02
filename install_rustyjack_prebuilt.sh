@@ -872,6 +872,20 @@ Group=rustyjack
 UMask=0007
 Environment=RUST_BACKTRACE=1
 Environment=RUSTYJACK_ROOT=${RUNTIME_ROOT}
+Environment=RUSTYJACK_WIFI_BACKEND=dbus
+Environment=RUSTYJACKD_OPS_PROFILE=appliance
+Environment=RUSTYJACKD_OPS_WIFI=true
+Environment=RUSTYJACKD_OPS_ETH=true
+Environment=RUSTYJACKD_OPS_HOTSPOT=true
+Environment=RUSTYJACKD_OPS_PORTAL=true
+Environment=RUSTYJACKD_OPS_STORAGE=true
+Environment=RUSTYJACKD_OPS_POWER=true
+Environment=RUSTYJACKD_OPS_UPDATE=true
+Environment=RUSTYJACKD_OPS_SYSTEM=true
+Environment=RUSTYJACKD_OPS_DEV=false
+Environment=RUSTYJACKD_OPS_OFFENSIVE=false
+Environment=RUSTYJACKD_OPS_LOOT=false
+Environment=RUSTYJACKD_OPS_PROCESS=false
 Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
 WatchdogSec=20s
@@ -889,6 +903,73 @@ SystemCallArchitectures=native
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+WPA_SERVICE=/etc/systemd/system/rustyjack-wpa_supplicant@.service
+WPA_CONF=/etc/rustyjack/wpa_supplicant.conf
+step "Installing wpa_supplicant service $WPA_SERVICE..."
+
+sudo tee "$WPA_SERVICE" >/dev/null <<UNIT
+[Unit]
+Description=Rustyjack wpa_supplicant (D-Bus) for %i
+After=network.target dbus.service
+Wants=dbus.service
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=simple
+ExecStart=/sbin/wpa_supplicant -u -s -i %i -D nl80211 -c /etc/rustyjack/wpa_supplicant.conf
+Restart=on-failure
+RestartSec=3
+
+RuntimeDirectory=wpa_supplicant
+RuntimeDirectoryMode=0755
+
+User=root
+Group=root
+
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/wpa_supplicant
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+MemoryDenyWriteExecute=true
+
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+
+SystemCallFilter=@system-service
+SystemCallFilter=~@clock @debug @module @obsolete @raw-io @reboot @swap
+
+PrivateDevices=false
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+step "Installing wpa_supplicant config $WPA_CONF..."
+sudo mkdir -p /etc/rustyjack
+sudo tee "$WPA_CONF" >/dev/null <<CONF
+ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
+update_config=0
+ap_scan=1
+country=US
+CONF
+sudo chmod 600 "$WPA_CONF"
+sudo systemctl unmask rustyjack-wpa_supplicant@.service 2>/dev/null || true
 
 SERVICE=/etc/systemd/system/rustyjack-ui.service
 SERVICE_FILE=$SERVICE
@@ -1028,6 +1109,12 @@ else
   else
     warn "cargo not available; cannot rebuild daemon on-device"
   fi
+fi
+sudo systemctl enable rustyjack-wpa_supplicant@wlan0.service
+if sudo systemctl start rustyjack-wpa_supplicant@wlan0.service 2>/dev/null; then
+  info "wpa_supplicant service started successfully"
+else
+  warn "Failed to start rustyjack-wpa_supplicant@wlan0.service"
 fi
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service

@@ -9,6 +9,8 @@ use chrono::Local;
 use walkdir::WalkDir;
 
 use crate::menu::PipelineType;
+use crate::ops::shared::preflight::preflight_only_summary;
+use rustyjack_commands::{Commands, WifiCommand, WifiPipelinePreflightArgs};
 
 use super::super::state::{App, CancelDecision, PipelineResult, StepOutcome};
 
@@ -16,6 +18,37 @@ impl App {
     /// Launch an attack pipeline
     pub(crate) fn launch_attack_pipeline(&mut self, pipeline_type: PipelineType) -> Result<()> {
         let active_interface = self.config.settings.active_network_interface.clone();
+        let review_path = self.root.join("REVIEW_APPROVED.md");
+
+        if !review_path.exists() {
+            let interface = if active_interface.trim().is_empty() {
+                None
+            } else {
+                Some(active_interface.clone())
+            };
+            let args = WifiPipelinePreflightArgs {
+                interface,
+                pipeline: pipeline_id(pipeline_type).to_string(),
+                requires_monitor: true,
+            };
+            let (msg, data) = self
+                .core
+                .dispatch(Commands::Wifi(WifiCommand::PipelinePreflight(args)))?;
+            let mut lines = preflight_only_summary(&data).unwrap_or_else(|| vec![msg]);
+
+            if self
+                .config
+                .settings
+                .operation_mode
+                .eq_ignore_ascii_case("stealth")
+                && pipeline_type != PipelineType::StealthRecon
+            {
+                lines.push("".to_string());
+                lines.push("Blocked by Stealth mode".to_string());
+            }
+
+            return self.show_message("Pipeline Preflight", lines.iter().map(|s| s.as_str()));
+        }
 
         if self
             .config
@@ -41,7 +74,7 @@ impl App {
                 [
                     "No WiFi interface set",
                     "",
-                    "Run Hardware Detect",
+                    "Run Hardware Sanity Check",
                     "to configure interface",
                 ],
             );
@@ -1225,5 +1258,15 @@ impl App {
 
         scan_for_handshakes(loot_dir, &mut newest);
         newest.map(|(path, _)| path)
+    }
+}
+
+fn pipeline_id(pipeline_type: PipelineType) -> &'static str {
+    match pipeline_type {
+        PipelineType::GetPassword => "get_password",
+        PipelineType::MassCapture => "mass_capture",
+        PipelineType::StealthRecon => "stealth_recon",
+        PipelineType::CredentialHarvest => "credential_harvest",
+        PipelineType::FullPentest => "full_pentest",
     }
 }

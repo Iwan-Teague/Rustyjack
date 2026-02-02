@@ -93,6 +93,7 @@ impl DaemonConfig {
                 hotspot_ops: true,
                 portal_ops: true,
                 storage_ops: true,
+                power_ops: true,
                 system_ops: true,
                 update_ops: true,
                 dev_ops: true,
@@ -110,6 +111,7 @@ impl DaemonConfig {
                 hotspot_ops: false,
                 portal_ops: false,
                 storage_ops: false,
+                power_ops: false,
                 system_ops: false,
                 update_ops: false,
                 dev_ops: false,
@@ -125,6 +127,7 @@ impl DaemonConfig {
                     "hotspot" => ops.hotspot_ops = true,
                     "portal" => ops.portal_ops = true,
                     "storage" | "mount" => ops.storage_ops = true,
+                    "power" => ops.power_ops = true,
                     "system" => ops.system_ops = true,
                     "update" => ops.update_ops = true,
                     "dev" => ops.dev_ops = true,
@@ -141,6 +144,7 @@ impl DaemonConfig {
         ops.hotspot_ops = env_bool("RUSTYJACKD_OPS_HOTSPOT", ops.hotspot_ops);
         ops.portal_ops = env_bool("RUSTYJACKD_OPS_PORTAL", ops.portal_ops);
         ops.storage_ops = env_bool("RUSTYJACKD_OPS_STORAGE", ops.storage_ops);
+        ops.power_ops = env_bool("RUSTYJACKD_OPS_POWER", ops.power_ops);
         ops.system_ops = env_bool("RUSTYJACKD_OPS_SYSTEM", ops.system_ops);
         ops.update_ops = env_bool("RUSTYJACKD_OPS_UPDATE", ops.update_ops);
         ops.dev_ops = env_bool("RUSTYJACKD_OPS_DEV", ops.dev_ops);

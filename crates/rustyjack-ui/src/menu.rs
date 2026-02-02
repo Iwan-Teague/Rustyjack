@@ -32,8 +32,6 @@ pub enum MenuAction {
     ProbeSniff,
     PmkidCapture,
     CrackHandshake,
-    /// Install USB WiFi drivers
-    InstallWifiDrivers,
     /// Karma attack - respond to all probes
     KarmaAttack,
     /// WiFi status/route actions (post-connection)
@@ -157,6 +155,7 @@ pub enum OpsCategory {
     Hotspot,
     Portal,
     Storage,
+    Power,
     Update,
     System,
     Dev,
@@ -232,6 +231,10 @@ impl MenuTree {
             MenuNode::Static(builder) => Ok(builder()),
         }
     }
+
+    pub fn node_ids(&self) -> Vec<&'static str> {
+        self.nodes.keys().copied().collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -257,7 +260,7 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new("Operation Mode", MenuAction::Submenu("aops")),
         MenuEntry::new("Operations", MenuAction::Submenu("aopst")),
-        MenuEntry::new("Hardware Detect", MenuAction::HardwareDetect),
+        MenuEntry::new("Hardware Sanity Check", MenuAction::HardwareDetect),
         MenuEntry::new("Wireless", MenuAction::Submenu("aw")),
         MenuEntry::new("Ethernet", MenuAction::Submenu("aeth")),
         MenuEntry::new("Obfuscation", MenuAction::Submenu("ao")),
@@ -346,6 +349,7 @@ fn ops_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Hotspot Ops", MenuAction::ToggleOps(OpsCategory::Hotspot)),
         MenuEntry::new("Portal Ops", MenuAction::ToggleOps(OpsCategory::Portal)),
         MenuEntry::new("Storage Ops", MenuAction::ToggleOps(OpsCategory::Storage)),
+        MenuEntry::new("Power Ops", MenuAction::ToggleOps(OpsCategory::Power)),
         MenuEntry::new("Update Ops", MenuAction::ToggleOps(OpsCategory::Update)),
         MenuEntry::new("System Ops", MenuAction::ToggleOps(OpsCategory::System)),
         MenuEntry::new("Dev Ops", MenuAction::ToggleOps(OpsCategory::Dev)),

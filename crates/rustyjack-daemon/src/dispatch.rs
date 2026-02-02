@@ -165,6 +165,7 @@ pub async fn handle_request(
                 hotspot_ops: ops_cfg.hotspot_ops,
                 portal_ops: ops_cfg.portal_ops,
                 storage_ops: ops_cfg.storage_ops,
+                power_ops: ops_cfg.power_ops,
                 system_ops: ops_cfg.system_ops,
                 update_ops: ops_cfg.update_ops,
                 dev_ops: ops_cfg.dev_ops,
@@ -253,7 +254,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(feature = "loot_ops")]
         RequestBody::LootCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -267,12 +267,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(not(feature = "loot_ops"))]
-        RequestBody::LootCommand(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "Loot disabled in this build",
-            false,
-        )),
         RequestBody::NotifyCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -345,7 +339,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(feature = "offensive_ops")]
         RequestBody::DnsSpoofCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -359,13 +352,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(not(feature = "offensive_ops"))]
-        RequestBody::DnsSpoofCommand(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "DnsSpoof disabled in this build",
-            false,
-        )),
-        #[cfg(feature = "offensive_ops")]
         RequestBody::MitmCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -379,13 +365,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(not(feature = "offensive_ops"))]
-        RequestBody::MitmCommand(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "Mitm disabled in this build",
-            false,
-        )),
-        #[cfg(feature = "offensive_ops")]
         RequestBody::ReverseCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -399,12 +378,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(not(feature = "offensive_ops"))]
-        RequestBody::ReverseCommand(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "Reverse disabled in this build",
-            false,
-        )),
         RequestBody::HotspotCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -418,7 +391,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(feature = "offensive_ops")]
         RequestBody::ScanCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -432,13 +404,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(not(feature = "offensive_ops"))]
-        RequestBody::ScanCommand(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "Scan disabled in this build",
-            false,
-        )),
-        #[cfg(feature = "offensive_ops")]
         RequestBody::BridgeCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -452,12 +417,6 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        #[cfg(not(feature = "offensive_ops"))]
-        RequestBody::BridgeCommand(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "Bridge disabled in this build",
-            false,
-        )),
         #[cfg(feature = "process_ops")]
         RequestBody::ProcessCommand(command) => {
             let root = state.config.root_path.clone();
@@ -1487,8 +1446,8 @@ pub async fn handle_request(
         }
         #[cfg(not(feature = "core_dispatch"))]
         RequestBody::CoreDispatch(_) => ResponseBody::Err(DaemonError::new(
-            ErrorCode::Forbidden,
-            "CoreDispatch disabled in this build",
+            ErrorCode::NotImplemented,
+            "CoreDispatch is disabled",
             false,
         )),
         RequestBody::JobStart(JobStartRequest { job }) => {

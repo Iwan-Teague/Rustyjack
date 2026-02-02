@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use rustyjack_ipc::{
     endpoint_for_body, BlockDevicesResponse, ClientHello, CoreDispatchRequest, CoreDispatchResponse,
-    DaemonError, DiskUsageRequest, DiskUsageResponse, ErrorCode, FeatureFlag,
+    DaemonError, DiskUsageRequest, DiskUsageResponse, FeatureFlag,
     GpioDiagnosticsResponse, HealthResponse, HelloAck, HostnameResponse, HotspotClientsResponse,
     HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse, JobCancelRequest,
     JobCancelResponse, JobKind, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,

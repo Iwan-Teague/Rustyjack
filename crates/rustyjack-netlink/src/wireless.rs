@@ -67,12 +67,15 @@ const NLA_TYPE_MASK: u16 = 0x3fff;
 
 const NL80211_BSS_BSSID: u16 = 1;
 const NL80211_BSS_FREQUENCY: u16 = 2;
+#[allow(dead_code)]
 const NL80211_BSS_TSF: u16 = 3;
 const NL80211_BSS_BEACON_INTERVAL: u16 = 4;
 const NL80211_BSS_CAPABILITY: u16 = 5;
 const NL80211_BSS_INFORMATION_ELEMENTS: u16 = 6;
 const NL80211_BSS_SIGNAL_MBM: u16 = 7;
+#[allow(dead_code)]
 const NL80211_BSS_SIGNAL_UNSPEC: u16 = 8;
+#[allow(dead_code)]
 const NL80211_BSS_STATUS: u16 = 9;
 const NL80211_BSS_SEEN_MS_AGO: u16 = 10;
 
