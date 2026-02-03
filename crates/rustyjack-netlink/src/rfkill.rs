@@ -509,9 +509,7 @@ impl RfkillManager {
             return Ok(None);
         }
 
-        let iface_path = Path::new("/sys/class/net")
-            .join(interface)
-            .join("device");
+        let iface_path = Path::new("/sys/class/net").join(interface).join("device");
         let iface_dev = match fs::canonicalize(&iface_path) {
             Ok(path) => path,
             Err(_) => return Ok(None),

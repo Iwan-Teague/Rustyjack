@@ -90,14 +90,8 @@ impl EapolSocket {
             )));
         }
 
-        let received = unsafe {
-            libc::recv(
-                self.fd,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-                0,
-            )
-        };
+        let received =
+            unsafe { libc::recv(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
         if received < 0 {
             let err = std::io::Error::last_os_error();
             if err.kind() == std::io::ErrorKind::WouldBlock

@@ -40,12 +40,7 @@ fn write_global_header<W: Write>(w: &mut W) -> io::Result<()> {
     Ok(())
 }
 
-fn write_record_header<W: Write>(
-    w: &mut W,
-    sec: u32,
-    usec: u32,
-    len: u32,
-) -> io::Result<()> {
+fn write_record_header<W: Write>(w: &mut W, sec: u32, usec: u32, len: u32) -> io::Result<()> {
     w.write_all(&sec.to_le_bytes())?;
     w.write_all(&usec.to_le_bytes())?;
     w.write_all(&len.to_le_bytes())?;

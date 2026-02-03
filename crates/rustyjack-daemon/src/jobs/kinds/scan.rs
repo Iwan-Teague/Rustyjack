@@ -2,8 +2,8 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use rustyjack_ipc::{DaemonError, ErrorCode, ScanModeIpc, ScanRequestIpc};
 use crate::jobs::cancel_bridge::create_cancel_flag;
+use rustyjack_ipc::{DaemonError, ErrorCode, ScanModeIpc, ScanRequestIpc};
 
 pub async fn run<F, Fut>(
     req: ScanRequestIpc,
@@ -15,7 +15,11 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     if cancel.is_cancelled() {
-        return Err(DaemonError::new(ErrorCode::Cancelled, "Job cancelled", false));
+        return Err(DaemonError::new(
+            ErrorCode::Cancelled,
+            "Job cancelled",
+            false,
+        ));
     }
 
     let root = rustyjack_core::resolve_root(None).map_err(|err| {
@@ -40,9 +44,14 @@ where
 
     let (tx, mut rx) = mpsc::channel::<(u8, String)>(64);
     let mut handle = tokio::task::spawn_blocking(move || {
-        rustyjack_core::services::scan::run_scan(&root, request, Some(&cancel_flag_for_task), |percent, message| {
-            let _ = tx.try_send((percent, message.to_string()));
-        })
+        rustyjack_core::services::scan::run_scan(
+            &root,
+            request,
+            Some(&cancel_flag_for_task),
+            |percent, message| {
+                let _ = tx.try_send((percent, message.to_string()));
+            },
+        )
     });
 
     let mut cancel_notified = false;

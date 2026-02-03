@@ -7,8 +7,8 @@ use tracing_error::ErrorLayer;
 use tracing_log::LogTracer;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::reload;
-use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Layer, Registry};
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Layer, Registry};
 
 use crate::config::LoggingConfig;
 use crate::targets::{T_CRYPTO, T_NET, T_USB, T_WIFI};
@@ -46,18 +46,17 @@ pub fn init(component: &str, root: &Path, cfg: &LoggingConfig) -> Result<Logging
         base.try_init().ok();
         let _ = LogTracer::init();
         apply_env(cfg);
-        tracing::warn!(
-            "File logging disabled ({}): {}",
-            log_dir.display(),
-            err
-        );
-        return Ok(LoggingGuards { _file_guards: guards });
+        tracing::warn!("File logging disabled ({}): {}", log_dir.display(), err);
+        return Ok(LoggingGuards {
+            _file_guards: guards,
+        });
     }
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Err(err) = std::fs::set_permissions(&log_dir, std::fs::Permissions::from_mode(0o2770))
+        if let Err(err) =
+            std::fs::set_permissions(&log_dir, std::fs::Permissions::from_mode(0o2770))
         {
             warn_msg = Some(format!(
                 "Failed to set log directory permissions ({}): {}",
@@ -102,7 +101,9 @@ pub fn init(component: &str, root: &Path, cfg: &LoggingConfig) -> Result<Logging
         tracing::warn!("{message}");
     }
 
-    Ok(LoggingGuards { _file_guards: guards })
+    Ok(LoggingGuards {
+        _file_guards: guards,
+    })
 }
 
 pub fn apply(cfg: &LoggingConfig, _component: &str) -> Result<()> {
@@ -143,10 +144,7 @@ fn subsystem_layer<S>(
     log_dir: &Path,
     filename: &str,
     target: &'static str,
-) -> (
-    impl tracing_subscriber::Layer<S> + Send + Sync,
-    WorkerGuard,
-)
+) -> (impl tracing_subscriber::Layer<S> + Send + Sync, WorkerGuard)
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {

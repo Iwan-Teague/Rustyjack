@@ -18,8 +18,8 @@ use rustyjack_wpa::crack::{
 #[cfg(target_os = "linux")]
 use crate::types::{CrackOutcome, CrackUpdate, DictionaryOption, HandshakeBundle};
 
-use crate::util::shorten_for_display;
 use crate::ops::shared::preflight::preflight_only_summary;
+use crate::util::shorten_for_display;
 use rustyjack_commands::{Commands, WifiCommand, WifiCrackArgs};
 
 use super::super::state::{App, ButtonAction};
@@ -132,9 +132,10 @@ impl App {
                 let (mode, wordlist) = match &dictionary {
                     DictionaryOption::Quick { .. } => ("quick".to_string(), None),
                     DictionaryOption::SsidPatterns { .. } => ("ssid".to_string(), None),
-                    DictionaryOption::Bundled { path, .. } => {
-                        ("wordlist".to_string(), Some(path.to_string_lossy().to_string()))
-                    }
+                    DictionaryOption::Bundled { path, .. } => (
+                        "wordlist".to_string(),
+                        Some(path.to_string_lossy().to_string()),
+                    ),
                 };
 
                 let args = WifiCrackArgs {
@@ -441,5 +442,4 @@ impl App {
             .draw_progress_dialog("Crack Handshake", &message, pct, &status)?;
         Ok(())
     }
-
 }

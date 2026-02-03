@@ -5,12 +5,11 @@
 
 use anyhow::{Context, Result};
 use chrono::Local;
+use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use rustyjack_client::DaemonClient;
 use rustyjack_evasion::logs_disabled;
-use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use std::{
-    env,
-    fs,
+    env, fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
 };
@@ -199,12 +198,8 @@ pub fn random_hotspot_password() -> String {
 pub fn fetch_gpio_diagnostics() -> Result<String> {
     block_on(async {
         let socket_path = daemon_socket_path();
-        let mut client = DaemonClient::connect(
-            &socket_path,
-            "rustyjack-ui",
-            env!("CARGO_PKG_VERSION"),
-        )
-        .await?;
+        let mut client =
+            DaemonClient::connect(&socket_path, "rustyjack-ui", env!("CARGO_PKG_VERSION")).await?;
         let response = client.gpio_diagnostics().await?;
         Ok(response.content)
     })

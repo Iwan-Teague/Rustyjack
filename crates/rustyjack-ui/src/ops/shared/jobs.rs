@@ -3,13 +3,13 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
+use crate::ops::shared::preflight::preflight_only_summary;
 use crate::{
     ops::OperationContext,
     ui::{input::UiInput, screens::cancel_confirm, screens::progress},
 };
-use crate::ops::shared::preflight::preflight_only_summary;
-use rustyjack_ipc::JobState;
 use rustyjack_commands::Commands;
+use rustyjack_ipc::JobState;
 
 pub enum JobRunResult {
     Completed { message: String, data: Value },
@@ -143,10 +143,8 @@ pub fn run_cancellable_job(
                 summary: vec![message],
             })
         }
-        JobRunResult::Cancelled => {
-            Ok(OperationOutcome::Cancelled {
-                summary: vec!["Operation cancelled by user".to_string()],
-            })
-        }
+        JobRunResult::Cancelled => Ok(OperationOutcome::Cancelled {
+            summary: vec!["Operation cancelled by user".to_string()],
+        }),
     }
 }

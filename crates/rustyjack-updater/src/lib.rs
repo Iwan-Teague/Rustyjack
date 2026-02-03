@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -43,11 +43,10 @@ pub async fn apply_update(policy: &UpdatePolicy, url: &str) -> Result<()> {
         .await
         .context("create stage dir")?;
 
-    let incoming_dir = policy.stage_dir.join(format!(
-        "incoming-{}-{}",
-        std::process::id(),
-        now_ms()
-    ));
+    let incoming_dir =
+        policy
+            .stage_dir
+            .join(format!("incoming-{}-{}", std::process::id(), now_ms()));
     tokio::fs::create_dir_all(&incoming_dir)
         .await
         .context("create incoming dir")?;
@@ -63,11 +62,10 @@ pub async fn apply_update(policy: &UpdatePolicy, url: &str) -> Result<()> {
 
     let verify_dir = incoming_dir.clone();
     let public_key = policy.public_key_ed25519;
-    let manifest = tokio::task::spawn_blocking(move || {
-        verify_manifest_and_files(&verify_dir, public_key)
-    })
-    .await
-    .context("verify manifest join")??;
+    let manifest =
+        tokio::task::spawn_blocking(move || verify_manifest_and_files(&verify_dir, public_key))
+            .await
+            .context("verify manifest join")??;
 
     let version_dir = policy.stage_dir.join(&manifest.version);
     if tokio::fs::metadata(&version_dir).await.is_ok() {
@@ -131,7 +129,9 @@ async fn download_archive(url: &str, dest: &Path) -> Result<()> {
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("download chunk")?;
-        file.write_all(&chunk).await.context("write archive chunk")?;
+        file.write_all(&chunk)
+            .await
+            .context("write archive chunk")?;
     }
     file.sync_all().await.context("sync archive file")?;
     Ok(())
@@ -192,8 +192,7 @@ fn verify_manifest_and_files(stage_dir: &Path, public_key: [u8; 32]) -> Result<M
     key.verify(&manifest_bytes, &signature)
         .context("manifest signature verification failed")?;
 
-    let manifest: Manifest =
-        serde_json::from_slice(&manifest_bytes).context("parse manifest")?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("parse manifest")?;
     if manifest.version.trim().is_empty() {
         bail!("manifest version is empty");
     }

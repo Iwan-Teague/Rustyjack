@@ -14,7 +14,7 @@ pub fn list_interfaces() -> Result<Vec<String>, ServiceError> {
     use std::fs;
     let sys_class = std::path::Path::new("/sys/class/net");
     let mut interfaces = Vec::new();
-    
+
     if let Ok(entries) = fs::read_dir(sys_class) {
         for entry in entries.flatten() {
             if let Ok(name) = entry.file_name().into_string() {
@@ -27,7 +27,7 @@ pub fn list_interfaces() -> Result<Vec<String>, ServiceError> {
             }
         }
     }
-    
+
     Ok(interfaces)
 }
 
@@ -54,13 +54,13 @@ where
     if req.interface.trim().is_empty() {
         return Err(ServiceError::InvalidInput("interface".to_string()));
     }
-    
+
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
 
     on_progress(10, "Starting scan");
-    
+
     on_progress(50, "Scanning networks");
     let networks = crate::system::scan_wifi_networks_with_timeout_cancel(
         &req.interface,
@@ -78,7 +78,7 @@ where
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
-    
+
     on_progress(100, "Scan complete");
     let count = networks.len();
     Ok(serde_json::json!({
@@ -102,13 +102,13 @@ where
     if req.ssid.trim().is_empty() {
         return Err(ServiceError::InvalidInput("ssid".to_string()));
     }
-    
+
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
 
     on_progress(10, "Connecting to network");
-    
+
     crate::system::connect_wifi_network_with_cancel(
         &req.interface,
         &req.ssid,
@@ -122,7 +122,7 @@ where
             ServiceError::OperationFailed(format!("WiFi connect failed: {}", e))
         }
     })?;
-    
+
     on_progress(100, "Connected");
     Ok(serde_json::json!({
         "interface": req.interface,
@@ -135,7 +135,7 @@ pub fn disconnect(interface: &str) -> Result<bool, ServiceError> {
     if interface.trim().is_empty() {
         return Err(ServiceError::InvalidInput("interface".to_string()));
     }
-    
+
     crate::system::disconnect_wifi_interface(Some(interface.to_string()))
         .map_err(|e| ServiceError::OperationFailed(format!("WiFi disconnect failed: {}", e)))?;
     Ok(true)

@@ -175,8 +175,8 @@ impl App {
         let mode_choice = self.choose_from_list("Pipeline Mode", &mode_options)?;
 
         let indefinite_mode = match mode_choice {
-            Some(0) => false,   // Standard
-            Some(1) => true,    // Indefinite
+            Some(0) => false, // Standard
+            Some(1) => true,  // Indefinite
             _ => {
                 self.go_home()?;
                 return Ok(());
@@ -291,7 +291,10 @@ impl App {
         }
     }
 
-    pub(crate) fn prepare_pipeline_loot_dir(&self, target_dir: &Path) -> Result<(PathBuf, SystemTime)> {
+    pub(crate) fn prepare_pipeline_loot_dir(
+        &self,
+        target_dir: &Path,
+    ) -> Result<(PathBuf, SystemTime)> {
         fs::create_dir_all(target_dir)
             .with_context(|| format!("creating target loot directory {}", target_dir.display()))?;
         let pipelines_root = target_dir.join("pipelines");
@@ -596,7 +599,9 @@ impl App {
         ssid: &str,
         _indefinite_mode: bool,
     ) -> Result<StepOutcome> {
-        use rustyjack_commands::{Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiScanArgs};
+        use rustyjack_commands::{
+            Commands, WifiCommand, WifiDeauthArgs, WifiPmkidArgs, WifiScanArgs,
+        };
 
         match step {
             0 => {
@@ -754,7 +759,11 @@ impl App {
     }
 
     /// Execute a step in the MassCapture pipeline
-    pub(crate) fn execute_mass_capture_step(&mut self, step: usize, interface: &str) -> Result<StepOutcome> {
+    pub(crate) fn execute_mass_capture_step(
+        &mut self,
+        step: usize,
+        interface: &str,
+    ) -> Result<StepOutcome> {
         use rustyjack_commands::{Commands, WifiCommand, WifiPmkidArgs, WifiScanArgs};
 
         match step {
@@ -843,7 +852,11 @@ impl App {
     }
 
     /// Execute a step in the StealthRecon pipeline
-    pub(crate) fn execute_stealth_recon_step(&mut self, step: usize, interface: &str) -> Result<StepOutcome> {
+    pub(crate) fn execute_stealth_recon_step(
+        &mut self,
+        step: usize,
+        interface: &str,
+    ) -> Result<StepOutcome> {
         use rustyjack_commands::{
             Commands, WifiCommand, WifiMacRandomizeArgs, WifiProbeSniffArgs, WifiTxPowerArgs,
         };
@@ -870,12 +883,13 @@ impl App {
                 // Step 2: Minimum TX power
                 #[cfg(target_os = "linux")]
                 {
-                    if let Err(err) = self.core.dispatch(Commands::Wifi(WifiCommand::TxPower(
-                        WifiTxPowerArgs {
-                            interface: interface.to_string(),
-                            dbm: 1,
-                        },
-                    ))) {
+                    if let Err(err) =
+                        self.core
+                            .dispatch(Commands::Wifi(WifiCommand::TxPower(WifiTxPowerArgs {
+                                interface: interface.to_string(),
+                                dbm: 1,
+                            })))
+                    {
                         return Ok(StepOutcome::Skipped(format!(
                             "TX power set failed: {}",
                             err

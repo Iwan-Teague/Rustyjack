@@ -4,18 +4,18 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use rustyjack_ipc::{
-    endpoint_for_body, BlockDevicesResponse, ClientHello, CoreDispatchRequest, CoreDispatchResponse,
-    DaemonError, DiskUsageRequest, DiskUsageResponse, FeatureFlag,
-    GpioDiagnosticsResponse, HealthResponse, HelloAck, HostnameResponse, HotspotClientsResponse,
-    HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse, JobCancelRequest,
+    endpoint_for_body, ActiveInterfaceClearResponse, ActiveInterfaceResponse, BlockDevicesResponse,
+    BridgeCommand, ClientHello, CoreDispatchRequest, CoreDispatchResponse, DaemonError,
+    DiskUsageRequest, DiskUsageResponse, DnsSpoofCommand, EthernetCommand, FeatureFlag,
+    GpioDiagnosticsResponse, HardwareCommand, HealthResponse, HelloAck, HostnameResponse,
+    HotspotClientsResponse, HotspotCommand, HotspotDiagnosticsRequest, HotspotDiagnosticsResponse,
+    HotspotWarningsResponse, InterfaceStatusRequest, InterfaceStatusResponse, JobCancelRequest,
     JobCancelResponse, JobKind, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,
-    JobStatusResponse, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk,
-    OpsConfig, StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse,
-    VersionResponse, ActiveInterfaceClearResponse, ActiveInterfaceResponse, InterfaceStatusRequest,
-    InterfaceStatusResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse, BridgeCommand,
-    DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand, LootCommand, MitmCommand,
-    NotifyCommand, ProcessCommand, ReverseCommand, ScanCommand, StatusCommand, SystemCommand,
-    WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
+    JobStatusResponse, LootCommand, MitmCommand, NotifyCommand, OpsConfig, ProcessCommand,
+    RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk, ReverseCommand,
+    ScanCommand, StatusCommand, StatusResponse, SystemActionResponse, SystemCommand,
+    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
+    WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -128,10 +128,13 @@ impl DaemonClient {
         let mut stream = match UnixStream::connect(&self.config.socket_path).await {
             Ok(stream) => stream,
             Err(err) => {
-                return Err(enhance_socket_connection_error(err, &self.config.socket_path));
+                return Err(enhance_socket_connection_error(
+                    err,
+                    &self.config.socket_path,
+                ));
             }
         };
-        
+
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
             client_name: self.config.client_name.clone(),
@@ -141,9 +144,10 @@ impl DaemonClient {
         let hello_bytes = serde_json::to_vec(&hello)?;
         write_frame(&mut stream, &hello_bytes, MAX_FRAME).await?;
 
-        let ack_bytes = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut stream, MAX_FRAME))
-            .await
-            .context("handshake timed out")??;
+        let ack_bytes =
+            tokio::time::timeout(Duration::from_secs(5), read_frame(&mut stream, MAX_FRAME))
+                .await
+                .context("handshake timed out")??;
         let ack: HelloAck = serde_json::from_slice(&ack_bytes)?;
         if ack.protocol_version != PROTOCOL_VERSION {
             bail!(
@@ -217,13 +221,13 @@ impl DaemonClient {
                 Err(err) => {
                     let should_retry = is_retryable_error(&err);
                     last_error = Some(err);
-                    
+
                     if !should_retry {
                         break;
                     }
-                    
+
                     attempts += 1;
-                    
+
                     if attempts < self.config.max_retries {
                         self.stream = None;
                         if let Err(e) = self.reconnect().await {
@@ -244,8 +248,11 @@ impl DaemonClient {
         req_timeout: Duration,
     ) -> Result<ResponseBody> {
         self.ensure_connected().await?;
-        
-        let stream = self.stream.as_mut().ok_or_else(|| anyhow!("not connected"))?;
+
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| anyhow!("not connected"))?;
         let info = self.info.as_ref().ok_or_else(|| anyhow!("no info"))?;
 
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
@@ -423,10 +430,7 @@ impl DaemonClient {
         }
     }
 
-    pub async fn wifi_capabilities(
-        &mut self,
-        interface: &str,
-    ) -> Result<WifiCapabilitiesResponse> {
+    pub async fn wifi_capabilities(&mut self, interface: &str) -> Result<WifiCapabilitiesResponse> {
         let body = RequestBody::WifiCapabilitiesGet(WifiCapabilitiesRequest {
             interface: interface.to_string(),
         });
@@ -515,7 +519,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn wifi_disconnect(&mut self, interface: &str) -> Result<rustyjack_ipc::WifiDisconnectResponse> {
+    pub async fn wifi_disconnect(
+        &mut self,
+        interface: &str,
+    ) -> Result<rustyjack_ipc::WifiDisconnectResponse> {
         let body = RequestBody::WifiDisconnect(rustyjack_ipc::WifiDisconnectRequest {
             interface: interface.to_string(),
         });
@@ -526,7 +533,11 @@ impl DaemonClient {
         }
     }
 
-    pub async fn wifi_scan_start(&mut self, interface: &str, timeout_ms: u64) -> Result<JobStarted> {
+    pub async fn wifi_scan_start(
+        &mut self,
+        interface: &str,
+        timeout_ms: u64,
+    ) -> Result<JobStarted> {
         let body = RequestBody::WifiScanStart(rustyjack_ipc::WifiScanStartRequest {
             interface: interface.to_string(),
             timeout_ms,
@@ -538,7 +549,13 @@ impl DaemonClient {
         }
     }
 
-    pub async fn wifi_connect_start(&mut self, interface: &str, ssid: &str, psk: Option<String>, timeout_ms: u64) -> Result<JobStarted> {
+    pub async fn wifi_connect_start(
+        &mut self,
+        interface: &str,
+        ssid: &str,
+        psk: Option<String>,
+        timeout_ms: u64,
+    ) -> Result<JobStarted> {
         let body = RequestBody::WifiConnectStart(rustyjack_ipc::WifiConnectStartRequest {
             interface: interface.to_string(),
             ssid: ssid.to_string(),
@@ -618,7 +635,11 @@ impl DaemonClient {
         }
     }
 
-    pub async fn mount_start(&mut self, device: &str, filesystem: Option<String>) -> Result<JobStarted> {
+    pub async fn mount_start(
+        &mut self,
+        device: &str,
+        filesystem: Option<String>,
+    ) -> Result<JobStarted> {
         let body = RequestBody::MountStart(rustyjack_ipc::MountStartRequest {
             device: device.to_string(),
             filesystem,
@@ -659,7 +680,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn ethernet_command(&mut self, command: EthernetCommand) -> Result<CoreDispatchResponse> {
+    pub async fn ethernet_command(
+        &mut self,
+        command: EthernetCommand,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::EthernetCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::EthernetCommand(resp)) => Ok(resp),
@@ -695,7 +719,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn hardware_command(&mut self, command: HardwareCommand) -> Result<CoreDispatchResponse> {
+    pub async fn hardware_command(
+        &mut self,
+        command: HardwareCommand,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::HardwareCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::HardwareCommand(resp)) => Ok(resp),
@@ -704,7 +731,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn dnsspoof_command(&mut self, command: DnsSpoofCommand) -> Result<CoreDispatchResponse> {
+    pub async fn dnsspoof_command(
+        &mut self,
+        command: DnsSpoofCommand,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::DnsSpoofCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::DnsSpoofCommand(resp)) => Ok(resp),
@@ -722,7 +752,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn reverse_command(&mut self, command: ReverseCommand) -> Result<CoreDispatchResponse> {
+    pub async fn reverse_command(
+        &mut self,
+        command: ReverseCommand,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::ReverseCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::ReverseCommand(resp)) => Ok(resp),
@@ -731,7 +764,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn hotspot_command(&mut self, command: HotspotCommand) -> Result<CoreDispatchResponse> {
+    pub async fn hotspot_command(
+        &mut self,
+        command: HotspotCommand,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::HotspotCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::HotspotCommand(resp)) => Ok(resp),
@@ -758,7 +794,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn process_command(&mut self, command: ProcessCommand) -> Result<CoreDispatchResponse> {
+    pub async fn process_command(
+        &mut self,
+        command: ProcessCommand,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::ProcessCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::ProcessCommand(resp)) => Ok(resp),
@@ -767,7 +806,11 @@ impl DaemonClient {
         }
     }
 
-    pub async fn core_dispatch(&mut self, legacy: rustyjack_ipc::LegacyCommand, args: Value) -> Result<CoreDispatchResponse> {
+    pub async fn core_dispatch(
+        &mut self,
+        legacy: rustyjack_ipc::LegacyCommand,
+        args: Value,
+    ) -> Result<CoreDispatchResponse> {
         let body = RequestBody::CoreDispatch(CoreDispatchRequest { legacy, args });
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::CoreDispatch(resp)) => Ok(resp),
@@ -776,7 +819,10 @@ impl DaemonClient {
         }
     }
 
-    pub async fn set_active_interface(&mut self, interface: &str) -> Result<rustyjack_ipc::SetActiveInterfaceResponse> {
+    pub async fn set_active_interface(
+        &mut self,
+        interface: &str,
+    ) -> Result<rustyjack_ipc::SetActiveInterfaceResponse> {
         let body = RequestBody::SetActiveInterface(rustyjack_ipc::SetActiveInterfaceRequest {
             interface: interface.to_string(),
         });
@@ -927,7 +973,9 @@ fn enhance_socket_connection_error(err: std::io::Error, socket_path: &Path) -> a
                 "Failed to connect to daemon socket at {}\n\
                  \n\
                  Error: {} ({})\n",
-                socket_display, err, err.kind()
+                socket_display,
+                err,
+                err.kind()
             );
 
             if socket_exists {

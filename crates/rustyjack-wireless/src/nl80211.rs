@@ -3,11 +3,11 @@
 //! This module provides low-level access to the Linux wireless subsystem
 //! via the nl80211 netlink interface.
 
-use std::fs;
 use crate::error::{Result, WirelessError};
 use crate::netlink_helpers::{netlink_set_interface_down, netlink_set_interface_up};
 use crate::process_helpers::pkill_pattern_force;
 use rustyjack_netlink::{InterfaceMode, WirelessManager};
+use std::fs;
 
 /// nl80211 command types
 #[repr(u8)]
@@ -363,8 +363,9 @@ pub fn set_mac_address(name: &str, mac: &[u8; 6]) -> Result<()> {
     let result = tokio::runtime::Handle::try_current()
         .map(|handle| {
             handle.block_on(async {
-                let mgr = rustyjack_netlink::InterfaceManager::new()
-                    .map_err(|e| WirelessError::Interface(format!("Failed to open netlink: {}", e)))?;
+                let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                    WirelessError::Interface(format!("Failed to open netlink: {}", e))
+                })?;
                 mgr.set_mac_address(name, &mac_str)
                     .await
                     .map_err(|e| WirelessError::Interface(format!("Failed to set MAC: {}", e)))
@@ -374,8 +375,9 @@ pub fn set_mac_address(name: &str, mac: &[u8; 6]) -> Result<()> {
             tokio::runtime::Runtime::new()
                 .map_err(|e| WirelessError::Interface(format!("Failed to create runtime: {}", e)))?
                 .block_on(async {
-                    let mgr = rustyjack_netlink::InterfaceManager::new()
-                        .map_err(|e| WirelessError::Interface(format!("Failed to open netlink: {}", e)))?;
+                    let mgr = rustyjack_netlink::InterfaceManager::new().map_err(|e| {
+                        WirelessError::Interface(format!("Failed to open netlink: {}", e))
+                    })?;
                     mgr.set_mac_address(name, &mac_str)
                         .await
                         .map_err(|e| WirelessError::Interface(format!("Failed to set MAC: {}", e)))

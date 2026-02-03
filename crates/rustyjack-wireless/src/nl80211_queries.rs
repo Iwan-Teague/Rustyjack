@@ -152,8 +152,6 @@ pub fn get_scan_results(interface: &str) -> Result<Vec<ScanResult>> {
     Ok(entries)
 }
 
-
-
 /// Get link status for a connected interface
 pub fn get_link_status(interface: &str) -> Result<LinkStatus> {
     let operstate = std::fs::read_to_string(format!("/sys/class/net/{}/operstate", interface))
@@ -197,7 +195,7 @@ pub struct InterfaceCapabilities {
 pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities> {
     // Check if wireless
     let is_wireless = crate::is_wireless_interface(iface);
-    
+
     let mut caps = InterfaceCapabilities {
         name: iface.to_string(),
         is_wireless,
@@ -211,35 +209,38 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
         driver: None,
         chipset: None,
     };
-    
+
     // Get MAC address
     if let Ok(mac_bytes) = crate::nl80211::get_mac_address(iface) {
         caps.mac_address = Some(format!(
             "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            mac_bytes[0], mac_bytes[1], mac_bytes[2],
-            mac_bytes[3], mac_bytes[4], mac_bytes[5]
+            mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]
         ));
     }
-    
+
     // Check if virtual interface
     let sysfs_path = format!("/sys/class/net/{}", iface);
     let device_path = format!("{}/device", sysfs_path);
     caps.is_physical = std::path::Path::new(&device_path).exists();
-    
+
     if !is_wireless {
         return Ok(caps);
     }
-    
+
     // Query wireless capabilities via WirelessManager
     if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
         // Check supported interface types (monitor, AP, etc.)
         if let Ok(phy_caps) = mgr.get_phy_capabilities(iface) {
             // Check for monitor mode support
-            caps.supports_monitor = phy_caps.supported_modes.contains(&rustyjack_netlink::InterfaceMode::Monitor);
-            
+            caps.supports_monitor = phy_caps
+                .supported_modes
+                .contains(&rustyjack_netlink::InterfaceMode::Monitor);
+
             // Check for AP mode support
-            caps.supports_ap = phy_caps.supported_modes.contains(&rustyjack_netlink::InterfaceMode::AccessPoint);
-            
+            caps.supports_ap = phy_caps
+                .supported_modes
+                .contains(&rustyjack_netlink::InterfaceMode::AccessPoint);
+
             // Check band support from band names
             for band_name in &phy_caps.supported_bands {
                 if band_name.contains("2.4") || band_name.contains("2GHz") {
@@ -249,13 +250,13 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
                 }
             }
         }
-        
+
         // Injection support heuristic:
         // If monitor mode is supported, assume injection is supported
         // (actual injection capability requires testing, but monitor is a good proxy)
         caps.supports_injection = caps.supports_monitor;
     }
-    
+
     // Read driver info from sysfs
     let uevent_path = format!("{}/device/uevent", sysfs_path);
     if let Ok(contents) = std::fs::read_to_string(&uevent_path) {
@@ -265,7 +266,7 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
             }
         }
     }
-    
+
     // Try to identify chipset from driver
     if let Some(ref driver) = caps.driver {
         caps.chipset = match driver.as_str() {
@@ -279,7 +280,7 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
             _ => Some(driver.clone()),
         };
     }
-    
+
     Ok(caps)
 }
 
@@ -321,13 +322,15 @@ pub fn get_station_info(interface: &str) -> Result<Vec<StationInfo>> {
     Ok(stations)
 }
 
-
 /// Get interface information
 pub fn get_interface_info(interface: &str) -> Result<InterfaceInfo> {
     let mut mgr = rustyjack_netlink::WirelessManager::new()
         .map_err(|e| WirelessError::System(format!("Failed to open nl80211: {}", e)))?;
     let info = mgr.get_interface_info(interface).map_err(|e| {
-        WirelessError::System(format!("Failed to get interface info for {}: {}", interface, e))
+        WirelessError::System(format!(
+            "Failed to get interface info for {}: {}",
+            interface, e
+        ))
     })?;
 
     let addr = {

@@ -316,9 +316,9 @@ impl App {
                 )
             };
             if hostname_randomization {
-                if let Err(err) =
-                    self.core
-                        .dispatch(Commands::System(SystemCommand::RandomizeHostname))
+                if let Err(err) = self
+                    .core
+                    .dispatch(Commands::System(SystemCommand::RandomizeHostname))
                 {
                     tracing::warn!("Hostname randomization failed: {:#}", err);
                 }

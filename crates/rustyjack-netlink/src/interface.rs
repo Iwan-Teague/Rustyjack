@@ -5,11 +5,11 @@
 
 use crate::error::{NetlinkError, Result};
 use futures::stream::TryStreamExt;
-use tracing::debug;
 use netlink_packet_route::address::AddressAttribute;
 use netlink_packet_route::link::{LinkAttribute, LinkFlag};
 use rtnetlink::{new_connection, Handle};
 use std::net::IpAddr;
+use tracing::debug;
 
 /// Manager for network interface operations (bring up/down, addresses, MAC queries).
 ///

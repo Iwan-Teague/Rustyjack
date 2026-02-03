@@ -30,10 +30,12 @@ pub fn run_scan<F>(
 where
     F: FnMut(u8, &str),
 {
-    let ports = req
-        .ports
-        .as_ref()
-        .map(|list| list.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(","));
+    let ports = req.ports.as_ref().map(|list| {
+        list.iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
     let args = ScanRunArgs {
         label: "scan".to_string(),
         nmap_args: Vec::new(),

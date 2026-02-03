@@ -137,11 +137,9 @@ fn netlink_ifindex(interface: &str) -> Result<u32> {
         handle.block_on(async {
             let mgr = rustyjack_netlink::InterfaceManager::new()
                 .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
-            mgr.get_interface_index(interface)
-                .await
-                .map_err(|e| {
-                    WirelessError::System(format!("Failed to get ifindex for {}: {}", interface, e))
-                })
+            mgr.get_interface_index(interface).await.map_err(|e| {
+                WirelessError::System(format!("Failed to get ifindex for {}: {}", interface, e))
+            })
         })
     };
 
@@ -152,14 +150,9 @@ fn netlink_ifindex(interface: &str) -> Result<u32> {
             .block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
-                mgr.get_interface_index(interface)
-                    .await
-                    .map_err(|e| {
-                        WirelessError::System(format!(
-                            "Failed to get ifindex for {}: {}",
-                            interface, e
-                        ))
-                    })
+                mgr.get_interface_index(interface).await.map_err(|e| {
+                    WirelessError::System(format!("Failed to get ifindex for {}: {}", interface, e))
+                })
             }),
     }
 }
@@ -171,14 +164,12 @@ fn netlink_ipv4_addrs(interface: &str) -> Result<Vec<rustyjack_netlink::AddressI
         handle.block_on(async {
             let mgr = rustyjack_netlink::InterfaceManager::new()
                 .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
-            mgr.get_ipv4_addresses(interface)
-                .await
-                .map_err(|e| {
-                    WirelessError::System(format!(
-                        "Failed to read IPv4 addresses for {}: {}",
-                        interface, e
-                    ))
-                })
+            mgr.get_ipv4_addresses(interface).await.map_err(|e| {
+                WirelessError::System(format!(
+                    "Failed to read IPv4 addresses for {}: {}",
+                    interface, e
+                ))
+            })
         })
     };
 
@@ -189,14 +180,12 @@ fn netlink_ipv4_addrs(interface: &str) -> Result<Vec<rustyjack_netlink::AddressI
             .block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| WirelessError::System(format!("Failed to open netlink: {}", e)))?;
-                mgr.get_ipv4_addresses(interface)
-                    .await
-                    .map_err(|e| {
-                        WirelessError::System(format!(
-                            "Failed to read IPv4 addresses for {}: {}",
-                            interface, e
-                        ))
-                    })
+                mgr.get_ipv4_addresses(interface).await.map_err(|e| {
+                    WirelessError::System(format!(
+                        "Failed to read IPv4 addresses for {}: {}",
+                        interface, e
+                    ))
+                })
             }),
     }
 }
@@ -361,9 +350,9 @@ fn perform_active_arp_scan(
     interface: &str,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<()> {
-    let network: Ipv4Net = subnet.parse().map_err(|e| {
-        WirelessError::System(format!("Invalid subnet {}: {}", subnet, e))
-    })?;
+    let network: Ipv4Net = subnet
+        .parse()
+        .map_err(|e| WirelessError::System(format!("Invalid subnet {}: {}", subnet, e)))?;
 
     let timeout = Duration::from_secs(1);
     check_cancel(cancel)?;
@@ -401,11 +390,7 @@ fn run_arp_discovery(
             .block_on(async {
                 if let Some(flag) = cancel {
                     rustyjack_ethernet::discover_hosts_arp_cancellable(
-                        interface,
-                        network,
-                        None,
-                        timeout,
-                        flag,
+                        interface, network, None, timeout, flag,
                     )
                     .await
                     .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
@@ -426,11 +411,7 @@ fn run_arp_discovery(
             rt.block_on(async {
                 if let Some(flag) = cancel {
                     rustyjack_ethernet::discover_hosts_arp_cancellable(
-                        interface,
-                        network,
-                        None,
-                        timeout,
-                        flag,
+                        interface, network, None, timeout, flag,
                     )
                     .await
                     .map_err(|e| WirelessError::System(format!("ARP discovery failed: {}", e)))
@@ -881,14 +862,7 @@ pub fn capture_dns_queries_cancellable(
 
     while start.elapsed() < duration {
         check_cancel(cancel)?;
-        let n = unsafe {
-            libc::recv(
-                fd,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-                0,
-            )
-        };
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
 
         if n < 0 {
             let err = io::Error::last_os_error();

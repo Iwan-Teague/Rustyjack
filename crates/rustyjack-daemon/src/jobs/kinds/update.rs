@@ -17,7 +17,11 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     if cancel.is_cancelled() {
-        return Err(DaemonError::new(ErrorCode::Cancelled, "Job cancelled", false));
+        return Err(DaemonError::new(
+            ErrorCode::Cancelled,
+            "Job cancelled",
+            false,
+        ));
     }
 
     let url = req.url.trim();

@@ -30,7 +30,8 @@ pub fn portal_running() -> bool {
             if let Some(handle) = handle {
                 let _ = handle.thread.join();
                 if handle.dnat_installed {
-                    let _ = remove_dnat_rule(&handle.interface, handle.listen_ip, handle.listen_port);
+                    let _ =
+                        remove_dnat_rule(&handle.interface, handle.listen_ip, handle.listen_port);
                 }
             }
             return false;
@@ -240,7 +241,11 @@ fn install_dnat(_cfg: &PortalConfig) -> Result<bool> {
 }
 
 #[cfg(target_os = "linux")]
-fn remove_dnat_rule(interface: &str, listen_ip: std::net::Ipv4Addr, listen_port: u16) -> Result<()> {
+fn remove_dnat_rule(
+    interface: &str,
+    listen_ip: std::net::Ipv4Addr,
+    listen_port: u16,
+) -> Result<()> {
     use rustyjack_netlink::IptablesManager;
 
     if let Ok(ipt) = IptablesManager::new() {
@@ -252,6 +257,10 @@ fn remove_dnat_rule(interface: &str, listen_ip: std::net::Ipv4Addr, listen_port:
 }
 
 #[cfg(not(target_os = "linux"))]
-fn remove_dnat_rule(_interface: &str, _listen_ip: std::net::Ipv4Addr, _listen_port: u16) -> Result<()> {
+fn remove_dnat_rule(
+    _interface: &str,
+    _listen_ip: std::net::Ipv4Addr,
+    _listen_port: u16,
+) -> Result<()> {
     Ok(())
 }

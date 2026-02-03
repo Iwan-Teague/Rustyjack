@@ -5,13 +5,21 @@ use crate::ui::layout::MENU_VISIBLE_ITEMS;
 use super::state::{App, ButtonAction};
 
 impl App {
-    pub(crate) fn choose_from_list(&mut self, title: &str, items: &[String]) -> Result<Option<usize>> {
+    pub(crate) fn choose_from_list(
+        &mut self,
+        title: &str,
+        items: &[String],
+    ) -> Result<Option<usize>> {
         // Reuse the menu-style selector so options are visible as a list.
         self.choose_from_menu(title, items)
     }
 
     /// Show a paginated menu (styled like the main menu) and return index
-    pub(crate) fn choose_from_menu(&mut self, title: &str, items: &[String]) -> Result<Option<usize>> {
+    pub(crate) fn choose_from_menu(
+        &mut self,
+        title: &str,
+        items: &[String],
+    ) -> Result<Option<usize>> {
         if items.is_empty() {
             return Ok(None);
         }

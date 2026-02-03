@@ -9,7 +9,11 @@ use crate::{types::InterfaceSummary, util::shorten_for_display};
 use super::state::{App, ButtonAction};
 
 impl App {
-    pub(crate) fn choose_interface_name(&mut self, title: &str, names: &[String]) -> Result<Option<String>> {
+    pub(crate) fn choose_interface_name(
+        &mut self,
+        title: &str,
+        names: &[String],
+    ) -> Result<Option<String>> {
         if names.is_empty() {
             self.show_message("Interfaces", ["No interfaces detected"])?;
             return Ok(None);
@@ -142,7 +146,10 @@ impl App {
                                     ],
                                 )?;
                                 if let Err(err) = self.core.cancel_job(job_id) {
-                                    self.show_error_dialog("Cancel failed: Interface selection", &err)?;
+                                    self.show_error_dialog(
+                                        "Cancel failed: Interface selection",
+                                        &err,
+                                    )?;
                                     return Ok(None);
                                 }
 
@@ -151,7 +158,9 @@ impl App {
                                     let st = self.core.job_status(job_id)?;
                                     if matches!(
                                         st.state,
-                                        JobState::Cancelled | JobState::Failed | JobState::Completed
+                                        JobState::Cancelled
+                                            | JobState::Failed
+                                            | JobState::Completed
                                     ) {
                                         break;
                                     }
@@ -238,23 +247,23 @@ impl App {
 
         self.show_message("Interface Set", lines.iter().map(|s| s.as_str()))
     }
-    
+
     pub(crate) fn select_active_interface(&mut self) -> Result<()> {
         // List all interfaces via daemon RPC
         let data = self.core.wifi_interfaces()?;
         let ifaces: rustyjack_ipc::WifiInterfacesResponse = serde_json::from_value(data)?;
-        
+
         if ifaces.interfaces.is_empty() {
             return self.show_message("Interfaces", ["No interfaces found"]);
         }
-        
+
         // Build menu labels (just names since daemon doesn't provide full details yet)
         let labels = ifaces.interfaces.clone();
-        
+
         // Let user select
         if let Some(idx) = self.choose_from_menu("Select Interface", &labels)? {
             let selected_name = &ifaces.interfaces[idx];
-            
+
             // Confirm selection with dialog
             let overlay = self.stats.snapshot();
             let content = vec![
@@ -268,7 +277,7 @@ impl App {
                 "KEY2 = Cancel".to_string(),
             ];
             self.display.draw_dialog(&content, &overlay)?;
-            
+
             loop {
                 let button = self.buttons.wait_for_press()?;
                 match self.map_button(button) {
@@ -289,7 +298,7 @@ impl App {
                     _ => {}
                 }
             }
-            
+
             // Call set-active-interface RPC
             self.show_progress(
                 "Setting Interface",
@@ -310,27 +319,27 @@ impl App {
             Ok(())
         }
     }
-    
+
     pub(crate) fn view_interface_status(&mut self) -> Result<()> {
         // Get current state - daemon only returns interface names
         let data = self.core.wifi_interfaces()?;
         let ifaces: rustyjack_ipc::WifiInterfacesResponse = serde_json::from_value(data)?;
-        
+
         // Show available interfaces
         let mut status_lines = vec!["Available Interfaces:".to_string(), "".to_string()];
-        
+
         for iface_name in &ifaces.interfaces {
             status_lines.push(format!("  {}", iface_name));
         }
-        
+
         if ifaces.interfaces.is_empty() {
             status_lines.push("  (none found)".to_string());
         }
-        
+
         status_lines.push("".to_string());
         status_lines.push("Only one interface should".to_string());
         status_lines.push("be active at a time.".to_string());
-        
+
         self.show_message("Interface Status", status_lines)
     }
 }

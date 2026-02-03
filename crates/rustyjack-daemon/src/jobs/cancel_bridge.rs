@@ -13,13 +13,13 @@ pub fn create_cancel_flag(token: &CancellationToken) -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     let flag_clone = flag.clone();
     let token_clone = token.clone();
-    
+
     // Spawn task to monitor cancellation
     tokio::spawn(async move {
         token_clone.cancelled().await;
         flag_clone.store(true, Ordering::Relaxed);
     });
-    
+
     flag
 }
 
@@ -32,7 +32,7 @@ mod tests {
     async fn test_cancel_flag_not_cancelled() {
         let token = CancellationToken::new();
         let flag = create_cancel_flag(&token);
-        
+
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(!flag.load(Ordering::Relaxed));
     }
@@ -41,10 +41,10 @@ mod tests {
     async fn test_cancel_flag_cancelled() {
         let token = CancellationToken::new();
         let flag = create_cancel_flag(&token);
-        
+
         token.cancel();
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         assert!(flag.load(Ordering::Relaxed));
     }
 
@@ -52,10 +52,10 @@ mod tests {
     async fn test_cancel_flag_immediate() {
         let token = CancellationToken::new();
         token.cancel();
-        
+
         let flag = create_cancel_flag(&token);
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         assert!(flag.load(Ordering::Relaxed));
     }
 }

@@ -10,7 +10,10 @@ fn main() {
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
         // Avoid panic if a global subscriber is already set (e.g., accidental double-start).
-        tracing_subscriber::fmt().with_env_filter(filter).try_init().ok();
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .try_init()
+            .ok();
     }
     let cli = Cli::parse();
     let format = if cli.json {

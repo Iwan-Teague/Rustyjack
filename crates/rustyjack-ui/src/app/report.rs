@@ -229,7 +229,10 @@ impl App {
             .join(", ")
     }
 
-    pub(crate) fn format_pipeline_lines(&self, pipeline: &HashMap<String, PipelineStats>) -> Vec<String> {
+    pub(crate) fn format_pipeline_lines(
+        &self,
+        pipeline: &HashMap<String, PipelineStats>,
+    ) -> Vec<String> {
         if pipeline.is_empty() {
             return Vec::new();
         }
@@ -467,7 +470,10 @@ impl App {
         lines.push(String::new());
     }
 
-    pub(crate) fn generate_network_report(&mut self, network: &str) -> Result<(PathBuf, Vec<String>)> {
+    pub(crate) fn generate_network_report(
+        &mut self,
+        network: &str,
+    ) -> Result<(PathBuf, Vec<String>)> {
         let reports_root = self.root.join("loot").join("reports");
         fs::create_dir_all(&reports_root).ok();
         let reports_dir = reports_root.join(network);
@@ -980,7 +986,10 @@ impl App {
         count
     }
 
-    pub(crate) fn read_inventory_summary(&self, dir: &Path) -> Result<Option<(usize, Vec<String>)>> {
+    pub(crate) fn read_inventory_summary(
+        &self,
+        dir: &Path,
+    ) -> Result<Option<(usize, Vec<String>)>> {
         if !dir.exists() {
             return Ok(None);
         }
@@ -1128,7 +1137,11 @@ impl App {
         Ok((ports, banners))
     }
 
-    pub(crate) fn collect_portscan_candidates(&self, network: &str, eth_dir: &Path) -> Vec<PathBuf> {
+    pub(crate) fn collect_portscan_candidates(
+        &self,
+        network: &str,
+        eth_dir: &Path,
+    ) -> Vec<PathBuf> {
         let mut candidates = Vec::new();
         if eth_dir.exists() {
             if let Ok(entries) = fs::read_dir(eth_dir) {

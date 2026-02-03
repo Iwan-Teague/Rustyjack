@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use rustyjack_netlink::{
-    AccessPoint, ApConfig, ApSecurity, DhcpConfig, DhcpServer, DhcpServerLease, DnsConfig,
-    DnsRule, DnsServer, InterfaceMode, IptablesManager,
+    AccessPoint, ApConfig, ApSecurity, DhcpConfig, DhcpServer, DhcpServerLease, DnsConfig, DnsRule,
+    DnsServer, InterfaceMode, IptablesManager,
 };
 
 use crate::error::{Result, WirelessError};
@@ -250,8 +250,7 @@ impl Drop for HotspotCleanup {
 
         if self.nat_configured && self.upstream_ready && !self.upstream_interface.is_empty() {
             if let Ok(ipt) = IptablesManager::new() {
-                let _ =
-                    ipt.teardown_nat_forwarding(&self.ap_interface, &self.upstream_interface);
+                let _ = ipt.teardown_nat_forwarding(&self.ap_interface, &self.upstream_interface);
             }
         }
 
@@ -338,7 +337,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
 
     // Clean up any existing AP/DHCP/DNS from previous run
     debug!("[HOTSPOT] Cleaning up any existing hotspot services...");
-    
+
     // Stop any existing Access Point in our global
     if let Some(ap_mutex) = ACCESS_POINT.get() {
         if let Ok(mut guard) = ap_mutex.lock() {
@@ -352,7 +351,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
             }
         }
     }
-    
+
     // Ensure previous instances are stopped to avoid dhcp bind failures
     let _ = pkill_pattern("hostapd");
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -496,7 +495,10 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         }
     }
 
-    info!("[HOTSPOT] Adding IP address {}/24 via netlink...", AP_GATEWAY);
+    info!(
+        "[HOTSPOT] Adding IP address {}/24 via netlink...",
+        AP_GATEWAY
+    );
     netlink_add_address(&config.ap_interface, IpAddr::V4(gateway_ip), 24)?;
 
     info!("[HOTSPOT] Bringing interface up via netlink...");
@@ -556,9 +558,7 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
     let hw_mode = select_hw_mode(&config.ap_interface, config.channel);
     info!(
         "Hotspot hardware mode selected: iface={} channel={} hw_mode={:?}",
-        config.ap_interface,
-        config.channel,
-        hw_mode
+        config.ap_interface, config.channel, hw_mode
     );
 
     let ap_config = ApConfig {
@@ -608,10 +608,9 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
                 .and_then(|rt| {
                     rt.block_on(async {
                         cleanup.ap_started = true;
-                        let ap = cleanup
-                            .ap
-                            .as_mut()
-                            .ok_or_else(|| WirelessError::System("AP not initialized".to_string()))?;
+                        let ap = cleanup.ap.as_mut().ok_or_else(|| {
+                            WirelessError::System("AP not initialized".to_string())
+                        })?;
                         ap.start()
                             .await
                             .map_err(|e| WirelessError::System(format!("AP start failed: {}", e)))
@@ -686,12 +685,10 @@ pub fn start_hotspot(config: HotspotConfig) -> Result<HotspotState> {
         .take_ap()
         .ok_or_else(|| WirelessError::System("AP missing after start".to_string()))?;
     let ap_lock = ACCESS_POINT.get_or_init(|| Mutex::new(None));
-    let mut guard = ap_lock
-        .lock()
-        .map_err(|_| {
-            stop_ap_best_effort(&mut ap);
-            WirelessError::System("AP mutex poisoned".to_string())
-        })?;
+    let mut guard = ap_lock.lock().map_err(|_| {
+        stop_ap_best_effort(&mut ap);
+        WirelessError::System("AP mutex poisoned".to_string())
+    })?;
     *guard = Some(ap);
     cleanup.disarm();
 
@@ -830,9 +827,9 @@ pub fn hotspot_disconnect_client(mac: &str) -> Result<()> {
 
 /// Replace the hotspot DHCP denylist with the provided MACs.
 pub fn hotspot_set_blacklist(macs: &[String]) -> Result<()> {
-    let dhcp_mutex = DHCP_SERVER.get().ok_or_else(|| {
-        WirelessError::System("Hotspot DHCP server not running".to_string())
-    })?;
+    let dhcp_mutex = DHCP_SERVER
+        .get()
+        .ok_or_else(|| WirelessError::System("Hotspot DHCP server not running".to_string()))?;
 
     let mut parsed = HashSet::new();
     for mac in macs {
@@ -851,9 +848,9 @@ pub fn hotspot_set_blacklist(macs: &[String]) -> Result<()> {
     let guard = dhcp_mutex
         .lock()
         .map_err(|_| WirelessError::System("DHCP server mutex poisoned".to_string()))?;
-    let runtime = guard.as_ref().ok_or_else(|| {
-        WirelessError::System("Hotspot DHCP server not running".to_string())
-    })?;
+    let runtime = guard
+        .as_ref()
+        .ok_or_else(|| WirelessError::System("Hotspot DHCP server not running".to_string()))?;
     if let Ok(mut denylist) = runtime.denylist.lock() {
         denylist.clear();
         denylist.extend(parsed.iter().copied());
@@ -990,9 +987,7 @@ fn start_dhcp_server(interface: &str, gateway_ip: Ipv4Addr) -> Result<()> {
         .map_err(|e| WirelessError::System(format!("Failed to start DHCP server: {}", e)))?;
     info!(
         "DHCP server bound on {} offering {}-{}",
-        interface,
-        dhcp_cfg.range_start,
-        dhcp_cfg.range_end
+        interface, dhcp_cfg.range_start, dhcp_cfg.range_end
     );
 
     let handle = std::thread::spawn(move || {
@@ -1137,12 +1132,14 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
             let dhcp_result = tokio::runtime::Handle::try_current()
                 .map(|handle| {
                     handle.block_on(async {
-                        rustyjack_netlink::dhcp_acquire(interface, None).await.map_err(|e| {
-                            WirelessError::System(format!(
-                                "DHCP acquire failed on {}: {}",
-                                interface, e
-                            ))
-                        })
+                        rustyjack_netlink::dhcp_acquire(interface, None)
+                            .await
+                            .map_err(|e| {
+                                WirelessError::System(format!(
+                                    "DHCP acquire failed on {}: {}",
+                                    interface, e
+                                ))
+                            })
                     })
                 })
                 .unwrap_or_else(|_| {
@@ -1154,12 +1151,14 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
                             ))
                         })?
                         .block_on(async {
-                            rustyjack_netlink::dhcp_acquire(interface, None).await.map_err(|e| {
-                                WirelessError::System(format!(
-                                    "DHCP acquire failed on {}: {}",
-                                    interface, e
-                                ))
-                            })
+                            rustyjack_netlink::dhcp_acquire(interface, None)
+                                .await
+                                .map_err(|e| {
+                                    WirelessError::System(format!(
+                                        "DHCP acquire failed on {}: {}",
+                                        interface, e
+                                    ))
+                                })
                         })
                 });
 
@@ -1167,10 +1166,7 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
                 Ok(lease) => {
                     info!(
                         "Upstream {} DHCP lease: {}/{} gateway={:?}",
-                        interface,
-                        lease.address,
-                        lease.prefix_len,
-                        lease.gateway
+                        interface, lease.address, lease.prefix_len, lease.gateway
                     );
                     has_ipv4 = true;
                 }
@@ -1187,10 +1183,7 @@ fn ensure_upstream_ready(interface: &str) -> Result<()> {
                 .find(|i| i.name == interface)
                 .cloned()
                 .ok_or_else(|| {
-                    WirelessError::Interface(format!(
-                        "Upstream interface {} not found",
-                        interface
-                    ))
+                    WirelessError::Interface(format!("Upstream interface {} not found", interface))
                 })?;
             has_ipv4 = iface_info
                 .addresses

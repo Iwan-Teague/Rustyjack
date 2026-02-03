@@ -329,7 +329,10 @@ impl App {
         Ok(resp)
     }
 
-    pub(crate) fn fetch_wifi_status(&mut self, interface: Option<String>) -> Result<WifiStatusOverview> {
+    pub(crate) fn fetch_wifi_status(
+        &mut self,
+        interface: Option<String>,
+    ) -> Result<WifiStatusOverview> {
         let args = WifiStatusArgs { interface };
         let (_, data) = self
             .core

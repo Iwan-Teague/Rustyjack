@@ -19,17 +19,15 @@ pub fn run_retention(root: &Path, cfg: &LoggingConfig) -> Result<()> {
     let mut entries = collect_log_files(&log_root)?;
 
     let cutoff = SystemTime::now()
-        .checked_sub(Duration::from_secs(cfg.keep_days.saturating_mul(24 * 60 * 60)))
+        .checked_sub(Duration::from_secs(
+            cfg.keep_days.saturating_mul(24 * 60 * 60),
+        ))
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
     entries.retain(|entry| {
         if entry.modified < cutoff {
             if let Err(err) = fs::remove_file(&entry.path) {
-                tracing::warn!(
-                    "Failed to remove old log {}: {}",
-                    entry.path.display(),
-                    err
-                );
+                tracing::warn!("Failed to remove old log {}: {}", entry.path.display(), err);
                 true
             } else {
                 false
@@ -94,8 +92,7 @@ fn collect_dir(dir: &Path, out: &mut Vec<LogFile>) -> Result<()> {
             continue;
         }
 
-        let metadata = fs::metadata(&path)
-            .with_context(|| format!("stat {}", path.display()))?;
+        let metadata = fs::metadata(&path).with_context(|| format!("stat {}", path.display()))?;
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         out.push(LogFile {
             path,

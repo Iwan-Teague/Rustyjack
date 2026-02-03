@@ -1,6 +1,6 @@
+use rustyjack_commands::Commands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use rustyjack_commands::Commands;
 
 use crate::DaemonError;
 

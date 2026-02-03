@@ -2,7 +2,9 @@ use std::{env, fs};
 
 use anyhow::{bail, Result};
 
-use rustyjack_commands::{Commands, DiscordCommand, DiscordSendArgs, HardwareCommand, NotifyCommand};
+use rustyjack_commands::{
+    Commands, DiscordCommand, DiscordSendArgs, HardwareCommand, NotifyCommand,
+};
 use rustyjack_encryption::clear_encryption_key;
 use zeroize::Zeroize;
 
@@ -306,7 +308,10 @@ impl App {
     }
 
     pub(crate) fn show_hardware_detect(&mut self) -> Result<()> {
-        self.show_progress("Hardware Sanity Check", ["Detecting interfaces...", "Please wait"])?;
+        self.show_progress(
+            "Hardware Sanity Check",
+            ["Detecting interfaces...", "Please wait"],
+        )?;
 
         match self
             .core
@@ -392,7 +397,10 @@ impl App {
                 summary_lines.push("".to_string());
                 summary_lines.push("Select to set active".to_string());
 
-                self.show_message("Hardware Sanity Check", summary_lines.iter().map(|s| s.as_str()))?;
+                self.show_message(
+                    "Hardware Sanity Check",
+                    summary_lines.iter().map(|s| s.as_str()),
+                )?;
 
                 if sanity_overall != "OK" {
                     let mut issue_lines = vec!["Hardware Sanity".to_string()];
@@ -441,10 +449,8 @@ impl App {
                         if let Some(name) = selected.get("name").and_then(|v| v.as_str()) {
                             self.config.settings.active_network_interface = name.to_string();
                             self.save_config()?;
-                            return self.show_message(
-                                "Active Interface",
-                                [format!("Set to: {}", name)],
-                            );
+                            return self
+                                .show_message("Active Interface", [format!("Set to: {}", name)]);
                         }
                     }
                 }

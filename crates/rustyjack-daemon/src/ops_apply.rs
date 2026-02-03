@@ -10,10 +10,12 @@ use crate::state::DaemonState;
 use rustyjack_ipc::JobKind;
 
 use rustyjack_core::mount::{list_mounts_under, unmount, MountPolicy, UnmountRequest};
-use rustyjack_core::system::ops::{InterfaceSummary, NetOps, RealNetOps};
-use rustyjack_core::system::{enable_ip_forwarding, stop_arp_spoof, stop_dns_spoof, stop_pcap_capture};
-use rustyjack_core::system::PreferenceManager;
 use rustyjack_core::netlink_helpers::{netlink_bridge_delete, netlink_set_interface_down};
+use rustyjack_core::system::ops::{InterfaceSummary, NetOps, RealNetOps};
+use rustyjack_core::system::PreferenceManager;
+use rustyjack_core::system::{
+    enable_ip_forwarding, stop_arp_spoof, stop_dns_spoof, stop_pcap_capture,
+};
 use rustyjack_netlink::{IptablesManager, Table};
 
 pub async fn apply_ops_delta(
@@ -27,7 +29,9 @@ pub async fn apply_ops_delta(
     if previous.wifi_ops && !next.wifi_ops {
         state
             .jobs
-            .cancel_where(|kind| matches!(kind, JobKind::WifiScan { .. } | JobKind::WifiConnect { .. }))
+            .cancel_where(|kind| {
+                matches!(kind, JobKind::WifiScan { .. } | JobKind::WifiConnect { .. })
+            })
             .await;
         if let Err(err) = disable_wireless_interfaces(&net_ops) {
             errors.push(format!("disable wifi: {err}"));
@@ -79,7 +83,12 @@ pub async fn apply_ops_delta(
     if previous.storage_ops && !next.storage_ops {
         state
             .jobs
-            .cancel_where(|kind| matches!(kind, JobKind::MountStart { .. } | JobKind::UnmountStart { .. }))
+            .cancel_where(|kind| {
+                matches!(
+                    kind,
+                    JobKind::MountStart { .. } | JobKind::UnmountStart { .. }
+                )
+            })
             .await;
         if let Err(err) = unmount_all(&state.config.root_path) {
             errors.push(format!("unmount storage: {err}"));
@@ -134,8 +143,7 @@ pub async fn apply_ops_delta(
 pub fn write_ops_override(root: &Path, ops: OpsConfig) -> Result<PathBuf> {
     let path = root.join(OPS_OVERRIDE_FILENAME);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let payload = serde_json::to_vec_pretty(&ops).context("serialize ops override")?;
     atomic_write(&path, &payload)?;

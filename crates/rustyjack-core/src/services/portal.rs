@@ -30,22 +30,22 @@ where
     if req.port == 0 {
         return Err(ServiceError::InvalidInput("port".to_string()));
     }
-    
+
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
 
     on_progress(10, "Starting captive portal");
-    
+
     #[cfg(target_os = "linux")]
     {
         use rustyjack_portal;
         use std::net::Ipv4Addr;
         use std::path::PathBuf;
         use std::time::Duration;
-        
+
         on_progress(50, "Configuring portal");
-        
+
         let listen_ip = match crate::system::detect_interface(Some(req.interface.clone())) {
             Ok(info) => info.address,
             Err(_) => Ipv4Addr::new(0, 0, 0, 0),
@@ -63,7 +63,7 @@ where
             dnat_mode: true,
             bind_to_device: true,
         };
-        
+
         match rustyjack_portal::start_portal(config) {
             Ok(_) => {
                 if crate::cancel::check_cancel(cancel).is_err() {
@@ -78,7 +78,7 @@ where
                     interface: req.interface.clone(),
                     port: req.port,
                 });
-                
+
                 on_progress(100, "Portal started");
                 Ok(serde_json::json!({
                     "interface": req.interface,
@@ -87,14 +87,19 @@ where
                     "started": true
                 }))
             }
-            Err(e) => Err(ServiceError::OperationFailed(format!("Portal start failed: {}", e))),
+            Err(e) => Err(ServiceError::OperationFailed(format!(
+                "Portal start failed: {}",
+                e
+            ))),
         }
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (req, on_progress);
-        Err(ServiceError::External("Portal not supported on this platform".to_string()))
+        Err(ServiceError::External(
+            "Portal not supported on this platform".to_string(),
+        ))
     }
 }
 
@@ -102,26 +107,31 @@ pub fn stop() -> Result<bool, ServiceError> {
     #[cfg(target_os = "linux")]
     {
         use rustyjack_portal;
-        
+
         match rustyjack_portal::stop_portal() {
             Ok(_) => {
                 let mut state = PORTAL_STATE.lock().unwrap();
                 *state = None;
                 Ok(true)
             }
-            Err(e) => Err(ServiceError::OperationFailed(format!("Portal stop failed: {}", e))),
+            Err(e) => Err(ServiceError::OperationFailed(format!(
+                "Portal stop failed: {}",
+                e
+            ))),
         }
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
-        Err(ServiceError::External("Portal not supported on this platform".to_string()))
+        Err(ServiceError::External(
+            "Portal not supported on this platform".to_string(),
+        ))
     }
 }
 
 pub fn status() -> Result<Value, ServiceError> {
     let state = PORTAL_STATE.lock().unwrap();
-    
+
     if let Some(ref portal) = *state {
         Ok(serde_json::json!({
             "running": true,

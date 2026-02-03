@@ -9,8 +9,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(target_os = "linux")]
 use tokio::io::unix::AsyncFd;
 
-use crate::state::DaemonState;
 use crate::ops::OpsConfig;
+use crate::state::DaemonState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnforcementSnapshot {
@@ -89,13 +89,14 @@ fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
 #[cfg(target_os = "linux")]
 pub async fn run_netlink_watcher(state: Arc<DaemonState>) -> anyhow::Result<()> {
     info!("Starting netlink watcher for hardware isolation enforcement");
-    
+
     let last_event: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-    let enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>> = Arc::new(StdMutex::new(None));
+    let enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>> =
+        Arc::new(StdMutex::new(None));
     let debounce_duration = Duration::from_millis(250);
 
     start_periodic_enforcement(Arc::clone(&state), Arc::clone(&enforcement_snapshot));
-    
+
     loop {
         match watch_netlink_events(
             Arc::clone(&state),
@@ -115,7 +116,7 @@ pub async fn run_netlink_watcher(state: Arc<DaemonState>) -> anyhow::Result<()> 
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -187,7 +188,7 @@ async fn schedule_enforcement(
     enforcement_snapshot: Arc<StdMutex<Option<EnforcementSnapshot>>>,
 ) {
     let now = Instant::now();
-    
+
     {
         let mut last = last_event.lock().await;
         if let Some(prev) = *last {
@@ -198,13 +199,13 @@ async fn schedule_enforcement(
         }
         *last = Some(now);
     }
-    
+
     let state_clone = Arc::clone(&state);
     tokio::spawn(async move {
         sleep(debounce_duration).await;
-        
+
         let _lock = state_clone.locks.acquire_uplink().await;
-        
+
         let root = state_clone.config.root_path.clone();
         let ops_cfg = *state_clone.ops_runtime.read().await;
         let snapshot = Arc::clone(&enforcement_snapshot);
@@ -259,7 +260,10 @@ fn log_enforcement_outcome(
     let changed = guard.as_ref().map(|prev| prev != &current).unwrap_or(true);
 
     if changed {
-        info!("{}: allowed={:?}, blocked={:?}", label, current.allowed, current.blocked);
+        info!(
+            "{}: allowed={:?}, blocked={:?}",
+            label, current.allowed, current.blocked
+        );
         *guard = Some(current);
     }
 
@@ -292,7 +296,9 @@ fn run_ops_enforcement(
     let interfaces = ops.list_interfaces()?;
     let allowed: Vec<String> = interfaces
         .into_iter()
-        .filter(|iface| (iface.is_wireless && ops_cfg.wifi_ops) || (!iface.is_wireless && ops_cfg.eth_ops))
+        .filter(|iface| {
+            (iface.is_wireless && ops_cfg.wifi_ops) || (!iface.is_wireless && ops_cfg.eth_ops)
+        })
         .map(|iface| iface.name)
         .collect();
 

@@ -1437,8 +1437,7 @@ fn subnet_mask_to_prefix(mask: Ipv4Addr) -> u8 {
 
 #[allow(dead_code)]
 fn is_addr_in_use(err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::AddrInUse
-        || err.raw_os_error() == Some(libc::EADDRINUSE)
+    err.kind() == io::ErrorKind::AddrInUse || err.raw_os_error() == Some(libc::EADDRINUSE)
 }
 
 #[cfg(target_os = "linux")]
@@ -1599,11 +1598,7 @@ fn wait_for_ack_raw(
     }
 }
 
-fn check_deadline(
-    deadline: Option<Instant>,
-    interface: &str,
-    packet_type: &str,
-) -> Result<()> {
+fn check_deadline(deadline: Option<Instant>, interface: &str, packet_type: &str) -> Result<()> {
     if let Some(deadline) = deadline {
         if Instant::now() >= deadline {
             return Err(NetlinkError::DhcpClient(DhcpClientError::Timeout {
@@ -1616,11 +1611,7 @@ fn check_deadline(
     Ok(())
 }
 
-fn recv_timeout(
-    deadline: Option<Instant>,
-    interface: &str,
-    packet_type: &str,
-) -> Result<Duration> {
+fn recv_timeout(deadline: Option<Instant>, interface: &str, packet_type: &str) -> Result<Duration> {
     check_deadline(deadline, interface, packet_type)?;
     if let Some(deadline) = deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1808,12 +1799,7 @@ fn checksum16(data: &[u8]) -> u16 {
 }
 
 #[cfg(target_os = "linux")]
-fn udp_checksum(
-    src_ip: Ipv4Addr,
-    dst_ip: Ipv4Addr,
-    udp_header: &[u8; 8],
-    payload: &[u8],
-) -> u16 {
+fn udp_checksum(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, udp_header: &[u8; 8], payload: &[u8]) -> u16 {
     let mut pseudo = Vec::with_capacity(12 + udp_header.len() + payload.len() + 1);
     pseudo.extend_from_slice(&src_ip.octets());
     pseudo.extend_from_slice(&dst_ip.octets());

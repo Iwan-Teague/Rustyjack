@@ -31,7 +31,11 @@ pub struct HandshakeCtx {
     pub gtk: Option<Vec<u8>>,
 }
 
-pub fn run_handshake(ctx: &mut HandshakeCtx, sock: &EapolSocket, timeout: std::time::Duration) -> Result<()> {
+pub fn run_handshake(
+    ctx: &mut HandshakeCtx,
+    sock: &EapolSocket,
+    timeout: std::time::Duration,
+) -> Result<()> {
     let m1 = wait_for_message(sock, timeout, |frame| {
         is_m1(frame) && (ctx.bssid == [0u8; 6] || frame.src == ctx.bssid)
     })?;
@@ -86,7 +90,11 @@ struct ParsedEapolKey {
     frame: Vec<u8>,
 }
 
-fn wait_for_message<F>(sock: &EapolSocket, timeout: std::time::Duration, predicate: F) -> Result<ParsedEapolKey>
+fn wait_for_message<F>(
+    sock: &EapolSocket,
+    timeout: std::time::Duration,
+    predicate: F,
+) -> Result<ParsedEapolKey>
 where
     F: Fn(&ParsedEapolKey) -> bool,
 {
@@ -225,9 +233,9 @@ fn build_m2(ctx: &HandshakeCtx, snonce: &[u8; 32], replay_counter: u64) -> Resul
 
     let mut mic_frame = frame.clone();
     mic_frame[95..111].fill(0);
-    let ptk = ctx.ptk.ok_or_else(|| {
-        NetlinkError::OperationFailed("PTK missing for M2".to_string())
-    })?;
+    let ptk = ctx
+        .ptk
+        .ok_or_else(|| NetlinkError::OperationFailed("PTK missing for M2".to_string()))?;
     let mic = compute_mic(&mic_frame[14..], &ptk[..16])?;
     frame[95..111].copy_from_slice(&mic);
     Ok(frame)
@@ -264,9 +272,9 @@ fn build_m4(ctx: &HandshakeCtx, replay_counter: u64) -> Result<Vec<u8>> {
 
     let mut mic_frame = frame.clone();
     mic_frame[95..111].fill(0);
-    let ptk = ctx.ptk.ok_or_else(|| {
-        NetlinkError::OperationFailed("PTK missing for M4".to_string())
-    })?;
+    let ptk = ctx
+        .ptk
+        .ok_or_else(|| NetlinkError::OperationFailed("PTK missing for M4".to_string()))?;
     let mic = compute_mic(&mic_frame[14..], &ptk[..16])?;
     frame[95..111].copy_from_slice(&mic);
     Ok(frame)
@@ -292,7 +300,9 @@ fn verify_mic(frame: &ParsedEapolKey, ptk: &[u8; 64]) -> Result<()> {
 
 fn extract_gtk(frame: &ParsedEapolKey, ptk: &[u8; 64]) -> Result<(u8, Vec<u8>)> {
     if frame.key_data.is_empty() {
-        return Err(NetlinkError::OperationFailed("No key data in M3".to_string()));
+        return Err(NetlinkError::OperationFailed(
+            "No key data in M3".to_string(),
+        ));
     }
 
     let key_data = match parse_kde(&frame.key_data) {
@@ -355,9 +365,8 @@ fn unwrap_key_data(encrypted: &[u8], kek: &[u8]) -> Result<Vec<u8>> {
         r.push(block);
     }
 
-    let cipher = aes::Aes128::new_from_slice(kek).map_err(|e| {
-        NetlinkError::OperationFailed(format!("AES init failed: {}", e))
-    })?;
+    let cipher = aes::Aes128::new_from_slice(kek)
+        .map_err(|e| NetlinkError::OperationFailed(format!("AES init failed: {}", e)))?;
 
     for j in (0..6).rev() {
         for i in (0..n).rev() {

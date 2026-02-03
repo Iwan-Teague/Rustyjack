@@ -60,10 +60,7 @@ impl App {
             Err(e) => {
                 self.show_message(
                     "Export Logs",
-                    [
-                        "Export failed",
-                        &shorten_for_display(&e.to_string(), 90),
-                    ],
+                    ["Export failed", &shorten_for_display(&e.to_string(), 90)],
                 )?;
             }
         }
@@ -87,7 +84,10 @@ impl App {
         };
 
         if devices.is_empty() {
-            self.show_message(title, ["No USB partitions detected", "Insert USB and retry"])?;
+            self.show_message(
+                title,
+                ["No USB partitions detected", "Insert USB and retry"],
+            )?;
             return Ok(None);
         }
 
@@ -313,7 +313,10 @@ impl App {
         }
     }
 
-    pub(crate) fn select_usb_mount(&mut self, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
+    pub(crate) fn select_usb_mount(
+        &mut self,
+        req: UsbAccessRequirement,
+    ) -> Result<Option<PathBuf>> {
         let Some(device) = self.select_usb_partition("USB")? else {
             return Ok(None);
         };
@@ -334,7 +337,11 @@ impl App {
         Ok(None)
     }
 
-    pub(crate) fn find_mount_for_device(&self, device: &str, req: UsbAccessRequirement) -> Result<Option<PathBuf>> {
+    pub(crate) fn find_mount_for_device(
+        &self,
+        device: &str,
+        req: UsbAccessRequirement,
+    ) -> Result<Option<PathBuf>> {
         let mount_root = self.root.join("mounts");
         let mounts = self.read_mount_points()?;
         for mount in mounts {
@@ -391,10 +398,7 @@ impl App {
                                 },
                             )))
                             .with_context(|| {
-                                format!(
-                                    "unmounting {} after readonly mount",
-                                    mountpoint.display()
-                                )
+                                format!("unmounting {} after readonly mount", mountpoint.display())
                             })?;
                         return Ok(None);
                     }

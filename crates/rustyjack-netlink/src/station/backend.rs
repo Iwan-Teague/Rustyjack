@@ -19,7 +19,11 @@ pub struct ScanOutcome {
 pub trait StationBackend: Send + Sync {
     fn ensure_ready(&self) -> Result<()>;
     fn scan(&self, cfg: &StationConfig) -> Result<ScanOutcome>;
-    fn connect(&self, cfg: &StationConfig, candidate: Option<&BssCandidate>) -> Result<StationOutcome>;
+    fn connect(
+        &self,
+        cfg: &StationConfig,
+        candidate: Option<&BssCandidate>,
+    ) -> Result<StationOutcome>;
     fn disconnect(&self) -> Result<()>;
     fn status(&self) -> Result<WpaStatus>;
     fn cleanup(&self) -> Result<()>;

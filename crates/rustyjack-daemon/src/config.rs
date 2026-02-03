@@ -65,8 +65,8 @@ impl DaemonConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(DEFAULT_WRITE_TIMEOUT_MS);
-        let admin_group = env::var("RUSTYJACKD_ADMIN_GROUP")
-            .unwrap_or_else(|_| DEFAULT_ADMIN_GROUP.to_string());
+        let admin_group =
+            env::var("RUSTYJACKD_ADMIN_GROUP").unwrap_or_else(|_| DEFAULT_ADMIN_GROUP.to_string());
         let operator_group = env::var("RUSTYJACKD_OPERATOR_GROUP")
             .unwrap_or_else(|_| DEFAULT_OPERATOR_GROUP.to_string());
         let root_path = env::var("RUSTYJACK_ROOT")
@@ -239,16 +239,14 @@ mod tests {
 
         fn set(&mut self, key: &str, value: &str) {
             if !self.vars.iter().any(|(k, _)| k == key) {
-                self.vars
-                    .push((key.to_string(), std::env::var(key).ok()));
+                self.vars.push((key.to_string(), std::env::var(key).ok()));
             }
             std::env::set_var(key, value);
         }
 
         fn remove(&mut self, key: &str) {
             if !self.vars.iter().any(|(k, _)| k == key) {
-                self.vars
-                    .push((key.to_string(), std::env::var(key).ok()));
+                self.vars.push((key.to_string(), std::env::var(key).ok()));
             }
             std::env::remove_var(key);
         }

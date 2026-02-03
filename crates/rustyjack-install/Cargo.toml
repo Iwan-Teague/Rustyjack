@@ -19,6 +19,10 @@ path = "src/bin/install_03_systemd.rs"
 name = "install_04_seed_config"
 path = "src/bin/install_04_seed_config.rs"
 
+[[bin]]
+name = "install_05_verify"
+path = "src/bin/install_05_verify.rs"
+
 [dependencies]
 anyhow = "1.0"
 hex = "0.4"

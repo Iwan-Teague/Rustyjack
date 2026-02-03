@@ -54,11 +54,7 @@ pub fn diagnostics(ap_interface: &str) -> Result<HotspotDiagnosticsResponse, Ser
                     name: dev.name.clone(),
                 })
                 .collect(),
-            Err(err) => {
-                return Err(ServiceError::Netlink(format!(
-                    "rfkill list error: {err}"
-                )))
-            }
+            Err(err) => return Err(ServiceError::Netlink(format!("rfkill list error: {err}"))),
         };
 
         let ap_support = match WirelessManager::new() {
@@ -120,7 +116,9 @@ pub fn clients() -> Result<HotspotClientsResponse, ServiceError> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        Ok(HotspotClientsResponse { clients: Vec::new() })
+        Ok(HotspotClientsResponse {
+            clients: Vec::new(),
+        })
     }
 }
 
@@ -160,15 +158,16 @@ where
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
-    
+
     on_progress(5, "Registering hotspot exception");
-    
+
     if has_upstream {
         // Register hotspot exception FIRST, before any interface manipulation
         // This allows the isolation engine to permit both interfaces
-        if let Err(e) =
-            crate::system::set_hotspot_exception(req.interface.clone(), req.upstream_interface.clone())
-        {
+        if let Err(e) = crate::system::set_hotspot_exception(
+            req.interface.clone(),
+            req.upstream_interface.clone(),
+        ) {
             return Err(ServiceError::OperationFailed(format!(
                 "Failed to set hotspot exception: {}",
                 e
@@ -180,15 +179,15 @@ where
         let _ = crate::system::clear_hotspot_exception();
         return Err(ServiceError::Cancelled);
     }
-    
+
     on_progress(10, "Starting hotspot");
-    
+
     #[cfg(target_os = "linux")]
     {
         use rustyjack_wireless::{start_hotspot, stop_hotspot};
-        
+
         on_progress(50, "Configuring access point");
-        
+
         // Create config for hotspot
         let config = rustyjack_wireless::HotspotConfig {
             ap_interface: req.interface.clone(),
@@ -198,7 +197,7 @@ where
             channel: req.channel.unwrap_or(6),
             restore_nm_on_stop: true,
         };
-        
+
         match start_hotspot(config) {
             Ok(_) => {
                 if crate::cancel::check_cancel(cancel).is_err() {
@@ -215,8 +214,10 @@ where
                     let root = crate::system::resolve_root(None).map_err(|e| {
                         ServiceError::OperationFailed(format!("Failed to resolve root: {}", e))
                     })?;
-                    let engine =
-                        crate::system::IsolationEngine::new(Arc::new(crate::system::RealNetOps), root);
+                    let engine = crate::system::IsolationEngine::new(
+                        Arc::new(crate::system::RealNetOps),
+                        root,
+                    );
                     match engine.enforce() {
                         Ok(_) => {
                             isolation_enforced = true;
@@ -258,17 +259,22 @@ where
                 if has_upstream {
                     let _ = crate::system::clear_hotspot_exception();
                 }
-                Err(ServiceError::OperationFailed(format!("Hotspot start failed: {}", e)))
+                Err(ServiceError::OperationFailed(format!(
+                    "Hotspot start failed: {}",
+                    e
+                )))
             }
         }
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (req, on_progress);
         // Clear exception if we set it
         let _ = crate::system::clear_hotspot_exception();
-        Err(ServiceError::External("Hotspot not supported on this platform".to_string()))
+        Err(ServiceError::External(
+            "Hotspot not supported on this platform".to_string(),
+        ))
     }
 }
 
@@ -276,21 +282,26 @@ pub fn stop() -> Result<bool, ServiceError> {
     #[cfg(target_os = "linux")]
     {
         use rustyjack_wireless::stop_hotspot;
-        
+
         // Clear hotspot exception FIRST to return to single-interface mode
         if let Err(e) = crate::system::clear_hotspot_exception() {
             // Log but don't fail - still try to stop hotspot
             eprintln!("Warning: Failed to clear hotspot exception: {}", e);
         }
-        
+
         match stop_hotspot() {
             Ok(_) => Ok(true),
-            Err(e) => Err(ServiceError::OperationFailed(format!("Hotspot stop failed: {}", e))),
+            Err(e) => Err(ServiceError::OperationFailed(format!(
+                "Hotspot stop failed: {}",
+                e
+            ))),
         }
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
-        Err(ServiceError::External("Not supported on this platform".to_string()))
+        Err(ServiceError::External(
+            "Not supported on this platform".to_string(),
+        ))
     }
 }

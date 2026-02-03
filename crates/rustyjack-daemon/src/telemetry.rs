@@ -43,24 +43,21 @@ pub fn log_request(
                 ErrorCode::NotImplemented => "not_implemented",
                 ErrorCode::Internal => "internal_error",
             };
-            
+
             let source_str = err
                 .source
                 .as_ref()
                 .map(|s| format!(" source={}", s))
                 .unwrap_or_default();
             let retryable_str = if err.retryable { " retryable=true" } else { "" };
-            
+
             info!(
                 "request_id={} endpoint={:?} peer_uid={} peer_pid={} duration_ms={} result=error code={}{}{}",
                 request_id, endpoint, peer.uid, peer.pid, duration_ms, code_name, source_str, retryable_str
             );
-            
+
             if let Some(detail) = &err.detail {
-                debug!(
-                    "request_id={} error_detail: {}",
-                    request_id, detail
-                );
+                debug!("request_id={} error_detail: {}", request_id, detail);
             }
         }
         ResponseBody::Event(_) => {

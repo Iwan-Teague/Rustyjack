@@ -1,6 +1,5 @@
 #[allow(dead_code)]
 use crate::error::{NetlinkError, Result};
-use tracing::{debug, info};
 use neli::{
     attr::Attribute,
     consts::nl::{NlmF, NlmFFlags},
@@ -16,6 +15,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+use tracing::{debug, info};
 
 // Re-export commonly used types from neli
 use neli::consts::socket::NlFamily;
@@ -316,81 +316,81 @@ fn spawn_event_logger(
                 break;
             }
             match sock.recv::<u16, Genlmsghdr<u8, u16>>() {
-            Ok(Some(msg)) => {
-                let nl_type = msg.nl_type;
-                match msg.nl_payload {
-                    NlPayload::Payload(genl) => {
-                        let cmd = genl.cmd;
-                        if cmd == NL80211_CMD_NEW_STATION || cmd == NL80211_CMD_DEL_STATION {
-                            let attrs = genl.get_attr_handle();
-                            let mut ifidx = None;
-                            let mut mac = None;
-                            for attr in attrs.iter() {
-                                match attr.nla_type.nla_type {
-                                    NL80211_ATTR_IFINDEX => {
-                                        if let Ok(val) = attr.get_payload_as::<u32>() {
-                                            ifidx = Some(val);
+                Ok(Some(msg)) => {
+                    let nl_type = msg.nl_type;
+                    match msg.nl_payload {
+                        NlPayload::Payload(genl) => {
+                            let cmd = genl.cmd;
+                            if cmd == NL80211_CMD_NEW_STATION || cmd == NL80211_CMD_DEL_STATION {
+                                let attrs = genl.get_attr_handle();
+                                let mut ifidx = None;
+                                let mut mac = None;
+                                for attr in attrs.iter() {
+                                    match attr.nla_type.nla_type {
+                                        NL80211_ATTR_IFINDEX => {
+                                            if let Ok(val) = attr.get_payload_as::<u32>() {
+                                                ifidx = Some(val);
+                                            }
                                         }
-                                    }
-                                    NL80211_ATTR_MAC => {
-                                        let bytes = attr.payload().as_ref();
-                                        if bytes.len() == 6 {
-                                            mac = Some([
-                                                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4],
-                                                bytes[5],
-                                            ]);
+                                        NL80211_ATTR_MAC => {
+                                            let bytes = attr.payload().as_ref();
+                                            if bytes.len() == 6 {
+                                                mac = Some([
+                                                    bytes[0], bytes[1], bytes[2], bytes[3],
+                                                    bytes[4], bytes[5],
+                                                ]);
+                                            }
                                         }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
-                            }
-                            if cmd == NL80211_CMD_NEW_STATION {
+                                if cmd == NL80211_CMD_NEW_STATION {
+                                    debug!(
+                                        "[WIFI] nl80211 NEW_STATION ifindex={:?} mac={:02x?}",
+                                        ifidx,
+                                        mac.unwrap_or([0; 6])
+                                    );
+                                } else {
+                                    debug!(
+                                        "[WIFI] nl80211 DEL_STATION ifindex={:?} mac={:02x?}",
+                                        ifidx,
+                                        mac.unwrap_or([0; 6])
+                                    );
+                                }
+                            } else if cmd == NL80211_CMD_REG_CHANGE {
                                 debug!(
-                                    "[WIFI] nl80211 NEW_STATION ifindex={:?} mac={:02x?}",
-                                    ifidx,
-                                    mac.unwrap_or([0; 6])
+                                    "[WIFI] nl80211 REG_CHANGE nl_type={} flags={:?}",
+                                    nl_type, msg.nl_flags
                                 );
                             } else {
                                 debug!(
-                                    "[WIFI] nl80211 DEL_STATION ifindex={:?} mac={:02x?}",
-                                    ifidx,
-                                    mac.unwrap_or([0; 6])
+                                    "[WIFI] nl80211 event cmd={} nl_type={} flags={:?}",
+                                    cmd, nl_type, msg.nl_flags
                                 );
                             }
-                        } else if cmd == NL80211_CMD_REG_CHANGE {
+                        }
+                        NlPayload::Err(err) => {
                             debug!(
-                                "[WIFI] nl80211 REG_CHANGE nl_type={} flags={:?}",
-                                nl_type, msg.nl_flags
-                            );
-                        } else {
-                            debug!(
-                                "[WIFI] nl80211 event cmd={} nl_type={} flags={:?}",
-                                cmd, nl_type, msg.nl_flags
+                                "[WIFI] nl80211 event error nl_type={} code={}",
+                                nl_type, err.error
                             );
                         }
-                    }
-                    NlPayload::Err(err) => {
-                        debug!(
-                            "[WIFI] nl80211 event error nl_type={} code={}",
-                            nl_type, err.error
-                        );
-                    }
-                    _ => {
-                        debug!("[WIFI] nl80211 event other nl_type={}", nl_type);
+                        _ => {
+                            debug!("[WIFI] nl80211 event other nl_type={}", nl_type);
+                        }
                     }
                 }
-            }
-            Ok(None) => {
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                if stop.load(Ordering::Relaxed) {
-                    break;
+                Ok(None) => {
+                    thread::sleep(Duration::from_millis(50));
                 }
-                debug!("[WIFI] nl80211 event recv error: {}", e);
-                thread::sleep(Duration::from_millis(200));
+                Err(e) => {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    debug!("[WIFI] nl80211 event recv error: {}", e);
+                    thread::sleep(Duration::from_millis(200));
+                }
             }
-        }
         }
         debug!("[WIFI] nl80211 event logger stopped");
     })
@@ -1272,7 +1272,9 @@ impl WirelessManager {
         }
 
         let bssid = bssid?;
-        let ssid = ies.and_then(Self::parse_ssid_from_ies).filter(|s| !s.is_empty());
+        let ssid = ies
+            .and_then(Self::parse_ssid_from_ies)
+            .filter(|s| !s.is_empty());
 
         Some(WifiScanResult {
             bssid,

@@ -8,11 +8,11 @@
 // - Timestamp
 // - Optional context data
 
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::fs::OpenOptions;
 use std::io::Write;
-use serde::{Serialize, Deserialize};
-use serde_json;
+use std::path::Path;
 
 /// Audit event representing a privileged operation
 #[derive(Debug, Clone, Serialize, Deserialize)]

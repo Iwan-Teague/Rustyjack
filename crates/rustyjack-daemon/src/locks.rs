@@ -65,7 +65,7 @@ impl LockManager {
 
         LockSet { _permits: permits }
     }
-    
+
     pub async fn acquire_uplink(&self) -> LockSet {
         self.acquire(&[LockKind::Uplink]).await
     }

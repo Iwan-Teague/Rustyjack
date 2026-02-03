@@ -85,7 +85,13 @@ impl RouteManager {
 
         match gateway {
             IpAddr::V4(gw) => {
-                let mut req = self.handle.route().add().v4().gateway(gw).output_interface(index);
+                let mut req = self
+                    .handle
+                    .route()
+                    .add()
+                    .v4()
+                    .gateway(gw)
+                    .output_interface(index);
                 if let Some(metric) = metric {
                     req.message_mut()
                         .attributes
@@ -101,7 +107,13 @@ impl RouteManager {
                     })?;
             }
             IpAddr::V6(gw) => {
-                let mut req = self.handle.route().add().v6().gateway(gw).output_interface(index);
+                let mut req = self
+                    .handle
+                    .route()
+                    .add()
+                    .v6()
+                    .gateway(gw)
+                    .output_interface(index);
                 if let Some(metric) = metric {
                     req.message_mut()
                         .attributes

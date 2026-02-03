@@ -127,10 +127,7 @@ impl App {
                     lines.push(upstream_line);
                 }
                 if let Some(err) = nm_error {
-                    lines.push(format!(
-                        "NM warn: {}",
-                        shorten_for_display(&err, 24)
-                    ));
+                    lines.push(format!("NM warn: {}", shorten_for_display(&err, 24)));
                 }
 
                 let options = if running {
@@ -407,14 +404,14 @@ impl App {
                                 #[cfg(target_os = "linux")]
                                 {
                                     if let Ok(warnings) = self.core.hotspot_warnings() {
-                                        if let Some(start_err) = warnings.last_start_error.as_deref()
+                                        if let Some(start_err) =
+                                            warnings.last_start_error.as_deref()
                                         {
                                             lines.push(shorten_for_display(
                                                 &format!("START_AP: {}", start_err),
                                                 90,
                                             ));
-                                            if let Some(hint) = classify_start_ap_error(start_err)
-                                            {
+                                            if let Some(hint) = classify_start_ap_error(start_err) {
                                                 lines.push(format!("Cause: {}", hint.category));
                                                 lines.push(format!("Hint: {}", hint.hint));
                                             }
@@ -464,16 +461,14 @@ impl App {
                             self.save_config_file(&config_path)?;
                             self.show_message(
                                 "Hotspot",
-                                [
-                                    format!(
-                                        "Restore NM: {}",
-                                        if self.config.settings.hotspot_restore_nm {
-                                            "On"
-                                        } else {
-                                            "Off"
-                                        }
-                                    ),
-                                ],
+                                [format!(
+                                    "Restore NM: {}",
+                                    if self.config.settings.hotspot_restore_nm {
+                                        "On"
+                                    } else {
+                                        "Off"
+                                    }
+                                )],
                             )?;
                         }
                     }
@@ -544,7 +539,10 @@ impl App {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn resolve_hotspot_interface(&mut self, ap_iface_hint: &str) -> Result<Option<String>> {
+    pub(crate) fn resolve_hotspot_interface(
+        &mut self,
+        ap_iface_hint: &str,
+    ) -> Result<Option<String>> {
         if !ap_iface_hint.is_empty() {
             return Ok(Some(ap_iface_hint.to_string()));
         }
@@ -568,7 +566,10 @@ impl App {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn select_hotspot_channel(&mut self, ap_iface_hint: Option<&str>) -> Result<Option<u8>> {
+    pub(crate) fn select_hotspot_channel(
+        &mut self,
+        ap_iface_hint: Option<&str>,
+    ) -> Result<Option<u8>> {
         let ap_iface = match self.resolve_hotspot_interface(ap_iface_hint.unwrap_or(""))? {
             Some(iface) => iface,
             None => return Ok(None),
@@ -1061,7 +1062,12 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn add_to_hotspot_blacklist(&mut self, mac: &str, hostname: &str, ip: &str) -> Result<()> {
+    pub(crate) fn add_to_hotspot_blacklist(
+        &mut self,
+        mac: &str,
+        hostname: &str,
+        ip: &str,
+    ) -> Result<()> {
         if self
             .config
             .settings

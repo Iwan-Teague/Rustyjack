@@ -121,17 +121,12 @@ impl Drop for StatsSampler {
     }
 }
 
-fn sample_once(
-    core: &CoreBridge,
-    shared: &Arc<Mutex<StatusOverlay>>,
-    root: &Path,
-) -> Result<bool> {
+fn sample_once(core: &CoreBridge, shared: &Arc<Mutex<StatusOverlay>>, root: &Path) -> Result<bool> {
     let temp = read_temp().unwrap_or_default();
     let (cpu_percent, uptime_secs) = read_cpu_and_uptime().unwrap_or((0.0, 0));
     let (mem_used_mb, mem_total_mb) = read_memory().unwrap_or((0, 0));
     let (disk_used_gb, disk_total_gb) =
-        read_disk_usage(core, root.to_str().unwrap_or("/var/lib/rustyjack"))
-            .unwrap_or((0.0, 0.0));
+        read_disk_usage(core, root.to_str().unwrap_or("/var/lib/rustyjack")).unwrap_or((0.0, 0.0));
 
     let mut overlay = {
         let guard = shared
@@ -234,7 +229,9 @@ fn extract_status_text(data: &Value) -> Option<String> {
 
 fn extract_dns_spoof_running(data: &Value) -> Option<bool> {
     match data {
-        Value::Object(map) => map.get("dnsspoof_running").and_then(|value| value.as_bool()),
+        Value::Object(map) => map
+            .get("dnsspoof_running")
+            .and_then(|value| value.as_bool()),
         _ => None,
     }
 }

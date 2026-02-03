@@ -186,7 +186,11 @@ impl CoreBridge {
 
     // ===== Job Management =====
 
-    async fn poll_job_until_complete(&self, client: &mut DaemonClient, job_id: JobId) -> Result<Value> {
+    async fn poll_job_until_complete(
+        &self,
+        client: &mut DaemonClient,
+        job_id: JobId,
+    ) -> Result<Value> {
         let max_wait = Duration::from_secs(300);
         let start = std::time::Instant::now();
         let poll_interval = Duration::from_millis(500);
@@ -197,13 +201,18 @@ impl CoreBridge {
             }
 
             let status = client.job_status(job_id).await?;
-            
+
             match status.job.state {
                 JobState::Completed => {
-                    return status.job.result.ok_or_else(|| anyhow!("Job completed but no result"));
+                    return status
+                        .job
+                        .result
+                        .ok_or_else(|| anyhow!("Job completed but no result"));
                 }
                 JobState::Failed => {
-                    let err_msg = status.job.error
+                    let err_msg = status
+                        .job
+                        .error
                         .map(|e| e.message)
                         .unwrap_or_else(|| "Job failed with unknown error".to_string());
                     bail!("Job failed: {}", err_msg);
@@ -292,12 +301,20 @@ impl CoreBridge {
         })
     }
 
-    pub fn wifi_connect(&self, interface: &str, ssid: &str, psk: Option<String>, timeout_ms: u64) -> Result<Value> {
+    pub fn wifi_connect(
+        &self,
+        interface: &str,
+        ssid: &str,
+        psk: Option<String>,
+        timeout_ms: u64,
+    ) -> Result<Value> {
         let interface = interface.to_string();
         let ssid = ssid.to_string();
         self.block_on(async move {
             let mut client = self.create_client().await?;
-            let job = client.wifi_connect_start(&interface, &ssid, psk, timeout_ms).await?;
+            let job = client
+                .wifi_connect_start(&interface, &ssid, psk, timeout_ms)
+                .await?;
             self.poll_job_until_complete(&mut client, job.job_id).await
         })
     }

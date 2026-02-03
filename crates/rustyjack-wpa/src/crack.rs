@@ -353,15 +353,15 @@ impl WpaCracker {
 
         // Common base words.
         let bases = [
-            "password", "Password", "PASSWORD", "admin", "Admin", "ADMIN", "letmein",
-            "welcome", "monkey", "dragon", "master", "qwerty", "login", "guest", "root",
-            "changeme", "secret", "private",
+            "password", "Password", "PASSWORD", "admin", "Admin", "ADMIN", "letmein", "welcome",
+            "monkey", "dragon", "master", "qwerty", "login", "guest", "root", "changeme", "secret",
+            "private",
         ];
 
         // Suffixes.
         let suffixes = [
-            "", "1", "12", "123", "1234", "12345", "!", "@", "#", "$", "!!", "123!",
-            "2024", "2023", "2022", "2021",
+            "", "1", "12", "123", "1234", "12345", "!", "@", "#", "$", "!!", "123!", "2024",
+            "2023", "2022", "2021",
         ];
 
         // Generate combinations.

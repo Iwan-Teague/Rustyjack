@@ -105,9 +105,9 @@ impl StationManager {
                     ));
                 }
             }
-            StationBackendKind::WpaSupplicantDbus => {
-                Box::new(crate::station::dbus::WpaSupplicantDbusBackend::new(interface)?)
-            }
+            StationBackendKind::WpaSupplicantDbus => Box::new(
+                crate::station::dbus::WpaSupplicantDbusBackend::new(interface)?,
+            ),
             StationBackendKind::RustOpen => {
                 #[cfg(feature = "station_rust_open")]
                 {
@@ -158,7 +158,9 @@ impl StationManager {
 
     pub fn connect(&self, config: &StationConfig) -> Result<StationOutcome> {
         if config.ssid.trim().is_empty() {
-            return Err(NetlinkError::InvalidInput("SSID cannot be empty".to_string()));
+            return Err(NetlinkError::InvalidInput(
+                "SSID cannot be empty".to_string(),
+            ));
         }
 
         self.backend.ensure_ready()?;
@@ -215,7 +217,10 @@ impl StationManager {
                 Err(e) => {
                     let _ = self.backend.disconnect();
                     failed_bssids.insert(candidate.bssid.clone());
-                    warn!("[WIFI] Connect attempt failed (bssid={}): {}", candidate.bssid, e);
+                    warn!(
+                        "[WIFI] Connect attempt failed (bssid={}): {}",
+                        candidate.bssid, e
+                    );
                 }
             }
         }
@@ -261,10 +266,7 @@ pub(crate) fn parse_scan_results(results: Vec<HashMap<String, String>>) -> Vec<S
         };
         let frequency = net.get("frequency").and_then(|v| v.parse::<u32>().ok());
         let signal_dbm = net.get("signal").and_then(|v| v.parse::<i32>().ok());
-        let flags = net
-            .get("flags")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
+        let flags = net.get("flags").map(|v| v.to_string()).unwrap_or_default();
         let ssid = net.get("ssid").map(|v| v.to_string()).unwrap_or_default();
 
         entries.push(ScanEntry {
@@ -364,12 +366,9 @@ struct RsnInfo {
 
 impl RsnInfo {
     fn supports_psk(&self) -> bool {
-        self.akm_suites.iter().any(|suite| {
-            matches!(
-                suite,
-                AkmSuite::Psk | AkmSuite::FtPsk | AkmSuite::PskSha256
-            )
-        })
+        self.akm_suites
+            .iter()
+            .any(|suite| matches!(suite, AkmSuite::Psk | AkmSuite::FtPsk | AkmSuite::PskSha256))
     }
 
     fn preferred_pairwise(&self) -> Option<&'static str> {

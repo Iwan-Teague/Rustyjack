@@ -44,9 +44,7 @@ impl From<ServiceError> for DaemonError {
 impl ServiceError {
     pub fn to_daemon_error(&self) -> DaemonError {
         match self {
-            ServiceError::InvalidInput(msg) => {
-                DaemonError::new(ErrorCode::BadRequest, msg, false)
-            }
+            ServiceError::InvalidInput(msg) => DaemonError::new(ErrorCode::BadRequest, msg, false),
             ServiceError::Io(err) => DaemonError::new(ErrorCode::Io, err.to_string(), false),
             ServiceError::Netlink(msg) => DaemonError::new(ErrorCode::Netlink, msg, false),
             ServiceError::External(msg) => DaemonError::new(ErrorCode::Internal, msg, false),
@@ -60,27 +58,27 @@ impl ServiceError {
         self.to_daemon_error().with_source(source)
     }
 
-    pub fn to_daemon_error_with_code(
-        &self,
-        code: ErrorCode,
-        source: &'static str,
-    ) -> DaemonError {
+    pub fn to_daemon_error_with_code(&self, code: ErrorCode, source: &'static str) -> DaemonError {
         match self {
-            ServiceError::InvalidInput(msg) => DaemonError::new(ErrorCode::BadRequest, msg, false)
-                .with_source(source),
+            ServiceError::InvalidInput(msg) => {
+                DaemonError::new(ErrorCode::BadRequest, msg, false).with_source(source)
+            }
             ServiceError::Io(err) => DaemonError::new(ErrorCode::Io, err.to_string(), false)
                 .with_detail(format!("{:?}", err))
                 .with_source(source),
-            ServiceError::Netlink(msg) => DaemonError::new(ErrorCode::Netlink, msg, false)
-                .with_source(source),
-            ServiceError::External(msg) => DaemonError::new(code, msg, false)
-                .with_source(source),
-            ServiceError::Internal(msg) => DaemonError::new(ErrorCode::Internal, msg, false)
-                .with_source(source),
-            ServiceError::OperationFailed(msg) => DaemonError::new(code, msg, true)
-                .with_source(source),
-            ServiceError::Cancelled => DaemonError::new(ErrorCode::Cancelled, "cancelled", false)
-                .with_source(source),
+            ServiceError::Netlink(msg) => {
+                DaemonError::new(ErrorCode::Netlink, msg, false).with_source(source)
+            }
+            ServiceError::External(msg) => DaemonError::new(code, msg, false).with_source(source),
+            ServiceError::Internal(msg) => {
+                DaemonError::new(ErrorCode::Internal, msg, false).with_source(source)
+            }
+            ServiceError::OperationFailed(msg) => {
+                DaemonError::new(code, msg, true).with_source(source)
+            }
+            ServiceError::Cancelled => {
+                DaemonError::new(ErrorCode::Cancelled, "cancelled", false).with_source(source)
+            }
         }
     }
 }

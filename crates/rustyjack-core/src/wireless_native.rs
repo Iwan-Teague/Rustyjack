@@ -7,11 +7,11 @@ use anyhow::{bail, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+use crate::cancel::{check_cancel, CancelFlag};
 #[cfg(target_os = "linux")]
 use anyhow::Context;
 #[cfg(target_os = "linux")]
 use chrono::Local;
-use crate::cancel::{check_cancel, CancelFlag};
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
@@ -579,8 +579,7 @@ pub fn execute_probe_sniff_cancellable(
     on_progress: impl Fn(f32, &str) + Send + 'static,
 ) -> Result<ProbeSniffResult> {
     use rustyjack_wireless::{
-        execute_probe_sniff_cancellable as native_probe,
-        ProbeSniffConfig as NativeProbeConfig,
+        execute_probe_sniff_cancellable as native_probe, ProbeSniffConfig as NativeProbeConfig,
     };
 
     tracing::info!(

@@ -12,4 +12,3 @@ pub fn shared_runtime() -> Result<&'static Runtime> {
         Err(err) => Err(anyhow!("Failed to initialize tokio runtime: {}", err)),
     }
 }
-

@@ -52,14 +52,24 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
         append_log_tail_path(buf, &root.join("logs").join("audit").join("audit.log"))
     });
 
-    append_section(&mut body, &mut statuses, "Kernel Log Tail", append_kernel_log_tail);
+    append_section(
+        &mut body,
+        &mut statuses,
+        "Kernel Log Tail",
+        append_kernel_log_tail,
+    );
     append_section(
         &mut body,
         &mut statuses,
         "sysfs network interfaces",
         append_sysfs_network_snapshot,
     );
-    append_section(&mut body, &mut statuses, "rfkill status", append_rfkill_status);
+    append_section(
+        &mut body,
+        &mut statuses,
+        "rfkill status",
+        append_rfkill_status,
+    );
     append_section(
         &mut body,
         &mut statuses,
@@ -241,7 +251,6 @@ fn append_rfkill_status(buf: &mut String) -> Result<(), ServiceError> {
 }
 
 fn append_wpa_supplicant_status(buf: &mut String) -> Result<(), ServiceError> {
-
     #[cfg(target_os = "linux")]
     {
         let mut found = false;
@@ -269,10 +278,12 @@ fn append_wpa_supplicant_status(buf: &mut String) -> Result<(), ServiceError> {
                 .unwrap_or_else(|| "unknown".to_string());
             let ip = crate::netlink_helpers::netlink_get_ipv4_addresses(&iface)
                 .ok()
-                .and_then(|addrs| addrs.into_iter().find_map(|addr| match addr.address {
-                    std::net::IpAddr::V4(v4) => Some(v4.to_string()),
-                    _ => None,
-                }));
+                .and_then(|addrs| {
+                    addrs.into_iter().find_map(|addr| match addr.address {
+                        std::net::IpAddr::V4(v4) => Some(v4.to_string()),
+                        _ => None,
+                    })
+                });
             buf.push_str(&format!(
                 "{}: operstate={} carrier={} ip={:?}\n",
                 iface, operstate, carrier, ip
@@ -324,11 +335,11 @@ fn append_netlink_routes(buf: &mut String) -> Result<(), ServiceError> {
                 .metric
                 .map(|m| m.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            let entry = format!("dst={}/{} gw={} metric={}", dst, route.prefix_len, gw, metric);
-            routes_by_iface
-                .entry(iface_name)
-                .or_default()
-                .push(entry);
+            let entry = format!(
+                "dst={}/{} gw={} metric={}",
+                dst, route.prefix_len, gw, metric
+            );
+            routes_by_iface.entry(iface_name).or_default().push(entry);
         }
 
         let mut iface_names: Vec<String> = routes_by_iface.keys().cloned().collect();
@@ -705,7 +716,11 @@ fn append_device_file_info(buf: &mut String, device_path: &str) {
 
             #[cfg(not(unix))]
             {
-                buf.push_str(&format!("{}: exists, {} bytes\n", device_path, metadata.len()));
+                buf.push_str(&format!(
+                    "{}: exists, {} bytes\n",
+                    device_path,
+                    metadata.len()
+                ));
             }
         }
         Err(err) => {

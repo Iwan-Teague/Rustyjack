@@ -33,7 +33,11 @@ impl StationBackend for RustOpenBackend {
         ))
     }
 
-    fn connect(&self, _cfg: &StationConfig, _candidate: Option<&BssCandidate>) -> Result<StationOutcome> {
+    fn connect(
+        &self,
+        _cfg: &StationConfig,
+        _candidate: Option<&BssCandidate>,
+    ) -> Result<StationOutcome> {
         Err(NetlinkError::OperationNotSupported(
             "RustOpen backend not implemented".to_string(),
         ))

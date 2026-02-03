@@ -10,7 +10,7 @@ impl App {
         if !self.mode_allows_active("Wi-Fi scanning disabled in Stealth")? {
             return Ok(());
         }
-        
+
         let active_interface = self.config.settings.active_network_interface.clone();
         if active_interface.is_empty() {
             return self.show_message(
@@ -18,11 +18,11 @@ impl App {
                 ["No active interface", "", "Run Hardware Sanity Check first"],
             );
         }
-        
+
         if let Some(error) = self.preflight_wireless_scan(&active_interface)? {
             return self.show_preflight_error("Preflight Failed", &error);
         }
-        
+
         self.show_progress("WiFi Scan", ["Scanning for networks...", "Please wait"])?;
 
         let scan_result = self.fetch_wifi_scan();
@@ -221,42 +221,42 @@ impl App {
 
         let mut result_lines = vec![msg];
 
-                if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
-                    if captured {
-                        result_lines.push("HANDSHAKE CAPTURED!".to_string());
-                        if let Some(hf) = data.get("handshake_file").and_then(|v| v.as_str()) {
-                            result_lines.push(format!(
-                                "File: {}",
-                                Path::new(hf)
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("handshake.cap")
-                            ));
-                        }
-                    } else {
-                        result_lines.push("No handshake detected".to_string());
-                    }
-                }
-
-                if let Some(packets) = data.get("total_packets_sent").and_then(|v| v.as_u64()) {
-                    result_lines.push(format!("Packets: {}", packets));
-                }
-
-                if let Some(bursts) = data.get("deauth_bursts").and_then(|v| v.as_u64()) {
-                    result_lines.push(format!("Bursts: {}", bursts));
-                }
-
-                if let Some(log) = data.get("log_file").and_then(|v| v.as_str()) {
+        if let Some(captured) = data.get("handshake_captured").and_then(|v| v.as_bool()) {
+            if captured {
+                result_lines.push("HANDSHAKE CAPTURED!".to_string());
+                if let Some(hf) = data.get("handshake_file").and_then(|v| v.as_str()) {
                     result_lines.push(format!(
-                        "Log: {}",
-                        Path::new(log)
+                        "File: {}",
+                        Path::new(hf)
                             .file_name()
                             .and_then(|n| n.to_str())
-                            .unwrap_or("log.txt")
+                            .unwrap_or("handshake.cap")
                     ));
                 }
+            } else {
+                result_lines.push("No handshake detected".to_string());
+            }
+        }
 
-                result_lines.push("Check Loot > Wireless".to_string());
+        if let Some(packets) = data.get("total_packets_sent").and_then(|v| v.as_u64()) {
+            result_lines.push(format!("Packets: {}", packets));
+        }
+
+        if let Some(bursts) = data.get("deauth_bursts").and_then(|v| v.as_u64()) {
+            result_lines.push(format!("Bursts: {}", bursts));
+        }
+
+        if let Some(log) = data.get("log_file").and_then(|v| v.as_str()) {
+            result_lines.push(format!(
+                "Log: {}",
+                Path::new(log)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("log.txt")
+            ));
+        }
+
+        result_lines.push("Check Loot > Wireless".to_string());
 
         self.show_message("Deauth Complete", result_lines.iter().map(|s| s.as_str()))?;
         self.go_home()?;
@@ -592,7 +592,11 @@ impl App {
         if active_interface.is_empty() {
             return self.show_message(
                 "PMKID Capture",
-                ["No WiFi interface set", "", "Run Hardware Sanity Check first"],
+                [
+                    "No WiFi interface set",
+                    "",
+                    "Run Hardware Sanity Check first",
+                ],
             );
         }
 
@@ -812,5 +816,4 @@ impl App {
 
         Ok(())
     }
-
 }

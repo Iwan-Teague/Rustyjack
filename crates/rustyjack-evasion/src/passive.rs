@@ -388,9 +388,9 @@ fn set_link_up(interface: &str) -> Result<()> {
         .map_err(|e| EvasionError::InterfaceError(format!("Failed to init link manager: {}", e)))?;
 
     let up = async {
-        mgr.set_link_up(interface)
-            .await
-            .map_err(|e| EvasionError::InterfaceError(format!("Failed to set {} up: {}", interface, e)))
+        mgr.set_link_up(interface).await.map_err(|e| {
+            EvasionError::InterfaceError(format!("Failed to set {} up: {}", interface, e))
+        })
     };
 
     if let Ok(handle) = tokio::runtime::Handle::try_current() {

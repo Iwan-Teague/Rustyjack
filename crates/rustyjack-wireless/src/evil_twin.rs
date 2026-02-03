@@ -357,9 +357,8 @@ impl EvilTwin {
             hw_mode: select_hw_mode(&self.config.ap_interface, channel),
         };
 
-        let mut ap = AccessPoint::new(ap_config).map_err(|e| {
-            WirelessError::System(format!("Failed to create Access Point: {}", e))
-        })?;
+        let mut ap = AccessPoint::new(ap_config)
+            .map_err(|e| WirelessError::System(format!("Failed to create Access Point: {}", e)))?;
 
         let start_result = tokio::runtime::Handle::try_current()
             .map(|handle| {
@@ -376,9 +375,9 @@ impl EvilTwin {
                     })
                     .and_then(|rt| {
                         rt.block_on(async {
-                            ap.start()
-                                .await
-                                .map_err(|e| WirelessError::System(format!("AP start failed: {}", e)))
+                            ap.start().await.map_err(|e| {
+                                WirelessError::System(format!("AP start failed: {}", e))
+                            })
                         })
                     })
             });
@@ -413,9 +412,8 @@ impl EvilTwin {
             log_packets: logging_enabled,
         };
 
-        let mut server = DhcpServer::new(dhcp_cfg.clone()).map_err(|e| {
-            WirelessError::System(format!("Failed to create DHCP server: {}", e))
-        })?;
+        let mut server = DhcpServer::new(dhcp_cfg.clone())
+            .map_err(|e| WirelessError::System(format!("Failed to create DHCP server: {}", e)))?;
         let running_handle = server.running_handle();
         server
             .start()
@@ -474,7 +472,11 @@ impl EvilTwin {
         server
             .start()
             .map_err(|e| WirelessError::System(format!("Failed to start DNS server: {}", e)))?;
-        tracing::info!("DNS server bound on {} ({})", self.config.ap_interface, gateway_ip);
+        tracing::info!(
+            "DNS server bound on {} ({})",
+            self.config.ap_interface,
+            gateway_ip
+        );
 
         self.dns = Some(server);
         Ok(())

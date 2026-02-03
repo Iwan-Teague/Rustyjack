@@ -10,6 +10,10 @@ ExecStart=/usr/local/bin/rustyjack-portal
 Restart=on-failure
 RestartSec=2
 
+# Ensure portal directories exist under /var/lib/rustyjack
+StateDirectory=rustyjack/portal rustyjack/logs
+StateDirectoryMode=0770
+
 # Run as unprivileged user
 User=rustyjack-portal
 Group=rustyjack-portal

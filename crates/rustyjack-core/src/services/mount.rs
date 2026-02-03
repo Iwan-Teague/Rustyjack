@@ -32,7 +32,7 @@ fn default_mount_policy() -> MountPolicy {
 pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
     let devices = enumerate_usb_block_devices()
         .map_err(|e| ServiceError::External(format!("enumerate USB devices: {}", e)))?;
-    
+
     let mut result = Vec::new();
     for dev in devices {
         let size = dev
@@ -41,7 +41,7 @@ pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
             .and_then(|p| p.size_bytes)
             .map(|s| format_size(s))
             .unwrap_or_else(|| "unknown".to_string());
-        
+
         result.push(BlockDeviceInfo {
             name: dev.devnode.to_string_lossy().to_string(),
             size,
@@ -55,13 +55,13 @@ pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
             is_partition: false,
             parent: None,
         });
-        
+
         for part in dev.partitions {
             let part_size = part
                 .size_bytes
                 .map(format_size)
                 .unwrap_or_else(|| "unknown".to_string());
-            
+
             result.push(BlockDeviceInfo {
                 name: part.devnode.to_string_lossy().to_string(),
                 size: part_size,
@@ -77,7 +77,7 @@ pub fn list_block_devices() -> Result<Vec<BlockDeviceInfo>, ServiceError> {
             });
         }
     }
-    
+
     Ok(result)
 }
 
@@ -85,7 +85,7 @@ fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
-    
+
     if bytes >= GB {
         format!("{:.1}G", bytes as f64 / GB as f64)
     } else if bytes >= MB {
@@ -109,7 +109,7 @@ pub fn list_mounts() -> Result<Vec<MountInfo>, ServiceError> {
     let policy = default_mount_policy();
     let mounts = list_mounts_under(&policy)
         .map_err(|e| ServiceError::External(format!("list mounts: {}", e)))?;
-    
+
     let mut result = Vec::new();
     for m in mounts {
         result.push(MountInfo {
@@ -119,7 +119,7 @@ pub fn list_mounts() -> Result<Vec<MountInfo>, ServiceError> {
             size: "".to_string(),
         });
     }
-    
+
     Ok(result)
 }
 
@@ -139,39 +139,39 @@ where
     if req.device.trim().is_empty() {
         return Err(ServiceError::InvalidInput("device".to_string()));
     }
-    
+
     if !req.device.starts_with("/dev/") {
         return Err(ServiceError::InvalidInput(
             "device must start with /dev/".to_string(),
         ));
     }
-    
+
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
 
     on_progress(10, "Validating device");
-    
+
     let policy = default_mount_policy();
     let device = PathBuf::from(&req.device);
-    
+
     let policy_req = PolicyMountRequest {
         device: device.clone(),
         mode: MountMode::ReadOnly,
         preferred_name: None,
     };
-    
+
     on_progress(30, "Checking device");
-    
+
     let response = policy_mount_device(&policy, policy_req)
         .map_err(|e| ServiceError::OperationFailed(format!("mount failed: {}", e)))?;
 
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
-    
+
     on_progress(100, "Mounted");
-    
+
     Ok(serde_json::json!({
         "device": response.device.to_string_lossy(),
         "mountpoint": response.mountpoint.to_string_lossy(),
@@ -196,40 +196,40 @@ where
     if req.device.trim().is_empty() {
         return Err(ServiceError::InvalidInput("device".to_string()));
     }
-    
+
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
 
     on_progress(10, "Finding mount");
-    
+
     let policy = default_mount_policy();
     let device = PathBuf::from(&req.device);
-    
+
     let mounts = list_mounts_under(&policy)
         .map_err(|e| ServiceError::External(format!("list mounts: {}", e)))?;
-    
+
     let mount_entry = mounts
         .iter()
         .find(|m| m.device == device)
         .ok_or_else(|| ServiceError::InvalidInput("device not mounted".to_string()))?;
-    
+
     on_progress(30, "Unmounting");
-    
+
     let policy_req = PolicyUnmountRequest {
         mountpoint: mount_entry.mountpoint.clone(),
         detach: false,
     };
-    
+
     policy_unmount(&policy, policy_req)
         .map_err(|e| ServiceError::OperationFailed(format!("unmount failed: {}", e)))?;
 
     if crate::cancel::check_cancel(cancel).is_err() {
         return Err(ServiceError::Cancelled);
     }
-    
+
     on_progress(100, "Unmounted");
-    
+
     Ok(serde_json::json!({
         "device": req.device,
         "unmounted": true

@@ -451,8 +451,7 @@ impl IptablesManager {
         tracing::info!("Adding MASQUERADE rule for interface {}", interface);
 
         let rule = Self::with_visibility(
-            Rule::new(Table::Nat, Chain::Postrouting, Target::Masquerade)
-                .out_interface(interface),
+            Rule::new(Table::Nat, Chain::Postrouting, Target::Masquerade).out_interface(interface),
             &format!("masquerade out={}", interface),
         );
 
@@ -635,7 +634,10 @@ impl IptablesManager {
             .in_interface(in_iface)
             .protocol(Protocol::Udp)
             .dst_port(dst_port),
-            &format!("dnat udp {}:{}->{}:{}", in_iface, dst_port, to_addr, to_port),
+            &format!(
+                "dnat udp {}:{}->{}:{}",
+                in_iface, dst_port, to_addr, to_port
+            ),
         );
 
         self.add_rule(&rule)

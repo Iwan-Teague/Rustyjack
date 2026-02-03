@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::error::{NetlinkError, Result};
-use tracing::info;
 use rand::{distributions::Alphanumeric, Rng};
+use tracing::info;
 
 /// WPA supplicant manager
 pub struct WpaManager {
@@ -219,8 +219,8 @@ impl WpaManager {
             )));
         }
 
-        let control_path = find_control_socket(interface)
-            .unwrap_or_else(|| default_control_dir().join(interface));
+        let control_path =
+            find_control_socket(interface).unwrap_or_else(|| default_control_dir().join(interface));
 
         Ok(Self {
             interface: interface.to_string(),
@@ -717,11 +717,10 @@ impl WpaManager {
         }
 
         if let Some(ref group) = config.group {
-            self.set_network(network_id, "group", group)
-                .map_err(|e| {
-                    let _ = self.remove_network(network_id);
-                    e
-                })?;
+            self.set_network(network_id, "group", group).map_err(|e| {
+                let _ = self.remove_network(network_id);
+                e
+            })?;
         }
 
         // Select and enable the network

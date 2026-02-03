@@ -3,8 +3,8 @@ use neli::consts::socket::NlFamily;
 use neli::genl::Genlmsghdr;
 use neli::nl::NlPayload;
 use neli::nl::Nlmsghdr;
-use neli::types::{Buffer, GenlBuffer};
 use neli::socket::NlSocketHandle;
+use neli::types::{Buffer, GenlBuffer};
 
 use crate::error::{NetlinkError, Result};
 
@@ -43,10 +43,9 @@ pub fn install_pairwise_key(ifindex: i32, bssid: [u8; 6], key: &[u8]) -> Result<
         })?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_CIPHER, CIPHER_SUITE_CCMP)
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build cipher attr: {}", e))
-            })?,
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_CIPHER, CIPHER_SUITE_CCMP).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build cipher attr: {}", e)),
+        )?,
     );
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, 0u32).map_err(|e| {
@@ -54,13 +53,24 @@ pub fn install_pairwise_key(ifindex: i32, bssid: [u8; 6], key: &[u8]) -> Result<
         })?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_TYPE, NL80211_KEYTYPE_PAIRWISE)
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build key type attr: {}", e))
-            })?,
+        neli::genl::Nlattr::new(
+            false,
+            false,
+            NL80211_ATTR_KEY_TYPE,
+            NL80211_KEYTYPE_PAIRWISE,
+        )
+        .map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build key type attr: {}", e))
+        })?,
     );
 
-    send_cmd(&mut sock, family_id, NL80211_CMD_NEW_KEY, attrs, "NEW_KEY (pairwise)")?;
+    send_cmd(
+        &mut sock,
+        family_id,
+        NL80211_CMD_NEW_KEY,
+        attrs,
+        "NEW_KEY (pairwise)",
+    )?;
 
     let mut attrs = GenlBuffer::new();
     attrs.push(
@@ -79,7 +89,13 @@ pub fn install_pairwise_key(ifindex: i32, bssid: [u8; 6], key: &[u8]) -> Result<
         })?,
     );
 
-    send_cmd(&mut sock, family_id, NL80211_CMD_SET_KEY, attrs, "SET_KEY (pairwise)")?;
+    send_cmd(
+        &mut sock,
+        family_id,
+        NL80211_CMD_SET_KEY,
+        attrs,
+        "SET_KEY (pairwise)",
+    )?;
     Ok(())
 }
 
@@ -98,15 +114,14 @@ pub fn install_group_key(ifindex: i32, key_id: u8, key: &[u8]) -> Result<()> {
         })?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_CIPHER, CIPHER_SUITE_CCMP)
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build cipher attr: {}", e))
-            })?,
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_CIPHER, CIPHER_SUITE_CCMP).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build cipher attr: {}", e)),
+        )?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, key_id as u32).map_err(|e| {
-            NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e))
-        })?,
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, key_id as u32).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e)),
+        )?,
     );
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_TYPE, NL80211_KEYTYPE_GROUP)
@@ -115,7 +130,13 @@ pub fn install_group_key(ifindex: i32, key_id: u8, key: &[u8]) -> Result<()> {
             })?,
     );
 
-    send_cmd(&mut sock, family_id, NL80211_CMD_NEW_KEY, attrs, "NEW_KEY (group)")?;
+    send_cmd(
+        &mut sock,
+        family_id,
+        NL80211_CMD_NEW_KEY,
+        attrs,
+        "NEW_KEY (group)",
+    )?;
 
     let mut attrs = GenlBuffer::new();
     attrs.push(
@@ -124,18 +145,23 @@ pub fn install_group_key(ifindex: i32, key_id: u8, key: &[u8]) -> Result<()> {
         })?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, key_id as u32).map_err(|e| {
-            NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e))
-        })?,
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_IDX, key_id as u32).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build key idx attr: {}", e)),
+        )?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DEFAULT, &[] as &[u8])
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build key default attr: {}", e))
-            })?,
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DEFAULT, &[] as &[u8]).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build key default attr: {}", e)),
+        )?,
     );
 
-    send_cmd(&mut sock, family_id, NL80211_CMD_SET_KEY, attrs, "SET_KEY (group)")?;
+    send_cmd(
+        &mut sock,
+        family_id,
+        NL80211_CMD_SET_KEY,
+        attrs,
+        "SET_KEY (group)",
+    )?;
     Ok(())
 }
 
@@ -165,8 +191,7 @@ fn send_cmd(
         None,
         NlPayload::Payload(genlhdr),
     );
-    sock.send(nlhdr).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to send {}: {}", label, e))
-    })?;
+    sock.send(nlhdr)
+        .map_err(|e| NetlinkError::OperationFailed(format!("Failed to send {}: {}", label, e)))?;
     Ok(())
 }

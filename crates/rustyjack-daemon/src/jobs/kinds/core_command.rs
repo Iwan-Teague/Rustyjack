@@ -66,17 +66,19 @@ where
                     false,
                 ))
             } else {
-                Err(DaemonError::new(ErrorCode::Internal, err.to_string(), false)
-                    .with_detail(format!("{:#}", err))
-                    .with_source("daemon.jobs.core_command"))
+                Err(
+                    DaemonError::new(ErrorCode::Internal, err.to_string(), false)
+                        .with_detail(format!("{:#}", err))
+                        .with_source("daemon.jobs.core_command"),
+                )
             }
         }
-        Err(join_err) => Err(DaemonError::new(
-            ErrorCode::Internal,
-            "Core command job panicked",
-            false,
-        )
-        .with_detail(join_err.to_string())
-        .with_source("daemon.jobs.core_command")),
+        Err(join_err) => {
+            Err(
+                DaemonError::new(ErrorCode::Internal, "Core command job panicked", false)
+                    .with_detail(join_err.to_string())
+                    .with_source("daemon.jobs.core_command"),
+            )
+        }
     }
 }

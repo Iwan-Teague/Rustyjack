@@ -4,11 +4,9 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::state::DaemonState;
 use crate::jobs::cancel_bridge::create_cancel_flag;
-use rustyjack_ipc::{
-    DaemonError, ErrorCode, InterfaceSelectDhcpResult, InterfaceSelectJobResult,
-};
+use crate::state::DaemonState;
+use rustyjack_ipc::{DaemonError, ErrorCode, InterfaceSelectDhcpResult, InterfaceSelectJobResult};
 
 pub async fn run<F, Fut>(
     interface: String,
@@ -36,11 +34,7 @@ where
 
     let mut handle = tokio::task::spawn_blocking(move || {
         let mut cb = |phase: &str, percent: u8, message: &str| {
-            let _ = tx.try_send((
-                phase.to_string(),
-                percent,
-                message.to_string(),
-            ));
+            let _ = tx.try_send((phase.to_string(), percent, message.to_string()));
         };
 
         rustyjack_core::system::interface_selection::select_interface(
@@ -97,21 +91,15 @@ where
         }
         Ok(Err(err)) => {
             if rustyjack_core::operations::is_cancelled_error(&err) {
-                Err(DaemonError::new(
-                    ErrorCode::Cancelled,
-                    "Job cancelled",
-                    false,
+                Err(
+                    DaemonError::new(ErrorCode::Cancelled, "Job cancelled", false)
+                        .with_source("daemon.jobs.interface_select"),
                 )
-                .with_source("daemon.jobs.interface_select"))
             } else {
                 Err(
-                    DaemonError::new(
-                        ErrorCode::Internal,
-                        "Interface selection failed",
-                        false,
-                    )
-                    .with_detail(format!("{:#}", err))
-                    .with_source("daemon.jobs.interface_select"),
+                    DaemonError::new(ErrorCode::Internal, "Interface selection failed", false)
+                        .with_detail(format!("{:#}", err))
+                        .with_source("daemon.jobs.interface_select"),
                 )
             }
         }
