@@ -8,10 +8,11 @@ use rustyjack_ipc::{
     GpioDiagnosticsResponse, HealthResponse, HostnameResponse, HotspotClientsResponse,
     HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse,
     InterfaceCapabilities, InterfaceStatusRequest, InterfaceStatusResponse, JobCancelRequest,
-    JobCancelResponse, JobSpec, JobStarted, JobStartRequest, JobStatusRequest, JobStatusResponse,
-    LogComponent, LogLevel, OpsStatus, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
-    ResponseOk, StatusResponse, SystemActionResponse, SystemLogsResponse, SystemStatusResponse,
-    VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse, PROTOCOL_VERSION,
+    JobCancelResponse, JobSpec, JobStartRequest, JobStarted, JobStatusRequest, JobStatusResponse,
+    LogComponent, LogLevel, OpsStatus, RequestBody, RequestEnvelope, ResponseBody,
+    ResponseEnvelope, ResponseOk, StatusResponse, SystemActionResponse, SystemLogsResponse,
+    SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse,
+    PROTOCOL_VERSION,
 };
 
 #[cfg(feature = "core_dispatch")]
@@ -34,13 +35,9 @@ where
     task::spawn_blocking(f)
         .await
         .map_err(|e| {
-            DaemonError::new(
-                ErrorCode::Internal,
-                format!("{} panicked", label),
-                false,
-            )
-            .with_detail(e.to_string())
-            .with_source(format!("daemon.dispatch.{}", label))
+            DaemonError::new(ErrorCode::Internal, format!("{} panicked", label), false)
+                .with_detail(e.to_string())
+                .with_source(format!("daemon.dispatch.{}", label))
         })?
         .map_err(|e| e.into())
 }
@@ -127,8 +124,7 @@ async fn dispatch_core_command(
             } else {
                 ErrorCode::Internal
             };
-            DaemonError::new(code, msg, false)
-                .with_source(format!("daemon.dispatch.{label}"))
+            DaemonError::new(code, msg, false).with_source(format!("daemon.dispatch.{label}"))
         })
     })
     .await?;
@@ -192,21 +188,15 @@ pub async fn handle_request(
             }
 
             if let Err(err) = write_ops_override(&state.config.root_path, next_ops) {
-                let mut daemon_err = DaemonError::new(
-                    ErrorCode::Internal,
-                    "failed to persist ops config",
-                    false,
-                );
+                let mut daemon_err =
+                    DaemonError::new(ErrorCode::Internal, "failed to persist ops config", false);
                 daemon_err = daemon_err
                     .with_detail(err.to_string())
                     .with_source("daemon.dispatch.ops_config_set");
                 ResponseBody::Err(daemon_err)
             } else if let Err(err) = apply_ops_delta(previous, next_ops, state).await {
-                let mut daemon_err = DaemonError::new(
-                    ErrorCode::Internal,
-                    "failed to apply ops changes",
-                    false,
-                );
+                let mut daemon_err =
+                    DaemonError::new(ErrorCode::Internal, "failed to apply ops changes", false);
                 daemon_err = daemon_err
                     .with_detail(err.to_string())
                     .with_source("daemon.dispatch.ops_config_set");
@@ -280,52 +270,50 @@ pub async fn handle_request(
                 Err(err) => ResponseBody::Err(err),
             }
         }
-        RequestBody::SystemCommand(command) => {
-            match command {
-                rustyjack_ipc::SystemCommand::Update(args) => {
-                    let url = args.url.trim();
-                    if let Err(err) = validation::validate_update_url(url) {
-                        ResponseBody::Err(err)
-                    } else {
-                        let policy = match update_policy_for(&state.config) {
-                            Ok(policy) => policy,
-                            Err(err) => {
-                                return ResponseEnvelope {
-                                    v: PROTOCOL_VERSION,
-                                    request_id: request.request_id,
-                                    body: ResponseBody::Err(err),
-                                };
-                            }
-                        };
-                        match apply_update(&policy, url).await {
-                            Ok(()) => ResponseBody::Ok(ResponseOk::SystemCommand(
-                                CoreDispatchResponse {
-                                    message: "Update applied".to_string(),
-                                    data: serde_json::json!({ "status": "applied" }),
-                                },
-                            )),
-                            Err(err) => ResponseBody::Err(
-                                DaemonError::new(ErrorCode::UpdateFailed, "update failed", false)
-                                    .with_detail(err.to_string()),
-                            ),
+        RequestBody::SystemCommand(command) => match command {
+            rustyjack_ipc::SystemCommand::Update(args) => {
+                let url = args.url.trim();
+                if let Err(err) = validation::validate_update_url(url) {
+                    ResponseBody::Err(err)
+                } else {
+                    let policy = match update_policy_for(&state.config) {
+                        Ok(policy) => policy,
+                        Err(err) => {
+                            return ResponseEnvelope {
+                                v: PROTOCOL_VERSION,
+                                request_id: request.request_id,
+                                body: ResponseBody::Err(err),
+                            };
                         }
-                    }
-                }
-                _ => {
-                    let root = state.config.root_path.clone();
-                    match dispatch_core_command(
-                        "system_command",
-                        root,
-                        rustyjack_core::Commands::System(command),
-                    )
-                    .await
-                    {
-                        Ok(resp) => ResponseBody::Ok(ResponseOk::SystemCommand(resp)),
-                        Err(err) => ResponseBody::Err(err),
+                    };
+                    match apply_update(&policy, url).await {
+                        Ok(()) => {
+                            ResponseBody::Ok(ResponseOk::SystemCommand(CoreDispatchResponse {
+                                message: "Update applied".to_string(),
+                                data: serde_json::json!({ "status": "applied" }),
+                            }))
+                        }
+                        Err(err) => ResponseBody::Err(
+                            DaemonError::new(ErrorCode::UpdateFailed, "update failed", false)
+                                .with_detail(err.to_string()),
+                        ),
                     }
                 }
             }
-        }
+            _ => {
+                let root = state.config.root_path.clone();
+                match dispatch_core_command(
+                    "system_command",
+                    root,
+                    rustyjack_core::Commands::System(command),
+                )
+                .await
+                {
+                    Ok(resp) => ResponseBody::Ok(ResponseOk::SystemCommand(resp)),
+                    Err(err) => ResponseBody::Err(err),
+                }
+            }
+        },
         RequestBody::HardwareCommand(command) => {
             let root = state.config.root_path.clone();
             match dispatch_core_command(
@@ -477,7 +465,7 @@ pub async fn handle_request(
             }
         }
         RequestBody::SystemReboot => {
-            use rustyjack_core::audit::{AuditEvent, operations};
+            use rustyjack_core::audit::{operations, AuditEvent};
 
             let root = state.config.root_path.clone();
             let uid = peer.uid;
@@ -507,7 +495,7 @@ pub async fn handle_request(
             }
         }
         RequestBody::SystemShutdown => {
-            use rustyjack_core::audit::{AuditEvent, operations};
+            use rustyjack_core::audit::{operations, AuditEvent};
 
             let root = state.config.root_path.clone();
             let uid = peer.uid;
@@ -537,10 +525,8 @@ pub async fn handle_request(
             }
         }
         RequestBody::SystemSync => {
-            let result = run_blocking("system_sync", || {
-                rustyjack_core::services::system::sync()
-            })
-            .await;
+            let result =
+                run_blocking("system_sync", || rustyjack_core::services::system::sync()).await;
 
             match result {
                 Ok(()) => ResponseBody::Ok(ResponseOk::SystemAction(SystemActionResponse {
@@ -556,13 +542,16 @@ pub async fn handle_request(
             .await;
 
             match result {
-                Ok(hostname) => ResponseBody::Ok(ResponseOk::Hostname(HostnameResponse { hostname })),
+                Ok(hostname) => {
+                    ResponseBody::Ok(ResponseOk::Hostname(HostnameResponse { hostname }))
+                }
                 Err(err) => ResponseBody::Err(err),
             }
         }
         RequestBody::BlockDevicesList => {
-            let result = task::spawn_blocking(|| rustyjack_core::services::mount::list_block_devices())
-                .await;
+            let result =
+                task::spawn_blocking(|| rustyjack_core::services::mount::list_block_devices())
+                    .await;
             match result {
                 Ok(Ok(devices)) => {
                     let mapped = devices
@@ -602,13 +591,14 @@ pub async fn handle_request(
                     }
                 }
             };
-            let result =
-                task::spawn_blocking(move || rustyjack_core::services::logs::collect_log_bundle(&root))
-                    .await;
+            let result = task::spawn_blocking(move || {
+                rustyjack_core::services::logs::collect_log_bundle(&root)
+            })
+            .await;
             match result {
-                Ok(Ok(content)) => ResponseBody::Ok(ResponseOk::SystemLogs(SystemLogsResponse {
-                    content,
-                })),
+                Ok(Ok(content)) => {
+                    ResponseBody::Ok(ResponseOk::SystemLogs(SystemLogsResponse { content }))
+                }
                 Ok(Err(err)) => ResponseBody::Err(err.to_daemon_error()),
                 Err(err) => ResponseBody::Err(
                     DaemonError::new(ErrorCode::Internal, "log bundle panicked", false)
@@ -620,11 +610,9 @@ pub async fn handle_request(
             let root = state.config.root_path.clone();
             let result = run_blocking("active_interface_get", move || {
                 let prefs = rustyjack_core::system::PreferenceManager::new(root);
-                prefs
-                    .get_preferred()
-                    .map_err(|err| {
-                        rustyjack_core::services::error::ServiceError::Internal(err.to_string())
-                    })
+                prefs.get_preferred().map_err(|err| {
+                    rustyjack_core::services::error::ServiceError::Internal(err.to_string())
+                })
             })
             .await;
 
@@ -641,11 +629,9 @@ pub async fn handle_request(
             let root = state.config.root_path.clone();
             let result = run_blocking("active_interface_clear", move || {
                 let prefs = rustyjack_core::system::PreferenceManager::new(root);
-                prefs
-                    .clear_preferred()
-                    .map_err(|err| {
-                        rustyjack_core::services::error::ServiceError::Internal(err.to_string())
-                    })
+                prefs.clear_preferred().map_err(|err| {
+                    rustyjack_core::services::error::ServiceError::Internal(err.to_string())
+                })
             })
             .await;
 
@@ -692,13 +678,15 @@ pub async fn handle_request(
                 // Admin-up is what we set with netlink, operstate is derived policy
                 // An interface can be admin-UP but operstate "down" when disconnected
                 let is_up = if let Ok(flags_hex) = fs::read_to_string(sys_path.join("flags")) {
-                    if let Ok(flags) = u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16) {
-                        (flags & 0x1) != 0  // IFF_UP is bit 0
+                    if let Ok(flags) =
+                        u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16)
+                    {
+                        (flags & 0x1) != 0 // IFF_UP is bit 0
                     } else {
-                        oper_state == "up"  // fallback to operstate
+                        oper_state == "up" // fallback to operstate
                     }
                 } else {
-                    oper_state == "up"  // fallback to operstate
+                    oper_state == "up" // fallback to operstate
                 };
                 let carrier = fs::read_to_string(sys_path.join("carrier"))
                     .ok()
@@ -716,20 +704,21 @@ pub async fn handle_request(
                     .flatten()
                     .map(|addr| addr.to_string());
 
-                let capabilities = ops.get_interface_capabilities(iface).ok().map(|caps| {
-                    InterfaceCapabilities {
-                        is_wireless: caps.is_wireless,
-                        is_physical: caps.is_physical,
-                        supports_monitor: caps.supports_monitor,
-                        supports_ap: caps.supports_ap,
-                        supports_injection: caps.supports_injection,
-                        supports_5ghz: caps.supports_5ghz,
-                        supports_2ghz: caps.supports_2ghz,
-                        mac_address: caps.mac_address,
-                        driver: caps.driver,
-                        chipset: caps.chipset,
-                    }
-                });
+                let capabilities =
+                    ops.get_interface_capabilities(iface)
+                        .ok()
+                        .map(|caps| InterfaceCapabilities {
+                            is_wireless: caps.is_wireless,
+                            is_physical: caps.is_physical,
+                            supports_monitor: caps.supports_monitor,
+                            supports_ap: caps.supports_ap,
+                            supports_injection: caps.supports_injection,
+                            supports_5ghz: caps.supports_5ghz,
+                            supports_2ghz: caps.supports_2ghz,
+                            mac_address: caps.mac_address,
+                            driver: caps.driver,
+                            chipset: caps.chipset,
+                        });
 
                 Ok(InterfaceStatusResponse {
                     interface: iface.to_string(),
@@ -756,16 +745,16 @@ pub async fn handle_request(
             .await;
 
             match result {
-                Ok(caps) => ResponseBody::Ok(ResponseOk::WifiCapabilities(
-                    WifiCapabilitiesResponse {
+                Ok(caps) => {
+                    ResponseBody::Ok(ResponseOk::WifiCapabilities(WifiCapabilitiesResponse {
                         native_available: caps.native_available,
                         has_root: caps.has_root,
                         interface_exists: caps.interface_exists,
                         interface_is_wireless: caps.interface_is_wireless,
                         supports_monitor_mode: caps.supports_monitor_mode,
                         supports_injection: caps.supports_injection,
-                    },
-                )),
+                    }))
+                }
                 Err(err) => ResponseBody::Err(err),
             }
         }
@@ -776,13 +765,13 @@ pub async fn handle_request(
             .await;
 
             match result {
-                Ok(resp) => ResponseBody::Ok(ResponseOk::HotspotWarnings(
-                    HotspotWarningsResponse {
+                Ok(resp) => {
+                    ResponseBody::Ok(ResponseOk::HotspotWarnings(HotspotWarningsResponse {
                         last_warning: resp.last_warning,
                         last_ap_error: resp.last_ap_error,
                         last_start_error: resp.last_start_error,
-                    },
-                )),
+                    }))
+                }
                 Err(err) => ResponseBody::Err(err),
             }
         }
@@ -793,16 +782,16 @@ pub async fn handle_request(
             .await;
 
             match result {
-                Ok(resp) => ResponseBody::Ok(ResponseOk::HotspotDiagnostics(
-                    HotspotDiagnosticsResponse {
+                Ok(resp) => {
+                    ResponseBody::Ok(ResponseOk::HotspotDiagnostics(HotspotDiagnosticsResponse {
                         regdom_raw: resp.regdom_raw,
                         regdom_valid: resp.regdom_valid,
                         rfkill: resp.rfkill,
                         ap_support: resp.ap_support,
                         allowed_channels: resp.allowed_channels,
                         last_start_error: resp.last_start_error,
-                    },
-                )),
+                    }))
+                }
                 Err(err) => ResponseBody::Err(err),
             }
         }
@@ -820,12 +809,14 @@ pub async fn handle_request(
             }
         }
         RequestBody::GpioDiagnosticsGet => {
-            let result = task::spawn_blocking(|| rustyjack_core::services::logs::gpio_diagnostics())
-                .await;
+            let result =
+                task::spawn_blocking(|| rustyjack_core::services::logs::gpio_diagnostics()).await;
             match result {
-                Ok(Ok(content)) => ResponseBody::Ok(ResponseOk::GpioDiagnostics(
-                    GpioDiagnosticsResponse { content },
-                )),
+                Ok(Ok(content)) => {
+                    ResponseBody::Ok(ResponseOk::GpioDiagnostics(GpioDiagnosticsResponse {
+                        content,
+                    }))
+                }
                 Ok(Err(err)) => ResponseBody::Err(err.to_daemon_error()),
                 Err(err) => ResponseBody::Err(
                     DaemonError::new(ErrorCode::Internal, "gpio diagnostics panicked", false)
@@ -1018,10 +1009,8 @@ pub async fn handle_request(
             }))
         }
         RequestBody::HotspotStop => {
-            let result = run_blocking("hotspot_stop", || {
-                rustyjack_core::services::hotspot::stop()
-            })
-            .await;
+            let result =
+                run_blocking("hotspot_stop", || rustyjack_core::services::hotspot::stop()).await;
 
             match result {
                 Ok(success) => ResponseBody::Ok(ResponseOk::HotspotAction(
@@ -1061,10 +1050,8 @@ pub async fn handle_request(
             }))
         }
         RequestBody::PortalStop => {
-            let result = run_blocking("portal_stop", || {
-                rustyjack_core::services::portal::stop()
-            })
-            .await;
+            let result =
+                run_blocking("portal_stop", || rustyjack_core::services::portal::stop()).await;
 
             match result {
                 Ok(success) => ResponseBody::Ok(ResponseOk::PortalAction(
@@ -1084,13 +1071,18 @@ pub async fn handle_request(
 
             match result {
                 Ok(status) => {
-                    let running =
-                        status.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let running = status
+                        .get("running")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     let interface = status
                         .get("interface")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    let port = status.get("port").and_then(|v| v.as_u64()).map(|p| p as u16);
+                    let port = status
+                        .get("port")
+                        .and_then(|v| v.as_u64())
+                        .map(|p| p as u16);
                     ResponseBody::Ok(ResponseOk::PortalStatus(
                         rustyjack_ipc::PortalStatusResponse {
                             running,
@@ -1215,25 +1207,26 @@ pub async fn handle_request(
             let root = state.config.root_path.clone();
             let iface = interface.clone();
             let result = run_blocking("set_active_interface", move || {
-                rustyjack_core::operations::set_active_interface(&root, &iface)
-                    .map_err(|e| {
-                        // Extract the root cause for a clean user-facing message
-                        let root_cause = e.root_cause().to_string();
-                        let full_chain = format!("{:#}", e);
-                        DaemonError::new(
-                            ErrorCode::Internal,
-                            format!("Failed to set interface '{}': {}", iface, root_cause),
-                            false,
-                        )
-                        .with_detail(full_chain)
-                        .with_source("set_active_interface")
-                    })
+                rustyjack_core::operations::set_active_interface(&root, &iface).map_err(|e| {
+                    // Extract the root cause for a clean user-facing message
+                    let root_cause = e.root_cause().to_string();
+                    let full_chain = format!("{:#}", e);
+                    DaemonError::new(
+                        ErrorCode::Internal,
+                        format!("Failed to set interface '{}': {}", iface, root_cause),
+                        false,
+                    )
+                    .with_detail(full_chain)
+                    .with_source("set_active_interface")
+                })
             })
             .await;
 
             match result {
                 Ok(outcome) => {
-                    let errors: Vec<String> = outcome.errors.iter()
+                    let errors: Vec<String> = outcome
+                        .errors
+                        .iter()
                         .map(|e| format!("{}: {}", e.interface, e.message))
                         .collect();
                     ResponseBody::Ok(ResponseOk::SetActiveInterface(
@@ -1264,11 +1257,17 @@ pub async fn handle_request(
                         Ok(outcome) => {
                             tracing::info!(
                                 "Hotplug enforcement: allowed={:?}, blocked={:?}, errors={}",
-                                outcome.allowed, outcome.blocked, outcome.errors.len()
+                                outcome.allowed,
+                                outcome.blocked,
+                                outcome.errors.len()
                             );
                             if !outcome.errors.is_empty() {
                                 for err in &outcome.errors {
-                                    tracing::warn!("Hotplug error on {}: {}", err.interface, err.message);
+                                    tracing::warn!(
+                                        "Hotplug error on {}: {}",
+                                        err.interface,
+                                        err.message
+                                    );
                                 }
                             }
                         }
@@ -1276,16 +1275,19 @@ pub async fn handle_request(
                             tracing::warn!("Hotplug enforcement failed: {}", e);
                         }
                     }
-                }).await.ok();
+                })
+                .await
+                .ok();
             });
             ResponseBody::Ok(ResponseOk::HotplugNotify(
-                rustyjack_ipc::HotplugNotifyResponse {
-                    acknowledged: true,
-                },
+                rustyjack_ipc::HotplugNotifyResponse { acknowledged: true },
             ))
         }
-        RequestBody::LogTailGet(rustyjack_ipc::LogTailRequest { component, max_lines }) => {
-            use rustyjack_ipc::{LogTailResponse};
+        RequestBody::LogTailGet(rustyjack_ipc::LogTailRequest {
+            component,
+            max_lines,
+        }) => {
+            use rustyjack_ipc::LogTailResponse;
 
             let root = state.config.root_path.clone();
             let max_lines = max_lines.unwrap_or(500).clamp(1, MAX_LOG_TAIL_LINES);
@@ -1297,12 +1299,15 @@ pub async fn handle_request(
                 if !log_path.exists() {
                     return Ok((Vec::new(), false));
                 }
-                let (content, truncated) =
-                    crate::tail::tail_lines_with_truncation(&log_path, max_lines, MAX_LOG_TAIL_BYTES)
-                        .map_err(|e| {
-                            DaemonError::new(ErrorCode::Io, "failed to tail log file", false)
-                                .with_detail(e.to_string())
-                        })?;
+                let (content, truncated) = crate::tail::tail_lines_with_truncation(
+                    &log_path,
+                    max_lines,
+                    MAX_LOG_TAIL_BYTES,
+                )
+                .map_err(|e| {
+                    DaemonError::new(ErrorCode::Io, "failed to tail log file", false)
+                        .with_detail(e.to_string())
+                })?;
                 let lines = content.lines().map(|line| line.to_string()).collect();
 
                 Ok::<(Vec<String>, bool), DaemonError>((lines, truncated))
@@ -1334,9 +1339,12 @@ pub async fn handle_request(
                 components,
             }))
         }
-        RequestBody::LoggingConfigSet(rustyjack_ipc::LoggingConfigSetRequest { enabled, level }) => {
+        RequestBody::LoggingConfigSet(rustyjack_ipc::LoggingConfigSetRequest {
+            enabled,
+            level,
+        }) => {
+            use rustyjack_core::audit::{operations, AuditEvent};
             use rustyjack_ipc::LoggingConfigSetResponse;
-            use rustyjack_core::audit::{AuditEvent, operations};
 
             let root = state.config.root_path.clone();
             let uid = peer.uid;
@@ -1416,14 +1424,12 @@ pub async fn handle_request(
                                 )
                                 .with_detail(err.to_string())
                             })?;
-                        rustyjack_core::operations::dispatch_command(&root, command).map_err(|err| {
-                            DaemonError::new(
-                                ErrorCode::Internal,
-                                "core dispatch failed",
-                                false,
-                            )
-                            .with_detail(err.to_string())
-                        })
+                        rustyjack_core::operations::dispatch_command(&root, command).map_err(
+                            |err| {
+                                DaemonError::new(ErrorCode::Internal, "core dispatch failed", false)
+                                    .with_detail(err.to_string())
+                            },
+                        )
                     })
                     .await;
 

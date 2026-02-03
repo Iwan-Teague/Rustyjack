@@ -23,61 +23,56 @@ use rustyjack_evasion::{
 };
 use rustyjack_portal::{start_portal, stop_portal, PortalConfig};
 use rustyjack_wireless::{
-    arp_scan, arp_scan_cancellable, calculate_bandwidth, discover_gateway,
-    discover_mdns_devices, discover_mdns_devices_cancellable, get_traffic_stats,
-    capture_dns_queries, capture_dns_queries_cancellable, hotspot_disconnect_client,
-    hotspot_set_blacklist, scan_network_services, scan_network_services_cancellable,
-    start_hotspot, status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
+    arp_scan, arp_scan_cancellable, calculate_bandwidth, capture_dns_queries,
+    capture_dns_queries_cancellable, discover_gateway, discover_mdns_devices,
+    discover_mdns_devices_cancellable, get_traffic_stats, hotspot_disconnect_client,
+    hotspot_set_blacklist, scan_network_services, scan_network_services_cancellable, start_hotspot,
+    status_hotspot, stop_hotspot, HotspotConfig, HotspotState,
 };
-use serde_json::{json, Map, Value};
 use serde::Serialize;
+use serde_json::{json, Map, Value};
 
 use crate::audit::{AuditEvent, AuditResult};
 
-use walkdir::WalkDir;
 #[cfg(target_os = "linux")]
 use rustyjack_netlink::{TxPowerSetting, WirelessManager};
+use walkdir::WalkDir;
 
+use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
 use crate::cli::{
     BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
     DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand, EthernetDiscoverArgs,
-    EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs, HardwareCommand,
-    HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs, LootCommand,
-    LootKind, LootListArgs, LootReadArgs,
-    MitmCommand, MitmStartArgs, NotifyCommand, ProcessCommand, ProcessKillArgs, ProcessStatusArgs,
-    ReverseCommand, ReverseLaunchArgs, ScanCommand, ScanDiscovery, ScanRunArgs,
-    StatusCommand, SystemCommand, SystemConfigureHostArgs, SystemFdeMigrateArgs,
-    SystemFdePrepareArgs, SystemUpdateArgs, ExportLogsToUsbArgs, UsbMountArgs, UsbMountMode,
-    UsbUnmountArgs, WifiBestArgs, WifiCommand,
-    WifiCrackArgs,
-    WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
-    WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPipelinePreflightArgs,
-    WifiPmkidArgs, WifiProbeSniffArgs,
+    EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs, ExportLogsToUsbArgs,
+    HardwareCommand, HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs,
+    LootCommand, LootKind, LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand,
+    ProcessCommand, ProcessKillArgs, ProcessStatusArgs, ReverseCommand, ReverseLaunchArgs,
+    ScanCommand, ScanDiscovery, ScanRunArgs, StatusCommand, SystemCommand, SystemConfigureHostArgs,
+    SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs, UsbMountArgs, UsbMountMode,
+    UsbUnmountArgs, WifiBestArgs, WifiCommand, WifiCrackArgs, WifiDeauthArgs, WifiDisconnectArgs,
+    WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs, WifiMacRestoreArgs, WifiMacSetArgs,
+    WifiMacSetVendorArgs, WifiPipelinePreflightArgs, WifiPmkidArgs, WifiProbeSniffArgs,
     WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
-    WifiProfileShowArgs,
-    WifiReconArpScanArgs, WifiReconBandwidthArgs, WifiReconCommand, WifiReconDnsCaptureArgs,
-    WifiReconGatewayArgs, WifiReconMdnsScanArgs, WifiReconServiceScanArgs, WifiRouteCommand,
-    WifiRouteEnsureArgs, WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs,
-    WifiTxPowerArgs,
+    WifiProfileShowArgs, WifiReconArpScanArgs, WifiReconBandwidthArgs, WifiReconCommand,
+    WifiReconDnsCaptureArgs, WifiReconGatewayArgs, WifiReconMdnsScanArgs, WifiReconServiceScanArgs,
+    WifiRouteCommand, WifiRouteEnsureArgs, WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs,
+    WifiSwitchArgs, WifiTxPowerArgs,
 };
+use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 #[cfg(target_os = "linux")]
 use crate::netlink_helpers::netlink_set_interface_up;
-use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
-use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 use crate::system::{
-    active_uplink, acquire_dhcp_lease, append_payload_log, apply_interface_isolation_strict,
-    arp_spoof_running, backup_routing_state, build_scan_loot_path,
-    build_manual_embed, build_mitm_pcap_path, cached_gateway, compose_status_text,
-    connect_wifi_network, default_gateway_ip, delete_wifi_profile, detect_ethernet_interface,
-    detect_interface, disconnect_wifi_interface, dns_spoof_running, enable_ip_forwarding,
-    enforce_single_interface, find_interface_by_mac, interface_gateway,
-    kill_process, last_dhcp_outcome, lease_record, list_interface_summaries, list_wifi_profiles,
-    load_wifi_profile, log_mac_usage, pcap_capture_running, ping_host, preferred_interface,
-    process_running_exact, randomize_hostname, read_default_route, read_discord_webhook,
-    read_dns_servers, read_interface_preference, read_interface_preference_with_mac,
-    read_interface_stats, read_wifi_link_info, restore_routing_state,
-    sanitize_label, save_wifi_profile, scan_local_hosts_cancellable,
-    scan_wifi_networks_with_timeout_cancel, select_active_uplink,
+    acquire_dhcp_lease, active_uplink, append_payload_log, apply_interface_isolation_strict,
+    arp_spoof_running, backup_routing_state, build_manual_embed, build_mitm_pcap_path,
+    build_scan_loot_path, cached_gateway, compose_status_text, connect_wifi_network,
+    default_gateway_ip, delete_wifi_profile, detect_ethernet_interface, detect_interface,
+    disconnect_wifi_interface, dns_spoof_running, enable_ip_forwarding, enforce_single_interface,
+    find_interface_by_mac, interface_gateway, kill_process, last_dhcp_outcome, lease_record,
+    list_interface_summaries, list_wifi_profiles, load_wifi_profile, log_mac_usage,
+    pcap_capture_running, ping_host, preferred_interface, process_running_exact,
+    randomize_hostname, read_default_route, read_discord_webhook, read_dns_servers,
+    read_interface_preference, read_interface_preference_with_mac, read_interface_stats,
+    read_wifi_link_info, restore_routing_state, sanitize_label, save_wifi_profile,
+    scan_local_hosts_cancellable, scan_wifi_networks_with_timeout_cancel, select_active_uplink,
     select_best_interface, select_wifi_interface, send_discord_payload, send_scan_to_discord,
     set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof,
     start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
@@ -112,7 +107,10 @@ fn get_active_interface(root: &Path) -> Result<Option<String>> {
     prefs.get_preferred()
 }
 
-pub fn set_active_interface(root: &Path, iface: &str) -> Result<crate::system::ops::IsolationOutcome> {
+pub fn set_active_interface(
+    root: &Path,
+    iface: &str,
+) -> Result<crate::system::ops::IsolationOutcome> {
     use crate::system::interface_selection::select_interface;
 
     let selection = select_interface(
@@ -262,9 +260,7 @@ pub fn dispatch_command_with_cancel(
         Commands::Reverse(ReverseCommand::Launch(args)) => handle_reverse_launch(root, args),
         Commands::System(SystemCommand::Update(args)) => handle_system_update(root, args),
         Commands::System(SystemCommand::RandomizeHostname) => handle_randomize_hostname(),
-        Commands::System(SystemCommand::ConfigureHost(args)) => {
-            handle_system_configure_host(args)
-        }
+        Commands::System(SystemCommand::ConfigureHost(args)) => handle_system_configure_host(args),
         Commands::System(SystemCommand::FdePrepare(args)) => handle_system_fde_prepare(root, args),
         Commands::System(SystemCommand::FdeMigrate(args)) => handle_system_fde_migrate(root, args),
         Commands::System(SystemCommand::Reboot) => handle_system_reboot(),
@@ -287,7 +283,9 @@ pub fn dispatch_command_with_cancel(
             EthernetCommand::Discover(args) => handle_eth_discover(root, args, cancel),
             EthernetCommand::PortScan(args) => handle_eth_port_scan(root, args, cancel),
             EthernetCommand::Inventory(args) => handle_eth_inventory(root, args, cancel),
-            EthernetCommand::SiteCredCapture(args) => handle_eth_site_cred_capture(root, args, cancel),
+            EthernetCommand::SiteCredCapture(args) => {
+                handle_eth_site_cred_capture(root, args, cancel)
+            }
         },
         Commands::Hotspot(sub) => match sub {
             HotspotCommand::Start(args) => handle_hotspot_start(root, args),
@@ -537,8 +535,7 @@ fn handle_eth_port_scan(
     check_cancel(cancel)?;
     let timeout = Duration::from_millis(args.timeout_ms.max(50));
     let result = if let Some(flag) = cancel {
-        quick_port_scan_cancellable(target, &ports, timeout, flag)
-            .context("running port scan")?
+        quick_port_scan_cancellable(target, &ports, timeout, flag).context("running port scan")?
     } else {
         quick_port_scan(target, &ports, timeout).context("running port scan")?
     };
@@ -929,13 +926,13 @@ fn handle_hotspot_set_blacklist(args: HotspotBlacklistArgs) -> Result<HandlerRes
 }
 
 const DEFAULT_SCAN_PORTS: &[u16] = &[
-    20, 21, 22, 23, 25, 26, 37, 53, 67, 68, 69, 79, 80, 81, 82, 83, 84, 85, 88, 110, 111, 113,
-    119, 123, 135, 137, 138, 139, 143, 161, 162, 179, 199, 389, 443, 445, 465, 514, 515, 543,
-    544, 548, 554, 587, 631, 636, 873, 902, 989, 990, 993, 995, 1025, 1026, 1027, 1028, 1029,
-    1030, 1110, 1433, 1720, 1723, 1755, 1900, 2000, 2001, 2002, 2049, 2082, 2083, 2100, 2222,
-    2301, 2381, 2483, 2484, 3128, 3306, 3389, 3690, 4444, 4567, 5000, 5001, 5060, 5061, 5432,
-    5631, 5900, 5985, 5986, 6000, 6001, 6379, 6667, 7001, 7002, 8000, 8008, 8009, 8080, 8081,
-    8086, 8088, 8443, 8888, 9000, 9001, 9090, 9200, 9300, 9418, 9999, 10000, 11211, 27017,
+    20, 21, 22, 23, 25, 26, 37, 53, 67, 68, 69, 79, 80, 81, 82, 83, 84, 85, 88, 110, 111, 113, 119,
+    123, 135, 137, 138, 139, 143, 161, 162, 179, 199, 389, 443, 445, 465, 514, 515, 543, 544, 548,
+    554, 587, 631, 636, 873, 902, 989, 990, 993, 995, 1025, 1026, 1027, 1028, 1029, 1030, 1110,
+    1433, 1720, 1723, 1755, 1900, 2000, 2001, 2002, 2049, 2082, 2083, 2100, 2222, 2301, 2381, 2483,
+    2484, 3128, 3306, 3389, 3690, 4444, 4567, 5000, 5001, 5060, 5061, 5432, 5631, 5900, 5985, 5986,
+    6000, 6001, 6379, 6667, 7001, 7002, 8000, 8008, 8009, 8080, 8081, 8086, 8088, 8443, 8888, 9000,
+    9001, 9090, 9200, 9300, 9418, 9999, 10000, 11211, 27017,
 ];
 
 #[derive(Debug, Clone)]
@@ -1024,44 +1021,42 @@ where
     on_progress(0.0, "Preparing");
     check_cancel(cancel)?;
 
-    let (hosts, discovery_summary) = if config.no_discovery || matches!(config.discovery, ScanDiscovery::None) {
-        let hosts = expand_targets(&scan_target, config.max_hosts)?;
-        let summary = format!(
-            "Discovery skipped (-Pn). Targets: {}",
-            hosts.len()
-        );
-        (
-            hosts
-                .into_iter()
-                .map(|ip| HostDiscovery {
-                    ip,
-                    ttl: None,
-                    arp: false,
-                    icmp: false,
-                })
-                .collect::<Vec<_>>(),
-            summary,
-        )
-    } else {
-        let discovery = run_scan_discovery(
-            &interface_info.name,
-            &scan_target,
-            config.discovery,
-            config.arp_rate_pps,
-            config.timeout,
-            cancel,
-        );
-        let mut hosts = discovery.0;
-        if let Some(limit) = config.max_hosts {
-            if hosts.len() > limit {
-                hosts.truncate(limit);
-                config
-                    .warnings
-                    .push(format!("Host list truncated to {} via --max-hosts", limit));
+    let (hosts, discovery_summary) =
+        if config.no_discovery || matches!(config.discovery, ScanDiscovery::None) {
+            let hosts = expand_targets(&scan_target, config.max_hosts)?;
+            let summary = format!("Discovery skipped (-Pn). Targets: {}", hosts.len());
+            (
+                hosts
+                    .into_iter()
+                    .map(|ip| HostDiscovery {
+                        ip,
+                        ttl: None,
+                        arp: false,
+                        icmp: false,
+                    })
+                    .collect::<Vec<_>>(),
+                summary,
+            )
+        } else {
+            let discovery = run_scan_discovery(
+                &interface_info.name,
+                &scan_target,
+                config.discovery,
+                config.arp_rate_pps,
+                config.timeout,
+                cancel,
+            );
+            let mut hosts = discovery.0;
+            if let Some(limit) = config.max_hosts {
+                if hosts.len() > limit {
+                    hosts.truncate(limit);
+                    config
+                        .warnings
+                        .push(format!("Host list truncated to {} via --max-hosts", limit));
+                }
             }
-        }
-        (hosts, discovery.1)
-    };
+            (hosts, discovery.1)
+        };
 
     check_cancel(cancel)?;
     on_progress(20.0, "Discovery complete");
@@ -1083,10 +1078,7 @@ where
             bail!("No ports selected for scan");
         }
         check_cancel(cancel)?;
-        let worker_count = config
-            .workers
-            .clamp(1, 32)
-            .min(hosts.len().max(1));
+        let worker_count = config.workers.clamp(1, 32).min(hosts.len().max(1));
         let (scan_results, scan_errors) = scan_hosts(
             &hosts,
             &ports,
@@ -1518,7 +1510,9 @@ where
                     let mut guard = queue.lock().ok()?;
                     guard.pop_front()
                 };
-                let Some(ip) = ip else { break; };
+                let Some(ip) = ip else {
+                    break;
+                };
                 let result = if let Some(flag) = cancel_flag.as_ref() {
                     rustyjack_ethernet::quick_port_scan_with_source_cancellable(
                         ip,
@@ -1613,11 +1607,19 @@ fn render_scan_report(
     out.push_str(&format!("Ports scanned: {} total\n", config.ports.len()));
     out.push_str(&format!(
         "Service detection: {}\n",
-        if config.service_detect { "enabled" } else { "disabled" }
+        if config.service_detect {
+            "enabled"
+        } else {
+            "disabled"
+        }
     ));
     out.push_str(&format!(
         "OS detection: {}\n",
-        if config.os_detect { "enabled" } else { "disabled" }
+        if config.os_detect {
+            "enabled"
+        } else {
+            "disabled"
+        }
     ));
     out.push_str(&format!("Discovery: {:?}\n", config.discovery));
     out.push_str(&format!("{discovery_summary}\n"));
@@ -1646,8 +1648,8 @@ fn render_scan_report(
         out.push_str(&format!("Host is up ({})\n", method));
         if config.os_detect {
             if let Some(ttl) = host.host.ttl {
-                let os_guess = rustyjack_ethernet::guess_os_from_ttl(Some(ttl))
-                    .unwrap_or("unknown");
+                let os_guess =
+                    rustyjack_ethernet::guess_os_from_ttl(Some(ttl)).unwrap_or("unknown");
                 out.push_str(&format!("TTL: {} (OS guess: {})\n", ttl, os_guess));
             } else {
                 out.push_str("TTL: unknown\n");
@@ -1674,17 +1676,9 @@ fn render_scan_report(
                     } else {
                         "".to_string()
                     };
-                    out.push_str(&format!(
-                        "{:>5}/tcp open  {:<7} {}\n",
-                        port,
-                        service,
-                        info
-                    ));
+                    out.push_str(&format!("{:>5}/tcp open  {:<7} {}\n", port, service, info));
                 }
-                out.push_str(&format!(
-                    "Not shown: {} closed ports\n",
-                    closed
-                ));
+                out.push_str(&format!("Not shown: {} closed ports\n", closed));
             }
         } else {
             out.push_str("Port scan skipped (-sn)\n");
@@ -2297,7 +2291,11 @@ fn handle_eth_site_cred_capture(
         cleanup();
         return Err(err);
     }
-    start_dns_spoof(&interface_info.name, interface_info.address, interface_info.address)?;
+    start_dns_spoof(
+        &interface_info.name,
+        interface_info.address,
+        interface_info.address,
+    )?;
     let _ = log_mac_usage(
         root,
         &interface_info.name,
@@ -2366,10 +2364,7 @@ fn handle_dnsspoof_start(root: &Path, args: DnsSpoofStartArgs) -> Result<Handler
         };
         let site_dir = root.join("DNSSpoof").join("sites").join(&site);
         if !site_dir.exists() {
-            warnings.push(format!(
-                "Site template missing: {}",
-                site_dir.display()
-            ));
+            warnings.push(format!("Site template missing: {}", site_dir.display()));
         }
         let checks = json!({
             "site": site,
@@ -2414,7 +2409,11 @@ fn handle_dnsspoof_start(root: &Path, args: DnsSpoofStartArgs) -> Result<Handler
         capture_dir.clone(),
     );
     start_portal(portal_cfg)?;
-    start_dns_spoof(&interface_info.name, interface_info.address, interface_info.address)?;
+    start_dns_spoof(
+        &interface_info.name,
+        interface_info.address,
+        interface_info.address,
+    )?;
     let _ = log_mac_usage(
         root,
         &interface_info.name,
@@ -2835,13 +2834,21 @@ fn handle_network_status() -> Result<HandlerResult> {
         } else {
             None
         };
-        let wpa_state = wifi_link
-            .as_ref()
-            .map(|link| if link.connected { "Connected" } else { "Disconnected" }.to_string());
+        let wpa_state = wifi_link.as_ref().map(|link| {
+            if link.connected {
+                "Connected"
+            } else {
+                "Disconnected"
+            }
+            .to_string()
+        });
 
         let link_ready = match summary.kind.as_str() {
             "wired" => carrier.unwrap_or(false),
-            "wireless" => wifi_link.as_ref().map(|link| link.connected).unwrap_or(false),
+            "wireless" => wifi_link
+                .as_ref()
+                .map(|link| link.connected)
+                .unwrap_or(false),
             _ => false,
         };
 
@@ -2906,9 +2913,7 @@ fn handle_network_status() -> Result<HandlerResult> {
     let mut data = Map::new();
     data.insert(
         "active_uplink".into(),
-        active_uplink()
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        active_uplink().map(Value::String).unwrap_or(Value::Null),
     );
     let preferred = preferred_interface().ok();
     data.insert(
@@ -3358,7 +3363,10 @@ fn handle_system_fde_prepare(root: &Path, args: SystemFdePrepareArgs) -> Result<
         dev.devnode.to_string_lossy() == device || format!("/dev/{}", dev.name) == device
     });
     if !allowed {
-        errors.push(format!("Device {} is not a detected USB block device", device));
+        errors.push(format!(
+            "Device {} is not a detected USB block device",
+            device
+        ));
     }
     let checks = json!({
         "device": device,
@@ -3413,7 +3421,10 @@ pub(crate) fn handle_system_reboot() -> Result<HandlerResult> {
     #[cfg(target_os = "linux")]
     {
         system_reboot_cmd(LINUX_REBOOT_CMD_RESTART)?;
-        return Ok(("Reboot initiated".to_string(), json!({ "action": "reboot" })));
+        return Ok((
+            "Reboot initiated".to_string(),
+            json!({ "action": "reboot" }),
+        ));
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -3426,7 +3437,10 @@ pub(crate) fn handle_system_poweroff() -> Result<HandlerResult> {
     #[cfg(target_os = "linux")]
     {
         system_reboot_cmd(LINUX_REBOOT_CMD_POWER_OFF)?;
-        return Ok(("Poweroff initiated".to_string(), json!({ "action": "poweroff" })));
+        return Ok((
+            "Poweroff initiated".to_string(),
+            json!({ "action": "poweroff" }),
+        ));
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -3579,8 +3593,8 @@ fn handle_system_export_logs_to_usb(
     let write_result = (|| -> Result<()> {
         let bundle = crate::services::logs::collect_log_bundle(root)
             .map_err(|e| anyhow!("log bundle collection failed: {}", e))?;
-        let mut file = File::create(&dest)
-            .with_context(|| format!("creating {}", dest.display()))?;
+        let mut file =
+            File::create(&dest).with_context(|| format!("creating {}", dest.display()))?;
         file.write_all(bundle.as_bytes())
             .with_context(|| format!("writing {}", dest.display()))?;
         file.sync_all().context("syncing log file")?;
@@ -3618,11 +3632,9 @@ fn handle_system_export_logs_to_usb(
         }
         (Err(err), Ok(())) => Err(err),
         (Ok(()), Err(err)) => Err(err),
-        (Err(err), Err(unmount_err)) => Err(anyhow!(
-            "{}; also failed to unmount: {}",
-            err,
-            unmount_err
-        )),
+        (Err(err), Err(unmount_err)) => {
+            Err(anyhow!("{}; also failed to unmount: {}", err, unmount_err))
+        }
     }
 }
 
@@ -3726,23 +3738,20 @@ fn handle_wifi_scan(
     try_apply_mac_policy(root, MacStage::PreAssoc, &interface, None);
 
     check_cancel(cancel)?;
-    let networks = match scan_wifi_networks_with_timeout_cancel(
-        &interface,
-        Duration::from_secs(5),
-        cancel,
-    ) {
-        Ok(nets) => {
-            tracing::info!("Scan completed, found {} network(s)", nets.len());
-            nets
-        }
-        Err(e) => {
-            if is_cancelled_error(&e) {
-                return Err(e);
+    let networks =
+        match scan_wifi_networks_with_timeout_cancel(&interface, Duration::from_secs(5), cancel) {
+            Ok(nets) => {
+                tracing::info!("Scan completed, found {} network(s)", nets.len());
+                nets
             }
-            tracing::error!("WiFi scan failed on {interface}: {e}");
-            bail!("WiFi scan failed: {e}");
-        }
-    };
+            Err(e) => {
+                if is_cancelled_error(&e) {
+                    return Err(e);
+                }
+                tracing::error!("WiFi scan failed on {interface}: {e}");
+                bail!("WiFi scan failed: {e}");
+            }
+        };
     check_cancel(cancel)?;
 
     let data = json!({
@@ -5014,8 +5023,7 @@ fn handle_wifi_pipeline_preflight(
     let interface = if let Some(ref iface) = args.interface {
         iface.clone()
     } else {
-        get_active_interface(root)?
-            .unwrap_or_default()
+        get_active_interface(root)?.unwrap_or_default()
     };
 
     if interface.trim().is_empty() {
@@ -5410,8 +5418,12 @@ fn handle_wifi_profile_connect(root: &Path, args: WifiProfileConnectArgs) -> Res
 
     tracing::info!("[CORE] WiFi connection successful ssid={ssid} iface={interface}");
 
-    let (route_msg, route_data) =
-        handle_wifi_route_ensure(root, WifiRouteEnsureArgs { interface: interface.clone() })?;
+    let (route_msg, route_data) = handle_wifi_route_ensure(
+        root,
+        WifiRouteEnsureArgs {
+            interface: interface.clone(),
+        },
+    )?;
     tracing::info!("[CORE] Route ensure after WiFi connect: {}", route_msg);
     if let Some(false) = route_data.get("route_set").and_then(|v| v.as_bool()) {
         tracing::warn!(
@@ -5720,7 +5732,9 @@ fn preflight_only_response(
     let status = if errors.is_empty() { "OK" } else { "FAIL" };
     let reason = format!("review approval missing ({})", review_path.display());
     let audit = AuditEvent::new(op)
-        .with_result(AuditResult::Denied { reason: reason.clone() })
+        .with_result(AuditResult::Denied {
+            reason: reason.clone(),
+        })
         .with_context(json!({
             "status": status,
             "errors": errors,

@@ -353,7 +353,10 @@ fn ops_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Update Ops", MenuAction::ToggleOps(OpsCategory::Update)),
         MenuEntry::new("System Ops", MenuAction::ToggleOps(OpsCategory::System)),
         MenuEntry::new("Dev Ops", MenuAction::ToggleOps(OpsCategory::Dev)),
-        MenuEntry::new("Offensive Ops", MenuAction::ToggleOps(OpsCategory::Offensive)),
+        MenuEntry::new(
+            "Offensive Ops",
+            MenuAction::ToggleOps(OpsCategory::Offensive),
+        ),
         MenuEntry::new("Loot Ops", MenuAction::ToggleOps(OpsCategory::Loot)),
         MenuEntry::new("Process Ops", MenuAction::ToggleOps(OpsCategory::Process)),
     ]

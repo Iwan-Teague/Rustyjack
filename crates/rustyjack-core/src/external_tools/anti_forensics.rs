@@ -1,7 +1,6 @@
 use std::{
     ffi::CString,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -10,17 +9,17 @@ use aes::Aes256;
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Context, Result};
+use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use cbc::{Decryptor, Encryptor};
-use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tar::{Archive, Builder};
 use tracing::{debug, info, warn};
-use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 use zeroize::Zeroize;
 
@@ -279,8 +278,8 @@ pub fn perform_complete_purge(root: &Path) -> PurgeReport {
     // Drop closure to release borrow on errors
     drop(delete_path);
 
-    service_disabled = !Path::new("/etc/systemd/system/multi-user.target.wants/rustyjack.service")
-        .exists();
+    service_disabled =
+        !Path::new("/etc/systemd/system/multi-user.target.wants/rustyjack.service").exists();
     if !service_disabled {
         errors.push("systemd unit link still present (manual disable required)".to_string());
     }
@@ -433,10 +432,7 @@ pub fn enable_anti_dump_protection() -> Result<()> {
             rlim_max: 0,
         };
         if libc::setrlimit(libc::RLIMIT_CORE, &lim) != 0 {
-            warn!(
-                "Failed to set RLIMIT_CORE: {}",
-                io::Error::last_os_error()
-            );
+            warn!("Failed to set RLIMIT_CORE: {}", io::Error::last_os_error());
         }
     }
 
@@ -706,8 +702,7 @@ pub fn randomize_hostname() -> Result<String> {
 
     // Set hostname without spawning hostnamectl.
     set_hostname(&new_hostname).context("setting hostname")?;
-    fs::write("/etc/hostname", format!("{new_hostname}\n"))
-        .context("writing /etc/hostname")?;
+    fs::write("/etc/hostname", format!("{new_hostname}\n")).context("writing /etc/hostname")?;
 
     // Update /etc/hosts to prevent sudo warnings
     let hosts_path = Path::new("/etc/hosts");
@@ -860,8 +855,8 @@ fn decrypt_rjenc_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
     let ct = &data[ct_start..];
     let mut key = [0u8; 32];
     pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ENC_PBKDF2_ITERS, &mut key);
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
     let plaintext = cipher
         .decrypt(nonce, ct)

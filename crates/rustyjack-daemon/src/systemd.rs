@@ -9,10 +9,10 @@ use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::time::Duration;
 
-use tracing::warn;
 use tokio::net::UnixListener;
 use tokio::task::JoinHandle;
 use tokio::time;
+use tracing::warn;
 
 use crate::config::DaemonConfig;
 
@@ -154,8 +154,7 @@ fn send_abstract_notification(message: &[u8], name: &[u8]) -> io::Result<()> {
         *slot = *byte as libc::c_char;
     }
 
-    let addr_len =
-        (std::mem::size_of::<libc::sa_family_t>() + 1 + name.len()) as libc::socklen_t;
+    let addr_len = (std::mem::size_of::<libc::sa_family_t>() + 1 + name.len()) as libc::socklen_t;
     let sock = UnixDatagram::unbound()?;
     let rc = unsafe {
         libc::sendto(

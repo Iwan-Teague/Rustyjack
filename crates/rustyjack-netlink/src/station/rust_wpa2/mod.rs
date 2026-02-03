@@ -114,10 +114,16 @@ impl StationBackend for RustWpa2Backend {
         })
     }
 
-    fn connect(&self, _cfg: &StationConfig, _candidate: Option<&BssCandidate>) -> Result<StationOutcome> {
+    fn connect(
+        &self,
+        _cfg: &StationConfig,
+        _candidate: Option<&BssCandidate>,
+    ) -> Result<StationOutcome> {
         let cfg = _cfg;
         if cfg.ssid.trim().is_empty() {
-            return Err(NetlinkError::InvalidInput("SSID cannot be empty".to_string()));
+            return Err(NetlinkError::InvalidInput(
+                "SSID cannot be empty".to_string(),
+            ));
         }
         let passphrase = cfg
             .password

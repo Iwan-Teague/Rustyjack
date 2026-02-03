@@ -341,7 +341,12 @@ impl Operation for BandwidthMonitorOp {
             "10 minutes".to_string(),
             "Indefinite".to_string(),
         ];
-        match picker::choose(&mut ctx.ui, "Monitor Duration", &durations, "Bandwidth Monitor")? {
+        match picker::choose(
+            &mut ctx.ui,
+            "Monitor Duration",
+            &durations,
+            "Bandwidth Monitor",
+        )? {
             PickerChoice::Selected(0) => self.duration_secs = 60,
             PickerChoice::Selected(1) => self.duration_secs = 300,
             PickerChoice::Selected(2) => self.duration_secs = 600,

@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
-use std::net::Ipv4Addr;
-use std::time::Duration;
-use std::sync::{Mutex as StdMutex, OnceLock};
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceSummary {
@@ -76,15 +76,15 @@ pub trait NetOps: Send + Sync {
     fn set_rfkill_block(&self, interface: &str, blocked: bool) -> Result<()>;
     fn is_wireless(&self, interface: &str) -> bool;
     fn interface_exists(&self, interface: &str) -> bool;
-    
+
     fn add_default_route(&self, iface: &str, gateway: Ipv4Addr, metric: u32) -> Result<()>;
     fn delete_default_route(&self, iface: &str) -> Result<()>;
     fn list_routes(&self) -> Result<Vec<RouteEntry>>;
-    
+
     fn acquire_dhcp(&self, iface: &str, timeout: Duration) -> Result<DhcpLease>;
     fn release_dhcp(&self, iface: &str) -> Result<()>;
     fn flush_addresses(&self, interface: &str) -> Result<()>;
-    
+
     fn get_ipv4_address(&self, iface: &str) -> Result<Option<Ipv4Addr>>;
     fn get_interface_capabilities(&self, iface: &str) -> Result<InterfaceCapabilities>;
     fn admin_is_up(&self, interface: &str) -> Result<bool>;
@@ -106,16 +106,16 @@ impl RealNetOps {
         let cache = INTERFACE_INDEX_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
         let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
         guard.clear();
-        
+
         use std::fs;
         let entries = fs::read_dir("/sys/class/net")?;
-        
+
         for entry in entries.flatten() {
             if let Ok(name) = entry.file_name().into_string() {
                 if name == "lo" {
                     continue;
                 }
-                
+
                 let ifindex_path = entry.path().join("ifindex");
                 if let Ok(content) = fs::read_to_string(&ifindex_path) {
                     if let Ok(idx) = content.trim().parse::<u32>() {
@@ -124,13 +124,13 @@ impl RealNetOps {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     fn interface_name_from_index(&self, index: u32) -> Option<String> {
         let cache = INTERFACE_INDEX_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
-        
+
         // Try cache first
         {
             let guard = cache.lock().ok()?;
@@ -138,10 +138,10 @@ impl RealNetOps {
                 return Some(name.clone());
             }
         }
-        
+
         // Cache miss - refresh and try again
         self.refresh_interface_cache().ok()?;
-        
+
         let guard = cache.lock().ok()?;
         guard.get(&index).cloned()
     }
@@ -149,8 +149,8 @@ impl RealNetOps {
 
 impl NetOps for RealNetOps {
     fn list_interfaces(&self) -> Result<Vec<InterfaceSummary>> {
-        use std::fs;
         use anyhow::Context;
+        use std::fs;
 
         let entries = fs::read_dir("/sys/class/net").context("reading /sys/class/net")?;
         let mut interfaces = Vec::new();
@@ -164,7 +164,7 @@ impl NetOps for RealNetOps {
 
             let is_wireless = self.is_wireless(&name);
             let kind = if is_wireless { "wireless" } else { "wired" };
-            
+
             let oper_state_path = entry.path().join("operstate");
             let oper_state = fs::read_to_string(&oper_state_path)
                 .unwrap_or_else(|_| "unknown".to_string())
@@ -223,7 +223,10 @@ impl NetOps for RealNetOps {
                 }
                 Ok(())
             }
-            None => Err(anyhow!("rfkill device not found for interface {}", interface)),
+            None => Err(anyhow!(
+                "rfkill device not found for interface {}",
+                interface
+            )),
         }
     }
 
@@ -239,57 +242,59 @@ impl NetOps for RealNetOps {
         use std::path::Path;
         Path::new("/sys/class/net").join(interface).exists()
     }
-    
+
     fn add_default_route(&self, iface: &str, gateway: Ipv4Addr, metric: u32) -> Result<()> {
         use std::net::IpAddr;
         crate::netlink_helpers::netlink_add_default_route(IpAddr::V4(gateway), iface, Some(metric))
     }
-    
+
     fn delete_default_route(&self, _iface: &str) -> Result<()> {
         crate::netlink_helpers::netlink_delete_default_route()
     }
-    
+
     fn list_routes(&self) -> Result<Vec<RouteEntry>> {
         use crate::netlink_helpers::netlink_list_routes;
-        
+
         // Refresh interface cache before querying routes
         self.refresh_interface_cache().ok();
-        
+
         let routes = netlink_list_routes()?;
-        
-        Ok(routes.into_iter().filter_map(|r| {
-            // Only process IPv4 routes with gateways
-            let gw = match r.gateway {
-                Some(std::net::IpAddr::V4(v4)) => v4,
-                _ => return None,
-            };
-            
-            // Resolve interface name from index
-            let iface_name = r.interface_index
-                .and_then(|idx| self.interface_name_from_index(idx))
-                .unwrap_or_else(|| format!("if{}", r.interface_index.unwrap_or(0)));
-            
-            // Build destination if present
-            let dest = match r.destination {
-                Some(std::net::IpAddr::V4(ip)) => {
-                    ipnet::Ipv4Net::new(ip, r.prefix_len).ok()
-                }
-                _ => None,
-            };
-            
-            Some(RouteEntry {
-                interface: iface_name,
-                gateway: gw,
-                metric: r.metric.unwrap_or(0),
-                destination: dest,
+
+        Ok(routes
+            .into_iter()
+            .filter_map(|r| {
+                // Only process IPv4 routes with gateways
+                let gw = match r.gateway {
+                    Some(std::net::IpAddr::V4(v4)) => v4,
+                    _ => return None,
+                };
+
+                // Resolve interface name from index
+                let iface_name = r
+                    .interface_index
+                    .and_then(|idx| self.interface_name_from_index(idx))
+                    .unwrap_or_else(|| format!("if{}", r.interface_index.unwrap_or(0)));
+
+                // Build destination if present
+                let dest = match r.destination {
+                    Some(std::net::IpAddr::V4(ip)) => ipnet::Ipv4Net::new(ip, r.prefix_len).ok(),
+                    _ => None,
+                };
+
+                Some(RouteEntry {
+                    interface: iface_name,
+                    gateway: gw,
+                    metric: r.metric.unwrap_or(0),
+                    destination: dest,
+                })
             })
-        }).collect())
+            .collect())
     }
-    
+
     fn acquire_dhcp(&self, iface: &str, timeout: Duration) -> Result<DhcpLease> {
         use anyhow::Context;
         use rustyjack_netlink::DhcpClient;
-        
+
         let client = DhcpClient::new()?;
         let rt = tokio::runtime::Runtime::new()?;
         let report = rt
@@ -302,7 +307,7 @@ impl NetOps for RealNetOps {
                 report.error.unwrap_or_else(|| "unknown error".to_string())
             )
         })?;
-        
+
         Ok(DhcpLease {
             ip: netlink_lease.address,
             prefix_len: netlink_lease.prefix_len,
@@ -310,10 +315,10 @@ impl NetOps for RealNetOps {
             dns_servers: netlink_lease.dns_servers,
         })
     }
-    
+
     fn release_dhcp(&self, iface: &str) -> Result<()> {
         use rustyjack_netlink::DhcpClient;
-        
+
         let client = DhcpClient::new()?;
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(client.release(iface))
@@ -323,10 +328,10 @@ impl NetOps for RealNetOps {
     fn flush_addresses(&self, interface: &str) -> Result<()> {
         crate::netlink_helpers::netlink_flush_addresses(interface)
     }
-    
+
     fn get_ipv4_address(&self, iface: &str) -> Result<Option<Ipv4Addr>> {
         use crate::netlink_helpers::netlink_get_ipv4_addresses;
-        
+
         let addrs = netlink_get_ipv4_addresses(iface)?;
         Ok(addrs.first().and_then(|addr| {
             if let std::net::IpAddr::V4(ipv4) = addr.address {
@@ -336,12 +341,12 @@ impl NetOps for RealNetOps {
             }
         }))
     }
-    
+
     fn get_interface_capabilities(&self, iface: &str) -> Result<InterfaceCapabilities> {
         #[cfg(target_os = "linux")]
         {
             use anyhow::Context;
-            
+
             if self.is_wireless(iface) {
                 // Query wireless capabilities from rustyjack_wireless and convert
                 let wireless_caps = rustyjack_wireless::query_interface_capabilities(iface)
@@ -375,17 +380,17 @@ impl NetOps for RealNetOps {
                     driver: None,
                     chipset: None,
                 };
-                
+
                 // Get MAC address
                 let mac_path = format!("/sys/class/net/{}/address", iface);
                 if let Ok(mac_str) = fs::read_to_string(&mac_path) {
                     caps.mac_address = Some(mac_str.trim().to_string());
                 }
-                
+
                 // Check if physical
                 let device_path = format!("/sys/class/net/{}/device", iface);
                 caps.is_physical = std::path::Path::new(&device_path).exists();
-                
+
                 // Read driver
                 let uevent_path = format!("/sys/class/net/{}/device/uevent", iface);
                 if let Ok(contents) = fs::read_to_string(&uevent_path) {
@@ -395,11 +400,11 @@ impl NetOps for RealNetOps {
                         }
                     }
                 }
-                
+
                 Ok(caps)
             }
         }
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             anyhow::bail!("Interface capabilities only supported on Linux")
@@ -433,7 +438,11 @@ impl NetOps for RealNetOps {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("Failed to read carrier for {}: {}", interface, e))
+                    Err(anyhow::anyhow!(
+                        "Failed to read carrier for {}: {}",
+                        interface,
+                        e
+                    ))
                 }
             }
         }
@@ -444,7 +453,10 @@ impl NetOps for RealNetOps {
 
         match rfkill_find_index(interface)? {
             Some(idx) => rfkill_is_blocked(idx),
-            None => Err(anyhow!("rfkill device not found for interface {}", interface)),
+            None => Err(anyhow!(
+                "rfkill device not found for interface {}",
+                interface
+            )),
         }
     }
 
@@ -453,7 +465,10 @@ impl NetOps for RealNetOps {
 
         match rfkill_find_index(interface)? {
             Some(idx) => rfkill_is_hard_blocked(idx),
-            None => Err(anyhow!("rfkill device not found for interface {}", interface)),
+            None => Err(anyhow!(
+                "rfkill device not found for interface {}",
+                interface
+            )),
         }
     }
 }
@@ -463,7 +478,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    
+
     #[derive(Clone)]
     pub struct MockNetOps {
         interfaces: Arc<Mutex<Vec<InterfaceSummary>>>,
@@ -475,7 +490,7 @@ mod tests {
         carrier_state: Arc<Mutex<HashMap<String, bool>>>,
         flushed: Arc<Mutex<Vec<String>>>,
     }
-    
+
     impl MockNetOps {
         pub fn new() -> Self {
             Self {
@@ -489,7 +504,7 @@ mod tests {
                 flushed: Arc::new(Mutex::new(Vec::new())),
             }
         }
-        
+
         pub fn add_interface(&self, name: &str, is_wireless: bool, oper_state: &str) {
             let mut interfaces = self.interfaces.lock().unwrap();
             interfaces.push(InterfaceSummary {
@@ -502,87 +517,103 @@ mod tests {
                 carrier: None,
                 capabilities: None,
             });
-            self.admin_state.lock().unwrap().insert(
-                name.to_string(),
-                oper_state == "up",
-            );
+            self.admin_state
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), oper_state == "up");
             // Default carrier true for wired, false for wireless to allow explicit control
             self.carrier_state
                 .lock()
                 .unwrap()
                 .insert(name.to_string(), !is_wireless);
         }
-        
+
         pub fn set_dhcp_result(&self, iface: &str, result: Result<DhcpLease>) {
             let mut results = self.dhcp_results.lock().unwrap();
             results.insert(iface.to_string(), result);
         }
-        
+
         pub fn set_carrier_state(&self, iface: &str, carrier: bool) {
             self.carrier_state
                 .lock()
                 .unwrap()
                 .insert(iface.to_string(), carrier);
         }
-        
+
         pub fn was_brought_up(&self, iface: &str) -> bool {
-            self.up_interfaces.lock().unwrap().contains(&iface.to_string())
+            self.up_interfaces
+                .lock()
+                .unwrap()
+                .contains(&iface.to_string())
         }
-        
+
         pub fn was_brought_down(&self, iface: &str) -> bool {
-            self.down_interfaces.lock().unwrap().contains(&iface.to_string())
+            self.down_interfaces
+                .lock()
+                .unwrap()
+                .contains(&iface.to_string())
         }
-        
+
         pub fn get_routes(&self) -> Vec<RouteEntry> {
             self.routes.lock().unwrap().clone()
         }
-        
+
         pub fn flushed_interfaces(&self) -> Vec<String> {
             self.flushed.lock().unwrap().clone()
         }
     }
-    
+
     impl NetOps for MockNetOps {
         fn list_interfaces(&self) -> Result<Vec<InterfaceSummary>> {
             Ok(self.interfaces.lock().unwrap().clone())
         }
-        
+
         fn bring_up(&self, interface: &str) -> Result<()> {
-            self.up_interfaces.lock().unwrap().push(interface.to_string());
+            self.up_interfaces
+                .lock()
+                .unwrap()
+                .push(interface.to_string());
             self.admin_state
                 .lock()
                 .unwrap()
                 .insert(interface.to_string(), true);
             Ok(())
         }
-        
+
         fn bring_down(&self, interface: &str) -> Result<()> {
-            self.down_interfaces.lock().unwrap().push(interface.to_string());
+            self.down_interfaces
+                .lock()
+                .unwrap()
+                .push(interface.to_string());
             self.admin_state
                 .lock()
                 .unwrap()
                 .insert(interface.to_string(), false);
             Ok(())
         }
-        
+
         fn set_rfkill_block(&self, _interface: &str, _blocked: bool) -> Result<()> {
             Ok(())
         }
-        
+
         fn is_wireless(&self, interface: &str) -> bool {
-            self.interfaces.lock().unwrap()
+            self.interfaces
+                .lock()
+                .unwrap()
                 .iter()
                 .find(|i| i.name == interface)
                 .map(|i| i.is_wireless)
                 .unwrap_or(false)
         }
-        
+
         fn interface_exists(&self, interface: &str) -> bool {
-            self.interfaces.lock().unwrap()
+            self.interfaces
+                .lock()
+                .unwrap()
                 .iter()
                 .any(|i| i.name == interface)
         }
-        
+
         fn add_default_route(&self, iface: &str, gateway: Ipv4Addr, metric: u32) -> Result<()> {
             let mut routes = self.routes.lock().unwrap();
             routes.push(RouteEntry {
@@ -593,39 +624,37 @@ mod tests {
             });
             Ok(())
         }
-        
+
         fn delete_default_route(&self, iface: &str) -> Result<()> {
             let mut routes = self.routes.lock().unwrap();
             routes.retain(|r| r.interface != iface || r.destination.is_some());
             Ok(())
         }
-        
+
         fn list_routes(&self) -> Result<Vec<RouteEntry>> {
             Ok(self.routes.lock().unwrap().clone())
         }
-        
+
         fn acquire_dhcp(&self, iface: &str, _timeout: Duration) -> Result<DhcpLease> {
             let results = self.dhcp_results.lock().unwrap();
-            results.get(iface)
-                .cloned()
-                .unwrap_or_else(|| {
-                    Ok(DhcpLease {
-                        ip: Ipv4Addr::new(192, 168, 1, 100),
-                        prefix_len: 24,
-                        gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
-                        dns_servers: vec![Ipv4Addr::new(8, 8, 8, 8)],
-                    })
+            results.get(iface).cloned().unwrap_or_else(|| {
+                Ok(DhcpLease {
+                    ip: Ipv4Addr::new(192, 168, 1, 100),
+                    prefix_len: 24,
+                    gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
+                    dns_servers: vec![Ipv4Addr::new(8, 8, 8, 8)],
                 })
+            })
         }
-        
+
         fn release_dhcp(&self, _iface: &str) -> Result<()> {
             Ok(())
         }
-        
+
         fn get_ipv4_address(&self, _iface: &str) -> Result<Option<Ipv4Addr>> {
             Ok(Some(Ipv4Addr::new(192, 168, 1, 100)))
         }
-        
+
         fn get_interface_capabilities(&self, iface: &str) -> Result<InterfaceCapabilities> {
             Ok(InterfaceCapabilities {
                 name: iface.to_string(),
@@ -673,40 +702,40 @@ mod tests {
     fn test_mock_netops_basic() {
         let mock = MockNetOps::new();
         mock.add_interface("eth0", false, "up");
-        
+
         let interfaces = mock.list_interfaces().unwrap();
         assert_eq!(interfaces.len(), 1);
         assert_eq!(interfaces[0].name, "eth0");
         assert!(!interfaces[0].is_wireless);
     }
-    
+
     #[test]
     fn test_mock_netops_bring_up() {
         let mock = MockNetOps::new();
         mock.add_interface("eth0", false, "up");
-        
+
         mock.bring_up("eth0").unwrap();
         assert!(mock.was_brought_up("eth0"));
     }
-    
+
     #[test]
     fn test_mock_netops_routes() {
         let mock = MockNetOps::new();
-        
+
         let gateway = Ipv4Addr::new(192, 168, 1, 1);
         mock.add_default_route("eth0", gateway, 100).unwrap();
-        
+
         let routes = mock.list_routes().unwrap();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].interface, "eth0");
         assert_eq!(routes[0].gateway, gateway);
         assert_eq!(routes[0].metric, 100);
     }
-    
+
     #[test]
     fn test_mock_netops_dhcp() {
         let mock = MockNetOps::new();
-        
+
         let lease = mock.acquire_dhcp("eth0", Duration::from_secs(1)).unwrap();
         assert_eq!(lease.ip, Ipv4Addr::new(192, 168, 1, 100));
         assert_eq!(lease.prefix_len, 24);

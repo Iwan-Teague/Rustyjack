@@ -2,7 +2,9 @@ use std::ffi::CString;
 use std::path::Path;
 
 use crate::services::error::ServiceError;
-use crate::system::{arp_spoof_running, compose_status_text, dns_spoof_running, pcap_capture_running};
+use crate::system::{
+    arp_spoof_running, compose_status_text, dns_spoof_running, pcap_capture_running,
+};
 
 #[derive(Debug, Clone)]
 pub struct StatusSummary {

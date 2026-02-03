@@ -25,34 +25,35 @@
 //! All network operations require root privileges (UID 0). Operations will fail with
 //! explicit error messages if not run as root.
 
+pub mod dns;
+pub mod interface_selection;
+pub mod isolation;
+pub mod isolation_guard;
+pub mod isolation_policy;
+pub mod loot_session;
 pub mod ops;
 pub mod preference;
-pub mod dns;
 pub mod routing;
-pub mod isolation;
-pub mod interface_selection;
-pub mod isolation_policy;
-pub mod isolation_guard;
-pub mod loot_session;
 pub mod setup;
 
+pub use dns::DnsManager;
+pub use interface_selection::{InterfaceSelectionOutcome, SelectionDhcpInfo};
+pub use isolation::{clear_hotspot_exception, set_hotspot_exception, IsolationEngine};
+pub use isolation_guard::IsolationPolicyGuard;
+pub use isolation_policy::{IsolationMode, IsolationPolicy, IsolationPolicyManager};
+pub use loot_session::LootSession;
 pub use ops::{
-    ErrorEntry, IsolationOutcome, NetOps, RealNetOps, RouteOutcome, RouteEntry,
-    InterfaceSummary, DhcpLease as OpsDhcpLease,
+    DhcpLease as OpsDhcpLease, ErrorEntry, InterfaceSummary, IsolationOutcome, NetOps, RealNetOps,
+    RouteEntry, RouteOutcome,
 };
 pub use preference::PreferenceManager;
-pub use dns::DnsManager;
 pub use routing::RouteManager;
-pub use isolation::{IsolationEngine, set_hotspot_exception, clear_hotspot_exception};
-pub use interface_selection::{InterfaceSelectionOutcome, SelectionDhcpInfo};
-pub use isolation_policy::{IsolationMode, IsolationPolicy, IsolationPolicyManager};
-pub use isolation_guard::IsolationPolicyGuard;
-pub use loot_session::LootSession;
 
 use std::{
     collections::HashMap,
-    env, fs,
+    env,
     ffi::CString,
+    fs,
     io::{self, Write},
     mem,
     net::{IpAddr, Ipv4Addr, ToSocketAddrs},
@@ -71,15 +72,14 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 use ipnet::Ipv4Net;
-use tracing::{debug, info, warn};
+use reqwest::blocking::{multipart, Client};
 use rustyjack_netlink::{
-    ArpSpoofConfig, ArpSpoofer, DhcpTransport, DnsConfig, DnsRule, DnsServer,
-    IptablesManager,
+    ArpSpoofConfig, ArpSpoofer, DhcpTransport, DnsConfig, DnsRule, DnsServer, IptablesManager,
 };
 use rustyjack_wireless::status_hotspot;
-use reqwest::blocking::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use tracing::{debug, info, warn};
 use zeroize::Zeroize;
 
 use rustyjack_netlink::wireless::{InterfaceMode, WirelessManager};
@@ -132,7 +132,9 @@ static ACTIVE_UPLINK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn interface_lock(interface: &str) -> &'static Mutex<()> {
     let locks = INTERFACE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(lock) = guard.get(interface) {
         return *lock;
     }
@@ -158,7 +160,9 @@ fn lock_uplink() -> std::sync::MutexGuard<'static, ()> {
 
 fn record_lease(interface: &str, lease: &OpsDhcpLease) {
     let cache = LEASE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.insert(
         interface.to_string(),
         LeaseRecord {
@@ -179,7 +183,9 @@ fn record_dhcp_outcome(
     error: Option<String>,
 ) {
     let cache = DHCP_OUTCOME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (address, gateway) = lease
         .map(|lease| (Some(lease.ip), lease.gateway))
         .unwrap_or((None, None));
@@ -198,13 +204,17 @@ fn record_dhcp_outcome(
 
 pub fn lease_record(interface: &str) -> Option<LeaseRecord> {
     let cache = LEASE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.get(interface).cloned()
 }
 
 pub fn clear_lease_record(interface: &str) {
     let cache = LEASE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.remove(interface);
 }
 
@@ -220,7 +230,9 @@ pub fn cached_dns(interface: &str) -> Vec<Ipv4Addr> {
 
 pub fn last_dhcp_outcome(interface: &str) -> Option<DhcpOutcome> {
     let cache = DHCP_OUTCOME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.get(interface).cloned()
 }
 
@@ -728,10 +740,12 @@ pub fn scan_local_hosts_cancellable(
     interface: &str,
     cancel: Option<&CancelFlag>,
 ) -> Result<Vec<HostInfo>> {
-    let interface_info =
-        detect_interface(Some(interface.to_string())).context("detecting interface for ARP scan")?;
+    let interface_info = detect_interface(Some(interface.to_string()))
+        .context("detecting interface for ARP scan")?;
     let cidr = format!("{}/{}", interface_info.address, interface_info.prefix);
-    let network: Ipv4Net = cidr.parse().context("parsing interface CIDR for ARP scan")?;
+    let network: Ipv4Net = cidr
+        .parse()
+        .context("parsing interface CIDR for ARP scan")?;
     let rate_limit_pps = Some(50);
     let timeout = Duration::from_secs(3);
 
@@ -785,11 +799,7 @@ pub fn scan_local_hosts_cancellable(
         }
     }?;
 
-    Ok(result
-        .hosts
-        .into_iter()
-        .map(|ip| HostInfo { ip })
-        .collect())
+    Ok(result.hosts.into_iter().map(|ip| HostInfo { ip }).collect())
 }
 
 pub fn spawn_arpspoof_pair(interface: &str, gateway: Ipv4Addr, host: &HostInfo) -> Result<()> {
@@ -852,8 +862,8 @@ fn parse_mac_bytes(input: &str) -> Result<[u8; 6]> {
     }
     let mut mac = [0u8; 6];
     for (idx, part) in parts.iter().enumerate() {
-        mac[idx] = u8::from_str_radix(part, 16)
-            .with_context(|| format!("invalid MAC octet {}", part))?;
+        mac[idx] =
+            u8::from_str_radix(part, 16).with_context(|| format!("invalid MAC octet {}", part))?;
     }
     Ok(mac)
 }
@@ -925,8 +935,8 @@ pub fn start_pcap_capture(interface: &str, path: &Path) -> Result<()> {
         .truncate(true)
         .open(path)
         .with_context(|| format!("opening pcap file {}", path.display()))?;
-    let writer = PcapWriter::new(io::BufWriter::new(file), PCAP_SNAPLEN)
-        .context("writing pcap header")?;
+    let writer =
+        PcapWriter::new(io::BufWriter::new(file), PCAP_SNAPLEN).context("writing pcap header")?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let running = Arc::new(AtomicBool::new(true));
@@ -939,7 +949,11 @@ pub fn start_pcap_capture(interface: &str, path: &Path) -> Result<()> {
         if let Err(err) = run_pcap_capture(fd, writer, stop_thread, running_thread) {
             tracing::error!("[PCAP] capture failed on {}: {}", interface_name, err);
         }
-        tracing::info!("[PCAP] capture stopped on {} -> {}", interface_name, path_display);
+        tracing::info!(
+            "[PCAP] capture stopped on {} -> {}",
+            interface_name,
+            path_display
+        );
     });
 
     let mut state = capture_state().lock().unwrap();
@@ -948,7 +962,11 @@ pub fn start_pcap_capture(interface: &str, path: &Path) -> Result<()> {
         running,
         thread,
     });
-    tracing::info!("[PCAP] capture started on {} -> {}", interface, path.display());
+    tracing::info!(
+        "[PCAP] capture started on {} -> {}",
+        interface,
+        path.display()
+    );
     Ok(())
 }
 
@@ -1103,14 +1121,7 @@ fn run_pcap_capture(
                 continue;
             }
 
-            let n = unsafe {
-                libc::recv(
-                    fd,
-                    buf.as_mut_ptr() as *mut libc::c_void,
-                    buf.len(),
-                    0,
-                )
-            };
+            let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
             if n < 0 {
                 let err = io::Error::last_os_error();
                 if err.kind() == io::ErrorKind::WouldBlock {
@@ -1223,7 +1234,10 @@ pub fn start_dns_spoof(interface: &str, listen_ip: Ipv4Addr, portal_ip: Ipv4Addr
     if let Err(err) = ipt
         .add_dnat_udp(interface, 53, &listen, 53)
         .context("adding UDP DNS redirect")
-        .and_then(|_| ipt.add_dnat(interface, 53, &listen, 53).context("adding TCP DNS redirect"))
+        .and_then(|_| {
+            ipt.add_dnat(interface, 53, &listen, 53)
+                .context("adding TCP DNS redirect")
+        })
     {
         let _ = server.stop();
         return Err(err);
@@ -1351,7 +1365,10 @@ pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
         };
         if received < 0 {
             let err = io::Error::last_os_error();
-            if matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) {
+            if matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) {
                 return Ok(false);
             }
             return Err(anyhow!("ICMP receive failed: {}", err));
@@ -1652,7 +1669,9 @@ pub fn read_default_route() -> Result<Option<DefaultRouteInfo>> {
             "default_route"
         );
         Ok(Some(DefaultRouteInfo {
-            interface: route.interface_index.and_then(|idx| iface_map.get(&idx).cloned()),
+            interface: route
+                .interface_index
+                .and_then(|idx| iface_map.get(&idx).cloned()),
             gateway: route.gateway.and_then(|gw| match gw {
                 std::net::IpAddr::V4(v4) => Some(v4),
                 _ => None,
@@ -1678,12 +1697,13 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
             return Ok(None);
         }
     };
-    let routes = netlink_list_routes().with_context(|| format!("querying routes for {interface}"))?;
+    let routes =
+        netlink_list_routes().with_context(|| format!("querying routes for {interface}"))?;
 
     let is_default = |route: &crate::netlink_helpers::RouteInfo| {
         // A default route has no specific destination (0.0.0.0/0)
         match route.destination {
-            None => true,  // No destination = default route
+            None => true, // No destination = default route
             Some(IpAddr::V4(v4)) if v4.octets() == [0, 0, 0, 0] && route.prefix_len == 0 => true,
             _ => false,
         }
@@ -1696,7 +1716,9 @@ pub fn interface_gateway(interface: &str) -> Result<Option<Ipv4Addr>> {
         })
     };
 
-    if let Some(route) = routes.iter().find(|r| r.interface_index == Some(ifindex) && is_default(r))
+    if let Some(route) = routes
+        .iter()
+        .find(|r| r.interface_index == Some(ifindex) && is_default(r))
     {
         if let Some(gateway) = find_gateway(route) {
             info!(
@@ -1793,13 +1815,7 @@ fn dhcp_acquire_report(interface: &str, hostname: Option<&str>) -> Result<DhcpAt
                 }
             }
             Err(err) => {
-                record_dhcp_outcome(
-                    interface,
-                    false,
-                    None,
-                    None,
-                    Some(err.to_string()),
-                );
+                record_dhcp_outcome(interface, false, None, None, Some(err.to_string()));
                 tracing::warn!(
                     target: "net",
                     iface = %interface,
@@ -2205,7 +2221,11 @@ fn apply_interface_isolation_with_ops_strict_impl(
     let mut blocked_vec = Vec::new();
     let mut errors = Vec::new();
 
-    if !allow_empty && !interfaces.iter().any(|iface| allowed_set.contains(&iface.name)) {
+    if !allow_empty
+        && !interfaces
+            .iter()
+            .any(|iface| allowed_set.contains(&iface.name))
+    {
         let allowed_list = allowed_set.iter().cloned().collect::<Vec<_>>().join(", ");
         warn!(
             target: "net",
@@ -2263,7 +2283,9 @@ fn apply_interface_isolation_with_ops_strict_impl(
                 });
             }
 
-            if let Err(e) = wait_for_admin_state(&*ops, &iface_info.name, true, Duration::from_secs(10)) {
+            if let Err(e) =
+                wait_for_admin_state(&*ops, &iface_info.name, true, Duration::from_secs(10))
+            {
                 errors.push(crate::system::ops::ErrorEntry {
                     interface: iface_info.name.clone(),
                     message: format!("wait for up failed: {}", e),
@@ -2289,7 +2311,9 @@ fn apply_interface_isolation_with_ops_strict_impl(
                 });
             }
 
-            if let Err(e) = wait_for_admin_state(&*ops, &iface_info.name, false, Duration::from_secs(5)) {
+            if let Err(e) =
+                wait_for_admin_state(&*ops, &iface_info.name, false, Duration::from_secs(5))
+            {
                 errors.push(crate::system::ops::ErrorEntry {
                     interface: iface_info.name.clone(),
                     message: format!("wait for down failed: {}", e),
@@ -2345,7 +2369,10 @@ pub(crate) fn verify_only_allow_list_admin_up(
 
     for iface in &admin_up {
         if !allowed.contains(iface) {
-            bail!("Isolation invariant violated: {} is UP but not allowed", iface);
+            bail!(
+                "Isolation invariant violated: {} is UP but not allowed",
+                iface
+            );
         }
     }
 
@@ -2366,7 +2393,11 @@ pub(crate) fn verify_only_allow_list_admin_up(
                 iface.name
             ),
             Err(e) => {
-                bail!("Isolation invariant violated: rfkill check failed for {}: {}", iface.name, e);
+                bail!(
+                    "Isolation invariant violated: rfkill check failed for {}: {}",
+                    iface.name,
+                    e
+                );
             }
         }
     }
@@ -2405,7 +2436,9 @@ fn wait_for_admin_state(
 pub fn apply_interface_isolation(allowed: &[String]) -> Result<()> {
     let outcome = apply_interface_isolation_with_ops(&crate::system::ops::RealNetOps, allowed)?;
     if !outcome.errors.is_empty() {
-        let error_msgs: Vec<String> = outcome.errors.iter()
+        let error_msgs: Vec<String> = outcome
+            .errors
+            .iter()
             .map(|e| format!("{}: {}", e.interface, e.message))
             .collect();
         bail!("Interface isolation errors: {}", error_msgs.join("; "));
@@ -2441,7 +2474,10 @@ pub fn apply_interface_isolation_with_ops(
     let mut blocked_vec = Vec::new();
     let mut errors = Vec::new();
 
-    if !interfaces.iter().any(|iface| allowed_set.contains(&iface.name)) {
+    if !interfaces
+        .iter()
+        .any(|iface| allowed_set.contains(&iface.name))
+    {
         let allowed_list = allowed_set.iter().cloned().collect::<Vec<_>>().join(", ");
         warn!(
             target: "net",
@@ -2482,7 +2518,7 @@ pub fn apply_interface_isolation_with_ops(
                     });
                 }
             }
-            
+
             allowed_vec.push(iface_info.name);
         } else {
             let _ = ops.bring_down(&iface_info.name);
@@ -2565,8 +2601,7 @@ pub fn rewrite_dns_servers(interface: &str, dns_servers: &[Ipv4Addr]) -> Result<
     let root = resolve_root(None)?;
     let resolv_path = root.join("resolv.conf");
     if let Some(parent) = resolv_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let tmp_path = resolv_path.with_file_name(".resolv.conf.rustyjack.tmp");
     let mut file = fs::File::create(&tmp_path).context("creating resolv.conf temp file")?;
@@ -2748,8 +2783,7 @@ pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
     let _ = netlink_set_interface_down("br0");
     let _ = netlink_bridge_delete("br0");
     for iface in [interface_a, interface_b] {
-        netlink_set_interface_down(iface)
-            .with_context(|| format!("bringing {iface} down"))?;
+        netlink_set_interface_down(iface).with_context(|| format!("bringing {iface} down"))?;
     }
     netlink_bridge_create("br0").context("creating br0 bridge")?;
     for iface in [interface_a, interface_b] {
@@ -2757,8 +2791,7 @@ pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
             .with_context(|| format!("adding {iface} to br0"))?;
     }
     for iface in [interface_a, interface_b, "br0"] {
-        netlink_set_interface_up(iface)
-            .with_context(|| format!("bringing {iface} up"))?;
+        netlink_set_interface_up(iface).with_context(|| format!("bringing {iface} up"))?;
     }
     Ok(())
 }
@@ -3062,7 +3095,6 @@ fn log_wifi_preflight(interface: &str) {
             "wifi_preflight_rfkill_missing"
         );
     }
-
 }
 
 #[allow(dead_code)]
@@ -3110,7 +3142,6 @@ fn freq_to_channel(freq: u32) -> Option<u8> {
         _ => None,
     }
 }
-
 
 pub fn list_wifi_profiles(root: &Path) -> Result<Vec<WifiProfileRecord>> {
     let mut profiles = Vec::new();
@@ -3414,10 +3445,7 @@ pub fn load_wifi_profile(root: &Path, identifier: &str) -> Result<Option<StoredW
 }
 
 pub fn ensure_default_wifi_profiles(root: &Path) -> Result<usize> {
-    let defaults = [
-        ("rustyjack", "123456789"),
-        ("SKYHN7XM", "6HekvGQvxuVV"),
-    ];
+    let defaults = [("rustyjack", "123456789"), ("SKYHN7XM", "6HekvGQvxuVV")];
 
     let mut created = 0usize;
     for (ssid, password) in defaults {

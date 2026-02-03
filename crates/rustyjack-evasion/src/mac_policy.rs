@@ -100,8 +100,9 @@ impl MacPolicyConfig {
     ///
     /// Returns error if file cannot be read or parsed.
     pub fn load(path: &Path) -> Result<Self> {
-        let raw = fs::read_to_string(path)
-            .map_err(|e| EvasionError::Config(format!("Failed to read {}: {}", path.display(), e)))?;
+        let raw = fs::read_to_string(path).map_err(|e| {
+            EvasionError::Config(format!("Failed to read {}: {}", path.display(), e))
+        })?;
         serde_json::from_str(&raw)
             .map_err(|e| EvasionError::Config(format!("Failed to parse {}: {}", path.display(), e)))
     }
@@ -157,7 +158,9 @@ impl MacPolicyEngine {
         ssid: Option<&str>,
     ) -> Result<Option<MacState>> {
         if interface.trim().is_empty() {
-            return Err(EvasionError::Config("interface cannot be empty".to_string()));
+            return Err(EvasionError::Config(
+                "interface cannot be empty".to_string(),
+            ));
         }
 
         if self.is_exception(interface, ssid) {

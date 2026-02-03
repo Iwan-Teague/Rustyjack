@@ -132,38 +132,24 @@ pub fn netlink_list_interfaces() -> Result<Vec<InterfaceInfo>> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn netlink_get_ipv4_addresses(
-    interface: &str,
-) -> Result<Vec<AddressInfo>> {
+pub fn netlink_get_ipv4_addresses(interface: &str) -> Result<Vec<AddressInfo>> {
     tokio::runtime::Handle::try_current()
         .map(|handle| {
             handle.block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
-                mgr.get_ipv4_addresses(interface)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to get IPv4 addresses for {}: {}",
-                            interface,
-                            e
-                        )
-                    })
+                mgr.get_ipv4_addresses(interface).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to get IPv4 addresses for {}: {}", interface, e)
+                })
             })
         })
         .unwrap_or_else(|_| {
             crate::runtime::shared_runtime()?.block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
-                mgr.get_ipv4_addresses(interface)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to get IPv4 addresses for {}: {}",
-                            interface,
-                            e
-                        )
-                    })
+                mgr.get_ipv4_addresses(interface).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to get IPv4 addresses for {}: {}", interface, e)
+                })
             })
         })
 }
@@ -175,18 +161,18 @@ pub fn netlink_get_interface_index(interface: &str) -> Result<u32> {
             handle.block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
-                mgr.get_interface_index(interface)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to get interface index for {}: {}", interface, e))
+                mgr.get_interface_index(interface).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to get interface index for {}: {}", interface, e)
+                })
             })
         })
         .unwrap_or_else(|_| {
             crate::runtime::shared_runtime()?.block_on(async {
                 let mgr = rustyjack_netlink::InterfaceManager::new()
                     .map_err(|e| anyhow::anyhow!("Failed to create interface manager: {}", e))?;
-                mgr.get_interface_index(interface)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to get interface index for {}: {}", interface, e))
+                mgr.get_interface_index(interface).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to get interface index for {}: {}", interface, e)
+                })
             })
         })
 }
@@ -434,7 +420,8 @@ pub fn rfkill_find_index(interface: &str) -> Result<Option<u32>> {
 pub fn rfkill_is_blocked(idx: u32) -> Result<bool> {
     use rustyjack_netlink::RfkillManager;
     let mgr = RfkillManager::new();
-    let device = mgr.get_state(idx)
+    let device = mgr
+        .get_state(idx)
         .map_err(|e| anyhow::anyhow!("Failed to get rfkill state for {}: {}", idx, e))?;
     Ok(device.is_blocked())
 }
@@ -444,7 +431,8 @@ pub fn rfkill_is_blocked(idx: u32) -> Result<bool> {
 pub fn rfkill_is_hard_blocked(idx: u32) -> Result<bool> {
     use rustyjack_netlink::RfkillManager;
     let mgr = RfkillManager::new();
-    let device = mgr.get_state(idx)
+    let device = mgr
+        .get_state(idx)
         .map_err(|e| anyhow::anyhow!("Failed to get rfkill state for {}: {}", idx, e))?;
     Ok(device.hard_blocked)
 }

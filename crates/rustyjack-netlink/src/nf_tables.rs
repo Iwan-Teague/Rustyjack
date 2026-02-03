@@ -5,8 +5,8 @@ use std::mem;
 use std::net::IpAddr;
 use std::os::unix::io::RawFd;
 
-use tracing::warn;
 use sha1::{Digest, Sha1};
+use tracing::warn;
 
 use crate::iptables::{Chain, IptablesError, Protocol, Rule, Table, Target};
 
@@ -219,14 +219,7 @@ impl NetfilterSocket {
     fn send(&mut self, msg_type: u16, flags: u16, payload: &[u8]) -> io::Result<u32> {
         let seq = self.next_seq();
         let msg = build_nlmsg(msg_type, flags, seq, self.pid, payload);
-        let ret = unsafe {
-            libc::send(
-                self.fd,
-                msg.as_ptr() as *const libc::c_void,
-                msg.len(),
-                0,
-            )
-        };
+        let ret = unsafe { libc::send(self.fd, msg.as_ptr() as *const libc::c_void, msg.len(), 0) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -235,14 +228,8 @@ impl NetfilterSocket {
 
     fn recv_msgs(&mut self) -> io::Result<Vec<NetlinkMessage>> {
         let mut buf = vec![0u8; 64 * 1024];
-        let len = unsafe {
-            libc::recv(
-                self.fd,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-                0,
-            )
-        };
+        let len =
+            unsafe { libc::recv(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
         if len < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -314,7 +301,11 @@ impl NfTablesManager {
         let table = rule.table.as_str();
         let chain = rule.chain.as_str();
         self.ensure_table(table)?;
-        self.ensure_chain(table, chain, base_chain_spec(rule.table, rule.chain.clone()))?;
+        self.ensure_chain(
+            table,
+            chain,
+            base_chain_spec(rule.table, rule.chain.clone()),
+        )?;
 
         let mut payload = nfgenmsg_payload();
         push_attr_string(&mut payload, NFTA_RULE_TABLE, table)?;
@@ -355,7 +346,12 @@ impl NfTablesManager {
         let rules = match self.list_rules(Some(table_name), Some(chain_name)) {
             Ok(rules) => rules,
             Err(err) => {
-                tracing::warn!("Failed to list rules for {} {}: {}", table_name, chain_name, err);
+                tracing::warn!(
+                    "Failed to list rules for {} {}: {}",
+                    table_name,
+                    chain_name,
+                    err
+                );
                 return Ok(());
             }
         };
@@ -524,8 +520,12 @@ impl NfTablesManager {
             }
 
             let Some(handle) = handle else { continue };
-            let Some(chain_name) = rule_chain else { continue };
-            let Some(table_name) = rule_table else { continue };
+            let Some(chain_name) = rule_chain else {
+                continue;
+            };
+            let Some(table_name) = rule_table else {
+                continue;
+            };
 
             if let Some(filter_table) = table {
                 if filter_table != table_name {
@@ -1112,7 +1112,9 @@ fn parse_string(buf: &[u8]) -> String {
 
 fn to_netlink_error(err: io::Error) -> IptablesError {
     match err.raw_os_error() {
-        Some(code) if code == libc::EPERM || code == libc::EACCES => IptablesError::PermissionDenied,
+        Some(code) if code == libc::EPERM || code == libc::EACCES => {
+            IptablesError::PermissionDenied
+        }
         _ => IptablesError::NetlinkError(err.to_string()),
     }
 }

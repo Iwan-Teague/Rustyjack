@@ -231,7 +231,11 @@ impl TxPowerManager {
                 let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
                 mgr.set_tx_power(interface, power_setting)
                     .map_err(|e| EvasionError::TxPowerError(format!("{}", e)))?;
-                tracing::debug!("Set TX power on {} to {} dBm using netlink", interface, level.to_dbm());
+                tracing::debug!(
+                    "Set TX power on {} to {} dBm using netlink",
+                    interface,
+                    level.to_dbm()
+                );
                 return Ok(());
             }
         }

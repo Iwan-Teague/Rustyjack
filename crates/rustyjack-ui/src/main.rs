@@ -19,9 +19,9 @@ mod types;
 mod ui;
 mod util;
 
+use crate::core::CoreBridge;
 use anyhow::Result;
 use app::App;
-use crate::core::CoreBridge;
 
 fn main() -> Result<()> {
     let root = CoreBridge::with_root(None)?.root().to_path_buf();

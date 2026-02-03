@@ -67,7 +67,10 @@ fn handle_event(event: notify::Result<Event>, root: &PathBuf, component: &str, p
         }
     };
 
-    if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)) {
+    if !matches!(
+        event.kind,
+        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+    ) {
         return;
     }
 

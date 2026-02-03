@@ -127,7 +127,19 @@ fn normalize_country(raw: &str) -> Option<String> {
 }
 
 fn read_country_from_wpa_supplicant() -> Option<String> {
-    let path = Path::new("/etc/wpa_supplicant/wpa_supplicant.conf");
+    let paths = [
+        Path::new("/etc/rustyjack/wpa_supplicant.conf"),
+        Path::new("/etc/wpa_supplicant/wpa_supplicant.conf"),
+    ];
+    for path in paths {
+        if let Some(code) = read_country_from_wpa_path(path) {
+            return Some(code);
+        }
+    }
+    None
+}
+
+fn read_country_from_wpa_path(path: &Path) -> Option<String> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
         let line = line.trim();
@@ -245,8 +257,8 @@ fn configure_regdom(detection: &CountryDetection) -> Result<RegdomSetupOutcome> 
 }
 
 fn update_cmdline(path: &Path, country: &str) -> Result<bool> {
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut parts: Vec<String> = contents.split_whitespace().map(|s| s.to_string()).collect();
     let key = "cfg80211.ieee80211_regdom=";
     let desired = format!("{key}{country}");
@@ -279,9 +291,9 @@ fn update_cmdline(path: &Path, country: &str) -> Result<bool> {
 
 fn configure_forwarding_sysctl() -> Result<SysctlSetupOutcome> {
     let path = Path::new("/etc/sysctl.d/99-rustyjack.conf");
-    let contents = "# Managed by Rustyjack\nnet.ipv4.ip_forward=1\nnet.ipv4.conf.all.forwarding=1\n";
-    write_atomic(path, contents, 0o644)
-        .with_context(|| format!("writing {}", path.display()))?;
+    let contents =
+        "# Managed by Rustyjack\nnet.ipv4.ip_forward=1\nnet.ipv4.conf.all.forwarding=1\n";
+    write_atomic(path, contents, 0o644).with_context(|| format!("writing {}", path.display()))?;
 
     let mut runtime_errors = Vec::new();
     let mut runtime_applied = true;
@@ -309,8 +321,7 @@ fn apply_sysctl_runtime(path: &str, desired: &str) -> Result<(), String> {
         }
     }
 
-    fs::write(path, format!("{desired}\n"))
-        .map_err(|e| format!("{}: {}", path, e))?;
+    fs::write(path, format!("{desired}\n")).map_err(|e| format!("{}: {}", path, e))?;
     Ok(())
 }
 
@@ -318,8 +329,7 @@ fn write_atomic(path: &Path, contents: &str, mode: u32) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("missing parent for {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("creating {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
 
     let tmp_path = temp_path_for(path);
     {

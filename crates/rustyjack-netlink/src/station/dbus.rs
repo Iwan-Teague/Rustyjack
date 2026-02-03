@@ -128,10 +128,7 @@ impl WpaSupplicantDbusBackend {
             .map_err(|e| NetlinkError::OperationFailed(format!("properties proxy: {}", e)))
     }
 
-    async fn bss_proxy<'a>(
-        conn: &'a Connection,
-        path: &'a OwnedObjectPath,
-    ) -> Result<Proxy<'a>> {
+    async fn bss_proxy<'a>(conn: &'a Connection, path: &'a OwnedObjectPath) -> Result<Proxy<'a>> {
         Proxy::new(conn, SUPPLICANT_BUS, path.as_str(), BSS_IFACE)
             .await
             .map_err(|e| NetlinkError::OperationFailed(format!("bss proxy: {}", e)))
@@ -150,10 +147,9 @@ impl WpaSupplicantDbusBackend {
 
         let path = match proxy.call_method("GetInterface", &(iface.as_str(),)).await {
             Ok(msg) => {
-                let (path,): (OwnedObjectPath,) = msg
-                    .body()
-                    .deserialize()
-                    .map_err(|e| NetlinkError::OperationFailed(format!("GetInterface parse: {}", e)))?;
+                let (path,): (OwnedObjectPath,) = msg.body().deserialize().map_err(|e| {
+                    NetlinkError::OperationFailed(format!("GetInterface parse: {}", e))
+                })?;
                 path
             }
             Err(err) if Self::is_interface_unknown(&err) => {
@@ -166,12 +162,9 @@ impl WpaSupplicantDbusBackend {
                     .map_err(|e| {
                         NetlinkError::OperationFailed(format!("CreateInterface failed: {}", e))
                     })?;
-                let (path,): (OwnedObjectPath,) = msg
-                    .body()
-                    .deserialize()
-                    .map_err(|e| {
-                        NetlinkError::OperationFailed(format!("CreateInterface parse: {}", e))
-                    })?;
+                let (path,): (OwnedObjectPath,) = msg.body().deserialize().map_err(|e| {
+                    NetlinkError::OperationFailed(format!("CreateInterface parse: {}", e))
+                })?;
                 path
             }
             Err(err) => {
@@ -195,7 +188,10 @@ impl WpaSupplicantDbusBackend {
         let iface_path = self.get_or_create_interface(&conn).await?;
         let iface_proxy = Self::interface_proxy(&conn, &iface_path).await?;
 
-        info!("[WIFI] D-Bus scan for ssid={} on {}", cfg.ssid, self.interface);
+        info!(
+            "[WIFI] D-Bus scan for ssid={} on {}",
+            cfg.ssid, self.interface
+        );
         let mut args: HashMap<String, OwnedValue> = HashMap::new();
         args.insert("Type".to_string(), owned_value("active".to_string())?);
         if cfg.force_scan_ssid && !cfg.ssid.trim().is_empty() {
@@ -312,11 +308,10 @@ impl WpaSupplicantDbusBackend {
         let ssid = String::from_utf8_lossy(&ssid_bytes).to_string();
 
         let bssid_bytes: Vec<u8> = proxy.get_property("BSSID").await.unwrap_or_default();
-        let bssid = format_bssid(&bssid_bytes)
-            .ok_or_else(|| NetlinkError::ParseError {
-                what: "BSSID".to_string(),
-                reason: "invalid length".to_string(),
-            })?;
+        let bssid = format_bssid(&bssid_bytes).ok_or_else(|| NetlinkError::ParseError {
+            what: "BSSID".to_string(),
+            reason: "invalid length".to_string(),
+        })?;
 
         let frequency = proxy.get_property::<u32>("Frequency").await.ok();
         let signal_dbm = match proxy.get_property::<i16>("Signal").await {
@@ -347,7 +342,11 @@ impl WpaSupplicantDbusBackend {
         Ok((entry, info))
     }
 
-    async fn fetch_status(&self, conn: &Connection, iface_path: &OwnedObjectPath) -> Result<WpaStatus> {
+    async fn fetch_status(
+        &self,
+        conn: &Connection,
+        iface_path: &OwnedObjectPath,
+    ) -> Result<WpaStatus> {
         let iface_proxy = Self::interface_proxy(conn, iface_path).await?;
         let state: String = iface_proxy
             .get_property("State")
@@ -368,7 +367,10 @@ impl WpaSupplicantDbusBackend {
             address: None,
         };
 
-        if let Ok(current_bss) = iface_proxy.get_property::<OwnedObjectPath>("CurrentBSS").await {
+        if let Ok(current_bss) = iface_proxy
+            .get_property::<OwnedObjectPath>("CurrentBSS")
+            .await
+        {
             if current_bss.as_str() != "/" {
                 if let Ok((_entry, info)) = self.read_bss_entry(conn, &current_bss).await {
                     status.ssid = info.ssid;
@@ -392,7 +394,9 @@ impl WpaSupplicantDbusBackend {
         let mut stream = props_proxy
             .receive_signal("PropertiesChanged")
             .await
-            .map_err(|e| NetlinkError::OperationFailed(format!("PropertiesChanged signal: {}", e)))?;
+            .map_err(|e| {
+                NetlinkError::OperationFailed(format!("PropertiesChanged signal: {}", e))
+            })?;
 
         let start = Instant::now();
         let mut last_state = StationState::Idle;
@@ -421,15 +425,9 @@ impl WpaSupplicantDbusBackend {
                         String,
                         HashMap<String, OwnedValue>,
                         Vec<String>,
-                    ) = msg
-                        .body()
-                        .deserialize()
-                        .map_err(|e| {
-                            NetlinkError::OperationFailed(format!(
-                                "PropertiesChanged parse: {}",
-                                e
-                            ))
-                        })?;
+                    ) = msg.body().deserialize().map_err(|e| {
+                        NetlinkError::OperationFailed(format!("PropertiesChanged parse: {}", e))
+                    })?;
                     if iface_name != IFACE_IFACE {
                         continue;
                     }
@@ -494,7 +492,11 @@ impl WpaSupplicantDbusBackend {
         Ok(())
     }
 
-    async fn disconnect_interface(&self, conn: &Connection, iface_path: &OwnedObjectPath) -> Result<()> {
+    async fn disconnect_interface(
+        &self,
+        conn: &Connection,
+        iface_path: &OwnedObjectPath,
+    ) -> Result<()> {
         let iface_proxy = Self::interface_proxy(conn, iface_path).await?;
         iface_proxy
             .call_method("Disconnect", &())
@@ -524,7 +526,9 @@ impl StationBackend for WpaSupplicantDbusBackend {
         candidate: Option<&BssCandidate>,
     ) -> Result<StationOutcome> {
         if cfg.ssid.trim().is_empty() {
-            return Err(NetlinkError::InvalidInput("SSID cannot be empty".to_string()));
+            return Err(NetlinkError::InvalidInput(
+                "SSID cannot be empty".to_string(),
+            ));
         }
 
         self.block_on(async {
@@ -588,9 +592,7 @@ impl StationBackend for WpaSupplicantDbusBackend {
                     let selected_bssid = candidate
                         .map(|c| c.bssid.clone())
                         .or_else(|| status.bssid.clone());
-                    let selected_freq = candidate
-                        .and_then(|c| c.frequency)
-                        .or(status.freq);
+                    let selected_freq = candidate.and_then(|c| c.frequency).or(status.freq);
 
                     Ok(StationOutcome {
                         status,

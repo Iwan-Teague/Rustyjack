@@ -63,7 +63,10 @@ impl ExternalBackend {
 
     fn scan_candidates(&self, config: &StationConfig) -> Result<ScanOutcome> {
         let wpa = self.wpa()?;
-        info!("[WIFI] Scanning for ssid={} on {}", config.ssid, self.interface);
+        info!(
+            "[WIFI] Scanning for ssid={} on {}",
+            config.ssid, self.interface
+        );
         wpa.scan()?;
 
         let start = Instant::now();
@@ -178,9 +181,15 @@ impl StationBackend for ExternalBackend {
         self.scan_candidates(cfg)
     }
 
-    fn connect(&self, cfg: &StationConfig, candidate: Option<&BssCandidate>) -> Result<StationOutcome> {
+    fn connect(
+        &self,
+        cfg: &StationConfig,
+        candidate: Option<&BssCandidate>,
+    ) -> Result<StationOutcome> {
         if cfg.ssid.trim().is_empty() {
-            return Err(NetlinkError::InvalidInput("SSID cannot be empty".to_string()));
+            return Err(NetlinkError::InvalidInput(
+                "SSID cannot be empty".to_string(),
+            ));
         }
 
         let wpa = self.wpa()?;
@@ -192,9 +201,7 @@ impl StationBackend for ExternalBackend {
                 let selected_bssid = candidate
                     .map(|c| c.bssid.clone())
                     .or_else(|| status.bssid.clone());
-                let selected_freq = candidate
-                    .and_then(|c| c.frequency)
-                    .or(status.freq);
+                let selected_freq = candidate.and_then(|c| c.frequency).or(status.freq);
                 Ok(StationOutcome {
                     status,
                     selected_bssid,

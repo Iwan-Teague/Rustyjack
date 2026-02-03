@@ -10,8 +10,8 @@ use rustyjack_ipc::{CoreDispatchRequest, ErrorCode, LegacyCommand, RequestBody, 
 
 #[tokio::test(flavor = "current_thread")]
 async fn status_reports_ops_and_core_dispatch_forbidden() {
-    let socket_path = std::env::temp_dir()
-        .join(format!("rustyjackd-test-{}.sock", std::process::id()));
+    let socket_path =
+        std::env::temp_dir().join(format!("rustyjackd-test-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&socket_path);
 
     let listener = UnixListener::bind(&socket_path).expect("bind socket");

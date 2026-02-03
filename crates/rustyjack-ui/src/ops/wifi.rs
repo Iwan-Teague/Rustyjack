@@ -231,12 +231,8 @@ impl Operation for ProbeSniffOp {
             duration: self.duration_secs,
             channel: 0,
         }));
-        let result = jobs::dispatch_cancellable(
-            ctx,
-            "Probe Sniff",
-            cmd,
-            self.duration_secs as u64,
-        )?;
+        let result =
+            jobs::dispatch_cancellable(ctx, "Probe Sniff", cmd, self.duration_secs as u64)?;
 
         match result {
             jobs::JobRunResult::Cancelled => Ok(OperationOutcome::Cancelled {
@@ -371,16 +367,16 @@ impl Operation for PmkidCaptureOp {
             } else {
                 None
             },
-            channel: if self.use_target { self.target_channel } else { 0 },
+            channel: if self.use_target {
+                self.target_channel
+            } else {
+                0
+            },
             duration: self.duration_secs,
         }));
 
-        let result = jobs::dispatch_cancellable(
-            ctx,
-            "PMKID Capture",
-            cmd,
-            self.duration_secs as u64,
-        )?;
+        let result =
+            jobs::dispatch_cancellable(ctx, "PMKID Capture", cmd, self.duration_secs as u64)?;
 
         match result {
             jobs::JobRunResult::Cancelled => Ok(OperationOutcome::Cancelled {

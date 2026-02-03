@@ -119,9 +119,9 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
 
     let authz = authorization_for_peer(&peer, &state.config);
     span.record("tier", format!("{:?}", authz).as_str());
-    
+
     debug!("New connection accepted");
-    
+
     let mut stream = stream;
 
     let hello_payload = match time::timeout(
@@ -194,7 +194,14 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
         }
     };
 
-    if let Err(err) = write_frame_timed(&mut stream, &ack_bytes, state.config.max_frame, state.config.write_timeout).await {
+    if let Err(err) = write_frame_timed(
+        &mut stream,
+        &ack_bytes,
+        state.config.max_frame,
+        state.config.write_timeout,
+    )
+    .await
+    {
         warn!("Failed to send hello ack: {}", err);
         return;
     }
@@ -205,7 +212,13 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
     let mut violations = 0usize;
 
     loop {
-        let payload = match read_frame_timed(&mut stream, state.config.max_frame, state.config.read_timeout).await {
+        let payload = match read_frame_timed(
+            &mut stream,
+            state.config.max_frame,
+            state.config.read_timeout,
+        )
+        .await
+        {
             Ok(payload) => payload,
             Err(err) => {
                 if err.kind() == io::ErrorKind::TimedOut {
@@ -314,7 +327,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
             duration_ms = tracing::field::Empty,
         );
         let _enter = request_span.enter();
-        
+
         debug!("Processing request");
 
         let required = required_tier_for_request(request.endpoint, &request.body);
@@ -360,15 +373,25 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
             }
         };
 
-        if let Err(err) = write_frame_timed(&mut stream, &payload, state.config.max_frame, state.config.write_timeout).await {
+        if let Err(err) = write_frame_timed(
+            &mut stream,
+            &payload,
+            state.config.max_frame,
+            state.config.write_timeout,
+        )
+        .await
+        {
             if err.kind() == io::ErrorKind::TimedOut {
-                warn!("Response write timeout to pid {} for request {}", peer.pid, response.request_id);
+                warn!(
+                    "Response write timeout to pid {} for request {}",
+                    peer.pid, response.request_id
+                );
             } else {
                 warn!("Failed to write response: {}", err);
             }
             break;
         }
-        
+
         // Record request duration
         let duration_ms = start.elapsed().as_millis() as u64;
         request_span.record("duration_ms", duration_ms);
@@ -402,7 +425,10 @@ async fn write_frame(stream: &mut UnixStream, payload: &[u8], max_frame: u32) ->
         return Err(io::Error::new(io::ErrorKind::InvalidData, "empty payload"));
     }
     if payload.len() as u32 > max_frame {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "payload exceeds max_frame"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "payload exceeds max_frame",
+        ));
     }
     let frame = rustyjack_ipc::encode_frame(payload);
     stream.write_all(&frame).await?;

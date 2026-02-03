@@ -181,9 +181,8 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
     }
 
     let created = if !mountpoint.exists() {
-        fs::create_dir_all(&mountpoint).with_context(|| {
-            format!("creating mountpoint {}", mountpoint.display())
-        })?;
+        fs::create_dir_all(&mountpoint)
+            .with_context(|| format!("creating mountpoint {}", mountpoint.display()))?;
         true
     } else {
         false
@@ -224,12 +223,16 @@ pub fn unmount(policy: &MountPolicy, req: UnmountRequest) -> Result<()> {
         bail!("mountpoint outside policy root");
     }
 
-    let entry = find_mount_by_mountpoint(&mountpoint)?
-        .ok_or_else(|| anyhow!("mountpoint not mounted"))?;
+    let entry =
+        find_mount_by_mountpoint(&mountpoint)?.ok_or_else(|| anyhow!("mountpoint not mounted"))?;
 
     do_unmount(&mountpoint, req.detach)?;
 
-    if mountpoint.read_dir().map(|mut i| i.next().is_none()).unwrap_or(false) {
+    if mountpoint
+        .read_dir()
+        .map(|mut i| i.next().is_none())
+        .unwrap_or(false)
+    {
         let _ = fs::remove_dir(&mountpoint);
     }
 
@@ -252,10 +255,7 @@ pub fn list_mounts_under(policy: &MountPolicy) -> Result<Vec<MountResponse>> {
         }
 
         let fs_type = map_fs_type(&m.fstype);
-        let readonly = m
-            .options
-            .iter()
-            .any(|opt| opt == "ro" || opt == "rdonly");
+        let readonly = m.options.iter().any(|opt| opt == "ro" || opt == "rdonly");
 
         found.push(MountResponse {
             device: m.source.clone(),
@@ -469,7 +469,8 @@ fn canonical_device_path(path: &Path) -> Result<PathBuf> {
     if !path.starts_with("/dev") {
         bail!("device path must be under /dev");
     }
-    let dev = fs::canonicalize(path).with_context(|| format!("canonicalizing {}", path.display()))?;
+    let dev =
+        fs::canonicalize(path).with_context(|| format!("canonicalizing {}", path.display()))?;
     if !dev.starts_with("/dev") {
         bail!("device path resolved outside /dev");
     }
@@ -513,8 +514,8 @@ fn ensure_usb_removable(dev_name: &str) -> Result<()> {
 
 fn base_device_name(dev_name: &str) -> Result<String> {
     let sys_path = Path::new("/sys/class/block").join(dev_name);
-    let real = fs::canonicalize(&sys_path)
-        .with_context(|| format!("resolving {}", sys_path.display()))?;
+    let real =
+        fs::canonicalize(&sys_path).with_context(|| format!("resolving {}", sys_path.display()))?;
     let part_flag = sys_path.join("partition").exists();
     if part_flag {
         let parent = real
@@ -555,8 +556,8 @@ fn has_partitions(dev_name: &str) -> Result<bool> {
 }
 
 fn detect_fs_type(device: &Path) -> Result<FsType> {
-    let mut file = File::open(device)
-        .with_context(|| format!("opening device {}", device.display()))?;
+    let mut file =
+        File::open(device).with_context(|| format!("opening device {}", device.display()))?;
     let mut buf = vec![0u8; 2048];
     file.read_exact(&mut buf)
         .with_context(|| "reading device header")?;
@@ -597,8 +598,7 @@ fn ensure_fs_supported(fs: &FsType) -> Result<()> {
 }
 
 fn kernel_supported_filesystems() -> Result<BTreeSet<String>> {
-    let contents = fs::read_to_string("/proc/filesystems")
-        .context("reading /proc/filesystems")?;
+    let contents = fs::read_to_string("/proc/filesystems").context("reading /proc/filesystems")?;
     let mut supported = BTreeSet::new();
     for line in contents.lines() {
         let fs_name = line.split_whitespace().last().unwrap_or("");
@@ -723,8 +723,7 @@ struct MountInfo {
 }
 
 fn read_mountinfo() -> Result<Vec<MountInfo>> {
-    let contents =
-        fs::read_to_string("/proc/self/mountinfo").context("reading mountinfo")?;
+    let contents = fs::read_to_string("/proc/self/mountinfo").context("reading mountinfo")?;
     let mut mounts = Vec::new();
     for line in contents.lines() {
         if let Some((left, right)) = line.split_once(" - ") {
@@ -761,10 +760,7 @@ fn find_mount(device: &Path, mountpoint: &Path) -> Result<Option<MountResponse>>
     for m in mounts {
         if m.mountpoint == mountpoint && m.source == device {
             let fs_type = map_fs_type(&m.fstype);
-            let readonly = m
-                .options
-                .iter()
-                .any(|opt| opt == "ro" || opt == "rdonly");
+            let readonly = m.options.iter().any(|opt| opt == "ro" || opt == "rdonly");
             return Ok(Some(MountResponse {
                 device: m.source,
                 mountpoint: m.mountpoint,
@@ -781,10 +777,7 @@ fn find_mount_by_mountpoint(mountpoint: &Path) -> Result<Option<MountResponse>> 
     for m in mounts {
         if m.mountpoint == mountpoint {
             let fs_type = map_fs_type(&m.fstype);
-            let readonly = m
-                .options
-                .iter()
-                .any(|opt| opt == "ro" || opt == "rdonly");
+            let readonly = m.options.iter().any(|opt| opt == "ro" || opt == "rdonly");
             return Ok(Some(MountResponse {
                 device: m.source,
                 mountpoint: m.mountpoint,
@@ -850,8 +843,7 @@ fn sanitize_mount_name(preferred: Option<&str>, dev_name: &str) -> String {
 }
 
 fn path_to_cstring(path: &Path) -> Result<CString> {
-    CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| anyhow!("invalid path for C string"))
+    CString::new(path.as_os_str().as_bytes()).map_err(|_| anyhow!("invalid path for C string"))
 }
 
 fn read_sysfs_flag(path: PathBuf) -> Result<bool> {

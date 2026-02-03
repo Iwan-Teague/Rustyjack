@@ -25,8 +25,8 @@ mod ops_apply;
 mod server;
 mod state;
 mod systemd;
-mod telemetry;
 mod tail;
+mod telemetry;
 mod validation;
 
 use config::DaemonConfig;

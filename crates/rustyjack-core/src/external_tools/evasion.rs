@@ -1,10 +1,10 @@
 use std::{fs, path::Path, thread, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
-use tracing::{debug, info, warn};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use rustyjack_evasion::{MacAddress, MacManager};
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvasionConfig {

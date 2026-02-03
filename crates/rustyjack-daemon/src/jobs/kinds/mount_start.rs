@@ -2,8 +2,8 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use rustyjack_ipc::{DaemonError, ErrorCode, MountStartRequestIpc};
 use crate::jobs::cancel_bridge::create_cancel_flag;
+use rustyjack_ipc::{DaemonError, ErrorCode, MountStartRequestIpc};
 
 pub async fn run<F, Fut>(
     req: MountStartRequestIpc,
@@ -15,7 +15,11 @@ where
     Fut: std::future::Future<Output = ()>,
 {
     if cancel.is_cancelled() {
-        return Err(DaemonError::new(ErrorCode::Cancelled, "Job cancelled", false));
+        return Err(DaemonError::new(
+            ErrorCode::Cancelled,
+            "Job cancelled",
+            false,
+        ));
     }
 
     let request = rustyjack_core::services::mount::MountRequest {
@@ -28,9 +32,13 @@ where
 
     let (tx, mut rx) = mpsc::channel::<(u8, String)>(64);
     let mut handle = tokio::task::spawn_blocking(move || {
-        rustyjack_core::services::mount::mount(request, Some(&cancel_flag_for_task), |percent, message| {
-            let _ = tx.try_send((percent, message.to_string()));
-        })
+        rustyjack_core::services::mount::mount(
+            request,
+            Some(&cancel_flag_for_task),
+            |percent, message| {
+                let _ = tx.try_send((percent, message.to_string()));
+            },
+        )
     });
 
     let mut cancel_notified = false;
@@ -52,10 +60,9 @@ where
 
     match result {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(err.to_daemon_error_with_code(
-            ErrorCode::MountFailed,
-            "daemon.jobs.mount_start",
-        )),
+        Ok(Err(err)) => {
+            Err(err.to_daemon_error_with_code(ErrorCode::MountFailed, "daemon.jobs.mount_start"))
+        }
         Err(err) => Err(
             DaemonError::new(ErrorCode::Internal, "mount job panicked", false)
                 .with_detail(err.to_string())

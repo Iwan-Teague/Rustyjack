@@ -678,9 +678,9 @@ impl Display {
             Point::new(0, 0),
             Size::new((LCD_WIDTH as u32) + 1, HEADER_HEIGHT),
         )
-            .into_styled(style)
-            .draw(&mut self.lcd)
-            .map_err(|_| anyhow::anyhow!("Draw error"))?;
+        .into_styled(style)
+        .draw(&mut self.lcd)
+        .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
         // Draw title in top left if provided, clipped to avoid overlapping temp
         if let Some(t) = title {
@@ -852,9 +852,9 @@ impl Display {
             Point::new(0, 0),
             Size::new((LCD_WIDTH as u32) + 1, HEADER_HEIGHT),
         )
-            .into_styled(style)
-            .draw(&mut self.lcd)
-            .map_err(|_| anyhow::anyhow!("Draw error"))?;
+        .into_styled(style)
+        .draw(&mut self.lcd)
+        .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
         // Calculate max chars that fit in toolbar (leave space for temp on right)
         // Toolbar width ~129, temp takes ~22px on right, title starts at x=4
@@ -1273,10 +1273,7 @@ impl Display {
                     _ => "??",
                 }
             };
-            let ip_label = status
-                .active_interface_ip
-                .as_deref()
-                .unwrap_or("-");
+            let ip_label = status.active_interface_ip.as_deref().unwrap_or("-");
             entries.push(format!(
                 "Active: {} [{}]",
                 status.active_interface, state_label
@@ -1302,10 +1299,7 @@ impl Display {
                         _ => "??",
                     }
                 };
-                let ip = status
-                    .active_interface_ip
-                    .as_deref()
-                    .unwrap_or("-");
+                let ip = status.active_interface_ip.as_deref().unwrap_or("-");
                 (symbol, ip)
             } else {
                 let symbol = match iface.oper_state.as_str() {
@@ -1427,7 +1421,8 @@ impl Display {
     pub fn draw_toolbar(&mut self, status: &StatusOverlay) -> Result<()> {
         println!(
             "[status] {:.0} °C | {}",
-            status.temp_c, status.text.as_str()
+            status.temp_c,
+            status.text.as_str()
         );
         Ok(())
     }

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use tracing::{debug, info, warn};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
 
 use rustyjack_ipc::{DaemonError, ErrorCode, JobInfo, JobKind, JobSpec, JobState, Progress};
 
@@ -40,15 +40,15 @@ impl JobManager {
     pub async fn start_job(self: &Arc<Self>, spec: JobSpec, state: Arc<DaemonState>) -> u64 {
         let job_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let created_at_ms = DaemonState::now_ms();
-        
+
         let kind_name = job_kind_name(&spec.kind);
         let requested_by = spec.requested_by.as_deref().unwrap_or("unknown");
-        
+
         info!(
             "job_id={} kind={} requested_by={} state=queued",
             job_id, kind_name, requested_by
         );
-        
+
         let info = JobInfo {
             job_id,
             kind: spec.kind.clone(),
@@ -88,9 +88,9 @@ impl JobManager {
         state: Arc<DaemonState>,
     ) {
         let kind_name = job_kind_name(&spec.kind);
-        
+
         info!("job_id={} kind={} state=running", job_id, kind_name);
-        
+
         self.update_job_state(job_id, JobState::Running, None, None)
             .await;
         self.update_job_started(job_id).await;
@@ -115,26 +115,27 @@ impl JobManager {
                     ErrorCode::Cancelled => JobState::Cancelled,
                     _ => JobState::Failed,
                 };
-                
+
                 let state_name = match job_state {
                     JobState::Cancelled => "cancelled",
                     JobState::Failed => "failed",
                     _ => "unknown",
                 };
-                
+
                 info!(
                     "job_id={} kind={} state={} error_code={:?} message={}",
                     job_id, kind_name, state_name, err.code, err.message
                 );
-                
+
                 if let Some(source) = &err.source {
                     debug!("job_id={} error_source={}", job_id, source);
                 }
                 if let Some(detail) = &err.detail {
                     debug!("job_id={} error_detail={}", job_id, detail);
                 }
-                
-                self.update_job_state(job_id, job_state, None, Some(err)).await;
+
+                self.update_job_state(job_id, job_state, None, Some(err))
+                    .await;
             }
         }
 
@@ -275,17 +276,13 @@ impl JobManager {
 
         let _active_ids: std::collections::HashSet<u64> = jobs
             .values()
-            .filter(|record| {
-                matches!(record.info.state, JobState::Queued | JobState::Running)
-            })
+            .filter(|record| matches!(record.info.state, JobState::Queued | JobState::Running))
             .map(|record| record.info.job_id)
             .collect();
 
         let mut finished: Vec<(u64, u64)> = jobs
             .values()
-            .filter(|record| {
-                !matches!(record.info.state, JobState::Queued | JobState::Running)
-            })
+            .filter(|record| !matches!(record.info.state, JobState::Queued | JobState::Running))
             .map(|record| (record.info.job_id, record.info.created_at_ms))
             .collect();
 
@@ -332,8 +329,6 @@ fn job_kind_name(kind: &JobKind) -> &'static str {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,7 +344,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let manager = create_test_manager();
-            
+
             // Start 6 sleep jobs (retention limit is 5)
             let mut job_ids = Vec::new();
             for i in 0..6 {
@@ -375,7 +370,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let manager = create_test_manager();
-            
+
             // Start 10 short sleep jobs
             for i in 0..10 {
                 let spec = JobSpec {

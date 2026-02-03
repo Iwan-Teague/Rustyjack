@@ -329,7 +329,9 @@ fn record_ap_error(msg: impl Into<String>) {
 }
 
 fn record_start_ap_error(msg: impl Into<String>) {
-    let mut guard = LAST_START_AP_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = LAST_START_AP_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *guard = Some(msg.into());
 }
 
@@ -341,13 +343,17 @@ pub fn take_last_ap_error() -> Option<String> {
 
 /// Retrieve and clear the last START_AP error.
 pub fn take_last_start_ap_error() -> Option<String> {
-    let mut guard = LAST_START_AP_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = LAST_START_AP_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     guard.take()
 }
 
 /// Retrieve the last START_AP error without clearing it.
 pub fn peek_last_start_ap_error() -> Option<String> {
-    let guard = LAST_START_AP_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = LAST_START_AP_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     guard.clone()
 }
 
@@ -475,10 +481,7 @@ impl AccessPoint {
         // Attempt set_channel for each candidate (best-effort), but do not filter
         let mut attempt_channels = Vec::new();
         for ch in candidate_channels {
-            match self
-                .wireless_mgr
-                .set_channel(&self.config.interface, ch)
-            {
+            match self.wireless_mgr.set_channel(&self.config.interface, ch) {
                 Ok(_) => {
                     tracing::info!(
                         "Channel {} (freq {:?}) accepted by driver (NoHT assumed)",
@@ -498,8 +501,8 @@ impl AccessPoint {
         }
 
         if attempt_channels.is_empty() {
-            let regdom = read_regdom_alpha2()
-                .map(|code| String::from_utf8_lossy(&code).to_string());
+            let regdom =
+                read_regdom_alpha2().map(|code| String::from_utf8_lossy(&code).to_string());
             let msg = if let Some(code) = regdom {
                 format!(
                     "No valid channels available for interface {} (regdom={} check regdom/driver)",
@@ -974,11 +977,7 @@ fn send_start_ap_inner(
                 },
             )?,
         );
-        log_attr(
-            "HIDDEN_SSID",
-            4,
-            Some(format!("hidden={}", hidden_ssid)),
-        );
+        log_attr("HIDDEN_SSID", 4, Some(format!("hidden={}", hidden_ssid)));
     }
     if include_basic_rates && !basic_rates.is_empty() {
         let basic_rates_bytes = basic_rates_to_bytes(basic_rates);
@@ -1020,7 +1019,10 @@ fn send_start_ap_inner(
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_WPA_VERSIONS, WPA_VERSION_2)
                 .map_err(|e| {
-                    NetlinkError::OperationFailed(format!("Failed to build WPA versions attr: {}", e))
+                    NetlinkError::OperationFailed(format!(
+                        "Failed to build WPA versions attr: {}",
+                        e
+                    ))
                 })?,
         );
         log_attr("WPA_VERSIONS", 4, Some("WPA2".to_string()));
@@ -1039,22 +1041,20 @@ fn send_start_ap_inner(
         let pairwise = u32_list_bytes(&[CIPHER_SUITE_CCMP]);
         let pairwise_len = pairwise.len();
         attrs.push(
-            neli::genl::Nlattr::new(
-                false,
-                false,
-                NL80211_ATTR_CIPHER_SUITES_PAIRWISE,
-                pairwise,
-            )
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build pairwise cipher attr: {}", e))
-            })?,
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_CIPHER_SUITES_PAIRWISE, pairwise)
+                .map_err(|e| {
+                    NetlinkError::OperationFailed(format!(
+                        "Failed to build pairwise cipher attr: {}",
+                        e
+                    ))
+                })?,
         );
         log_attr("CIPHER_PAIRWISE", pairwise_len, Some("CCMP".to_string()));
         let akm = u32_list_bytes(&[AKM_SUITE_PSK]);
         attrs.push(
-            neli::genl::Nlattr::new(false, false, NL80211_ATTR_AKM_SUITES, akm).map_err(
-                |e| NetlinkError::OperationFailed(format!("Failed to build AKM suites attr: {}", e)),
-            )?,
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_AKM_SUITES, akm).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build AKM suites attr: {}", e))
+            })?,
         );
         log_attr("AKM_SUITES", 4, Some("PSK".to_string()));
     }
@@ -1108,7 +1108,11 @@ fn send_start_ap_inner(
         NL80211_CHAN_WIDTH_20_NOHT
     };
     if include_channel_type {
-        let chan_type = if ht_enabled { NL80211_CHAN_HT20 } else { NL80211_CHAN_NO_HT };
+        let chan_type = if ht_enabled {
+            NL80211_CHAN_HT20
+        } else {
+            NL80211_CHAN_NO_HT
+        };
         attrs.push(
             neli::genl::Nlattr::new(false, false, NL80211_ATTR_WIPHY_CHANNEL_TYPE, chan_type)
                 .map_err(|e| {
@@ -1820,9 +1824,15 @@ fn band_for_channel<'a>(
         .find(|band| band.frequencies.iter().any(|f| f.freq == freq))
         .or_else(|| {
             if channel <= 14 {
-                phy_caps.band_info.iter().find(|band| band.name.contains("2.4"))
+                phy_caps
+                    .band_info
+                    .iter()
+                    .find(|band| band.name.contains("2.4"))
             } else {
-                phy_caps.band_info.iter().find(|band| band.name.contains("5"))
+                phy_caps
+                    .band_info
+                    .iter()
+                    .find(|band| band.name.contains("5"))
             }
         })
 }
@@ -1931,9 +1941,15 @@ fn rates_from_wiphy(
         .find(|band| band.frequencies.iter().any(|f| f.freq == freq))
         .or_else(|| {
             if channel <= 14 {
-                phy_caps.band_info.iter().find(|band| band.name.contains("2.4"))
+                phy_caps
+                    .band_info
+                    .iter()
+                    .find(|band| band.name.contains("2.4"))
             } else {
-                phy_caps.band_info.iter().find(|band| band.name.contains("5"))
+                phy_caps
+                    .band_info
+                    .iter()
+                    .find(|band| band.name.contains("5"))
             }
         })?;
     if band.rates.is_empty() {
@@ -2310,7 +2326,10 @@ fn derive_ptk(
     if output.len() >= 64 {
         ptk.copy_from_slice(&output[..64]);
     } else {
-        tracing::error!("[AP] PTK derivation output too short ({} bytes)", output.len());
+        tracing::error!(
+            "[AP] PTK derivation output too short ({} bytes)",
+            output.len()
+        );
     }
     ptk
 }
@@ -2554,7 +2573,10 @@ fn spawn_eapol_task(
                         }
                         let calc_mic = hmac_sha1(&ptk[..16], &frame[..(113 + key_data_len)]);
                         if calc_mic.len() < 16 {
-                            tracing::error!("[AP] Calculated MIC too short (len={})", calc_mic.len());
+                            tracing::error!(
+                                "[AP] Calculated MIC too short (len={})",
+                                calc_mic.len()
+                            );
                             record_ap_error("Calculated MIC too short".to_string());
                             drop(state_guard);
                             continue;
@@ -2973,10 +2995,14 @@ fn install_keys_and_authorize(ifindex: u32, sta: &[u8; 6], ptk: &[u8], gtk: &[u8
             })?,
         );
         attrs.push(
-            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DEFAULT, &[] as &[u8])
-                .map_err(|e| {
-                    NetlinkError::OperationFailed(format!("Failed to build key default attr: {}", e))
-                })?,
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_KEY_DEFAULT, &[] as &[u8]).map_err(
+                |e| {
+                    NetlinkError::OperationFailed(format!(
+                        "Failed to build key default attr: {}",
+                        e
+                    ))
+                },
+            )?,
         );
 
         let genlhdr = Genlmsghdr::new(NL80211_CMD_SET_KEY, NL80211_GENL_VERSION, attrs);
@@ -3147,9 +3173,8 @@ mod tests {
     #[test]
     fn test_generate_pmk_vector() {
         let pmk = generate_pmk("password", "IEEE").expect("pmk");
-        let expected = hex_to_bytes(
-            "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e",
-        );
+        let expected =
+            hex_to_bytes("f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e");
         assert_eq!(pmk.to_vec(), expected);
     }
 
@@ -3166,10 +3191,7 @@ mod tests {
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
         let mut out = Vec::new();
         let bytes = hex.as_bytes();
-        assert!(
-            bytes.len() % 2 == 0,
-            "hex string must have even length"
-        );
+        assert!(bytes.len() % 2 == 0, "hex string must have even length");
         for i in (0..bytes.len()).step_by(2) {
             let chunk = std::str::from_utf8(&bytes[i..i + 2]).expect("hex utf8");
             let byte = u8::from_str_radix(chunk, 16).expect("hex byte");

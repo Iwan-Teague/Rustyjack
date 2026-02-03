@@ -2,8 +2,8 @@ use anyhow::{bail, Result};
 use std::fs;
 
 use rustyjack_commands::{
-    Commands, EthernetCommand, EthernetDiscoverArgs, EthernetInventoryArgs,
-    EthernetPortScanArgs, EthernetSiteCredArgs, MitmCommand, MitmStartArgs,
+    Commands, EthernetCommand, EthernetDiscoverArgs, EthernetInventoryArgs, EthernetPortScanArgs,
+    EthernetSiteCredArgs, MitmCommand, MitmStartArgs,
 };
 
 use crate::ops::{
@@ -343,21 +343,14 @@ impl Operation for EthernetSiteCredOp {
     }
 
     fn run(&mut self, ctx: &mut OperationContext) -> Result<OperationOutcome> {
-        let cmd = Commands::Ethernet(EthernetCommand::SiteCredCapture(
-            EthernetSiteCredArgs {
-                interface: Some(self.interface.clone()),
-                target: None,
-                site: self.site.clone(),
-                max_hosts: self.max_hosts,
-                timeout_ms: 800,
-            },
-        ));
+        let cmd = Commands::Ethernet(EthernetCommand::SiteCredCapture(EthernetSiteCredArgs {
+            interface: Some(self.interface.clone()),
+            target: None,
+            site: self.site.clone(),
+            max_hosts: self.max_hosts,
+            timeout_ms: 800,
+        }));
 
-        jobs::run_cancellable_job(
-            ctx,
-            &cmd,
-            "Site Cred Capture",
-            "Running pipeline...",
-        )
+        jobs::run_cancellable_job(ctx, &cmd, "Site Cred Capture", "Running pipeline...")
     }
 }

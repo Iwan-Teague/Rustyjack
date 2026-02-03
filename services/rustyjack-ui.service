@@ -1,7 +1,8 @@
 [Unit]
 Description=Rustyjack UI Service (unprivileged)
-After=local-fs.target network.target rustyjackd.socket
-Wants=network.target rustyjackd.socket
+After=local-fs.target network.target rustyjackd.service
+Wants=network.target rustyjackd.service
+Requires=rustyjackd.service
 
 [Service]
 Type=simple

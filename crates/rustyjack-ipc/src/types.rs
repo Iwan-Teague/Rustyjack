@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use rustyjack_commands::{
     BridgeCommand, DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand, LootCommand,
     MitmCommand, NotifyCommand, ProcessCommand, ReverseCommand, ScanCommand, StatusCommand,
     SystemCommand, WifiCommand,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{AuthzSummary, DaemonError, JobEvent, JobInfo, JobKind, JobSpec, JobStarted};
 

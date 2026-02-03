@@ -6,8 +6,8 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use super::dns::DnsManager;
-use super::ops::{ErrorEntry, IsolationOutcome, NetOps};
 use super::isolation_policy::{IsolationMode, IsolationPolicyManager};
+use super::ops::{ErrorEntry, IsolationOutcome, NetOps};
 use super::preference::PreferenceManager;
 use super::routing::RouteManager;
 
@@ -47,7 +47,10 @@ enum EnforcementMode {
 #[derive(Debug, Clone)]
 pub enum DhcpReport {
     NotAttempted,
-    Succeeded { ip: Ipv4Addr, gateway: Option<Ipv4Addr> },
+    Succeeded {
+        ip: Ipv4Addr,
+        gateway: Option<Ipv4Addr>,
+    },
     Failed(String),
 }
 
@@ -105,9 +108,8 @@ impl IsolationEngine {
     }
 
     fn enforce_block_all(&self) -> Result<IsolationOutcome> {
-        let outcome = crate::system::apply_interface_isolation_with_ops_block_all(
-            Arc::clone(&self.ops),
-        )?;
+        let outcome =
+            crate::system::apply_interface_isolation_with_ops_block_all(Arc::clone(&self.ops))?;
         if !outcome.errors.is_empty() {
             let error_msgs: Vec<String> = outcome
                 .errors
@@ -123,7 +125,7 @@ impl IsolationEngine {
         // Acquire global lock to prevent concurrent enforcement
         let lock = ENFORCEMENT_LOCK.get_or_init(|| StdMutex::new(()));
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        
+
         info!("Starting network isolation enforcement (lock acquired)");
 
         let policy_mgr = IsolationPolicyManager::new(self.root.clone());
@@ -151,7 +153,10 @@ impl IsolationEngine {
 
         // Check for hotspot exception
         if let Some(exc) = get_hotspot_exception() {
-            info!("Hotspot exception active: AP={}, upstream={}", exc.ap_interface, exc.upstream_interface);
+            info!(
+                "Hotspot exception active: AP={}, upstream={}",
+                exc.ap_interface, exc.upstream_interface
+            );
             return self.enforce_with_hotspot(&exc);
         }
 
@@ -232,8 +237,11 @@ impl IsolationEngine {
     }
 
     fn enforce_with_hotspot(&self, exc: &HotspotException) -> Result<IsolationOutcome> {
-        info!("Enforcing with hotspot exception: AP={}, upstream={}", exc.ap_interface, exc.upstream_interface);
-        
+        info!(
+            "Enforcing with hotspot exception: AP={}, upstream={}",
+            exc.ap_interface, exc.upstream_interface
+        );
+
         let mut outcome = IsolationOutcome {
             allowed: Vec::new(),
             blocked: Vec::new(),
@@ -253,12 +261,15 @@ impl IsolationEngine {
         // Verify both hotspot interfaces exist
         let has_ap = interfaces.iter().any(|i| i.name == exc.ap_interface);
         let has_upstream = interfaces.iter().any(|i| i.name == exc.upstream_interface);
-        
+
         if !has_ap {
             bail!("Hotspot AP interface {} not found", exc.ap_interface);
         }
         if !has_upstream {
-            bail!("Hotspot upstream interface {} not found", exc.upstream_interface);
+            bail!(
+                "Hotspot upstream interface {} not found",
+                exc.upstream_interface
+            );
         }
 
         // Block all interfaces except the two hotspot interfaces
@@ -282,7 +293,10 @@ impl IsolationEngine {
         info!("Activating upstream interface: {}", exc.upstream_interface);
         match self.activate_interface(&exc.upstream_interface, EnforcementMode::Connectivity) {
             Ok(()) => {
-                info!("Successfully activated upstream: {}", exc.upstream_interface);
+                info!(
+                    "Successfully activated upstream: {}",
+                    exc.upstream_interface
+                );
                 outcome.allowed.push(exc.upstream_interface.clone());
             }
             Err(e) => {
@@ -321,8 +335,11 @@ impl IsolationEngine {
     }
 
     fn activate_ap_interface(&self, iface: &str) -> Result<()> {
-        info!("Activating AP interface: {} (no DHCP, manual config)", iface);
-        
+        info!(
+            "Activating AP interface: {} (no DHCP, manual config)",
+            iface
+        );
+
         // Check interface exists
         if !self.ops.interface_exists(iface) {
             bail!("Interface {} does not exist", iface);
@@ -360,8 +377,10 @@ impl IsolationEngine {
             warn!("Preferred interface '{}' not found", pref);
         }
 
-        let candidates: Vec<&super::ops::InterfaceSummary> =
-            interfaces.iter().filter(|iface| iface.name != "lo").collect();
+        let candidates: Vec<&super::ops::InterfaceSummary> = interfaces
+            .iter()
+            .filter(|iface| iface.name != "lo")
+            .collect();
 
         if candidates.is_empty() {
             warn!("No interfaces found");
@@ -392,22 +411,34 @@ impl IsolationEngine {
         // ============================================================
         info!("[Step 1/6] Checking interface {} exists...", iface);
         if !self.ops.interface_exists(iface) {
-            error!("[Step 1/6] FAILED: Interface {} does not exist in /sys/class/net", iface);
+            error!(
+                "[Step 1/6] FAILED: Interface {} does not exist in /sys/class/net",
+                iface
+            );
             bail!("Step 1 failed: Interface '{}' does not exist", iface);
         }
         info!("[Step 1/6] PASSED: Interface {} exists", iface);
 
         let is_wireless = self.ops.is_wireless(iface);
-        info!("Interface type: {}", if is_wireless { "wireless" } else { "ethernet" });
+        info!(
+            "Interface type: {}",
+            if is_wireless { "wireless" } else { "ethernet" }
+        );
 
         // ============================================================
         // STEP 3 (wireless only): Check if hardware rfkill blocked
         // ============================================================
         if is_wireless {
-            info!("[Step 2/6] Checking if {} is hardware-blocked (rfkill)...", iface);
+            info!(
+                "[Step 2/6] Checking if {} is hardware-blocked (rfkill)...",
+                iface
+            );
             match self.ops.is_rfkill_hard_blocked(iface) {
                 Ok(true) => {
-                    error!("[Step 2/6] FAILED: {} is HARDWARE blocked (physical switch)", iface);
+                    error!(
+                        "[Step 2/6] FAILED: {} is HARDWARE blocked (physical switch)",
+                        iface
+                    );
                     error!("The wireless adapter has a physical kill switch that is ON.");
                     error!("This cannot be fixed via software. Check for a physical WiFi switch on the device.");
                     bail!("Step 2 failed: Interface '{}' is hardware-blocked by rfkill. Check physical WiFi switch.", iface);
@@ -416,7 +447,10 @@ impl IsolationEngine {
                     info!("[Step 2/6] PASSED: {} is not hardware-blocked", iface);
                 }
                 Err(e) => {
-                    warn!("[Step 2/6] WARNING: Could not check rfkill status: {} (continuing)", e);
+                    warn!(
+                        "[Step 2/6] WARNING: Could not check rfkill status: {} (continuing)",
+                        e
+                    );
                 }
             }
         } else {
@@ -431,8 +465,15 @@ impl IsolationEngine {
 
             // Execute unblock
             if let Err(e) = self.ops.set_rfkill_block(iface, false) {
-                error!("[Step 3/6] FAILED: Could not unblock rfkill for {}: {}", iface, e);
-                bail!("Step 3 failed: Cannot unblock rfkill for '{}': {}", iface, e);
+                error!(
+                    "[Step 3/6] FAILED: Could not unblock rfkill for {}: {}",
+                    iface, e
+                );
+                bail!(
+                    "Step 3 failed: Cannot unblock rfkill for '{}': {}",
+                    iface,
+                    e
+                );
             }
 
             // Verify unblock succeeded by checking state
@@ -446,7 +487,10 @@ impl IsolationEngine {
                     info!("[Step 3/6] PASSED: {} rfkill unblocked and verified", iface);
                 }
                 Err(e) => {
-                    warn!("[Step 3/6] WARNING: Could not verify rfkill state: {} (continuing)", e);
+                    warn!(
+                        "[Step 3/6] WARNING: Could not verify rfkill state: {} (continuing)",
+                        e
+                    );
                 }
             }
         } else {
@@ -460,13 +504,22 @@ impl IsolationEngine {
         if let Err(e) = self.ops.bring_up(iface) {
             // Check if interface still exists
             if !self.ops.interface_exists(iface) {
-                error!("[Step 4/6] FAILED: Interface {} disappeared during bring_up", iface);
-                bail!("Step 4 failed: Interface '{}' disappeared during activation", iface);
+                error!(
+                    "[Step 4/6] FAILED: Interface {} disappeared during bring_up",
+                    iface
+                );
+                bail!(
+                    "Step 4 failed: Interface '{}' disappeared during activation",
+                    iface
+                );
             }
-            error!("[Step 4/6] FAILED: bring_up command failed for {}: {}", iface, e);
+            error!(
+                "[Step 4/6] FAILED: bring_up command failed for {}: {}",
+                iface, e
+            );
             bail!("Step 4 failed: Could not bring up '{}': {}", iface, e);
         }
-        info!("[Step 4/6] PASSED: bring_up command executed", );
+        info!("[Step 4/6] PASSED: bring_up command executed",);
 
         // ============================================================
         // STEP 6: Verify interface is admin-UP (IFF_UP flag)
@@ -477,7 +530,10 @@ impl IsolationEngine {
                 info!("[Step 5/6] PASSED: {} is admin-UP (IFF_UP=1)", iface);
             }
             Ok(false) => {
-                error!("[Step 5/6] FAILED: {} is NOT admin-UP after bring_up command", iface);
+                error!(
+                    "[Step 5/6] FAILED: {} is NOT admin-UP after bring_up command",
+                    iface
+                );
                 error!("The bring_up command succeeded but the interface did not come UP.");
                 if is_wireless {
                     error!("For wireless: this usually means rfkill is still blocking.");
@@ -488,11 +544,21 @@ impl IsolationEngine {
                         }
                     }
                 }
-                bail!("Step 5 failed: Interface '{}' did not come UP. IFF_UP flag is not set.", iface);
+                bail!(
+                    "Step 5 failed: Interface '{}' did not come UP. IFF_UP flag is not set.",
+                    iface
+                );
             }
             Err(e) => {
-                error!("[Step 5/6] FAILED: Could not read interface flags for {}: {}", iface, e);
-                bail!("Step 5 failed: Cannot verify interface '{}' state: {}", iface, e);
+                error!(
+                    "[Step 5/6] FAILED: Could not read interface flags for {}: {}",
+                    iface, e
+                );
+                bail!(
+                    "Step 5 failed: Cannot verify interface '{}' state: {}",
+                    iface,
+                    e
+                );
             }
         }
 
@@ -501,7 +567,10 @@ impl IsolationEngine {
 
         // RC1: For Selection mode, we're done - interface is UP
         if mode == EnforcementMode::Selection {
-            info!("Interface {} selected (Selection mode: admin-UP only)", iface);
+            info!(
+                "Interface {} selected (Selection mode: admin-UP only)",
+                iface
+            );
             return Ok(());
         }
 
@@ -511,7 +580,10 @@ impl IsolationEngine {
             // RC3: Passive mode for wireless should NOT auto-connect
             // Only admin-UP, let user manually connect via UI
             if mode == EnforcementMode::Passive {
-                info!("Interface {} activated in Passive mode (no auto-connect)", iface);
+                info!(
+                    "Interface {} activated in Passive mode (no auto-connect)",
+                    iface
+                );
                 return Ok(());
             }
 
@@ -535,15 +607,23 @@ impl IsolationEngine {
                 }
                 Ok(Some(false)) => {
                     warn!("[Ethernet Step 1/3] NO CARRIER: Ethernet cable not plugged in");
-                    info!("Interface {} is UP but no cable detected. Plug in ethernet cable.", iface);
+                    info!(
+                        "Interface {} is UP but no cable detected. Plug in ethernet cable.",
+                        iface
+                    );
                     info!("=== ETHERNET PIPELINE COMPLETE (no carrier) ===");
                     return Ok(());
                 }
                 Ok(None) => {
-                    warn!("[Ethernet Step 1/3] WARNING: Cannot determine carrier state (continuing)");
+                    warn!(
+                        "[Ethernet Step 1/3] WARNING: Cannot determine carrier state (continuing)"
+                    );
                 }
                 Err(e) => {
-                    warn!("[Ethernet Step 1/3] WARNING: Error checking carrier: {} (continuing)", e);
+                    warn!(
+                        "[Ethernet Step 1/3] WARNING: Error checking carrier: {} (continuing)",
+                        e
+                    );
                 }
             }
 
@@ -576,10 +656,9 @@ impl IsolationEngine {
                         }
                     } else {
                         warn!("  No DNS in DHCP lease, using fallback 1.1.1.1, 9.9.9.9");
-                        let _ = self.dns.set_dns(&[
-                            Ipv4Addr::new(1, 1, 1, 1),
-                            Ipv4Addr::new(9, 9, 9, 9),
-                        ]);
+                        let _ = self
+                            .dns
+                            .set_dns(&[Ipv4Addr::new(1, 1, 1, 1), Ipv4Addr::new(9, 9, 9, 9)]);
                     }
 
                     info!("[Ethernet Step 3/3] PASSED: Network configured");
@@ -588,7 +667,10 @@ impl IsolationEngine {
                 }
                 Err(e) => {
                     warn!("[Ethernet Step 2/3] DHCP FAILED: {}", e);
-                    info!("Interface {} is UP but DHCP failed. No network connectivity.", iface);
+                    info!(
+                        "Interface {} is UP but DHCP failed. No network connectivity.",
+                        iface
+                    );
                     info!("Possible causes: No DHCP server, network issue, or cable problem.");
                     info!("=== ETHERNET PIPELINE COMPLETE (no DHCP) ===");
                     // In Passive mode, DHCP failure is not fatal - interface is still UP
@@ -637,7 +719,7 @@ impl IsolationEngine {
 
     #[allow(dead_code)]
     fn try_auto_connect_wifi(&self, iface: &str) -> Result<bool> {
-        use crate::system::{list_wifi_profiles, load_wifi_profile, connect_wifi_network};
+        use crate::system::{connect_wifi_network, list_wifi_profiles, load_wifi_profile};
 
         // Load all profile records
         let profile_records = match list_wifi_profiles(&self.root) {
@@ -656,9 +738,7 @@ impl IsolationEngine {
         // Filter to auto-connect profiles matching this interface
         let mut candidates: Vec<_> = profile_records
             .into_iter()
-            .filter(|p| {
-                p.auto_connect && (p.interface == iface || p.interface == "auto")
-            })
+            .filter(|p| p.auto_connect && (p.interface == iface || p.interface == "auto"))
             .collect();
 
         if candidates.is_empty() {
@@ -669,11 +749,18 @@ impl IsolationEngine {
         // Sort by priority (highest first)
         candidates.sort_by(|a, b| b.priority.cmp(&a.priority));
 
-        info!("Found {} auto-connect profile(s) for {}", candidates.len(), iface);
+        info!(
+            "Found {} auto-connect profile(s) for {}",
+            candidates.len(),
+            iface
+        );
 
         // Try to connect to the highest priority profile
         let record = &candidates[0];
-        info!("Attempting auto-connect to {} (priority {})", record.ssid, record.priority);
+        info!(
+            "Attempting auto-connect to {} (priority {})",
+            record.ssid, record.priority
+        );
 
         // Load full profile to get password
         let full_profile = match load_wifi_profile(&self.root, &record.ssid) {
@@ -700,7 +787,6 @@ impl IsolationEngine {
         }
     }
 
-
     fn block_interface(&self, iface: &str) -> Result<()> {
         debug!("Blocking interface: {}", iface);
 
@@ -711,7 +797,7 @@ impl IsolationEngine {
 
         // Release DHCP lease if any
         self.ops.release_dhcp(iface).ok();
-        
+
         // CRITICAL: Bring interface DOWN to prevent any communication
         let mut bring_down_ok = false;
         let mut last_err = None;
@@ -729,9 +815,8 @@ impl IsolationEngine {
         }
         if !bring_down_ok {
             if let Some(err) = last_err {
-                return Err(err).with_context(|| {
-                    format!("CRITICAL: failed to bring down {}", iface)
-                });
+                return Err(err)
+                    .with_context(|| format!("CRITICAL: failed to bring down {}", iface));
             }
             bail!("CRITICAL: failed to bring down {}", iface);
         }
@@ -741,7 +826,7 @@ impl IsolationEngine {
                 iface
             );
         }
-        
+
         // Block wireless if applicable
         if self.ops.is_wireless(iface) {
             if let Err(e) = self.ops.set_rfkill_block(iface, true) {
@@ -753,7 +838,11 @@ impl IsolationEngine {
         Ok(())
     }
 
-    fn verify_enforcement(&self, expected_active: Option<&str>, mode: EnforcementMode) -> Result<()> {
+    fn verify_enforcement(
+        &self,
+        expected_active: Option<&str>,
+        mode: EnforcementMode,
+    ) -> Result<()> {
         debug!("Verifying enforcement state");
 
         let current_route = self.routes.get_default_route()?;
@@ -800,17 +889,20 @@ impl IsolationEngine {
 pub fn set_hotspot_exception(ap_interface: String, upstream_interface: String) -> Result<()> {
     let lock = HOTSPOT_EXCEPTION.get_or_init(|| StdMutex::new(None));
     let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-    
+
     if guard.is_some() {
         bail!("Hotspot exception already set - cannot run multiple hotspots");
     }
-    
+
     *guard = Some(HotspotException {
         ap_interface: ap_interface.clone(),
         upstream_interface: upstream_interface.clone(),
     });
-    
-    info!("Set hotspot exception: AP={}, upstream={}", ap_interface, upstream_interface);
+
+    info!(
+        "Set hotspot exception: AP={}, upstream={}",
+        ap_interface, upstream_interface
+    );
     Ok(())
 }
 
@@ -818,14 +910,17 @@ pub fn set_hotspot_exception(ap_interface: String, upstream_interface: String) -
 pub fn clear_hotspot_exception() -> Result<()> {
     let lock = HOTSPOT_EXCEPTION.get_or_init(|| StdMutex::new(None));
     let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-    
+
     if guard.is_none() {
         debug!("No hotspot exception to clear");
         return Ok(());
     }
-    
+
     let exc = guard.take().unwrap();
-    info!("Cleared hotspot exception: AP={}, upstream={}", exc.ap_interface, exc.upstream_interface);
+    info!(
+        "Cleared hotspot exception: AP={}, upstream={}",
+        exc.ap_interface, exc.upstream_interface
+    );
     Ok(())
 }
 
@@ -841,75 +936,75 @@ mod tests {
     use super::*;
     use crate::system::ops::tests::MockNetOps;
     use tempfile::TempDir;
-    
+
     #[test]
     fn test_enforce_single_wired_interface() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("eth0", false, "up");
         mock.add_interface("wlan0", true, "up");
-        
+
         let temp_dir = TempDir::new().unwrap();
         let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
-        
+
         let outcome = engine.enforce().unwrap();
-        
+
         // Should prefer wired over wireless
         assert_eq!(outcome.allowed.len(), 1);
         assert_eq!(outcome.allowed[0], "eth0");
         assert_eq!(outcome.blocked.len(), 1);
         assert_eq!(outcome.blocked[0], "wlan0");
         assert_eq!(outcome.errors.len(), 0);
-        
+
         // Verify eth0 was brought up
         assert!(mock.was_brought_up("eth0"));
-        
+
         // Verify route was added
         let routes = mock.get_routes();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].interface, "eth0");
     }
-    
+
     #[test]
     fn test_enforce_no_interfaces() {
         let mock = Arc::new(MockNetOps::new());
         let temp_dir = TempDir::new().unwrap();
         let engine = IsolationEngine::new(mock, temp_dir.path().to_path_buf());
-        
+
         let outcome = engine.enforce().unwrap();
-        
+
         assert_eq!(outcome.allowed.len(), 0);
         assert_eq!(outcome.blocked.len(), 0);
     }
-    
+
     #[test]
     fn test_enforce_respects_preference() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("eth0", false, "up");
         mock.add_interface("wlan0", true, "up");
-        
+
         let temp_dir = TempDir::new().unwrap();
         let prefs = PreferenceManager::new(temp_dir.path().to_path_buf());
         prefs.set_preferred("wlan0").unwrap();
-        
+
         let engine = IsolationEngine::new(mock, temp_dir.path().to_path_buf());
         let outcome = engine.enforce().unwrap();
-        
+
         // Should use wlan0 because it's preferred
         assert_eq!(outcome.allowed[0], "wlan0");
         assert_eq!(outcome.blocked[0], "eth0");
     }
-    
+
     #[test]
     fn test_enforce_dhcp_failure() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("eth0", false, "up");
         mock.set_dhcp_result("eth0", Err(anyhow::anyhow!("DHCP timeout")));
-        
+
         let temp_dir = TempDir::new().unwrap();
         let engine = IsolationEngine::new(mock, temp_dir.path().to_path_buf());
-        
+
         let result = engine.enforce();
-        
+
         // Should fail because DHCP failed
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("DHCP"));
@@ -929,52 +1024,52 @@ mod tests {
         assert_eq!(outcome.allowed, vec!["eth0".to_string()]);
         assert!(mock.get_routes().is_empty());
     }
-    
+
     #[test]
     fn test_enforce_idempotent() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("eth0", false, "up");
-        
+
         let temp_dir = TempDir::new().unwrap();
         let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
-        
+
         // Call enforce twice
         let outcome1 = engine.enforce().unwrap();
         let outcome2 = engine.enforce().unwrap();
-        
+
         // Results should be identical
         assert_eq!(outcome1.allowed, outcome2.allowed);
         assert_eq!(outcome1.blocked, outcome2.blocked);
     }
-    
+
     #[test]
     fn test_enforce_wireless_only() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("wlan0", true, "up");
-        
+
         let temp_dir = TempDir::new().unwrap();
         let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
-        
+
         let outcome = engine.enforce().unwrap();
-        
+
         // Should select wireless when no wired available
         assert_eq!(outcome.allowed.len(), 1);
         assert_eq!(outcome.allowed[0], "wlan0");
         assert_eq!(outcome.blocked.len(), 0);
     }
-    
+
     #[test]
     fn test_enforce_multiple_interfaces() {
         let mock = Arc::new(MockNetOps::new());
         mock.add_interface("eth0", false, "up");
         mock.add_interface("eth1", false, "up");
         mock.add_interface("wlan0", true, "up");
-        
+
         let temp_dir = TempDir::new().unwrap();
         let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
-        
+
         let outcome = engine.enforce().unwrap();
-        
+
         // Should select first wired interface
         assert_eq!(outcome.allowed.len(), 1);
         assert_eq!(outcome.blocked.len(), 2);

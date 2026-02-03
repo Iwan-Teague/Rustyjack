@@ -672,11 +672,7 @@ impl App {
                             errors.push(shorten_for_display(&e.to_string(), 80));
                         } else {
                             if let Err(err) = fs::remove_file(&path) {
-                                tracing::warn!(
-                                    "Failed to remove {}: {:#}",
-                                    path.display(),
-                                    err
-                                );
+                                tracing::warn!("Failed to remove {}: {:#}", path.display(), err);
                             }
                         }
                         data.zeroize();
@@ -791,11 +787,7 @@ impl App {
         if devices.is_empty() {
             return self.show_message(
                 "FDE Migration",
-                [
-                    "No USB devices detected",
-                    "",
-                    "Insert USB media and retry",
-                ],
+                ["No USB devices detected", "", "Insert USB media and retry"],
             );
         }
 
@@ -830,10 +822,7 @@ impl App {
 
         self.show_message(
             "FDE Migration",
-            [
-                "Dry-run preflight only.",
-                "Execute requires review.",
-            ],
+            ["Dry-run preflight only.", "Execute requires review."],
         )?;
 
         self.run_fde_migrate(&target, &keyfile, false)
@@ -856,7 +845,10 @@ impl App {
             Err(err) => {
                 return self.show_message(
                     "Full Disk Encryption",
-                    ["Failed to start", &shorten_for_display(&err.to_string(), 90)],
+                    [
+                        "Failed to start",
+                        &shorten_for_display(&err.to_string(), 90),
+                    ],
                 );
             }
         };
@@ -865,14 +857,8 @@ impl App {
             return self.show_message("Full Disk Encryption", lines.iter().map(|s| s.as_str()));
         }
 
-        let stdout = data
-            .get("stdout")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let mut lines: Vec<String> = stdout
-            .lines()
-            .map(|l| shorten_for_display(l, 32))
-            .collect();
+        let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+        let mut lines: Vec<String> = stdout.lines().map(|l| shorten_for_display(l, 32)).collect();
         if lines.is_empty() {
             lines.push(msg);
         }
@@ -880,7 +866,12 @@ impl App {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn run_fde_migrate(&mut self, target: &str, keyfile: &str, execute: bool) -> Result<()> {
+    pub(crate) fn run_fde_migrate(
+        &mut self,
+        target: &str,
+        keyfile: &str,
+        execute: bool,
+    ) -> Result<()> {
         self.show_progress(
             "Full Disk Encryption",
             ["Migrating root...", "Do not remove power/USB"],
@@ -899,7 +890,10 @@ impl App {
             Err(err) => {
                 return self.show_message(
                     "Full Disk Encryption",
-                    ["Failed to start", &shorten_for_display(&err.to_string(), 90)],
+                    [
+                        "Failed to start",
+                        &shorten_for_display(&err.to_string(), 90),
+                    ],
                 );
             }
         };
@@ -908,10 +902,7 @@ impl App {
             return self.show_message("Full Disk Encryption", lines.iter().map(|s| s.as_str()));
         }
 
-        let stderr = data
-            .get("stderr")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let stderr = data.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
         if !stderr.trim().is_empty() {
             return self.show_message(
                 "Full Disk Encryption",
@@ -969,8 +960,7 @@ impl App {
                     .with_context(|| format!("encrypting {}", enc.display()))?;
                 let mut content_mut = content.clone();
                 content_mut.zeroize();
-                fs::remove_file(&plain)
-                    .with_context(|| format!("removing {}", plain.display()))?;
+                fs::remove_file(&plain).with_context(|| format!("removing {}", plain.display()))?;
             }
         } else {
             self.config.settings.encrypt_discord_webhook = false;

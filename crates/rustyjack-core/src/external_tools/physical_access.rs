@@ -1,10 +1,10 @@
 use std::{fs, path::Path, thread, time::Duration};
 
+use crate::redact;
 use anyhow::{anyhow, Result};
-use tracing::{debug, info, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use crate::redact;
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WifiCredential {

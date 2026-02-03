@@ -76,9 +76,9 @@ pub mod rfkill;
 #[cfg(target_os = "linux")]
 pub mod route;
 #[cfg(target_os = "linux")]
-pub mod supplicant;
-#[cfg(target_os = "linux")]
 pub mod station;
+#[cfg(target_os = "linux")]
+pub mod supplicant;
 #[cfg(target_os = "linux")]
 pub mod systemd;
 #[cfg(target_os = "linux")]
@@ -124,9 +124,9 @@ pub use rfkill::{RfkillDevice, RfkillError, RfkillManager, RfkillType};
 #[cfg(target_os = "linux")]
 pub use route::{RouteInfo, RouteManager};
 #[cfg(target_os = "linux")]
-pub use supplicant::{StationConfig, StationManager, StationOutcome, StationState};
-#[cfg(target_os = "linux")]
 pub use station::backend::StationBackendKind;
+#[cfg(target_os = "linux")]
+pub use supplicant::{StationConfig, StationManager, StationOutcome, StationState};
 #[cfg(target_os = "linux")]
 pub use systemd::restart_unit as systemd_restart_unit;
 #[cfg(target_os = "linux")]
@@ -135,14 +135,14 @@ pub use wireless::{
     WirelessManager,
 };
 #[cfg(target_os = "linux")]
-pub use wpa::{BssInfo, WpaNetworkConfig, WpaStatus};
-#[cfg(target_os = "linux")]
 pub use wpa::WpaState as WpaSupplicantState;
 #[cfg(all(target_os = "linux", feature = "station_external"))]
 pub use wpa::{
     ensure_wpa_control_socket, is_wpa_running, start_wpa_supplicant, stop_wpa_supplicant,
     wpa_control_socket_status, WpaManager,
 };
+#[cfg(target_os = "linux")]
+pub use wpa::{BssInfo, WpaNetworkConfig, WpaStatus};
 
 #[cfg(target_os = "linux")]
 use std::net::IpAddr;
@@ -238,7 +238,10 @@ pub fn station_disconnect_with_backend(
 }
 
 #[cfg(target_os = "linux")]
-pub fn scan_wifi_networks(interface: &str, timeout: std::time::Duration) -> Result<Vec<WifiScanResult>> {
+pub fn scan_wifi_networks(
+    interface: &str,
+    timeout: std::time::Duration,
+) -> Result<Vec<WifiScanResult>> {
     let mut mgr = WirelessManager::new()?;
     mgr.scan_wifi(interface, timeout)
 }

@@ -9,6 +9,6 @@ pub mod ops_apply;
 pub mod server;
 pub mod state;
 pub mod systemd;
-pub mod telemetry;
 pub mod tail;
+pub mod telemetry;
 pub mod validation;

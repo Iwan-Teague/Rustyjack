@@ -27,24 +27,17 @@ pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     #[cfg(unix)]
     {
         let perms = fs::Permissions::from_mode(mode);
-        fs::set_permissions(&tmp, perms)
-            .with_context(|| format!("chmod {}", tmp.display()))?;
+        fs::set_permissions(&tmp, perms).with_context(|| format!("chmod {}", tmp.display()))?;
     }
 
-    fs::rename(&tmp, path).with_context(|| {
-        format!(
-            "rename {} -> {}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     fsync_parent(path)?;
     Ok(())
 }
 
 pub fn atomic_copy(src: &Path, dest: &Path, mode: u32) -> Result<()> {
-    let data =
-        fs::read(src).with_context(|| format!("read {}", src.display()))?;
+    let data = fs::read(src).with_context(|| format!("read {}", src.display()))?;
     atomic_write(dest, &data, mode)
 }
 

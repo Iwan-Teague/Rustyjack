@@ -111,10 +111,7 @@ impl App {
 
             match status.state {
                 JobState::Queued | JobState::Running => {
-                    if matches!(
-                        self.check_cancel_request("Update")?,
-                        CancelDecision::Cancel
-                    ) {
+                    if matches!(self.check_cancel_request("Update")?, CancelDecision::Cancel) {
                         if let Err(err) = self.core.cancel_job(job_id) {
                             self.show_error_dialog("Update cancel failed", &err)?;
                             return Ok(());
@@ -274,10 +271,7 @@ impl App {
         }
 
         self.show_progress("Complete Purge", ["Removing Rustyjack...", "Please wait"])?;
-        let (msg, data) = match self
-            .core
-            .dispatch(Commands::System(SystemCommand::Purge))
-        {
+        let (msg, data) = match self.core.dispatch(Commands::System(SystemCommand::Purge)) {
             Ok(result) => result,
             Err(err) => {
                 return self.show_message(
@@ -417,5 +411,4 @@ impl App {
             || without_compression.ends_with("-log")
             || without_compression.ends_with(".log")
     }
-
 }

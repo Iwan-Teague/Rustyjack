@@ -5,8 +5,8 @@ use neli::consts::socket::NlFamily;
 use neli::genl::Genlmsghdr;
 use neli::nl::NlPayload;
 use neli::nl::Nlmsghdr;
-use neli::types::{Buffer, GenlBuffer};
 use neli::socket::NlSocketHandle;
+use neli::types::{Buffer, GenlBuffer};
 
 use crate::error::{NetlinkError, Result};
 use libc;
@@ -42,15 +42,22 @@ pub fn connect(
     let (mut sock, family_id) = nl80211_socket()?;
 
     let mut attrs = GenlBuffer::new();
-    attrs.push(neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
-    })?);
-    attrs.push(neli::genl::Nlattr::new(false, false, NL80211_ATTR_SSID, ssid.as_bytes())
-        .map_err(|e| NetlinkError::OperationFailed(format!("Failed to build SSID attr: {}", e)))?);
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+        })?,
+    );
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_SSID, ssid.as_bytes()).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build SSID attr: {}", e))
+        })?,
+    );
     if let Some(bssid) = bssid {
-        attrs.push(neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &bssid[..]).map_err(
-            |e| NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e)),
-        )?);
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &bssid[..]).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e))
+            })?,
+        );
     }
     if let Some(freq) = frequency {
         attrs.push(
@@ -66,23 +73,30 @@ pub fn connect(
         })?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_WPA_VERSIONS, WPA_VERSION_2)
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build WPA versions attr: {}", e))
-            })?,
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_WPA_VERSIONS, WPA_VERSION_2).map_err(
+            |e| NetlinkError::OperationFailed(format!("Failed to build WPA versions attr: {}", e)),
+        )?,
     );
     attrs.push(
-        neli::genl::Nlattr::new(false, false, NL80211_ATTR_CIPHER_SUITE_GROUP, CIPHER_SUITE_CCMP)
-            .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build group cipher attr: {}", e))
-            })?,
+        neli::genl::Nlattr::new(
+            false,
+            false,
+            NL80211_ATTR_CIPHER_SUITE_GROUP,
+            CIPHER_SUITE_CCMP,
+        )
+        .map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build group cipher attr: {}", e))
+        })?,
     );
 
     let pairwise = u32_list_bytes(&[CIPHER_SUITE_CCMP]);
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_CIPHER_SUITES_PAIRWISE, pairwise)
             .map_err(|e| {
-                NetlinkError::OperationFailed(format!("Failed to build pairwise cipher attr: {}", e))
+                NetlinkError::OperationFailed(format!(
+                    "Failed to build pairwise cipher attr: {}",
+                    e
+                ))
             })?,
     );
     let akm = u32_list_bytes(&[AKM_SUITE_PSK]);
@@ -112,18 +126,22 @@ pub fn connect_open(
     let (mut sock, family_id) = nl80211_socket()?;
 
     let mut attrs = GenlBuffer::new();
-    attrs.push(neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
-    })?);
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+        })?,
+    );
     attrs.push(
         neli::genl::Nlattr::new(false, false, NL80211_ATTR_SSID, ssid.as_bytes()).map_err(|e| {
             NetlinkError::OperationFailed(format!("Failed to build SSID attr: {}", e))
         })?,
     );
     if let Some(bssid) = bssid {
-        attrs.push(neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &bssid[..]).map_err(
-            |e| NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e)),
-        )?);
+        attrs.push(
+            neli::genl::Nlattr::new(false, false, NL80211_ATTR_MAC, &bssid[..]).map_err(|e| {
+                NetlinkError::OperationFailed(format!("Failed to build MAC attr: {}", e))
+            })?,
+        );
     }
     if let Some(freq) = frequency {
         attrs.push(
@@ -133,7 +151,13 @@ pub fn connect_open(
         );
     }
 
-    send_cmd(&mut sock, family_id, NL80211_CMD_CONNECT, attrs, "CONNECT_OPEN")?;
+    send_cmd(
+        &mut sock,
+        family_id,
+        NL80211_CMD_CONNECT,
+        attrs,
+        "CONNECT_OPEN",
+    )?;
     Ok(())
 }
 
@@ -142,11 +166,19 @@ pub fn disconnect(interface: &str) -> Result<()> {
     let (mut sock, family_id) = nl80211_socket()?;
 
     let mut attrs = GenlBuffer::new();
-    attrs.push(neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
-    })?);
+    attrs.push(
+        neli::genl::Nlattr::new(false, false, NL80211_ATTR_IFINDEX, ifindex).map_err(|e| {
+            NetlinkError::OperationFailed(format!("Failed to build ifindex attr: {}", e))
+        })?,
+    );
 
-    send_cmd(&mut sock, family_id, NL80211_CMD_DISCONNECT, attrs, "DISCONNECT")?;
+    send_cmd(
+        &mut sock,
+        family_id,
+        NL80211_CMD_DISCONNECT,
+        attrs,
+        "DISCONNECT",
+    )?;
     Ok(())
 }
 
@@ -216,9 +248,8 @@ fn send_cmd(
         None,
         NlPayload::Payload(genlhdr),
     );
-    sock.send(nlhdr).map_err(|e| {
-        NetlinkError::OperationFailed(format!("Failed to send {}: {}", label, e))
-    })?;
+    sock.send(nlhdr)
+        .map_err(|e| NetlinkError::OperationFailed(format!("Failed to send {}: {}", label, e)))?;
     Ok(())
 }
 

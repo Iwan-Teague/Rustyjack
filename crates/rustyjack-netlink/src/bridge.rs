@@ -54,9 +54,8 @@ fn validate_ifname(name: &str) -> Result<CString> {
             name
         )));
     }
-    CString::new(name).map_err(|_| {
-        NetlinkError::InvalidInput(format!("Interface name '{}' contains NUL", name))
-    })
+    CString::new(name)
+        .map_err(|_| NetlinkError::InvalidInput(format!("Interface name '{}' contains NUL", name)))
 }
 
 #[cfg(target_os = "linux")]
@@ -65,11 +64,7 @@ fn build_ifreq_index(bridge: &str, ifindex: u32) -> Result<IfReqIndex> {
         ifr_name: [0; libc::IFNAMSIZ],
         ifr_ifindex: ifindex as libc::c_int,
     };
-    for (dst, src) in ifr
-        .ifr_name
-        .iter_mut()
-        .zip(bridge.as_bytes().iter())
-    {
+    for (dst, src) in ifr.ifr_name.iter_mut().zip(bridge.as_bytes().iter()) {
         *dst = *src as libc::c_char;
     }
     Ok(ifr)

@@ -224,10 +224,7 @@ impl KarmaAttack {
         let mut map = match self.ssid_to_bssid.lock() {
             Ok(m) => m,
             Err(e) => {
-                tracing::warn!(
-                    "[KARMA] BSSID map mutex poisoned, recovering: {}",
-                    e
-                );
+                tracing::warn!("[KARMA] BSSID map mutex poisoned, recovering: {}", e);
                 e.into_inner()
             }
         };
@@ -786,7 +783,11 @@ where
     let _ = netlink_set_interface_up(ap_interface);
 
     let gateway_ip = Ipv4Addr::new(192, 168, 4, 1);
-    let channel = if config.channel == 0 { 6 } else { config.channel };
+    let channel = if config.channel == 0 {
+        6
+    } else {
+        config.channel
+    };
 
     let ap_config = ApConfig {
         interface: ap_interface.to_string(),
@@ -904,7 +905,9 @@ fn start_access_point(ap_config: ApConfig) -> Result<AccessPoint> {
         })
         .unwrap_or_else(|_| {
             tokio::runtime::Runtime::new()
-                .map_err(|e| WirelessError::System(format!("Failed to create tokio runtime: {}", e)))
+                .map_err(|e| {
+                    WirelessError::System(format!("Failed to create tokio runtime: {}", e))
+                })
                 .and_then(|rt| {
                     rt.block_on(async {
                         ap.start()

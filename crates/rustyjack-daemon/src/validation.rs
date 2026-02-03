@@ -302,7 +302,7 @@ pub fn validate_update_url(url: &str) -> Result<(), DaemonError> {
 
 pub fn validate_mount_device_hint(device: &str) -> Result<(), DaemonError> {
     validate_device_path(device)?;
-    
+
     if !device.starts_with("/dev/") {
         return Err(DaemonError::new(
             ErrorCode::BadRequest,
@@ -310,7 +310,7 @@ pub fn validate_mount_device_hint(device: &str) -> Result<(), DaemonError> {
             false,
         ));
     }
-    
+
     if device.starts_with("/dev/mmcblk") || device.starts_with("/dev/loop") {
         return Err(DaemonError::new(
             ErrorCode::BadRequest,
@@ -323,7 +323,7 @@ pub fn validate_mount_device_hint(device: &str) -> Result<(), DaemonError> {
     {
         validate_removable_block_device(device)?;
     }
-    
+
     Ok(())
 }
 
@@ -444,7 +444,9 @@ pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustyjack_ipc::{JobKind, MountStartRequestIpc, ScanModeIpc, ScanRequestIpc, WifiConnectRequestIpc};
+    use rustyjack_ipc::{
+        JobKind, MountStartRequestIpc, ScanModeIpc, ScanRequestIpc, WifiConnectRequestIpc,
+    };
 
     #[test]
     fn test_validate_mount_device_rejects_mmcblk() {

@@ -1,10 +1,6 @@
 use anyhow::Result;
 
-use crate::ui::{
-    input::UiInput,
-    screens::cancel_confirm,
-    UiContext,
-};
+use crate::ui::{input::UiInput, screens::cancel_confirm, UiContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmChoice {

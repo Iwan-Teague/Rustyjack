@@ -11,11 +11,11 @@ use tracing::{debug, info, warn};
 
 use crate::cancel::{check_cancel, CancelFlag};
 use crate::netlink_helpers::rfkill_find_index;
+use crate::system::wifi_backend_from_env;
 use crate::system::{
     dns::DnsManager, ops::ErrorEntry, preference::PreferenceManager, routing::RouteManager, NetOps,
     RealNetOps,
 };
-use crate::system::wifi_backend_from_env;
 use rustyjack_netlink::{station_disconnect_with_backend, StationBackendKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +76,12 @@ where
     let dns = DnsManager::new(root.join("resolv.conf"));
     let routes = RouteManager::new(Arc::clone(&ops));
 
-    emit_progress(&mut progress, "validate", 5, &format!("Validating {}", iface));
+    emit_progress(
+        &mut progress,
+        "validate",
+        5,
+        &format!("Validating {}", iface),
+    );
     check_cancel(cancel)?;
 
     // Step 1: validate + snapshot
@@ -84,9 +89,7 @@ where
         bail!("Interface {} does not exist", iface);
     }
 
-    let interfaces = ops
-        .list_interfaces()
-        .context("failed to list interfaces")?;
+    let interfaces = ops.list_interfaces().context("failed to list interfaces")?;
     let selected = interfaces
         .iter()
         .find(|intf| intf.name == iface)
@@ -287,7 +290,10 @@ where
             .get_ipv4_address(iface)
             .context("failed to read DHCP address")?;
         if dhcp.ip.is_some() && ip.is_none() {
-            bail!("DHCP reported an address but none is configured on {}", iface);
+            bail!(
+                "DHCP reported an address but none is configured on {}",
+                iface
+            );
         }
     }
 
@@ -504,9 +510,9 @@ fn parse_link_state(
     msg: &netlink_packet_core::NetlinkMessage<netlink_packet_route::RouteNetlinkMessage>,
     target_iface: &str,
 ) -> Option<LinkState> {
+    use netlink_packet_core::NetlinkPayload;
     use netlink_packet_route::link::{LinkAttribute, LinkFlag, State};
     use netlink_packet_route::RouteNetlinkMessage;
-    use netlink_packet_core::NetlinkPayload;
 
     match &msg.payload {
         NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewLink(link)) => {
@@ -542,8 +548,8 @@ struct LinkEventWatcher {
 
 impl LinkEventWatcher {
     fn new() -> Result<Self> {
-        let mut socket =
-            netlink_sys::Socket::new(netlink_sys::protocols::NETLINK_ROUTE).context("netlink socket")?;
+        let mut socket = netlink_sys::Socket::new(netlink_sys::protocols::NETLINK_ROUTE)
+            .context("netlink socket")?;
         let groups = libc::RTMGRP_LINK as u32;
         socket
             .bind(&netlink_sys::SocketAddr::new(0, groups))
@@ -562,10 +568,11 @@ impl LinkEventWatcher {
     fn recv(
         &mut self,
         buf: &mut BytesMut,
-    ) -> Result<Vec<netlink_packet_core::NetlinkMessage<netlink_packet_route::RouteNetlinkMessage>>> {
+    ) -> Result<Vec<netlink_packet_core::NetlinkMessage<netlink_packet_route::RouteNetlinkMessage>>>
+    {
+        use netlink_packet_core::NetlinkBuffer;
         use netlink_packet_core::NetlinkMessage;
         use netlink_packet_core::NetlinkPayload;
-        use netlink_packet_core::NetlinkBuffer;
         use netlink_packet_route::RouteNetlinkMessage;
 
         buf.clear();

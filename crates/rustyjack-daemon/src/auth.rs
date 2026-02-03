@@ -1,10 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::os::unix::io::AsRawFd;
-use std::collections::HashMap;
 
-use tracing::debug;
 use tokio::net::UnixStream;
+use tracing::debug;
 
 use rustyjack_ipc::{AuthorizationTier, Endpoint, JobKind, RequestBody, SystemCommand};
 
@@ -154,9 +154,7 @@ fn parse_group_file() -> io::Result<HashMap<u32, String>> {
         let mut parts = line.split(':');
         let name = parts.next().unwrap_or("");
         let _pw = parts.next();
-        let gid = parts
-            .next()
-            .and_then(|s| s.parse::<u32>().ok());
+        let gid = parts.next().and_then(|s| s.parse::<u32>().ok());
         if let Some(gid) = gid {
             map.insert(gid, name.to_string());
         }
@@ -273,14 +271,13 @@ pub fn required_tier_for_request(endpoint: Endpoint, body: &RequestBody) -> Auth
 }
 
 fn required_tier_for_system_command(cmd: &SystemCommand) -> AuthorizationTier {
-    use AuthorizationTier as T;
     use rustyjack_ipc::SystemCommand as SC;
+    use AuthorizationTier as T;
 
     match cmd {
-        SC::RandomizeHostname
-        | SC::UsbMount(_)
-        | SC::UsbUnmount(_)
-        | SC::ExportLogsToUsb(_) => T::Operator,
+        SC::RandomizeHostname | SC::UsbMount(_) | SC::UsbUnmount(_) | SC::ExportLogsToUsb(_) => {
+            T::Operator
+        }
         _ => T::Admin,
     }
 }
@@ -377,14 +374,10 @@ pub fn required_ops_for_request(endpoint: Endpoint, body: &RequestBody) -> Requi
         E::EthernetCommand | E::SetActiveInterface | E::ActiveInterfaceClear => RequiredOps::Eth,
         E::HotspotStart | E::HotspotStop | E::HotspotCommand => RequiredOps::Hotspot,
         E::PortalStart | E::PortalStop => RequiredOps::Portal,
-        E::MountList
-        | E::MountStart
-        | E::UnmountStart
-        | E::BlockDevicesList
-        | E::DiskUsageGet => RequiredOps::Storage,
-        E::SystemReboot
-        | E::SystemShutdown
-        | E::SystemSync => RequiredOps::Power,
+        E::MountList | E::MountStart | E::UnmountStart | E::BlockDevicesList | E::DiskUsageGet => {
+            RequiredOps::Storage
+        }
+        E::SystemReboot | E::SystemShutdown | E::SystemSync => RequiredOps::Power,
         E::HostnameRandomizeNow | E::LoggingConfigSet => RequiredOps::System,
         E::JobStart => match body {
             B::JobStart(req) => required_ops_for_jobkind(&req.job.kind),
@@ -453,29 +446,56 @@ pub fn ops_allows(cfg: &crate::ops::OpsConfig, required: RequiredOps) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustyjack_ipc::{JobKind, SystemCommand, WifiCommand};
-    use rustyjack_ipc::WifiPipelinePreflightArgs;
     use rustyjack_commands::{UsbMountArgs, WifiDeauthArgs};
+    use rustyjack_ipc::WifiPipelinePreflightArgs;
+    use rustyjack_ipc::{JobKind, SystemCommand, WifiCommand};
 
     #[test]
     fn test_tier_allows_admin_can_do_anything() {
-        assert!(tier_allows(AuthorizationTier::Admin, AuthorizationTier::Admin));
-        assert!(tier_allows(AuthorizationTier::Admin, AuthorizationTier::Operator));
-        assert!(tier_allows(AuthorizationTier::Admin, AuthorizationTier::ReadOnly));
+        assert!(tier_allows(
+            AuthorizationTier::Admin,
+            AuthorizationTier::Admin
+        ));
+        assert!(tier_allows(
+            AuthorizationTier::Admin,
+            AuthorizationTier::Operator
+        ));
+        assert!(tier_allows(
+            AuthorizationTier::Admin,
+            AuthorizationTier::ReadOnly
+        ));
     }
 
     #[test]
     fn test_tier_allows_operator_cannot_admin() {
-        assert!(!tier_allows(AuthorizationTier::Operator, AuthorizationTier::Admin));
-        assert!(tier_allows(AuthorizationTier::Operator, AuthorizationTier::Operator));
-        assert!(tier_allows(AuthorizationTier::Operator, AuthorizationTier::ReadOnly));
+        assert!(!tier_allows(
+            AuthorizationTier::Operator,
+            AuthorizationTier::Admin
+        ));
+        assert!(tier_allows(
+            AuthorizationTier::Operator,
+            AuthorizationTier::Operator
+        ));
+        assert!(tier_allows(
+            AuthorizationTier::Operator,
+            AuthorizationTier::ReadOnly
+        ));
     }
 
     #[test]
     fn test_tier_allows_readonly_only_readonly() {
-        assert!(!tier_allows(AuthorizationTier::ReadOnly, AuthorizationTier::Admin));
-        assert!(!tier_allows(AuthorizationTier::ReadOnly, AuthorizationTier::Operator));
-        assert!(tier_allows(AuthorizationTier::ReadOnly, AuthorizationTier::ReadOnly));
+        assert!(!tier_allows(
+            AuthorizationTier::ReadOnly,
+            AuthorizationTier::Admin
+        ));
+        assert!(!tier_allows(
+            AuthorizationTier::ReadOnly,
+            AuthorizationTier::Operator
+        ));
+        assert!(tier_allows(
+            AuthorizationTier::ReadOnly,
+            AuthorizationTier::ReadOnly
+        ));
     }
 
     #[test]
@@ -491,7 +511,10 @@ mod tests {
     #[test]
     fn test_required_tier_for_jobkind_sleep_is_readonly() {
         let kind = JobKind::Sleep { seconds: 10 };
-        assert_eq!(required_tier_for_jobkind(&kind), AuthorizationTier::ReadOnly);
+        assert_eq!(
+            required_tier_for_jobkind(&kind),
+            AuthorizationTier::ReadOnly
+        );
     }
 
     #[test]
@@ -502,7 +525,10 @@ mod tests {
                 filesystem: Some("ext4".to_string()),
             },
         };
-        assert_eq!(required_tier_for_jobkind(&kind), AuthorizationTier::Operator);
+        assert_eq!(
+            required_tier_for_jobkind(&kind),
+            AuthorizationTier::Operator
+        );
     }
 
     #[test]
@@ -512,13 +538,22 @@ mod tests {
                 url: "https://example.com/update.tar.zst".to_string(),
             },
         };
-        assert_eq!(required_tier_for_jobkind(&kind), AuthorizationTier::Operator);
+        assert_eq!(
+            required_tier_for_jobkind(&kind),
+            AuthorizationTier::Operator
+        );
     }
 
     #[test]
     fn test_required_tier_system_reboot_is_admin() {
-        assert_eq!(required_tier(Endpoint::SystemReboot), AuthorizationTier::Admin);
-        assert_eq!(required_tier(Endpoint::SystemShutdown), AuthorizationTier::Admin);
+        assert_eq!(
+            required_tier(Endpoint::SystemReboot),
+            AuthorizationTier::Admin
+        );
+        assert_eq!(
+            required_tier(Endpoint::SystemShutdown),
+            AuthorizationTier::Admin
+        );
     }
 
     #[test]
@@ -539,13 +574,12 @@ mod tests {
             RequiredOps::Offensive
         );
 
-        let preflight = RequestBody::WifiCommand(WifiCommand::PipelinePreflight(
-            WifiPipelinePreflightArgs {
+        let preflight =
+            RequestBody::WifiCommand(WifiCommand::PipelinePreflight(WifiPipelinePreflightArgs {
                 interface: Some("wlan0".to_string()),
                 pipeline: "get_password".to_string(),
                 requires_monitor: true,
-            },
-        ));
+            }));
         assert_eq!(
             required_ops_for_request(Endpoint::WifiCommand, &preflight),
             RequiredOps::Offensive
@@ -569,13 +603,19 @@ mod tests {
 
     #[test]
     fn test_required_tier_version_is_readonly() {
-        assert_eq!(required_tier(Endpoint::Version), AuthorizationTier::ReadOnly);
+        assert_eq!(
+            required_tier(Endpoint::Version),
+            AuthorizationTier::ReadOnly
+        );
         assert_eq!(required_tier(Endpoint::Health), AuthorizationTier::ReadOnly);
     }
 
     #[test]
     fn test_required_tier_job_start_is_operator() {
-        assert_eq!(required_tier(Endpoint::JobStart), AuthorizationTier::Operator);
+        assert_eq!(
+            required_tier(Endpoint::JobStart),
+            AuthorizationTier::Operator
+        );
     }
 
     #[test]

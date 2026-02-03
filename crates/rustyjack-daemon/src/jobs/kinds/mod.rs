@@ -1,5 +1,5 @@
-mod hotspot_start;
 mod core_command;
+mod hotspot_start;
 mod interface_select;
 mod mount_start;
 mod noop;
@@ -13,11 +13,11 @@ mod wifi_scan;
 
 use std::future::Future;
 
-use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
-use rustyjack_ipc::{DaemonError, JobKind};
 use crate::state::DaemonState;
+use rustyjack_ipc::{DaemonError, JobKind};
 
 pub async fn execute<F, Fut>(
     kind: &JobKind,
@@ -32,9 +32,7 @@ where
     match kind {
         JobKind::Noop => noop::run().await,
         JobKind::Sleep { seconds } => sleep::run(*seconds, cancel).await,
-        JobKind::ScanRun { req } => {
-            scan::run(req.clone(), cancel, &mut progress).await
-        }
+        JobKind::ScanRun { req } => scan::run(req.clone(), cancel, &mut progress).await,
         JobKind::SystemUpdate { req } => {
             update::run(
                 req.clone(),
@@ -47,11 +45,17 @@ where
         }
         JobKind::WifiScan { req } => wifi_scan::run(req.clone(), cancel, &mut progress).await,
         JobKind::WifiConnect { req } => wifi_connect::run(req.clone(), cancel, &mut progress).await,
-        JobKind::HotspotStart { req } => hotspot_start::run(req.clone(), cancel, &mut progress).await,
+        JobKind::HotspotStart { req } => {
+            hotspot_start::run(req.clone(), cancel, &mut progress).await
+        }
         JobKind::PortalStart { req } => portal_start::run(req.clone(), cancel, &mut progress).await,
         JobKind::MountStart { req } => mount_start::run(req.clone(), cancel, &mut progress).await,
-        JobKind::UnmountStart { req } => unmount_start::run(req.clone(), cancel, &mut progress).await,
-        JobKind::InterfaceSelect { interface } => interface_select::run(interface.clone(), Arc::clone(state), cancel, &mut progress).await,
+        JobKind::UnmountStart { req } => {
+            unmount_start::run(req.clone(), cancel, &mut progress).await
+        }
+        JobKind::InterfaceSelect { interface } => {
+            interface_select::run(interface.clone(), Arc::clone(state), cancel, &mut progress).await
+        }
         JobKind::CoreCommand { command } => {
             core_command::run(command.clone(), Arc::clone(state), cancel, &mut progress).await
         }

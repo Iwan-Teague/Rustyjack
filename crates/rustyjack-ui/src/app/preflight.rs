@@ -29,7 +29,7 @@ impl App {
                 iface
             )));
         }
-        
+
         Ok(None)
     }
 
@@ -56,29 +56,35 @@ impl App {
 
         let caps = match self.core.get_interface_capabilities(iface) {
             Ok(c) => c,
-            Err(e) => return Ok(Some(format!("Failed to check interface capabilities: {}", e))),
+            Err(e) => {
+                return Ok(Some(format!(
+                    "Failed to check interface capabilities: {}",
+                    e
+                )))
+            }
         };
-        
+
         if !caps.supports_monitor {
             return Ok(Some(format!(
                 "{} does not support monitor mode. Deauth requires an adapter that can enter monitor mode (e.g., ath9k, rtl8812au).",
                 iface
             )));
         }
-        
+
         if !caps.supports_injection {
             return Ok(Some(format!(
                 "{} cannot inject packets. Deauth attacks require packet injection capability. Consider using an external USB Wi-Fi adapter.",
                 iface
             )));
         }
-        
+
         if self.config.settings.target_bssid.is_empty() {
             return Ok(Some(
-                "No target BSSID set. Use 'Set as Target' on a network from the scan list first.".to_string()
+                "No target BSSID set. Use 'Set as Target' on a network from the scan list first."
+                    .to_string(),
             ));
         }
-        
+
         Ok(None)
     }
 
@@ -105,16 +111,21 @@ impl App {
 
         let caps = match self.core.get_interface_capabilities(iface) {
             Ok(c) => c,
-            Err(e) => return Ok(Some(format!("Failed to check interface capabilities: {}", e))),
+            Err(e) => {
+                return Ok(Some(format!(
+                    "Failed to check interface capabilities: {}",
+                    e
+                )))
+            }
         };
-        
+
         if !caps.supports_ap {
             return Ok(Some(format!(
                 "{} does not support Access Point mode. Evil Twin requires AP capability. The built-in CYW43436 supports limited AP mode on 2.4GHz only.",
                 iface
             )));
         }
-        
+
         let target_net = &self.config.settings.target_network;
         if !target_net.is_empty() {
             let channel_str = target_net.split('|').nth(2).unwrap_or("0");
@@ -127,18 +138,23 @@ impl App {
                 }
             }
         }
-        
+
         if self.config.settings.target_network.is_empty() {
             return Ok(Some(
-                "No target network set. Use 'Set as Target' on a network from the scan list first.".to_string()
+                "No target network set. Use 'Set as Target' on a network from the scan list first."
+                    .to_string(),
             ));
         }
-        
+
         Ok(None)
     }
 
     /// Preflight check for hotspot
-    pub(crate) fn preflight_hotspot(&mut self, iface: &str, upstream: &str) -> Result<Option<String>> {
+    pub(crate) fn preflight_hotspot(
+        &mut self,
+        iface: &str,
+        upstream: &str,
+    ) -> Result<Option<String>> {
         let status = match self.core.interface_status(iface) {
             Ok(s) => s,
             Err(e) => return Ok(Some(format!("Failed to check interface status: {}", e))),
@@ -160,16 +176,21 @@ impl App {
 
         let caps = match self.core.get_interface_capabilities(iface) {
             Ok(c) => c,
-            Err(e) => return Ok(Some(format!("Failed to check interface capabilities: {}", e))),
+            Err(e) => {
+                return Ok(Some(format!(
+                    "Failed to check interface capabilities: {}",
+                    e
+                )))
+            }
         };
-        
+
         if !caps.supports_ap {
             return Ok(Some(format!(
                 "{} does not support Access Point mode. Hotspot requires AP capability.",
                 iface
             )));
         }
-        
+
         if !caps.supports_2ghz {
             return Ok(Some(format!(
                 "{} does not support 2.4GHz. Hotspot requires 2.4GHz band support.",
@@ -215,7 +236,7 @@ impl App {
                 }
             }
         }
-        
+
         Ok(None)
     }
 
@@ -242,23 +263,28 @@ impl App {
 
         let caps = match self.core.get_interface_capabilities(iface) {
             Ok(c) => c,
-            Err(e) => return Ok(Some(format!("Failed to check interface capabilities: {}", e))),
+            Err(e) => {
+                return Ok(Some(format!(
+                    "Failed to check interface capabilities: {}",
+                    e
+                )))
+            }
         };
-        
+
         if !caps.supports_ap {
             return Ok(Some(format!(
                 "{} does not support AP mode. Karma requires AP capability.",
                 iface
             )));
         }
-        
+
         if !caps.supports_monitor {
             return Ok(Some(format!(
                 "{} does not support monitor mode. Karma requires monitor mode to sniff probe requests.",
                 iface
             )));
         }
-        
+
         Ok(None)
     }
 
@@ -285,9 +311,14 @@ impl App {
 
         let caps = match self.core.get_interface_capabilities(iface) {
             Ok(c) => c,
-            Err(e) => return Ok(Some(format!("Failed to check interface capabilities: {}", e))),
+            Err(e) => {
+                return Ok(Some(format!(
+                    "Failed to check interface capabilities: {}",
+                    e
+                )))
+            }
         };
-        
+
         if !caps.supports_monitor {
             return Ok(Some(format!(
                 "{} does not support monitor mode. Handshake capture requires monitor mode capability.",
@@ -301,13 +332,14 @@ impl App {
                 iface
             )));
         }
-        
+
         if self.config.settings.target_bssid.is_empty() {
             return Ok(Some(
-                "No target BSSID set. Use 'Set as Target' on a network from the scan list first.".to_string()
+                "No target BSSID set. Use 'Set as Target' on a network from the scan list first."
+                    .to_string(),
             ));
         }
-        
+
         Ok(None)
     }
 
@@ -358,7 +390,12 @@ impl App {
 
         let caps = match self.core.get_interface_capabilities(iface) {
             Ok(c) => c,
-            Err(e) => return Ok(Some(format!("Failed to check interface capabilities: {}", e))),
+            Err(e) => {
+                return Ok(Some(format!(
+                    "Failed to check interface capabilities: {}",
+                    e
+                )))
+            }
         };
 
         if !caps.supports_monitor {
@@ -372,7 +409,11 @@ impl App {
     }
 
     /// Preflight check for ethernet operations
-    pub(crate) fn preflight_ethernet_operation(&mut self, iface: &str, requires_ip: bool) -> Result<Option<String>> {
+    pub(crate) fn preflight_ethernet_operation(
+        &mut self,
+        iface: &str,
+        requires_ip: bool,
+    ) -> Result<Option<String>> {
         let status = match self.core.interface_status(iface) {
             Ok(s) => s,
             Err(e) => return Ok(Some(format!("Failed to check interface status: {}", e))),
@@ -398,7 +439,7 @@ impl App {
                 iface
             )));
         }
-        
+
         if requires_ip {
             if status.ip.is_none() {
                 return Ok(Some(format!(
@@ -407,7 +448,7 @@ impl App {
                 )));
             }
         }
-        
+
         Ok(None)
     }
 
@@ -445,7 +486,7 @@ impl App {
                 iface
             )));
         }
-        
+
         Ok(None)
     }
 

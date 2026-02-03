@@ -63,8 +63,8 @@ pub mod karma;
 mod netlink_helpers;
 pub mod nl80211;
 pub mod nl80211_queries;
-pub mod pmkid;
 pub mod pcap;
+pub mod pmkid;
 pub mod probe;
 mod process_helpers;
 pub mod radiotap;
@@ -100,7 +100,6 @@ pub mod stealth {
 // Re-exports for convenience
 pub use capture::{CaptureFilter, CapturedPacket, PacketCapture};
 pub use deauth::{DeauthAttacker, DeauthConfig, DeauthStats};
-pub use nl80211_queries::{InterfaceCapabilities, query_interface_capabilities};
 pub use error::{Result, WirelessError};
 pub use evil_twin::{
     execute_evil_twin, execute_evil_twin_cancellable, EvilTwin, EvilTwinConfig, EvilTwinResult,
@@ -109,14 +108,13 @@ pub use evil_twin::{
 pub use frames::{DeauthFrame, DeauthReason, FrameSubtype, FrameType, Ieee80211Frame, MacAddress};
 pub use handshake::{HandshakeCapture, HandshakeMessage, HandshakeState};
 pub use interface::WirelessInterface;
-pub use pcap::PcapWriter;
-pub use rustyjack_wpa::crack;
-pub use rustyjack_wpa::{CrackResult, CrackerConfig, HandshakeExport, WpaCracker};
 pub use karma::{
     execute_karma, execute_karma_cancellable, execute_karma_with_ap,
     execute_karma_with_ap_cancellable, CapturedProbe, KarmaAttack, KarmaConfig,
     KarmaExecutionResult, KarmaResult, KarmaStats, KarmaVictim,
 };
+pub use nl80211_queries::{query_interface_capabilities, InterfaceCapabilities};
+pub use pcap::PcapWriter;
 pub use pmkid::{
     execute_pmkid_capture, execute_pmkid_capture_cancellable, PmkidCapture, PmkidCaptureResult,
     PmkidCapturer, PmkidConfig,
@@ -126,12 +124,14 @@ pub use probe::{
     ProbeSniffConfig, ProbeSniffResult, ProbeSniffer, ProbedNetwork,
 };
 pub use recon::{
-    arp_scan, arp_scan_cancellable, calculate_bandwidth, discover_gateway, discover_mdns_devices,
-    discover_mdns_devices_cancellable, get_traffic_stats, capture_dns_queries,
-    capture_dns_queries_cancellable, scan_network_services, scan_network_services_cancellable,
-    ArpDevice, BandwidthSample, DeviceServices, DnsQuery, GatewayInfo, MdnsDevice, ServiceInfo,
-    TrafficStats,
+    arp_scan, arp_scan_cancellable, calculate_bandwidth, capture_dns_queries,
+    capture_dns_queries_cancellable, discover_gateway, discover_mdns_devices,
+    discover_mdns_devices_cancellable, get_traffic_stats, scan_network_services,
+    scan_network_services_cancellable, ArpDevice, BandwidthSample, DeviceServices, DnsQuery,
+    GatewayInfo, MdnsDevice, ServiceInfo, TrafficStats,
 };
+pub use rustyjack_wpa::crack;
+pub use rustyjack_wpa::{CrackResult, CrackerConfig, HandshakeExport, WpaCracker};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

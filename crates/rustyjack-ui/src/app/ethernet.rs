@@ -575,7 +575,10 @@ impl App {
 
         #[cfg(target_os = "linux")]
         {
-            if let Err(err) = self.core.dispatch(Commands::DnsSpoof(DnsSpoofCommand::Stop)) {
+            if let Err(err) = self
+                .core
+                .dispatch(Commands::DnsSpoof(DnsSpoofCommand::Stop))
+            {
                 self.show_error_dialog("DNS Spoof Stop Failed", &err)?;
             }
             match self.core.dispatch(Commands::Mitm(MitmCommand::Stop)) {

@@ -333,15 +333,12 @@ impl DnsServer {
                 .lock()
                 .map_err(|e| DnsError::InvalidConfig(format!("State lock poisoned: {e}")))?;
             s.query_count += 1;
-                if s.config.log_queries {
-                    tracing::debug!("[DNS] Query from {}: {} (type {})", client, qname, qtype);
-                }
+            if s.config.log_queries {
+                tracing::debug!("[DNS] Query from {}: {} (type {})", client, qname, qtype);
+            }
         }
 
-        let upstream_dns = state
-            .lock()
-            .map(|s| s.config.upstream_dns)
-            .unwrap_or(None);
+        let upstream_dns = state.lock().map(|s| s.config.upstream_dns).unwrap_or(None);
         let response_ip = Self::resolve_query(state, &qname, qtype)?;
 
         if qtype != QTYPE_A && qtype != QTYPE_ANY {

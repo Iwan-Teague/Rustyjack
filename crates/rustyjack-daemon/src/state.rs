@@ -2,8 +2,8 @@ use std::fs;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use tracing::{info, warn};
 use tokio::sync::RwLock;
+use tracing::{info, warn};
 
 use crate::config::DaemonConfig;
 use crate::jobs::JobManager;
@@ -72,8 +72,10 @@ impl DaemonState {
             loop {
                 match engine.enforce() {
                     Ok(outcome) => {
-                        info!("Startup enforcement succeeded: allowed={:?}, blocked={:?}",
-                            outcome.allowed, outcome.blocked);
+                        info!(
+                            "Startup enforcement succeeded: allowed={:?}, blocked={:?}",
+                            outcome.allowed, outcome.blocked
+                        );
                         if !outcome.errors.is_empty() {
                             warn!("Enforcement had {} non-fatal errors", outcome.errors.len());
                             for err in &outcome.errors {
@@ -83,12 +85,19 @@ impl DaemonState {
                         break;
                     }
                     Err(e) => {
-                        warn!("Startup enforcement failed (attempt {}/{}): {}",
-                            retries + 1, max_retries, e);
+                        warn!(
+                            "Startup enforcement failed (attempt {}/{}): {}",
+                            retries + 1,
+                            max_retries,
+                            e
+                        );
 
                         retries += 1;
                         if retries >= max_retries {
-                            tracing::error!("Startup enforcement failed after {} attempts, continuing anyway", max_retries);
+                            tracing::error!(
+                                "Startup enforcement failed after {} attempts, continuing anyway",
+                                max_retries
+                            );
                             break;
                         }
 

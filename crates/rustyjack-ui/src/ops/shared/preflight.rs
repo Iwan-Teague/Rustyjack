@@ -1,8 +1,8 @@
 use anyhow::{bail, Result};
 use serde_json::Value;
 
-use crate::{config::GuiConfig, core::CoreBridge};
 use crate::util::shorten_for_display;
+use crate::{config::GuiConfig, core::CoreBridge};
 
 pub fn require_not_stealth(config: &GuiConfig, context: &str) -> Result<()> {
     if config
@@ -28,10 +28,7 @@ pub fn deauth_attack(core: &CoreBridge, config: &GuiConfig, iface: &str) -> Resu
         .map_err(|e| anyhow::anyhow!("Failed to check interface status: {}", e))?;
 
     if !status.exists {
-        bail!(
-            "{} does not exist. Select a valid Wi-Fi interface.",
-            iface
-        );
+        bail!("{} does not exist. Select a valid Wi-Fi interface.", iface);
     }
 
     if !status.is_wireless {
@@ -72,10 +69,7 @@ pub fn pmkid_capture(core: &CoreBridge, iface: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to check interface status: {}", e))?;
 
     if !status.exists {
-        bail!(
-            "{} does not exist. Select a valid Wi-Fi interface.",
-            iface
-        );
+        bail!("{} does not exist. Select a valid Wi-Fi interface.", iface);
     }
 
     if !status.is_wireless {
@@ -94,10 +88,7 @@ pub fn probe_sniff(core: &CoreBridge, iface: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to check interface status: {}", e))?;
 
     if !status.exists {
-        bail!(
-            "{} does not exist. Select a valid Wi-Fi interface.",
-            iface
-        );
+        bail!("{} does not exist. Select a valid Wi-Fi interface.", iface);
     }
 
     if !status.is_wireless {

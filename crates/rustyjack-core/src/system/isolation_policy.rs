@@ -33,8 +33,7 @@ impl IsolationPolicyManager {
     pub fn read(&self) -> Result<Option<IsolationPolicy>> {
         match fs::read_to_string(&self.path) {
             Ok(contents) => {
-                let policy = serde_json::from_str(&contents)
-                    .context("parsing isolation policy")?;
+                let policy = serde_json::from_str(&contents).context("parsing isolation policy")?;
                 Ok(Some(policy))
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),

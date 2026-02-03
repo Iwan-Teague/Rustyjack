@@ -20,13 +20,15 @@ impl LootSession {
         let iface = sanitize_label(iface);
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
         let short_id: u16 = rand::thread_rng().gen();
-        let id = format!("{}_{}_{}_{}", timestamp, op, iface, format!("{:04x}", short_id));
+        let id = format!(
+            "{}_{}_{}_{}",
+            timestamp,
+            op,
+            iface,
+            format!("{:04x}", short_id)
+        );
 
-        let dir = root
-            .join("loot")
-            .join("Wireless")
-            .join("sessions")
-            .join(id);
+        let dir = root.join("loot").join("Wireless").join("sessions").join(id);
         let artifacts = dir.join("artifacts");
         let logs = if crate::logs_enabled() {
             Some(dir.join("logs"))
@@ -41,6 +43,10 @@ impl LootSession {
                 .with_context(|| format!("creating {}", logs_dir.display()))?;
         }
 
-        Ok(Self { dir, artifacts, logs })
+        Ok(Self {
+            dir,
+            artifacts,
+            logs,
+        })
     }
 }

@@ -331,12 +331,12 @@ impl StateManager {
         {
             let mbm = dbm * 100;
 
-            let mut mgr = rustyjack_netlink::WirelessManager::new().map_err(|e| {
-                EvasionError::System(format!("Failed to open nl80211: {}", e))
-            })?;
+            let mut mgr = rustyjack_netlink::WirelessManager::new()
+                .map_err(|e| EvasionError::System(format!("Failed to open nl80211: {}", e)))?;
             let power_setting = rustyjack_netlink::TxPowerSetting::Fixed(mbm as u32);
-            mgr.set_tx_power(interface, power_setting)
-                .map_err(|e| EvasionError::RestoreError(format!("Failed to restore TX power: {}", e)))
+            mgr.set_tx_power(interface, power_setting).map_err(|e| {
+                EvasionError::RestoreError(format!("Failed to restore TX power: {}", e))
+            })
         }
     }
 }

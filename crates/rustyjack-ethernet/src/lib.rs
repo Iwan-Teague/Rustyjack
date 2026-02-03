@@ -215,7 +215,7 @@ pub fn discover_hosts(network: Ipv4Net, timeout: Duration) -> Result<LanDiscover
 }
 
 /// Perform ICMP echo sweep with cancellation support.
-/// 
+///
 /// Checks the cancel flag periodically during sending and receiving.
 /// Returns early with `Err` containing "cancelled" message if cancel flag is set.
 pub fn discover_hosts_cancellable(
@@ -245,7 +245,7 @@ pub fn discover_hosts_cancellable(
         if cancel.load(Ordering::Relaxed) {
             return Err(CancelledError.into());
         }
-        
+
         let packet = build_icmp_echo(ident, seq);
         let addr = SocketAddr::new(ip.into(), 0);
         let sock_addr = socket2::SockAddr::from(addr);
@@ -275,7 +275,7 @@ pub fn discover_hosts_cancellable(
         if cancel.load(Ordering::Relaxed) {
             return Err(CancelledError.into());
         }
-        
+
         match socket.recv_from(&mut buf) {
             Ok((n, from)) => {
                 if n < 28 {
@@ -385,7 +385,7 @@ pub fn quick_port_scan_with_source(
 }
 
 /// Perform a TCP connect scan with cancellation support.
-/// 
+///
 /// Checks the cancel flag periodically during the scan loop.
 /// Returns early with `Err` containing "cancelled" message if cancel flag is set.
 pub fn quick_port_scan_cancellable(
@@ -396,13 +396,13 @@ pub fn quick_port_scan_cancellable(
 ) -> Result<PortScanResult> {
     let mut open = Vec::new();
     let mut banners = Vec::new();
-    
+
     for port in ports {
         // Check cancellation before each port
         if cancel.load(Ordering::Relaxed) {
             return Err(CancelledError.into());
         }
-        
+
         let addr = SocketAddr::new(target.into(), *port);
         if let Ok(stream) = TcpStream::connect_timeout(&addr, timeout) {
             stream.set_read_timeout(Some(DEFAULT_BANNER_READ)).ok();
@@ -432,13 +432,13 @@ pub fn quick_port_scan_with_source_cancellable(
 ) -> Result<PortScanResult> {
     let mut open = Vec::new();
     let mut banners = Vec::new();
-    
+
     for port in ports {
         // Check cancellation before each port
         if cancel.load(Ordering::Relaxed) {
             return Err(CancelledError.into());
         }
-        
+
         let addr = SocketAddr::new(target.into(), *port);
         let stream = connect_with_source(addr, source_ip, timeout)
             .or_else(|_| TcpStream::connect_timeout(&addr, timeout));
@@ -548,7 +548,14 @@ pub async fn discover_hosts_arp(
 
     // Blocking operations wrapped in spawn_blocking to avoid blocking the async runtime
     tokio::task::spawn_blocking(move || {
-        discover_hosts_arp_blocking(&interface, network, &local_mac, local_ip, rate_limit_pps, timeout)
+        discover_hosts_arp_blocking(
+            &interface,
+            network,
+            &local_mac,
+            local_ip,
+            rate_limit_pps,
+            timeout,
+        )
     })
     .await
     .context("ARP discovery task panicked")?
@@ -715,7 +722,13 @@ pub async fn discover_hosts_arp_cancellable(
     // Blocking operations wrapped in spawn_blocking to avoid blocking the async runtime
     tokio::task::spawn_blocking(move || {
         discover_hosts_arp_cancellable_blocking(
-            &interface, network, &local_mac, local_ip, rate_limit_pps, timeout, &cancel
+            &interface,
+            network,
+            &local_mac,
+            local_ip,
+            rate_limit_pps,
+            timeout,
+            &cancel,
         )
     })
     .await

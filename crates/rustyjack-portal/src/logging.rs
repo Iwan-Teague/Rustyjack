@@ -16,8 +16,8 @@ impl PortalLogger {
     pub fn new(capture_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(capture_dir).context("creating portal capture directory")?;
 
-        let credentials = open_append(capture_dir.join("credentials.log"))
-            .context("opening credentials log")?;
+        let credentials =
+            open_append(capture_dir.join("credentials.log")).context("opening credentials log")?;
         let visits = open_append(capture_dir.join("visits.log")).context("opening visits log")?;
 
         Ok(Self {
@@ -78,9 +78,7 @@ pub fn format_credentials_line_at(
     let ua = escape_log_value(ua);
     let user = escape_log_value(user);
     let pass = escape_log_value(pass);
-    format!(
-        "[{timestamp}] ip={ip} ua=\"{ua}\" user=\"{user}\" pass=\"{pass}\"\n"
-    )
+    format!("[{timestamp}] ip={ip} ua=\"{ua}\" user=\"{user}\" pass=\"{pass}\"\n")
 }
 
 pub fn format_visit_line_at(
@@ -93,9 +91,7 @@ pub fn format_visit_line_at(
     // Escape user-controlled input to prevent log injection attacks
     let ua = escape_log_value(ua);
     let uri = escape_log_value(uri);
-    format!(
-        "[{timestamp}] ip={ip} ua=\"{ua}\" uri=\"{uri}\" status={status}\n"
-    )
+    format!("[{timestamp}] ip={ip} ua=\"{ua}\" uri=\"{uri}\" status={status}\n")
 }
 
 /// Escape a string for safe inclusion in log files.
@@ -175,7 +171,8 @@ mod tests {
     #[test]
     fn escapes_newlines() {
         // Attacker tries to inject fake log entry
-        let malicious = "legit\n[2025-01-01T00:00:00+00:00] ip=evil ua=\"x\" user=\"admin\" pass=\"pwned\"";
+        let malicious =
+            "legit\n[2025-01-01T00:00:00+00:00] ip=evil ua=\"x\" user=\"admin\" pass=\"pwned\"";
         let escaped = escape_log_value(malicious);
         assert!(!escaped.contains('\n'));
         assert!(escaped.contains("\\n"));
@@ -215,7 +212,7 @@ mod tests {
         );
         // Verify no raw newlines in output
         assert_eq!(line.matches('\n').count(), 1); // Only the trailing newline
-        // Verify quotes are escaped
+                                                   // Verify quotes are escaped
         assert!(line.contains("\\\""));
     }
 }

@@ -26,7 +26,9 @@ use crate::{
             EthernetDiscoveryOp, EthernetInventoryOp, EthernetMitmOp, EthernetPortScanOp,
             EthernetSiteCredOp,
         },
-        recon::{ArpScanOp, BandwidthMonitorOp, DnsCaptureOp, GatewayReconOp, MdnsScanOp, ServiceScanOp},
+        recon::{
+            ArpScanOp, BandwidthMonitorOp, DnsCaptureOp, GatewayReconOp, MdnsScanOp, ServiceScanOp,
+        },
         runner::OperationRunner,
         wifi::{DeauthAttackOp, EvilTwinAttackOp, KarmaAttackOp, PmkidCaptureOp, ProbeSniffOp},
         OperationContext,
@@ -95,7 +97,9 @@ pub(crate) fn action_route(action: &MenuAction) -> ActionRoute {
         MenuAction::ImportWebhookFromUsb => ActionRoute::Local("import_webhook_from_usb"),
         MenuAction::SetVendorMac => ActionRoute::Local("set_vendor_mac"),
         MenuAction::RestoreMac => ActionRoute::Local("restore_mac"),
-        MenuAction::ToggleHostnameRandomization => ActionRoute::Local("toggle_hostname_randomization"),
+        MenuAction::ToggleHostnameRandomization => {
+            ActionRoute::Local("toggle_hostname_randomization")
+        }
         MenuAction::RandomizeHostnameNow => ActionRoute::Local("randomize_hostname_now"),
         MenuAction::SetOperationMode(_) => ActionRoute::Local("select_operation_mode"),
         MenuAction::SetTxPower(_) => ActionRoute::Local("set_tx_power"),
@@ -120,7 +124,9 @@ pub(crate) fn action_route(action: &MenuAction) -> ActionRoute {
         MenuAction::Hotspot => ActionRoute::Local("manage_hotspot"),
         MenuAction::EncryptionLoadKey => ActionRoute::Local("load_encryption_key_from_usb"),
         MenuAction::EncryptionGenerateKey => ActionRoute::Local("generate_encryption_key_on_usb"),
-        MenuAction::FullDiskEncryptionSetup => ActionRoute::Local("start_full_disk_encryption_flow"),
+        MenuAction::FullDiskEncryptionSetup => {
+            ActionRoute::Local("start_full_disk_encryption_flow")
+        }
         MenuAction::FullDiskEncryptionMigrate => ActionRoute::Local("start_fde_migration"),
         MenuAction::ShowInfo => ActionRoute::Info,
     }
@@ -227,11 +233,7 @@ impl App {
     pub(crate) fn confirm_cancel(&mut self, label: &str) -> Result<bool> {
         let choice = self.confirm_yes_no(
             &format!("Cancel {label}?"),
-            [
-                "Stop the operation?",
-                "Yes = stop now",
-                "No = keep running",
-            ],
+            ["Stop the operation?", "Yes = stop now", "No = keep running"],
         )?;
         Ok(matches!(choice, ConfirmChoice::Yes | ConfirmChoice::Cancel))
     }
@@ -556,7 +558,11 @@ impl App {
         }
     }
 
-    pub(crate) fn set_ops_config_value(config: &mut OpsConfig, category: OpsCategory, enabled: bool) {
+    pub(crate) fn set_ops_config_value(
+        config: &mut OpsConfig,
+        category: OpsCategory,
+        enabled: bool,
+    ) {
         match category {
             OpsCategory::Wifi => config.wifi_ops = enabled,
             OpsCategory::Ethernet => config.eth_ops = enabled,
@@ -683,17 +689,15 @@ impl App {
         loop {
             let button = self.buttons.wait_for_press()?;
             match self.map_button(button) {
-                ButtonAction::Select => {
-                    match self.core.system_reboot() {
-                        Ok(_) => {
-                            std::process::exit(0);
-                        }
-                        Err(err) => {
-                            let msg = shorten_for_display(&err.to_string(), 90);
-                            self.show_message("Reboot Failed", [msg])?;
-                        }
+                ButtonAction::Select => match self.core.system_reboot() {
+                    Ok(_) => {
+                        std::process::exit(0);
                     }
-                }
+                    Err(err) => {
+                        let msg = shorten_for_display(&err.to_string(), 90);
+                        self.show_message("Reboot Failed", [msg])?;
+                    }
+                },
                 ButtonAction::Back | ButtonAction::Cancel => {
                     // Cancel and return
                     break;
@@ -729,7 +733,10 @@ impl App {
             let elapsed = start.elapsed().as_secs();
 
             // Check for cancel (non-blocking button check)
-            if matches!(self.check_cancel_request(attack_name)?, CancelDecision::Cancel) {
+            if matches!(
+                self.check_cancel_request(attack_name)?,
+                CancelDecision::Cancel
+            ) {
                 self.show_progress(attack_name, ["Cancelling...", "Please wait", ""])?;
                 if let Err(e) = self.core.cancel_job(job_id) {
                     self.show_error_dialog(&format!("Cancel failed: {attack_name}"), &e)?;
@@ -1302,7 +1309,12 @@ impl App {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn execute_with_progress<F, T>(&mut self, title: &str, message: &str, operation: F) -> Result<T>
+    pub(crate) fn execute_with_progress<F, T>(
+        &mut self,
+        title: &str,
+        message: &str,
+        operation: F,
+    ) -> Result<T>
     where
         F: FnOnce() -> Result<T>,
     {

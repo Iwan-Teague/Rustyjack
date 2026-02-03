@@ -155,7 +155,10 @@ fn parse_cipher(bytes: &[u8]) -> Result<String> {
         });
     }
     if bytes[0..3] != [0x00, 0x0f, 0xac] {
-        return Ok(format!("UNKNOWN({:02x}{:02x}{:02x}:{:02x})", bytes[0], bytes[1], bytes[2], bytes[3]));
+        return Ok(format!(
+            "UNKNOWN({:02x}{:02x}{:02x}:{:02x})",
+            bytes[0], bytes[1], bytes[2], bytes[3]
+        ));
     }
     let cipher = match bytes[3] {
         0x04 => "CCMP",
@@ -173,7 +176,10 @@ fn parse_akm(bytes: &[u8]) -> Result<String> {
         });
     }
     if bytes[0..3] != [0x00, 0x0f, 0xac] {
-        return Ok(format!("UNKNOWN({:02x}{:02x}{:02x}:{:02x})", bytes[0], bytes[1], bytes[2], bytes[3]));
+        return Ok(format!(
+            "UNKNOWN({:02x}{:02x}{:02x}:{:02x})",
+            bytes[0], bytes[1], bytes[2], bytes[3]
+        ));
     }
     let akm = match bytes[3] {
         0x02 => "PSK",
