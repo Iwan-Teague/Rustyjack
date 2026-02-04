@@ -26,6 +26,29 @@ has_crate_artifact() {
   compgen -G "$base/deps/lib${crate}-*.so" >/dev/null
 }
 
+wpa_supplicant_present() {
+  if cmd wpa_supplicant; then
+    return 0
+  fi
+  [ -x /sbin/wpa_supplicant ] || [ -x /usr/sbin/wpa_supplicant ] || [ -x /usr/local/sbin/wpa_supplicant ]
+}
+
+ensure_wpa_supplicant() {
+  if wpa_supplicant_present; then
+    info "[OK] wpa_supplicant present"
+    return 0
+  fi
+  warn "wpa_supplicant not found; attempting to install..."
+  if ! sudo apt-get install -y --no-install-recommends wpasupplicant; then
+    fail "Failed to install wpa_supplicant"
+  fi
+  if wpa_supplicant_present; then
+    info "[OK] wpa_supplicant installed"
+    return 0
+  fi
+  fail "wpa_supplicant still missing after install"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   fail "This installer must run as root."
 fi
@@ -366,6 +389,9 @@ else
     fi
   fi
 fi
+
+# Ensure wpa_supplicant is present even if package installation was skipped
+ensure_wpa_supplicant
 
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."

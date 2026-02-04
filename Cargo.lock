@@ -2643,16 +2643,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustyjack-install"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hex",
- "tokio",
- "zbus",
-]
-
-[[package]]
 name = "rustyjack-ipc"
 version = "0.1.0"
 dependencies = [

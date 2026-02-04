@@ -27,6 +27,29 @@ warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
 
+wpa_supplicant_present() {
+  if cmd wpa_supplicant; then
+    return 0
+  fi
+  [ -x /sbin/wpa_supplicant ] || [ -x /usr/sbin/wpa_supplicant ] || [ -x /usr/local/sbin/wpa_supplicant ]
+}
+
+ensure_wpa_supplicant() {
+  if wpa_supplicant_present; then
+    info "[OK] wpa_supplicant present"
+    return 0
+  fi
+  warn "wpa_supplicant not found; attempting to install..."
+  if ! sudo apt-get install -y --no-install-recommends wpasupplicant; then
+    fail "Failed to install wpa_supplicant"
+  fi
+  if wpa_supplicant_present; then
+    info "[OK] wpa_supplicant installed"
+    return 0
+  fi
+  fail "wpa_supplicant still missing after install"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   fail "This installer must run as root."
 fi
@@ -444,6 +467,8 @@ else
     fi
   fi
 fi
+
+ensure_wpa_supplicant
 
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."

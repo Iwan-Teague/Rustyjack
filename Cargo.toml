@@ -16,7 +16,6 @@ members = [
     "crates/rustyjack-daemon",
     "crates/rustyjack-client",
     "crates/rustyjack-updater",
-    "crates/rustyjack-install",
 ]
 
 [workspace.package]

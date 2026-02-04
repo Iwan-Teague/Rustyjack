@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Installer that uses prebuilt binaries instead of building on-device
-# Usage: sudo PREBUILT_DIR=prebuilt/arm32 ./install_rustyjack_prebuilt.sh
+# Usage: sudo ./install_rustyjack_prebuilt.sh
+# Notes:
+#   - Auto-selects prebuilt/arm64 on 64-bit OS when available, otherwise prebuilt/arm32
 # Environment overrides:
-#   PREBUILT_DIR=prebuilt/arm32   # relative to project root or absolute path
+#   PREBUILT_DIR=prebuilt/arm32   # relative to project root or absolute path (arm32 or arm64)
 #   USB_MOUNT_POINT=/mnt/usb      # where to mount removable media
 #   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
 set -euo pipefail
@@ -13,6 +15,81 @@ info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
 warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
+
+hash_file() {
+  local path="$1"
+  if cmd sha256sum; then
+    sha256sum "$path" | awk '{print $1}'
+    return 0
+  fi
+  if cmd shasum; then
+    shasum -a 256 "$path" | awk '{print $1}'
+    return 0
+  fi
+  echo ""
+  return 1
+}
+
+detect_arm64_capable() {
+  local uname_arch=""
+  local long_bits=""
+  local dpkg_arch=""
+  uname_arch=$(uname -m 2>/dev/null || true)
+  long_bits=$(getconf LONG_BIT 2>/dev/null || true)
+  if cmd dpkg; then
+    dpkg_arch=$(dpkg --print-architecture 2>/dev/null || true)
+  fi
+  if [ "$uname_arch" != "aarch64" ] && [ "$long_bits" != "64" ] && [ "$dpkg_arch" != "arm64" ]; then
+    return 1
+  fi
+  if [ -e /lib/ld-linux-aarch64.so.1 ] || [ -e /lib64/ld-linux-aarch64.so.1 ]; then
+    return 0
+  fi
+  return 1
+}
+
+print_binary_info() {
+  local label="$1"
+  local path="$2"
+  if [ -f "$path" ]; then
+    local size=""
+    local buildid=""
+    local hash=""
+    size=$(ls -lh "$path" | awk '{print $5}')
+    buildid=$(file "$path" | grep -o "BuildID\\[sha1\\]=[a-f0-9]*" || echo "BuildID not found")
+    hash=$(hash_file "$path" || true)
+    if [ -n "$hash" ]; then
+      info "  ${label}: $size - $buildid - sha256=$hash"
+    else
+      info "  ${label}: $size - $buildid - sha256=unavailable"
+    fi
+  else
+    warn "  ${label}: NOT FOUND at $path"
+  fi
+}
+
+wpa_supplicant_present() {
+  if cmd wpa_supplicant; then
+    return 0
+  fi
+  [ -x /sbin/wpa_supplicant ] || [ -x /usr/sbin/wpa_supplicant ] || [ -x /usr/local/sbin/wpa_supplicant ]
+}
+
+ensure_wpa_supplicant() {
+  if wpa_supplicant_present; then
+    info "[OK] wpa_supplicant present"
+    return 0
+  fi
+  warn "wpa_supplicant not found; attempting to install..."
+  if ! sudo apt-get install -y --no-install-recommends wpasupplicant; then
+    fail "Failed to install wpa_supplicant"
+  fi
+  if wpa_supplicant_present; then
+    info "[OK] wpa_supplicant installed"
+    return 0
+  fi
+  fail "wpa_supplicant still missing after install"
+}
 
 if [ "$(id -u)" -ne 0 ]; then
   fail "This installer must run as root."
@@ -311,15 +388,16 @@ mount_usb_if_needed() {
 }
 
 find_prebuilt_dir_on_mounts() {
+  local arch="$1"
   local base=""
   for base in "${USB_MOUNT_POINT:-/mnt/usb}" /media /mnt /run/media; do
     [ -d "$base" ] || continue
-  local candidate=""
-  for candidate in \
-    "$base"/Rustyjack/Prebuilt/arm32 \
-      "$base"/Rustyjack/prebuilt/arm32 \
-      "$base"/rustyjack/Prebuilt/arm32 \
-      "$base"/rustyjack/prebuilt/arm32; do
+    local candidate=""
+    for candidate in \
+      "$base"/Rustyjack/Prebuilt/"$arch" \
+      "$base"/Rustyjack/prebuilt/"$arch" \
+      "$base"/rustyjack/Prebuilt/"$arch" \
+      "$base"/rustyjack/prebuilt/"$arch"; do
       if [ -f "$candidate/$BINARY_NAME" ]; then
         echo "$candidate"
         return 0
@@ -327,7 +405,7 @@ find_prebuilt_dir_on_mounts() {
     done
 
     local hit=""
-    hit=$(find "$base" -maxdepth 6 -type f \( -path "*/prebuilt/arm32/$BINARY_NAME" -o -path "*/Prebuilt/arm32/$BINARY_NAME" \) 2>/dev/null | head -n 1 || true)
+    hit=$(find "$base" -maxdepth 6 -type f \( -path "*/prebuilt/$arch/$BINARY_NAME" -o -path "*/Prebuilt/$arch/$BINARY_NAME" \) 2>/dev/null | head -n 1 || true)
     if [ -n "$hit" ]; then
       echo "${hit%/$BINARY_NAME}"
       return 0
@@ -350,19 +428,20 @@ default_route_interface() {
 }
 
 copy_prebuilt_from_usb() {
-  local dest_dir="$PROJECT_ROOT/prebuilt/arm32"
+  local arch="$1"
+  local dest_dir="$PROJECT_ROOT/prebuilt/$arch"
   local src_dir=""
 
-  info "Searching for prebuilt binaries on mounted devices..."
+  info "Searching for prebuilt binaries on mounted devices (arch=$arch)..."
 
   # First check if binaries already exist on mounted filesystems
-  src_dir="$(find_prebuilt_dir_on_mounts || true)"
+  src_dir="$(find_prebuilt_dir_on_mounts "$arch" || true)"
 
   if [ -z "$src_dir" ]; then
     info "No binaries found on current mounts, attempting to mount USB..."
     if mount_usb_if_needed; then
       info "USB mount successful, searching again..."
-      src_dir="$(find_prebuilt_dir_on_mounts || true)"
+      src_dir="$(find_prebuilt_dir_on_mounts "$arch" || true)"
     else
       warn "USB mounting failed or no USB device detected"
     fi
@@ -373,10 +452,10 @@ copy_prebuilt_from_usb() {
     warn "BINARIES NOT FOUND ON USB"
     warn "=========================================="
     warn "Searched locations:"
-    warn "  - /mnt/usb/Rustyjack/Prebuilt/arm32"
-    warn "  - /mnt/usb/Rustyjack/prebuilt/arm32"
-    warn "  - /mnt/usb/rustyjack/Prebuilt/arm32"
-    warn "  - /mnt/usb/rustyjack/prebuilt/arm32"
+    warn "  - /mnt/usb/Rustyjack/Prebuilt/$arch"
+    warn "  - /mnt/usb/Rustyjack/prebuilt/$arch"
+    warn "  - /mnt/usb/rustyjack/Prebuilt/$arch"
+    warn "  - /mnt/usb/rustyjack/prebuilt/$arch"
     warn "  - Deep search in /mnt/usb, /media, /mnt, /run/media"
     warn ""
     warn "Will attempt to use binaries from: $dest_dir"
@@ -394,12 +473,12 @@ copy_prebuilt_from_usb() {
 
   local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
   local all_found=1
+  declare -A src_hashes
 
   for bin in "${bins[@]}"; do
     if [ -f "$src_dir/$bin" ]; then
-      local size=$(ls -lh "$src_dir/$bin" | awk '{print $5}')
-      local buildid=$(file "$src_dir/$bin" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
-      info "  ✓ $bin ($size) - $buildid"
+      print_binary_info "✓ $bin" "$src_dir/$bin"
+      src_hashes["$bin"]="$(hash_file "$src_dir/$bin" || true)"
     else
       warn "  ✗ $bin - MISSING"
       all_found=0
@@ -443,9 +522,14 @@ copy_prebuilt_from_usb() {
 
     for bin in "${bins[@]}"; do
       if [ -f "$dest_dir/$bin" ]; then
-        local size=$(ls -lh "$dest_dir/$bin" | awk '{print $5}')
-        local buildid=$(file "$dest_dir/$bin" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
-        info "  ✓ $bin ($size) - $buildid"
+        print_binary_info "✓ $bin" "$dest_dir/$bin"
+        local src_hash="${src_hashes[$bin]:-}"
+        local dest_hash=""
+        dest_hash=$(hash_file "$dest_dir/$bin" || true)
+        if [ -n "$src_hash" ] && [ -n "$dest_hash" ] && [ "$src_hash" != "$dest_hash" ]; then
+          warn "  ✗ $bin hash mismatch after copy (src=$src_hash dest=$dest_hash)"
+          fail "Binary copy failed integrity check"
+        fi
       else
         warn "  ✗ $bin - COPY FAILED"
       fi
@@ -543,6 +627,9 @@ else
   fi
 fi
 
+# Ensure wpa_supplicant is present even if package installation was skipped
+ensure_wpa_supplicant
+
 # ---- 3: enable I2C / SPI & kernel modules -------------------
 step "Enabling I2C and SPI..."
 add_dtparam dtparam=i2c_arm=on
@@ -576,8 +663,38 @@ info "Using project root: $PROJECT_ROOT"
 RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/rustyjack}"
 info "Using runtime root: $RUNTIME_ROOT"
 
-DEFAULT_PREBUILT_DIR="prebuilt/arm32"
-PREBUILT_DIR="${PREBUILT_DIR:-$DEFAULT_PREBUILT_DIR}"
+DEFAULT_PREBUILT_DIR_ARM32="prebuilt/arm32"
+DEFAULT_PREBUILT_DIR_ARM64="prebuilt/arm64"
+PREBUILT_DIR_OVERRIDE=0
+if [ -n "${PREBUILT_DIR:-}" ]; then
+  PREBUILT_DIR_OVERRIDE=1
+fi
+
+PREFERRED_ARCH="arm32"
+if detect_arm64_capable; then
+  PREFERRED_ARCH="arm64"
+  info "[OK] Detected 64-bit userspace; arm64 binaries are supported"
+else
+  info "[OK] Detected 32-bit userspace; arm64 binaries are NOT supported"
+fi
+
+if [ "$PREBUILT_DIR_OVERRIDE" -eq 1 ]; then
+  info "PREBUILT_DIR override set: $PREBUILT_DIR"
+else
+  PREBUILT_DIR="prebuilt/$PREFERRED_ARCH"
+fi
+
+PREBUILT_ARCH="$PREFERRED_ARCH"
+case "$PREBUILT_DIR" in
+  *arm64*) PREBUILT_ARCH="arm64" ;;
+  *arm32*) PREBUILT_ARCH="arm32" ;;
+esac
+
+info "Selected prebuilt directory: $PREBUILT_DIR (arch=$PREBUILT_ARCH)"
+
+if [ "$PREBUILT_ARCH" = "arm64" ] && ! detect_arm64_capable; then
+  fail "arm64 binaries selected but this OS does not appear to support 64-bit execution"
+fi
 BINARY_NAME="rustyjack-ui"
 CLI_NAME="rustyjack"
 DAEMON_NAME="rustyjackd"
@@ -599,42 +716,98 @@ set_prebuilt_paths() {
 
 set_prebuilt_paths
 
-if [ ! -f "$PREBUILT_BIN" ] || [ ! -f "$PREBUILT_CLI" ] || [ ! -f "$PREBUILT_DAEMON" ] || [ ! -f "$PREBUILT_PORTAL" ]; then
-  if copy_prebuilt_from_usb; then
-    PREBUILT_DIR="$DEFAULT_PREBUILT_DIR"
+prebuilt_has_all_bins() {
+  local root="$1"
+  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
+  for bin in "${bins[@]}"; do
+    if [ ! -f "$root/$bin" ]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+if [ "$PREBUILT_DIR_OVERRIDE" -eq 0 ]; then
+  if [ "$PREFERRED_ARCH" = "arm64" ]; then
+    if ! prebuilt_has_all_bins "$PREBUILT_ROOT"; then
+      info "arm64 binaries not found locally; attempting USB search..."
+      copy_prebuilt_from_usb "arm64" || true
+      set_prebuilt_paths
+    fi
+    if ! prebuilt_has_all_bins "$PREBUILT_ROOT"; then
+      warn "arm64 binaries not available; falling back to arm32"
+      PREBUILT_DIR="$DEFAULT_PREBUILT_DIR_ARM32"
+      PREBUILT_ARCH="arm32"
+      set_prebuilt_paths
+    fi
+  fi
+  if ! prebuilt_has_all_bins "$PREBUILT_ROOT"; then
+    info "Prebuilt binaries not found locally; attempting USB search (arch=$PREBUILT_ARCH)..."
+    copy_prebuilt_from_usb "$PREBUILT_ARCH" || true
     set_prebuilt_paths
-    info "Using prebuilt binaries from $PREBUILT_ROOT"
   fi
 fi
 
+info "Using prebuilt binaries from $PREBUILT_ROOT"
+
 if [ ! -f "$PREBUILT_BIN" ]; then
-  fail "Prebuilt binary not found: $PREBUILT_BIN\nPlace your arm32 binary at $PREBUILT_BIN or set PREBUILT_DIR to its location."
+  fail "Prebuilt binary not found: $PREBUILT_BIN\nPlace your ${PREBUILT_ARCH} binary at $PREBUILT_BIN or set PREBUILT_DIR to its location."
 fi
 if [ ! -f "$PREBUILT_CLI" ]; then
-  fail "Prebuilt CLI not found: $PREBUILT_CLI\nPlace your arm32 CLI binary at $PREBUILT_CLI (rustyjack-core) or set PREBUILT_DIR accordingly."
+  fail "Prebuilt CLI not found: $PREBUILT_CLI\nPlace your ${PREBUILT_ARCH} CLI binary at $PREBUILT_CLI (rustyjack-core) or set PREBUILT_DIR accordingly."
 fi
 if [ ! -f "$PREBUILT_DAEMON" ]; then
-  fail "Prebuilt daemon not found: $PREBUILT_DAEMON\nPlace your arm32 daemon binary at $PREBUILT_DAEMON or set PREBUILT_DIR accordingly."
+  fail "Prebuilt daemon not found: $PREBUILT_DAEMON\nPlace your ${PREBUILT_ARCH} daemon binary at $PREBUILT_DAEMON or set PREBUILT_DIR accordingly."
+fi
+if [ ! -f "$PREBUILT_PORTAL" ]; then
+  fail "Prebuilt portal not found: $PREBUILT_PORTAL\nPlace your ${PREBUILT_ARCH} portal binary at $PREBUILT_PORTAL or set PREBUILT_DIR accordingly."
 fi
 
-# Ensure the prebuilt binary is executable and appears to be a 32-bit ARM ELF
+# Ensure the prebuilt binaries are executable and appear to match the target arch
 if [ ! -x "$PREBUILT_BIN" ]; then
   info "Making prebuilt binary executable: $PREBUILT_BIN"
   chmod +x "$PREBUILT_BIN" || warn "Failed to chmod +x $PREBUILT_BIN"
+fi
+if [ ! -x "$PREBUILT_CLI" ]; then
+  info "Making prebuilt CLI executable: $PREBUILT_CLI"
+  chmod +x "$PREBUILT_CLI" || warn "Failed to chmod +x $PREBUILT_CLI"
 fi
 if [ ! -x "$PREBUILT_DAEMON" ]; then
   info "Making prebuilt daemon executable: $PREBUILT_DAEMON"
   chmod +x "$PREBUILT_DAEMON" || warn "Failed to chmod +x $PREBUILT_DAEMON"
 fi
-if command -v file >/dev/null 2>&1; then
-  arch_info=$(file -b "$PREBUILT_BIN" || true)
-  if echo "$arch_info" | grep -qiE 'ELF 32-bit.*ARM|ARM, EABI|ARM aarch32'; then
-    info "[OK] Prebuilt binary looks like 32-bit ARM: $arch_info"
-  else
-    warn "Prebuilt binary does not look like 32-bit ARM: $arch_info"
-    warn "Proceeding anyway; ensure the binary matches your Pi's userspace (armhf/armv7)."
-  fi
+if [ ! -x "$PREBUILT_PORTAL" ]; then
+  info "Making prebuilt portal executable: $PREBUILT_PORTAL"
+  chmod +x "$PREBUILT_PORTAL" || warn "Failed to chmod +x $PREBUILT_PORTAL"
 fi
+check_binary_arch() {
+  local path="$1"
+  local arch="$2"
+  if ! command -v file >/dev/null 2>&1; then
+    return 0
+  fi
+  local arch_info=""
+  arch_info=$(file -b "$path" || true)
+  if [ "$arch" = "arm64" ]; then
+    if echo "$arch_info" | grep -qiE 'ELF 64-bit.*ARM aarch64|ARM aarch64'; then
+      info "[OK] $(basename "$path") looks like 64-bit ARM: $arch_info"
+    else
+      warn "$(basename "$path") does not look like 64-bit ARM: $arch_info"
+      warn "Proceeding anyway; ensure the binary matches your Pi's userspace (arm64)."
+    fi
+  else
+    if echo "$arch_info" | grep -qiE 'ELF 32-bit.*ARM|ARM, EABI|ARM aarch32'; then
+      info "[OK] $(basename "$path") looks like 32-bit ARM: $arch_info"
+    else
+      warn "$(basename "$path") does not look like 32-bit ARM: $arch_info"
+      warn "Proceeding anyway; ensure the binary matches your Pi's userspace (armhf/armv7)."
+    fi
+  fi
+}
+check_binary_arch "$PREBUILT_BIN" "$PREBUILT_ARCH"
+check_binary_arch "$PREBUILT_CLI" "$PREBUILT_ARCH"
+check_binary_arch "$PREBUILT_DAEMON" "$PREBUILT_ARCH"
+check_binary_arch "$PREBUILT_PORTAL" "$PREBUILT_ARCH"
 
 step "Stopping existing service (if any)..."
 sudo systemctl stop rustyjack-ui.service 2>/dev/null || true
@@ -649,13 +822,7 @@ step "Installing prebuilt binaries to /usr/local/bin/"
 info "Source binaries:"
 for bin_var in PREBUILT_BIN PREBUILT_CLI PREBUILT_DAEMON PREBUILT_PORTAL; do
   bin_path="${!bin_var}"
-  if [ -f "$bin_path" ]; then
-    size=$(ls -lh "$bin_path" | awk '{print $5}')
-    buildid=$(file "$bin_path" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
-    info "  $(basename "$bin_path"): $size - $buildid"
-  else
-    warn "  $(basename "$bin_path"): NOT FOUND at $bin_path"
-  fi
+  print_binary_info "$(basename "$bin_path")" "$bin_path"
 done
 info ""
 
@@ -667,11 +834,32 @@ sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Fail
 info "Installed binaries to /usr/local/bin:"
 for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
   if [ -f "/usr/local/bin/$bin_name" ]; then
-    size=$(ls -lh "/usr/local/bin/$bin_name" | awk '{print $5}')
-    buildid=$(file "/usr/local/bin/$bin_name" | grep -o "BuildID\[sha1\]=[a-f0-9]*" || echo "BuildID not found")
-    info "  ✓ $bin_name: $size - $buildid"
+    print_binary_info "✓ $bin_name" "/usr/local/bin/$bin_name"
   else
     warn "  ✗ $bin_name: INSTALLATION FAILED"
+  fi
+done
+info ""
+
+info "Verifying installed binary hashes..."
+for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
+  src_path="$PREBUILT_ROOT/$bin_name"
+  dest_path="/usr/local/bin/$bin_name"
+  if [ -f "$src_path" ] && [ -f "$dest_path" ]; then
+    src_hash=$(hash_file "$src_path" || true)
+    dest_hash=$(hash_file "$dest_path" || true)
+    if [ -n "$src_hash" ] && [ -n "$dest_hash" ]; then
+      if [ "$src_hash" = "$dest_hash" ]; then
+        info "  ✓ $bin_name hash match ($src_hash)"
+      else
+        warn "  ✗ $bin_name hash mismatch (src=$src_hash dest=$dest_hash)"
+        fail "Binary integrity check failed for $bin_name"
+      fi
+    else
+      warn "  [WARN] $bin_name hash unavailable (missing sha256sum/shasum)"
+    fi
+  else
+    warn "  ✗ $bin_name hash check skipped (missing source or destination)"
   fi
 done
 info ""

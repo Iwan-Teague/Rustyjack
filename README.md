@@ -249,28 +249,6 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 
 `install_rustyjack_dev.sh` is available for development setups and follows the same dependency/build steps.
 
-### Appliance Verification (Rust Installers)
-
-If you are using the Rust installer binaries directly, run them in this order:
-
-1. `install_01_layout`
-2. `install_02_identities`
-3. `install_04_seed_config`
-4. `install_03_systemd`
-
-Then run the verifier:
-
-- `install_05_verify` (expects `verification OK`)
-
-On-device checklist (manual):
-
-- Users/groups exist: `getent group rustyjack rustyjack-ui rustyjack-portal` and `getent passwd rustyjack-ui rustyjack-portal`
-- Required files exist: `/usr/local/bin/rustyjackd`, `/usr/local/bin/rustyjack-ui`, `/usr/local/bin/rustyjack-portal`, `/etc/rustyjack/update_pubkey.ed25519`, `/etc/rustyjack/wpa_supplicant.conf`
-- Unit files exist: `/etc/systemd/system/rustyjackd.service`, `/etc/systemd/system/rustyjackd.socket`, `/etc/systemd/system/rustyjack-ui.service`, `/etc/systemd/system/rustyjack-portal.service`, `/etc/systemd/system/rustyjack-wpa_supplicant@.service`
-- Units enabled: `systemctl is-enabled rustyjackd.socket rustyjackd.service rustyjack-ui.service rustyjack-portal.service rustyjack-wpa_supplicant@wlan0.service` (expects `enabled`)
-- Units active: `systemctl is-active rustyjackd.socket rustyjackd.service rustyjack-ui.service rustyjack-portal.service rustyjack-wpa_supplicant@wlan0.service` (expects `active`)
-- WPA D-Bus backend: `busctl --system call fi.w1.wpa_supplicant1 /fi/w1/wpa_supplicant1 fi.w1.wpa_supplicant1 GetInterface s wlan0` (expects an object path)
-
 ## Configuration & Paths
 
 **Configuration Files**:
