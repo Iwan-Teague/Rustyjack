@@ -372,18 +372,37 @@ pub struct InterfaceStatusRequest {
     pub interface: String,
 }
 
+/// TX-in-monitor capability verdict for IPC
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TxInMonitorCapability {
+    /// Known to support TX in monitor mode (injection-capable)
+    Supported,
+    /// Known NOT to support TX in monitor mode
+    NotSupported,
+    /// Cannot determine - hardware/driver not recognized
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceCapabilities {
     pub is_wireless: bool,
     pub is_physical: bool,
     pub supports_monitor: bool,
     pub supports_ap: bool,
+    /// Legacy field - use tx_in_monitor for accurate detection
+    /// This field is true if tx_in_monitor is Supported
     pub supports_injection: bool,
     pub supports_5ghz: bool,
     pub supports_2ghz: bool,
     pub mac_address: Option<String>,
     pub driver: Option<String>,
     pub chipset: Option<String>,
+    /// TX-in-monitor capability with accurate driver-based detection
+    #[serde(default)]
+    pub tx_in_monitor: Option<TxInMonitorCapability>,
+    /// Human-readable reason for tx_in_monitor verdict
+    #[serde(default)]
+    pub tx_in_monitor_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,7 +429,20 @@ pub struct WifiCapabilitiesResponse {
     pub interface_exists: bool,
     pub interface_is_wireless: bool,
     pub supports_monitor_mode: bool,
+    /// Legacy field - use tx_in_monitor for accurate detection
     pub supports_injection: bool,
+    /// TX-in-monitor capability with accurate driver-based detection
+    #[serde(default)]
+    pub tx_in_monitor: Option<TxInMonitorCapability>,
+    /// Human-readable reason for tx_in_monitor verdict
+    #[serde(default)]
+    pub tx_in_monitor_reason: Option<String>,
+    /// Driver name if detected
+    #[serde(default)]
+    pub driver_name: Option<String>,
+    /// AP mode support
+    #[serde(default)]
+    pub supports_ap: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -23,6 +23,14 @@ static UI_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 pub type HandlerResult = (String, Value);
 
+/// TX-in-monitor capability verdict
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxInMonitorCapability {
+    Supported,
+    NotSupported,
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct InterfaceCapabilities {
     pub name: String,
@@ -30,12 +38,29 @@ pub struct InterfaceCapabilities {
     pub is_physical: bool,
     pub supports_monitor: bool,
     pub supports_ap: bool,
+    /// Legacy field - use tx_in_monitor for accurate detection
     pub supports_injection: bool,
     pub supports_5ghz: bool,
     pub supports_2ghz: bool,
     pub mac_address: Option<String>,
     pub driver: Option<String>,
     pub chipset: Option<String>,
+    /// TX-in-monitor capability with accurate driver-based detection
+    pub tx_in_monitor: TxInMonitorCapability,
+    /// Human-readable reason for tx_in_monitor verdict
+    pub tx_in_monitor_reason: String,
+}
+
+impl InterfaceCapabilities {
+    /// Check if the interface can perform TX-in-monitor operations (injection)
+    pub fn is_injection_capable(&self) -> bool {
+        matches!(self.tx_in_monitor, TxInMonitorCapability::Supported)
+    }
+
+    /// Check if injection capability is unknown (may or may not work)
+    pub fn is_injection_unknown(&self) -> bool {
+        matches!(self.tx_in_monitor, TxInMonitorCapability::Unknown)
+    }
 }
 
 #[derive(Clone)]
@@ -487,6 +512,16 @@ impl CoreBridge {
 
             let status = client.interface_status(&interface).await?;
             if let Some(caps) = status.capabilities {
+                // Convert IPC TxInMonitorCapability to UI TxInMonitorCapability
+                let tx_cap = match caps.tx_in_monitor {
+                    Some(rustyjack_ipc::types::TxInMonitorCapability::Supported) => {
+                        TxInMonitorCapability::Supported
+                    }
+                    Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported) => {
+                        TxInMonitorCapability::NotSupported
+                    }
+                    _ => TxInMonitorCapability::Unknown,
+                };
                 return Ok(InterfaceCapabilities {
                     name: interface.clone(),
                     is_wireless: status.is_wireless,
@@ -499,22 +534,36 @@ impl CoreBridge {
                     mac_address: caps.mac_address,
                     driver: caps.driver,
                     chipset: caps.chipset,
+                    tx_in_monitor: tx_cap,
+                    tx_in_monitor_reason: caps.tx_in_monitor_reason.unwrap_or_default(),
                 });
             }
 
             let response = client.wifi_capabilities(&interface).await?;
+            // Convert IPC TxInMonitorCapability to UI TxInMonitorCapability
+            let tx_cap = match response.tx_in_monitor {
+                Some(rustyjack_ipc::types::TxInMonitorCapability::Supported) => {
+                    TxInMonitorCapability::Supported
+                }
+                Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported) => {
+                    TxInMonitorCapability::NotSupported
+                }
+                _ => TxInMonitorCapability::Unknown,
+            };
             Ok(InterfaceCapabilities {
                 name: interface.clone(),
                 is_wireless: response.interface_is_wireless,
                 is_physical: response.interface_exists,
                 supports_monitor: response.supports_monitor_mode,
-                supports_ap: false,
+                supports_ap: response.supports_ap,
                 supports_injection: response.supports_injection,
                 supports_5ghz: false,
                 supports_2ghz: response.interface_is_wireless,
                 mac_address: None,
-                driver: None,
+                driver: response.driver_name,
                 chipset: None,
+                tx_in_monitor: tx_cap,
+                tx_in_monitor_reason: response.tx_in_monitor_reason.unwrap_or_default(),
             })
         })
     }

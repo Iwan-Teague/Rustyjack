@@ -12,19 +12,59 @@ Environment=RUSTYJACK_DISPLAY_ROTATION=landscape
 Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
 Restart=on-failure
 RestartSec=2
+
+# Run as unprivileged user
 User=rustyjack-ui
 Group=rustyjack-ui
 SupplementaryGroups=rustyjack gpio spi
-NoNewPrivileges=true
-PrivateTmp=true
+
+# Filesystem access restrictions
 ProtectSystem=strict
 ProtectHome=true
-RestrictRealtime=true
-MemoryDenyWriteExecute=true
-SystemCallArchitectures=native
-LockPersonality=true
 ReadWritePaths=/var/lib/rustyjack
 ReadOnlyPaths=/run/rustyjack
+PrivateTmp=true
+
+# Kernel hardening
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+
+# Process restrictions
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+
+# Memory protection
+MemoryDenyWriteExecute=true
+
+# Network restrictions (UI only needs Unix socket to daemon)
+RestrictAddressFamilies=AF_UNIX
+
+# Syscall filtering
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @debug
+SystemCallArchitectures=native
+
+# Resource limits
+LimitNOFILE=512
+LimitNPROC=32
+TasksMax=32
+MemoryMax=128M
+
+# Device access (GPIO/SPI for display and buttons)
+DeviceAllow=/dev/spidev* rw
+DeviceAllow=/dev/gpiochip* rw
+DeviceAllow=/dev/mem r
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rustyjack-ui
 
 [Install]
 WantedBy=multi-user.target

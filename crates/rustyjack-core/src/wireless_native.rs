@@ -349,6 +349,9 @@ pub fn execute_deauth_attack_cancellable(
     bail!("Native wireless operations require Linux. This platform is not supported.")
 }
 
+/// TX-in-monitor capability verdict (re-exported from netlink crate)
+pub use rustyjack_netlink::wireless::TxInMonitorCapability;
+
 /// Information about wireless capabilities
 #[derive(Debug, Clone)]
 pub struct WirelessCapabilities {
@@ -357,15 +360,54 @@ pub struct WirelessCapabilities {
     pub interface_exists: bool,
     pub interface_is_wireless: bool,
     pub supports_monitor_mode: bool,
-    pub supports_injection: bool,
+    /// TX-in-monitor (injection) capability - properly detected via driver heuristics
+    pub tx_in_monitor: TxInMonitorCapability,
+    /// Human-readable reason for the tx_in_monitor verdict
+    pub tx_in_monitor_reason: String,
+    /// Driver name if detected (e.g., "ath9k_htc", "brcmfmac")
+    pub driver_name: Option<String>,
+    /// Whether AP mode is supported
+    pub supports_ap: bool,
+    /// Whether 5GHz band is supported
+    pub supports_5ghz: bool,
+    /// Whether 2.4GHz band is supported
+    pub supports_2ghz: bool,
 }
 
 impl WirelessCapabilities {
-    pub fn is_attack_capable(&self) -> bool {
+    /// Check if the interface can perform monitor-only operations (passive capture)
+    ///
+    /// Operations like probe sniffing and PMKID capture (passive mode) only need
+    /// monitor mode support, not TX capability.
+    pub fn is_monitor_capable(&self) -> bool {
         self.native_available
             && self.has_root
             && self.interface_is_wireless
             && self.supports_monitor_mode
+    }
+
+    /// Check if the interface can perform TX-in-monitor operations (injection)
+    ///
+    /// Operations like deauth, handshake capture with active deauth, and evil twin
+    /// require actual packet injection in monitor mode.
+    pub fn is_injection_capable(&self) -> bool {
+        self.native_available
+            && self.has_root
+            && self.interface_is_wireless
+            && self.supports_monitor_mode
+            && matches!(self.tx_in_monitor, TxInMonitorCapability::Supported)
+    }
+
+    /// Check if injection capability is unknown (conservative: may or may not work)
+    pub fn is_injection_unknown(&self) -> bool {
+        self.supports_monitor_mode
+            && matches!(self.tx_in_monitor, TxInMonitorCapability::Unknown)
+    }
+
+    /// Legacy method for backward compatibility - checks monitor capability only
+    #[deprecated(note = "Use is_monitor_capable() or is_injection_capable() instead")]
+    pub fn is_attack_capable(&self) -> bool {
+        self.is_monitor_capable()
     }
 }
 
@@ -383,13 +425,49 @@ pub fn check_capabilities(interface: &str) -> WirelessCapabilities {
     let interface_exists = std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists();
     let interface_is_wireless = is_wireless_interface(interface);
 
-    // Check monitor mode support via nl80211
+    // Default values for when we can't query nl80211
     let mut supports_monitor = false;
+    let mut supports_ap = false;
+    let mut supports_5ghz = false;
+    let mut supports_2ghz = false;
+    let mut driver_name = None;
+    let mut tx_in_monitor = TxInMonitorCapability::Unknown;
+    let mut tx_in_monitor_reason =
+        "Could not query interface capabilities".to_string();
+
+    // Query detailed capabilities via nl80211
     if interface_exists && interface_is_wireless {
         if let Some(_phy) = interface_wiphy(interface) {
             if let Ok(mut mgr) = rustyjack_netlink::WirelessManager::new() {
                 if let Ok(caps) = mgr.get_phy_capabilities(interface) {
                     supports_monitor = caps.supports_monitor;
+                    supports_ap = caps.supports_ap;
+                    driver_name = caps.driver_name;
+                    tx_in_monitor = caps.tx_in_monitor;
+                    tx_in_monitor_reason = caps.tx_in_monitor_reason;
+
+                    // Determine band support from band_info
+                    for band in &caps.band_info {
+                        if band.name.contains("2.4") || band.name.contains("2GHz") {
+                            supports_2ghz = true;
+                        }
+                        if band.name.contains("5") && !band.name.contains("2.5") {
+                            supports_5ghz = true;
+                        }
+                    }
+                    // Fallback: check frequency ranges if band names aren't clear
+                    if !supports_2ghz && !supports_5ghz {
+                        for band in &caps.band_info {
+                            for freq in &band.frequencies {
+                                if freq.freq >= 2400 && freq.freq <= 2500 {
+                                    supports_2ghz = true;
+                                }
+                                if freq.freq >= 5000 && freq.freq <= 6000 {
+                                    supports_5ghz = true;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -401,7 +479,12 @@ pub fn check_capabilities(interface: &str) -> WirelessCapabilities {
         interface_exists,
         interface_is_wireless,
         supports_monitor_mode: supports_monitor,
-        supports_injection: supports_monitor, // Assume injection if monitor is supported
+        tx_in_monitor,
+        tx_in_monitor_reason,
+        driver_name,
+        supports_ap,
+        supports_5ghz,
+        supports_2ghz,
     }
 }
 
@@ -413,7 +496,12 @@ pub fn check_capabilities(_interface: &str) -> WirelessCapabilities {
         interface_exists: false,
         interface_is_wireless: false,
         supports_monitor_mode: false,
-        supports_injection: false,
+        tx_in_monitor: TxInMonitorCapability::Unknown,
+        tx_in_monitor_reason: "Native wireless operations require Linux".to_string(),
+        driver_name: None,
+        supports_ap: false,
+        supports_5ghz: false,
+        supports_2ghz: false,
     }
 }
 

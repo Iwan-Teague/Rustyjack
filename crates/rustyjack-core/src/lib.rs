@@ -23,6 +23,7 @@ compile_error!(
 );
 
 pub mod mount;
+pub mod mutation_guard;
 
 pub mod arp_helpers;
 pub mod audit;

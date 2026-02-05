@@ -177,18 +177,31 @@ pub fn get_link_status(interface: &str) -> Result<LinkStatus> {
 
 /// Interface capability information
 #[derive(Debug, Clone)]
+/// TX-in-monitor capability verdict
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxInMonitorCapability {
+    Supported,
+    NotSupported,
+    Unknown,
+}
+
 pub struct InterfaceCapabilities {
     pub name: String,
     pub is_wireless: bool,
     pub is_physical: bool,
     pub supports_monitor: bool,
     pub supports_ap: bool,
+    /// Legacy field - derived from tx_in_monitor for backward compatibility
     pub supports_injection: bool,
     pub supports_5ghz: bool,
     pub supports_2ghz: bool,
     pub mac_address: Option<String>,
     pub driver: Option<String>,
     pub chipset: Option<String>,
+    /// TX-in-monitor capability with accurate driver-based detection
+    pub tx_in_monitor: TxInMonitorCapability,
+    /// Human-readable reason for tx_in_monitor verdict
+    pub tx_in_monitor_reason: String,
 }
 
 /// Query interface capabilities via nl80211 and sysfs
@@ -208,6 +221,8 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
         mac_address: None,
         driver: None,
         chipset: None,
+        tx_in_monitor: TxInMonitorCapability::Unknown,
+        tx_in_monitor_reason: "Not yet determined".to_string(),
     };
 
     // Get MAC address
@@ -249,12 +264,32 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
                     caps.supports_5ghz = true;
                 }
             }
-        }
 
-        // Injection support heuristic:
-        // If monitor mode is supported, assume injection is supported
-        // (actual injection capability requires testing, but monitor is a good proxy)
-        caps.supports_injection = caps.supports_monitor;
+            // Use proper TX-in-monitor detection from netlink crate
+            caps.tx_in_monitor = match phy_caps.tx_in_monitor {
+                rustyjack_netlink::wireless::TxInMonitorCapability::Supported => {
+                    TxInMonitorCapability::Supported
+                }
+                rustyjack_netlink::wireless::TxInMonitorCapability::NotSupported => {
+                    TxInMonitorCapability::NotSupported
+                }
+                rustyjack_netlink::wireless::TxInMonitorCapability::Unknown => {
+                    TxInMonitorCapability::Unknown
+                }
+            };
+            caps.tx_in_monitor_reason = phy_caps.tx_in_monitor_reason;
+
+            // Derive legacy supports_injection from tx_in_monitor for backward compat
+            caps.supports_injection = matches!(
+                caps.tx_in_monitor,
+                TxInMonitorCapability::Supported
+            );
+
+            // Copy driver name from phy_caps
+            if caps.driver.is_none() {
+                caps.driver = phy_caps.driver_name;
+            }
+        }
     }
 
     // Read driver info from sysfs

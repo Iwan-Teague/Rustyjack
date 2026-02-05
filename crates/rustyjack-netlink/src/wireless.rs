@@ -216,6 +216,17 @@ pub struct WifiScanResult {
     pub ies: Option<Vec<u8>>,
 }
 
+/// TX-in-monitor capability verdict
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxInMonitorCapability {
+    /// Known to support TX in monitor mode (injection-capable)
+    Supported,
+    /// Known NOT to support TX in monitor mode
+    NotSupported,
+    /// Cannot determine - hardware/driver not recognized
+    Unknown,
+}
+
 /// PHY capabilities
 #[derive(Debug, Clone)]
 pub struct PhyCapabilities {
@@ -227,7 +238,42 @@ pub struct PhyCapabilities {
     pub supports_station: bool,
     pub supported_bands: Vec<String>,
     pub band_info: Vec<BandInfo>,
+    /// Driver name detected from sysfs (e.g., "ath9k_htc", "brcmfmac")
+    pub driver_name: Option<String>,
+    /// TX-in-monitor mode capability (packet injection)
+    pub tx_in_monitor: TxInMonitorCapability,
+    /// Human-readable reason for the tx_in_monitor verdict
+    pub tx_in_monitor_reason: String,
 }
+
+/// Drivers known to NOT support TX in monitor mode (injection)
+/// These are typically "FullMAC" drivers where the firmware handles most 802.11 processing
+pub const INJECTION_DENY_DRIVERS: &[&str] = &[
+    "brcmfmac",   // Broadcom FullMAC (Pi onboard, many USB dongles)
+    "mwifiex",    // Marvell FullMAC
+    "iwlwifi",    // Intel - most models lack injection support
+    "iwlmvm",     // Intel newer driver
+    "mt7921e",    // MediaTek FullMAC
+    "mt7921u",    // MediaTek FullMAC USB
+];
+
+/// Drivers known to support TX in monitor mode (injection)
+/// These are typically "SoftMAC" drivers with mac80211
+pub const INJECTION_ALLOW_DRIVERS: &[&str] = &[
+    "ath9k_htc",  // Atheros USB (AR9271, etc.) - excellent injection
+    "ath9k",      // Atheros PCI/PCIe
+    "ath5k",      // Older Atheros
+    "rt2800usb",  // Ralink USB
+    "rt2800pci",  // Ralink PCI
+    "rt73usb",    // Ralink legacy USB
+    "rtl8187",    // Realtek legacy USB
+    "rtl8812au",  // Realtek AC USB (with proper driver)
+    "rtl8814au",  // Realtek AC USB high power
+    "rtl88xxau",  // Realtek AC USB variant
+    "carl9170",   // Atheros AR9170 USB
+    "zd1211rw",   // ZyDAS USB
+    "ath10k_pci", // Qualcomm Atheros 802.11ac (some models)
+];
 
 #[derive(Debug, Clone)]
 pub struct BandInfo {
@@ -1366,6 +1412,12 @@ impl WirelessManager {
                 )
             })?;
 
+        // Detect driver name from sysfs
+        let driver_name = Self::detect_driver_name(interface);
+
+        // Determine TX-in-monitor capability based on driver
+        let (tx_in_monitor, tx_in_monitor_reason) = Self::determine_tx_in_monitor(&driver_name);
+
         let mut caps = PhyCapabilities {
             wiphy: info.wiphy,
             name: format!("phy{}", info.wiphy),
@@ -1375,6 +1427,9 @@ impl WirelessManager {
             supports_station: false,
             supported_bands: Vec::new(),
             band_info: Vec::new(),
+            driver_name,
+            tx_in_monitor,
+            tx_in_monitor_reason,
         };
 
         let mut band_info = Vec::new();
@@ -1389,19 +1444,30 @@ impl WirelessManager {
                         }
                     }
                     NL80211_ATTR_SUPPORTED_IFTYPES => {
-                        // Best-effort: mark common modes as supported when the attribute is present.
-                        caps.supports_monitor = true;
-                        caps.supports_ap = true;
-                        caps.supports_station = true;
-                        for mode in [
-                            InterfaceMode::AccessPoint,
-                            InterfaceMode::Station,
-                            InterfaceMode::Monitor,
-                        ] {
-                            if !caps.supported_modes.contains(&mode) {
-                                caps.supported_modes.push(mode);
+                        // Parse nested attributes to determine actual supported interface types.
+                        // Each nested attr's type field contains the NL80211_IFTYPE_* value.
+                        // The presence of the nested attr indicates support for that mode.
+                        let nested = Self::parse_nested_attrs(attr.payload().as_ref());
+                        for nested_attr in nested {
+                            // The nla_type of nested attrs under SUPPORTED_IFTYPES
+                            // corresponds to NL80211_IFTYPE_* values
+                            let iftype = nested_attr.nla_type as u32;
+                            if let Some(mode) = InterfaceMode::from_nl80211(iftype) {
+                                if !caps.supported_modes.contains(&mode) {
+                                    caps.supported_modes.push(mode);
+                                }
+                                match mode {
+                                    InterfaceMode::Monitor => caps.supports_monitor = true,
+                                    InterfaceMode::AccessPoint => caps.supports_ap = true,
+                                    InterfaceMode::Station => caps.supports_station = true,
+                                    _ => {}
+                                }
                             }
                         }
+                        debug!(
+                            "nl80211 parsed SUPPORTED_IFTYPES: modes={:?} monitor={} ap={} station={}",
+                            caps.supported_modes, caps.supports_monitor, caps.supports_ap, caps.supports_station
+                        );
                     }
                     NL80211_ATTR_WIPHY_BANDS => {
                         for band_attr in Self::parse_nested_attrs(attr.payload().as_ref()) {
@@ -1709,6 +1775,81 @@ impl WirelessManager {
             5805 => Some(161),
             5825 => Some(165),
             _ => None,
+        }
+    }
+
+    /// Detect the driver name for a wireless interface from sysfs
+    ///
+    /// Reads from /sys/class/net/{interface}/device/driver and follows the symlink
+    /// to get the actual driver name.
+    fn detect_driver_name(interface: &str) -> Option<String> {
+        let driver_path = format!("/sys/class/net/{}/device/driver", interface);
+
+        // The driver path is a symlink to the actual driver module
+        match std::fs::read_link(&driver_path) {
+            Ok(target) => {
+                // The target is like "../../../../bus/usb/drivers/ath9k_htc"
+                // We want the last component
+                target
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            }
+            Err(e) => {
+                debug!(
+                    "Could not read driver symlink for {}: {}",
+                    interface, e
+                );
+                None
+            }
+        }
+    }
+
+    /// Determine TX-in-monitor capability based on driver name
+    ///
+    /// Returns (capability verdict, human-readable reason)
+    fn determine_tx_in_monitor(
+        driver_name: &Option<String>,
+    ) -> (TxInMonitorCapability, String) {
+        match driver_name {
+            Some(driver) => {
+                // Check deny list first (FullMAC drivers known to not support injection)
+                if INJECTION_DENY_DRIVERS.iter().any(|d| driver.contains(d)) {
+                    return (
+                        TxInMonitorCapability::NotSupported,
+                        format!(
+                            "Driver '{}' is a FullMAC driver that does not support packet injection. \
+                             Monitor mode may work for passive capture, but TX (deauth, injection) will fail.",
+                            driver
+                        ),
+                    );
+                }
+
+                // Check allow list (SoftMAC/mac80211 drivers known to support injection)
+                if INJECTION_ALLOW_DRIVERS.iter().any(|d| driver.contains(d)) {
+                    return (
+                        TxInMonitorCapability::Supported,
+                        format!(
+                            "Driver '{}' is a SoftMAC driver known to support packet injection in monitor mode.",
+                            driver
+                        ),
+                    );
+                }
+
+                // Unknown driver - be conservative
+                (
+                    TxInMonitorCapability::Unknown,
+                    format!(
+                        "Driver '{}' is not in known allow/deny lists. \
+                         Injection capability is uncertain. Test with caution.",
+                        driver
+                    ),
+                )
+            }
+            None => (
+                TxInMonitorCapability::Unknown,
+                "Could not detect driver name. Injection capability is unknown.".to_string(),
+            ),
         }
     }
 }

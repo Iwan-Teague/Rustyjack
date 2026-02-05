@@ -857,6 +857,15 @@ pub enum StatusCommand {
 pub enum HardwareCommand {
     /// Scan and detect all available network hardware
     Detect,
+    /// Show detailed Wi-Fi hardware profile (driver, capabilities, injection support)
+    WifiProfile(HardwareWifiProfileArgs),
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HardwareWifiProfileArgs {
+    /// Wireless interface to inspect (e.g., wlan0)
+    #[arg(long, short)]
+    pub interface: String,
 }
 
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

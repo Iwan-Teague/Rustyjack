@@ -17,6 +17,14 @@ pub struct InterfaceSummary {
     pub capabilities: Option<InterfaceCapabilities>,
 }
 
+/// TX-in-monitor capability verdict
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TxInMonitorCapability {
+    Supported,
+    NotSupported,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceCapabilities {
     pub name: String,
@@ -24,12 +32,25 @@ pub struct InterfaceCapabilities {
     pub is_physical: bool,
     pub supports_monitor: bool,
     pub supports_ap: bool,
+    /// Legacy field - derived from tx_in_monitor for backward compatibility
     pub supports_injection: bool,
     pub supports_5ghz: bool,
     pub supports_2ghz: bool,
     pub mac_address: Option<String>,
     pub driver: Option<String>,
     pub chipset: Option<String>,
+    /// TX-in-monitor capability with accurate driver-based detection
+    #[serde(default)]
+    pub tx_in_monitor: TxInMonitorCapability,
+    /// Human-readable reason for tx_in_monitor verdict
+    #[serde(default)]
+    pub tx_in_monitor_reason: String,
+}
+
+impl Default for TxInMonitorCapability {
+    fn default() -> Self {
+        Self::Unknown
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +372,20 @@ impl NetOps for RealNetOps {
                 // Query wireless capabilities from rustyjack_wireless and convert
                 let wireless_caps = rustyjack_wireless::query_interface_capabilities(iface)
                     .context(format!("Failed to query capabilities for {}", iface))?;
+
+                // Convert tx_in_monitor capability
+                let tx_cap = match wireless_caps.tx_in_monitor {
+                    rustyjack_wireless::TxInMonitorCapability::Supported => {
+                        TxInMonitorCapability::Supported
+                    }
+                    rustyjack_wireless::TxInMonitorCapability::NotSupported => {
+                        TxInMonitorCapability::NotSupported
+                    }
+                    rustyjack_wireless::TxInMonitorCapability::Unknown => {
+                        TxInMonitorCapability::Unknown
+                    }
+                };
+
                 Ok(InterfaceCapabilities {
                     name: wireless_caps.name,
                     is_wireless: wireless_caps.is_wireless,
@@ -363,6 +398,8 @@ impl NetOps for RealNetOps {
                     mac_address: wireless_caps.mac_address,
                     driver: wireless_caps.driver,
                     chipset: wireless_caps.chipset,
+                    tx_in_monitor: tx_cap,
+                    tx_in_monitor_reason: wireless_caps.tx_in_monitor_reason,
                 })
             } else {
                 // For wired interfaces, return basic capabilities
@@ -379,6 +416,8 @@ impl NetOps for RealNetOps {
                     mac_address: None,
                     driver: None,
                     chipset: None,
+                    tx_in_monitor: TxInMonitorCapability::NotSupported,
+                    tx_in_monitor_reason: "Wired interface - TX-in-monitor not applicable".to_string(),
                 };
 
                 // Get MAC address
@@ -668,6 +707,8 @@ mod tests {
                 mac_address: Some("00:11:22:33:44:55".to_string()),
                 driver: Some("mock_driver".to_string()),
                 chipset: Some("Mock Chipset".to_string()),
+                tx_in_monitor: TxInMonitorCapability::Unknown,
+                tx_in_monitor_reason: "Mock interface".to_string(),
             })
         }
 
