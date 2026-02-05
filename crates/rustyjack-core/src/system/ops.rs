@@ -375,13 +375,13 @@ impl NetOps for RealNetOps {
 
                 // Convert tx_in_monitor capability
                 let tx_cap = match wireless_caps.tx_in_monitor {
-                    rustyjack_wireless::TxInMonitorCapability::Supported => {
+                    rustyjack_wireless::nl80211_queries::TxInMonitorCapability::Supported => {
                         TxInMonitorCapability::Supported
                     }
-                    rustyjack_wireless::TxInMonitorCapability::NotSupported => {
+                    rustyjack_wireless::nl80211_queries::TxInMonitorCapability::NotSupported => {
                         TxInMonitorCapability::NotSupported
                     }
-                    rustyjack_wireless::TxInMonitorCapability::Unknown => {
+                    rustyjack_wireless::nl80211_queries::TxInMonitorCapability::Unknown => {
                         TxInMonitorCapability::Unknown
                     }
                 };

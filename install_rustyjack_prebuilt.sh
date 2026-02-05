@@ -2,9 +2,10 @@
 # Installer that uses prebuilt binaries instead of building on-device
 # Usage: sudo ./install_rustyjack_prebuilt.sh
 # Notes:
-#   - Auto-selects prebuilt/arm64 on 64-bit OS when available, otherwise prebuilt/arm32
+#   - Auto-selects prebuilt/arm64/<variant> on 64-bit OS when available, otherwise prebuilt/arm32/<variant>
+#   - Variants: release or development
 # Environment overrides:
-#   PREBUILT_DIR=prebuilt/arm32   # relative to project root or absolute path (arm32 or arm64)
+#   PREBUILT_DIR=prebuilt/arm64/release   # relative to project root or absolute path
 #   USB_MOUNT_POINT=/mnt/usb      # where to mount removable media
 #   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
 set -euo pipefail
@@ -39,6 +40,29 @@ prompt_yes_no() {
       n|N|no|NO) return 1 ;;
     esac
     echo "Please answer y or n."
+  done
+}
+
+prompt_select_option() {
+  local prompt="$1"
+  shift
+  local options=("$@")
+  local reply=""
+  while true; do
+    echo "$prompt" >&2
+    local i=1
+    for opt in "${options[@]}"; do
+      echo "  $i) $opt" >&2
+      i=$((i + 1))
+    done
+    if ! read -r -p "Choose [1-${#options[@]}]: " reply; then
+      reply=""
+    fi
+    if [[ "$reply" =~ ^[0-9]+$ ]] && [ "$reply" -ge 1 ] && [ "$reply" -le "${#options[@]}" ]; then
+      echo "$((reply - 1))"
+      return 0
+    fi
+    echo "Please enter a number between 1 and ${#options[@]}." >&2
   done
 }
 
@@ -441,26 +465,56 @@ mount_usb_if_needed() {
 
 find_prebuilt_dir_on_mounts() {
   local arch="$1"
+  local variant="${2:-}"
   local base=""
+  local suffix=""
+  if [ -n "$variant" ] && [ "$variant" != "legacy" ]; then
+    suffix="$arch/$variant"
+  else
+    suffix="$arch"
+  fi
+  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
+
   for base in "${USB_MOUNT_POINT:-/mnt/usb}" /media /mnt /run/media; do
     [ -d "$base" ] || continue
     local candidate=""
     for candidate in \
-      "$base"/Rustyjack/Prebuilt/"$arch" \
-      "$base"/Rustyjack/prebuilt/"$arch" \
-      "$base"/rustyjack/Prebuilt/"$arch" \
-      "$base"/rustyjack/prebuilt/"$arch"; do
-      if [ -f "$candidate/$BINARY_NAME" ]; then
+      "$base"/Rustyjack/Prebuilt/"$suffix" \
+      "$base"/Rustyjack/prebuilt/"$suffix" \
+      "$base"/rustyjack/Prebuilt/"$suffix" \
+      "$base"/rustyjack/prebuilt/"$suffix"; do
+      local all_found=1
+      for bin in "${bins[@]}"; do
+        if [ ! -f "$candidate/$bin" ]; then
+          all_found=0
+          break
+        fi
+      done
+      if [ "$all_found" -eq 1 ]; then
         echo "$candidate"
         return 0
       fi
     done
 
     local hit=""
-    hit=$(find "$base" -maxdepth 6 -type f \( -path "*/prebuilt/$arch/$BINARY_NAME" -o -path "*/Prebuilt/$arch/$BINARY_NAME" \) 2>/dev/null | head -n 1 || true)
+    if [ -n "$variant" ] && [ "$variant" != "legacy" ]; then
+      hit=$(find "$base" -maxdepth 7 -type f \( -path "*/prebuilt/$arch/$variant/$BINARY_NAME" -o -path "*/Prebuilt/$arch/$variant/$BINARY_NAME" \) 2>/dev/null | head -n 1 || true)
+    else
+      hit=$(find "$base" -maxdepth 7 -type f \( -path "*/prebuilt/$arch/$BINARY_NAME" -o -path "*/Prebuilt/$arch/$BINARY_NAME" \) 2>/dev/null | head -n 1 || true)
+    fi
     if [ -n "$hit" ]; then
-      echo "${hit%/$BINARY_NAME}"
-      return 0
+      local dir="${hit%/$BINARY_NAME}"
+      local all_found=1
+      for bin in "${bins[@]}"; do
+        if [ ! -f "$dir/$bin" ]; then
+          all_found=0
+          break
+        fi
+      done
+      if [ "$all_found" -eq 1 ]; then
+        echo "$dir"
+        return 0
+      fi
     fi
   done
   return 1
@@ -481,24 +535,38 @@ default_route_interface() {
 
 copy_prebuilt_from_usb() {
   local arch="$1"
+  local variant="${2:-}"
+  local src_override="${3:-}"
   local dest_dir=""
   local src_dir=""
   if [ -n "${PREBUILT_DIR:-}" ]; then
     dest_dir="$(resolve_prebuilt_root "$PREBUILT_DIR")"
   else
-    dest_dir="$PROJECT_ROOT/prebuilt/$arch"
+    if [ -n "$variant" ] && [ "$variant" != "legacy" ]; then
+      dest_dir="$PROJECT_ROOT/prebuilt/$arch/$variant"
+    else
+      dest_dir="$PROJECT_ROOT/prebuilt/$arch"
+    fi
   fi
 
-  info "Searching for prebuilt binaries on mounted devices (arch=$arch)..."
+  if [ -n "$variant" ] && [ "$variant" != "legacy" ]; then
+    info "Searching for prebuilt binaries on mounted devices (arch=$arch, variant=$variant)..."
+  else
+    info "Searching for prebuilt binaries on mounted devices (arch=$arch)..."
+  fi
 
-  # First check if binaries already exist on mounted filesystems
-  src_dir="$(find_prebuilt_dir_on_mounts "$arch" || true)"
+  if [ -n "$src_override" ]; then
+    src_dir="$src_override"
+  else
+    # First check if binaries already exist on mounted filesystems
+    src_dir="$(find_prebuilt_dir_on_mounts "$arch" "$variant" || true)"
+  fi
 
   if [ -z "$src_dir" ]; then
     info "No binaries found on current mounts, attempting to mount USB..."
     if mount_usb_if_needed; then
       info "USB mount successful, searching again..."
-      src_dir="$(find_prebuilt_dir_on_mounts "$arch" || true)"
+      src_dir="$(find_prebuilt_dir_on_mounts "$arch" "$variant" || true)"
     else
       warn "USB mounting failed or no USB device detected"
     fi
@@ -509,10 +577,18 @@ copy_prebuilt_from_usb() {
     warn "BINARIES NOT FOUND ON USB"
     warn "=========================================="
     warn "Searched locations:"
-    warn "  - /mnt/usb/Rustyjack/Prebuilt/$arch"
-    warn "  - /mnt/usb/Rustyjack/prebuilt/$arch"
-    warn "  - /mnt/usb/rustyjack/Prebuilt/$arch"
-    warn "  - /mnt/usb/rustyjack/prebuilt/$arch"
+    warn "  - /mnt/usb/Rustyjack/Prebuilt/$arch/release"
+    warn "  - /mnt/usb/Rustyjack/prebuilt/$arch/release"
+    warn "  - /mnt/usb/rustyjack/Prebuilt/$arch/release"
+    warn "  - /mnt/usb/rustyjack/prebuilt/$arch/release"
+    warn "  - /mnt/usb/Rustyjack/Prebuilt/$arch/development"
+    warn "  - /mnt/usb/Rustyjack/prebuilt/$arch/development"
+    warn "  - /mnt/usb/rustyjack/Prebuilt/$arch/development"
+    warn "  - /mnt/usb/rustyjack/prebuilt/$arch/development"
+    warn "  - /mnt/usb/Rustyjack/Prebuilt/$arch (legacy)"
+    warn "  - /mnt/usb/Rustyjack/prebuilt/$arch (legacy)"
+    warn "  - /mnt/usb/rustyjack/Prebuilt/$arch (legacy)"
+    warn "  - /mnt/usb/rustyjack/prebuilt/$arch (legacy)"
     warn "  - Deep search in /mnt/usb, /media, /mnt, /run/media"
     warn ""
     warn "Will attempt to use binaries from: $dest_dir"
@@ -534,12 +610,12 @@ copy_prebuilt_from_usb() {
 
   for bin in "${bins[@]}"; do
     if [ -f "$src_dir/$bin" ]; then
-      print_binary_info "✓ $bin" "$src_dir/$bin"
+      print_binary_info "OK $bin" "$src_dir/$bin"
       if [ "$SKIP_HASH_CHECKS" != "1" ]; then
         src_hashes["$bin"]="$(hash_file "$src_dir/$bin" || true)"
       fi
     else
-      warn "  ✗ $bin - MISSING"
+      warn "  $bin - MISSING"
       all_found=0
     fi
   done
@@ -580,6 +656,10 @@ copy_prebuilt_from_usb() {
   done
   printf "\n"
 
+  if [ -f "$src_dir/build_info.txt" ]; then
+    sudo install -Dm644 "$src_dir/build_info.txt" "$dest_dir/build_info.txt" || true
+  fi
+
   if [ "$copied" -eq 1 ]; then
     info ""
     info "=========================================="
@@ -591,16 +671,16 @@ copy_prebuilt_from_usb() {
       info "Verifying copied binaries..."
       for bin in "${bins[@]}"; do
         if [ -f "$dest_dir/$bin" ]; then
-          print_binary_info "✓ $bin" "$dest_dir/$bin"
+          print_binary_info "OK $bin" "$dest_dir/$bin"
           local src_hash="${src_hashes[$bin]:-}"
           local dest_hash=""
           dest_hash=$(hash_file "$dest_dir/$bin" || true)
           if [ -n "$src_hash" ] && [ -n "$dest_hash" ] && [ "$src_hash" != "$dest_hash" ]; then
-            warn "  ✗ $bin hash mismatch after copy (src=$src_hash dest=$dest_hash)"
+            warn "  $bin hash mismatch after copy (src=$src_hash dest=$dest_hash)"
             fail "Binary copy failed integrity check"
           fi
         else
-          warn "  ✗ $bin - COPY FAILED"
+          warn "  $bin - COPY FAILED"
         fi
       done
     else
@@ -738,8 +818,6 @@ info "Using project root: $PROJECT_ROOT"
 RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/rustyjack}"
 info "Using runtime root: $RUNTIME_ROOT"
 
-DEFAULT_PREBUILT_DIR_ARM32="prebuilt/arm32"
-DEFAULT_PREBUILT_DIR_ARM64="prebuilt/arm64"
 PREBUILT_DIR_OVERRIDE=0
 if [ -n "${PREBUILT_DIR:-}" ]; then
   PREBUILT_DIR_OVERRIDE=1
@@ -753,23 +831,6 @@ else
   info "[OK] Detected 32-bit userspace; arm64 binaries are NOT supported"
 fi
 
-if [ "$PREBUILT_DIR_OVERRIDE" -eq 1 ]; then
-  info "PREBUILT_DIR override set: $PREBUILT_DIR"
-else
-  PREBUILT_DIR="prebuilt/$PREFERRED_ARCH"
-fi
-
-PREBUILT_ARCH="$PREFERRED_ARCH"
-case "$PREBUILT_DIR" in
-  *arm64*) PREBUILT_ARCH="arm64" ;;
-  *arm32*) PREBUILT_ARCH="arm32" ;;
-esac
-
-info "Selected prebuilt directory: $PREBUILT_DIR (arch=$PREBUILT_ARCH)"
-
-if [ "$PREBUILT_ARCH" = "arm64" ] && ! detect_arm64_capable; then
-  fail "arm64 binaries selected but this OS does not appear to support 64-bit execution"
-fi
 BINARY_NAME="rustyjack-ui"
 CLI_NAME="rustyjack"
 DAEMON_NAME="rustyjackd"
@@ -789,8 +850,6 @@ set_prebuilt_paths() {
   PREBUILT_PORTAL="$PREBUILT_ROOT/$PORTAL_NAME"
 }
 
-set_prebuilt_paths
-
 prebuilt_has_all_bins() {
   local root="$1"
   local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
@@ -802,25 +861,329 @@ prebuilt_has_all_bins() {
   return 0
 }
 
-if [ "$PREBUILT_DIR_OVERRIDE" -eq 0 ]; then
-  if [ "$PREFERRED_ARCH" = "arm64" ]; then
-    if ! prebuilt_has_all_bins "$PREBUILT_ROOT"; then
-      info "arm64 binaries not found locally; attempting USB search..."
-      copy_prebuilt_from_usb "arm64" || true
-      set_prebuilt_paths
-    fi
-    if ! prebuilt_has_all_bins "$PREBUILT_ROOT"; then
-      warn "arm64 binaries not available; falling back to arm32"
-      PREBUILT_DIR="$DEFAULT_PREBUILT_DIR_ARM32"
-      PREBUILT_ARCH="arm32"
-      set_prebuilt_paths
-    fi
+read_build_info_file() {
+  local dir="$1"
+  local file="$dir/build_info.txt"
+  BUILD_INFO_EPOCH=""
+  BUILD_INFO_ISO=""
+  BUILD_INFO_GIT_HASH=""
+  BUILD_INFO_GIT_DIRTY=""
+  BUILD_INFO_PROFILE=""
+  BUILD_INFO_VARIANT=""
+  BUILD_INFO_TARGET=""
+  BUILD_INFO_ARCH=""
+  if [ ! -f "$file" ]; then
+    return 1
   fi
-  if ! prebuilt_has_all_bins "$PREBUILT_ROOT"; then
-    info "Prebuilt binaries not found locally; attempting USB search (arch=$PREBUILT_ARCH)..."
-    copy_prebuilt_from_usb "$PREBUILT_ARCH" || true
-    set_prebuilt_paths
+  BUILD_INFO_EPOCH="$(grep -E '^build_epoch=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_ISO="$(grep -E '^build_iso=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_GIT_HASH="$(grep -E '^git_hash=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_GIT_DIRTY="$(grep -E '^git_dirty=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_PROFILE="$(grep -E '^build_profile=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_VARIANT="$(grep -E '^build_variant=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_TARGET="$(grep -E '^target=' "$file" | head -n 1 | cut -d= -f2-)"
+  BUILD_INFO_ARCH="$(grep -E '^arch=' "$file" | head -n 1 | cut -d= -f2-)"
+  return 0
+}
+
+stat_epoch() {
+  local path="$1"
+  if stat -c %Y "$path" >/dev/null 2>&1; then
+    stat -c %Y "$path"
+    return 0
   fi
+  if stat -f %m "$path" >/dev/null 2>&1; then
+    stat -f %m "$path"
+    return 0
+  fi
+  echo "0"
+  return 1
+}
+
+format_epoch_iso() {
+  local epoch="$1"
+  if [ -z "$epoch" ] || [ "$epoch" -le 0 ] 2>/dev/null; then
+    echo "unknown"
+    return 0
+  fi
+  if date -u -d "@$epoch" +"%Y-%m-%dT%H:%M:%SZ" >/dev/null 2>&1; then
+    date -u -d "@$epoch" +"%Y-%m-%dT%H:%M:%SZ"
+    return 0
+  fi
+  if date -u -r "$epoch" +"%Y-%m-%dT%H:%M:%SZ" >/dev/null 2>&1; then
+    date -u -r "$epoch" +"%Y-%m-%dT%H:%M:%SZ"
+    return 0
+  fi
+  echo "unknown"
+}
+
+CAND_COUNT=0
+CAND_ARCH=()
+CAND_VARIANT=()
+CAND_SOURCE=()
+CAND_DIR=()
+CAND_EPOCH=()
+CAND_ISO=()
+CAND_GIT=()
+CAND_DIRTY=()
+CAND_EPOCH_SRC=()
+CAND_COMPAT=()
+
+add_candidate() {
+  local arch="$1"
+  local variant="$2"
+  local source="$3"
+  local dir="$4"
+  local key="$arch/$variant/$source/$dir"
+  for existing in "${CAND_DIR[@]}"; do
+    if [ "$existing" = "$dir" ]; then
+      return 0
+    fi
+  done
+
+  if ! prebuilt_has_all_bins "$dir"; then
+    return 1
+  fi
+
+  local epoch=""
+  local iso=""
+  local git_hash="unknown"
+  local git_dirty=""
+  local epoch_src="unknown"
+
+  if read_build_info_file "$dir"; then
+    epoch="$BUILD_INFO_EPOCH"
+    iso="$BUILD_INFO_ISO"
+    if [ -z "$iso" ] && [ -n "$epoch" ]; then
+      iso="$(format_epoch_iso "$epoch")"
+    fi
+    git_hash="${BUILD_INFO_GIT_HASH:-unknown}"
+    git_dirty="${BUILD_INFO_GIT_DIRTY:-0}"
+    epoch_src="build_info"
+  else
+    epoch="$(stat_epoch "$dir/$BINARY_NAME")"
+    iso="$(format_epoch_iso "$epoch")"
+    epoch_src="mtime"
+  fi
+
+  local compat="1"
+  if [ "$arch" = "arm64" ] && ! detect_arm64_capable; then
+    compat="0"
+  fi
+
+  CAND_ARCH+=("$arch")
+  CAND_VARIANT+=("$variant")
+  CAND_SOURCE+=("$source")
+  CAND_DIR+=("$dir")
+  CAND_EPOCH+=("$epoch")
+  CAND_ISO+=("$iso")
+  CAND_GIT+=("$git_hash")
+  CAND_DIRTY+=("$git_dirty")
+  CAND_EPOCH_SRC+=("$epoch_src")
+  CAND_COMPAT+=("$compat")
+  CAND_COUNT=$((CAND_COUNT + 1))
+  return 0
+}
+
+collect_candidates() {
+  local arch=""
+  local variant=""
+
+  for arch in arm64 arm32; do
+    for variant in release development; do
+      local rel="prebuilt/$arch/$variant"
+      local abs
+      abs="$(resolve_prebuilt_root "$rel")"
+      if prebuilt_has_all_bins "$abs"; then
+        add_candidate "$arch" "$variant" "local" "$abs"
+      fi
+    done
+    local legacy_rel="prebuilt/$arch"
+    local legacy_abs
+    legacy_abs="$(resolve_prebuilt_root "$legacy_rel")"
+    if prebuilt_has_all_bins "$legacy_abs"; then
+      add_candidate "$arch" "legacy" "local" "$legacy_abs"
+    fi
+  done
+
+  # Search USB if available.
+  mount_usb_if_needed || true
+  for arch in arm64 arm32; do
+    for variant in release development legacy; do
+      local usb_dir=""
+      usb_dir="$(find_prebuilt_dir_on_mounts "$arch" "$variant" || true)"
+      if [ -n "$usb_dir" ]; then
+        add_candidate "$arch" "$variant" "usb" "$usb_dir"
+      fi
+    done
+  done
+}
+
+print_candidates() {
+  local max_epoch_all=0
+  local max_epoch_compat=0
+  local i=0
+  local latest_idx=-1
+
+  for i in "${!CAND_EPOCH[@]}"; do
+    local epoch="${CAND_EPOCH[$i]}"
+    local compat="${CAND_COMPAT[$i]}"
+    if [ -n "$epoch" ] && [ "$epoch" -gt "$max_epoch_all" ] 2>/dev/null; then
+      max_epoch_all="$epoch"
+    fi
+    if [ "$compat" = "1" ] && [ -n "$epoch" ] && [ "$epoch" -gt "$max_epoch_compat" ] 2>/dev/null; then
+      max_epoch_compat="$epoch"
+    fi
+  done
+
+  info "Available prebuilt binaries:"
+  for i in "${!CAND_ARCH[@]}"; do
+    local arch="${CAND_ARCH[$i]}"
+    local variant="${CAND_VARIANT[$i]}"
+    local source="${CAND_SOURCE[$i]}"
+    local epoch="${CAND_EPOCH[$i]}"
+    local iso="${CAND_ISO[$i]}"
+    local git_hash="${CAND_GIT[$i]}"
+    local git_dirty="${CAND_DIRTY[$i]}"
+    local epoch_src="${CAND_EPOCH_SRC[$i]}"
+    local compat="${CAND_COMPAT[$i]}"
+    local tag="unknown"
+    if [ -n "$epoch" ] && [ "$epoch" -gt 0 ] 2>/dev/null; then
+      if [ "$epoch" -eq "$max_epoch_all" ] 2>/dev/null; then
+        tag="latest"
+      elif [ "$compat" = "1" ] && [ "$epoch" -eq "$max_epoch_compat" ] 2>/dev/null; then
+        tag="latest compatible"
+      else
+        tag="outdated"
+      fi
+    fi
+
+    local dirty_note=""
+    if [ "$git_dirty" = "1" ]; then
+      dirty_note=" dirty"
+    fi
+
+    local compat_note="compatible"
+    if [ "$arch" = "arm64" ] && ! detect_arm64_capable; then
+      compat_note="incompatible (requires 64-bit OS)"
+    elif [ "$arch" = "arm32" ] && detect_arm64_capable; then
+      compat_note="compatible (arm32 on 64-bit OS)"
+    fi
+
+    local build_note="build ${iso}"
+    if [ "$epoch_src" = "mtime" ]; then
+      build_note="build ${iso} (mtime)"
+    fi
+
+    printf "  %s) %s/%s (%s) - %s - git %s%s - %s - %s\n" \
+      "$((i + 1))" "$arch" "$variant" "$source" "$build_note" "$git_hash" "$dirty_note" "$tag" "$compat_note"
+  done
+
+  if [ "$max_epoch_all" -gt 0 ] 2>/dev/null; then
+    for i in "${!CAND_EPOCH[@]}"; do
+      if [ "${CAND_EPOCH[$i]}" = "$max_epoch_all" ]; then
+        latest_idx="$i"
+        break
+      fi
+    done
+  fi
+
+  if [ "$latest_idx" -ge 0 ]; then
+    info "Most recent build: ${CAND_ARCH[$latest_idx]}/${CAND_VARIANT[$latest_idx]} (${CAND_SOURCE[$latest_idx]}) - ${CAND_ISO[$latest_idx]}"
+  fi
+}
+
+select_candidate() {
+  local selected=""
+  if [ ! -t 0 ]; then
+    local best_idx=-1
+    local best_epoch=0
+    local i=0
+    for i in "${!CAND_EPOCH[@]}"; do
+      local compat="${CAND_COMPAT[$i]}"
+      local epoch="${CAND_EPOCH[$i]}"
+      if [ "$compat" != "1" ]; then
+        continue
+      fi
+      if [ -n "$epoch" ] && [ "$epoch" -gt "$best_epoch" ] 2>/dev/null; then
+        best_epoch="$epoch"
+        best_idx="$i"
+      elif [ "$best_idx" -eq -1 ]; then
+        best_idx="$i"
+      fi
+    done
+    if [ "$best_idx" -lt 0 ]; then
+      return 1
+    fi
+    selected="$best_idx"
+    info "Non-interactive shell detected; selecting $((selected + 1))"
+  else
+    while true; do
+      if ! read -r -p "Select prebuilt set to install [1-${CAND_COUNT}]: " selected; then
+        selected=""
+      fi
+      if [[ "$selected" =~ ^[0-9]+$ ]] && [ "$selected" -ge 1 ] && [ "$selected" -le "$CAND_COUNT" ]; then
+        selected=$((selected - 1))
+        if [ "${CAND_COMPAT[$selected]}" != "1" ]; then
+          warn "Selection is incompatible with this OS. Choose a compatible build."
+          continue
+        fi
+        break
+      fi
+      echo "Please enter a number between 1 and ${CAND_COUNT}."
+    done
+  fi
+  SELECTED_INDEX="$selected"
+  return 0
+}
+
+PREBUILT_ARCH="$PREFERRED_ARCH"
+PREBUILT_VARIANT=""
+PREBUILT_SOURCE=""
+
+if [ "$PREBUILT_DIR_OVERRIDE" -eq 1 ]; then
+  info "PREBUILT_DIR override set: $PREBUILT_DIR"
+  case "$PREBUILT_DIR" in
+    *arm64*) PREBUILT_ARCH="arm64" ;;
+    *arm32*) PREBUILT_ARCH="arm32" ;;
+  esac
+else
+  collect_candidates
+  if [ "$CAND_COUNT" -eq 0 ]; then
+    fail "No prebuilt binaries found in local directories or USB media"
+  fi
+  print_candidates
+  if ! select_candidate; then
+    fail "No compatible prebuilt binaries available"
+  fi
+
+  PREBUILT_ARCH="${CAND_ARCH[$SELECTED_INDEX]}"
+  PREBUILT_VARIANT="${CAND_VARIANT[$SELECTED_INDEX]}"
+  PREBUILT_SOURCE="${CAND_SOURCE[$SELECTED_INDEX]}"
+  PREBUILT_DIR="${CAND_DIR[$SELECTED_INDEX]}"
+
+  if [ "$PREBUILT_SOURCE" = "usb" ]; then
+    if [ "$USB_COPY_TO_PREBUILT" = "1" ]; then
+      if [ "$PREBUILT_VARIANT" = "legacy" ] || [ -z "$PREBUILT_VARIANT" ]; then
+        PREBUILT_DIR="prebuilt/$PREBUILT_ARCH"
+      else
+        PREBUILT_DIR="prebuilt/$PREBUILT_ARCH/$PREBUILT_VARIANT"
+      fi
+    fi
+    copy_prebuilt_from_usb "$PREBUILT_ARCH" "$PREBUILT_VARIANT" "${CAND_DIR[$SELECTED_INDEX]}" || true
+  fi
+fi
+
+if [ "$PREBUILT_ARCH" = "arm64" ] && ! detect_arm64_capable; then
+  fail "arm64 binaries selected but this OS does not appear to support 64-bit execution"
+fi
+
+set_prebuilt_paths
+
+if [ -n "$PREBUILT_VARIANT" ] && [ "$PREBUILT_VARIANT" != "legacy" ]; then
+  info "Selected prebuilt directory: $PREBUILT_DIR (arch=$PREBUILT_ARCH, variant=$PREBUILT_VARIANT)"
+else
+  info "Selected prebuilt directory: $PREBUILT_DIR (arch=$PREBUILT_ARCH)"
 fi
 
 info "Using prebuilt binaries from $PREBUILT_ROOT"
@@ -909,9 +1272,9 @@ sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Fail
 info "Installed binaries to /usr/local/bin:"
 for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
   if [ -f "/usr/local/bin/$bin_name" ]; then
-    print_binary_info "✓ $bin_name" "/usr/local/bin/$bin_name"
+    print_binary_info "OK $bin_name" "/usr/local/bin/$bin_name"
   else
-    warn "  ✗ $bin_name: INSTALLATION FAILED"
+    warn "  $bin_name: INSTALLATION FAILED"
   fi
 done
 info ""
@@ -926,16 +1289,16 @@ if [ "$SKIP_HASH_CHECKS" != "1" ]; then
       dest_hash=$(hash_file "$dest_path" || true)
       if [ -n "$src_hash" ] && [ -n "$dest_hash" ]; then
         if [ "$src_hash" = "$dest_hash" ]; then
-          info "  ✓ $bin_name hash match ($src_hash)"
+          info "  $bin_name hash match ($src_hash)"
         else
-          warn "  ✗ $bin_name hash mismatch (src=$src_hash dest=$dest_hash)"
+          warn "  $bin_name hash mismatch (src=$src_hash dest=$dest_hash)"
           fail "Binary integrity check failed for $bin_name"
         fi
       else
         warn "  [WARN] $bin_name hash unavailable (missing sha256sum/shasum)"
       fi
     else
-      warn "  ✗ $bin_name hash check skipped (missing source or destination)"
+      warn "  $bin_name hash check skipped (missing source or destination)"
     fi
   done
   info ""

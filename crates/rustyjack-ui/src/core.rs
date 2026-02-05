@@ -514,10 +514,10 @@ impl CoreBridge {
             if let Some(caps) = status.capabilities {
                 // Convert IPC TxInMonitorCapability to UI TxInMonitorCapability
                 let tx_cap = match caps.tx_in_monitor {
-                    Some(rustyjack_ipc::types::TxInMonitorCapability::Supported) => {
+                    Some(rustyjack_ipc::TxInMonitorCapability::Supported) => {
                         TxInMonitorCapability::Supported
                     }
-                    Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported) => {
+                    Some(rustyjack_ipc::TxInMonitorCapability::NotSupported) => {
                         TxInMonitorCapability::NotSupported
                     }
                     _ => TxInMonitorCapability::Unknown,
@@ -542,10 +542,10 @@ impl CoreBridge {
             let response = client.wifi_capabilities(&interface).await?;
             // Convert IPC TxInMonitorCapability to UI TxInMonitorCapability
             let tx_cap = match response.tx_in_monitor {
-                Some(rustyjack_ipc::types::TxInMonitorCapability::Supported) => {
+                Some(rustyjack_ipc::TxInMonitorCapability::Supported) => {
                     TxInMonitorCapability::Supported
                 }
-                Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported) => {
+                Some(rustyjack_ipc::TxInMonitorCapability::NotSupported) => {
                     TxInMonitorCapability::NotSupported
                 }
                 _ => TxInMonitorCapability::Unknown,

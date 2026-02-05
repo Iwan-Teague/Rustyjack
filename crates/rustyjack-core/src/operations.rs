@@ -58,6 +58,14 @@ use crate::cli::{
     WifiSwitchArgs, WifiTxPowerArgs,
 };
 use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
+
+fn supports_injection(caps: &crate::wireless_native::WirelessCapabilities) -> bool {
+    caps.supports_monitor_mode
+        && matches!(
+            caps.tx_in_monitor,
+            crate::wireless_native::TxInMonitorCapability::Supported
+        )
+}
 #[cfg(target_os = "linux")]
 use crate::netlink_helpers::netlink_set_interface_up;
 use crate::system::{
@@ -4187,7 +4195,7 @@ fn handle_wifi_deauth(
                 "interface_exists": caps.interface_exists,
                 "interface_is_wireless": caps.interface_is_wireless,
                 "supports_monitor_mode": caps.supports_monitor_mode,
-                "supports_injection": caps.supports_injection,
+                "supports_injection": supports_injection(&caps),
             }
         });
 
@@ -4402,7 +4410,7 @@ fn handle_wifi_evil_twin(
                 "interface_exists": caps.interface_exists,
                 "interface_is_wireless": caps.interface_is_wireless,
                 "supports_monitor_mode": caps.supports_monitor_mode,
-                "supports_injection": caps.supports_injection,
+                "supports_injection": supports_injection(&caps),
                 "supports_ap": supports_ap,
             }
         });
@@ -4594,7 +4602,7 @@ fn handle_wifi_pmkid(
                 "interface_exists": caps.interface_exists,
                 "interface_is_wireless": caps.interface_is_wireless,
                 "supports_monitor_mode": caps.supports_monitor_mode,
-                "supports_injection": caps.supports_injection,
+                "supports_injection": supports_injection(&caps),
             }
         });
         return preflight_only_response(
@@ -4745,7 +4753,7 @@ fn handle_wifi_probe_sniff(
                 "interface_exists": caps.interface_exists,
                 "interface_is_wireless": caps.interface_is_wireless,
                 "supports_monitor_mode": caps.supports_monitor_mode,
-                "supports_injection": caps.supports_injection,
+                "supports_injection": supports_injection(&caps),
             }
         });
         return preflight_only_response(
@@ -4878,7 +4886,7 @@ fn handle_wifi_karma(
                 "interface_exists": caps.interface_exists,
                 "interface_is_wireless": caps.interface_is_wireless,
                 "supports_monitor_mode": caps.supports_monitor_mode,
-                "supports_injection": caps.supports_injection,
+                "supports_injection": supports_injection(&caps),
             }
         });
         return preflight_only_response(
@@ -5038,7 +5046,12 @@ fn handle_wifi_pipeline_preflight(
             interface_exists: false,
             interface_is_wireless: false,
             supports_monitor_mode: false,
-            supports_injection: false,
+            tx_in_monitor: crate::wireless_native::TxInMonitorCapability::Unknown,
+            tx_in_monitor_reason: "Interface not set".to_string(),
+            driver_name: None,
+            supports_ap: false,
+            supports_5ghz: false,
+            supports_2ghz: false,
         }
     } else {
         crate::wireless_native::check_capabilities(&interface)
@@ -5059,7 +5072,7 @@ fn handle_wifi_pipeline_preflight(
     if args.requires_monitor && !caps.supports_monitor_mode {
         errors.push("Monitor mode not supported by interface".to_string());
     }
-    if args.requires_monitor && !caps.supports_injection {
+    if args.requires_monitor && caps.supports_monitor_mode && !supports_injection(&caps) {
         errors.push("Frame injection not supported by interface".to_string());
     }
 
@@ -5073,7 +5086,7 @@ fn handle_wifi_pipeline_preflight(
             "interface_exists": caps.interface_exists,
             "interface_is_wireless": caps.interface_is_wireless,
             "supports_monitor_mode": caps.supports_monitor_mode,
-            "supports_injection": caps.supports_injection,
+            "supports_injection": supports_injection(&caps),
         }
     });
 

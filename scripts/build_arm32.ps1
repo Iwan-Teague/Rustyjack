@@ -1,20 +1,28 @@
 #!/usr/bin/env pwsh
 # ARM32 cross-compilation build script for Windows
-# Builds rustyjack binaries for Raspberry Pi (armv7)
-# Always performs a complete fresh build - no caching
-
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..") | Select-Object -ExpandProperty Path
-$DockerDir = Join-Path $RepoRoot "docker\arm32"
 $Target = "armv7-unknown-linux-gnueabihf"
 $TargetDir = "/work/target-32"
 $HostTargetDir = Join-Path $RepoRoot "target-32"
-$ImageName = "rustyjack/arm32-dev"
+$DockerRun = Join-Path $RepoRoot "docker\arm32\run.ps1"
+$BuildMode = "debug"
+$BuildProfileFlag = ""
+$DefaultBuild = $false
+$ContainerArgs = @()
+$BuildRan = $false
+$LastBuildStamp = Join-Path $HostTargetDir ".last_build_stamp"
 
-# Step 0: Ensure Docker Desktop is running
-Write-Host "=== CHECKING DOCKER ===" -ForegroundColor Cyan
+$BuildInfoReady = $false
+$BuildInfoEpoch = ""
+$BuildInfoIso = ""
+$BuildInfoGitHash = "unknown"
+$BuildInfoGitDirty = "0"
+$BuildInfoVariant = "development"
+$BuildInfoProfile = "debug"
+$BuildInfoEnv = ""
 
 function Test-DockerRunning {
     try {
@@ -75,87 +83,431 @@ if (-not (Test-DockerRunning)) {
     Write-Host "Docker Desktop is already running." -ForegroundColor Green
 }
 
-# Step 1: Clean everything
-Write-Host "=== CLEAN BUILD ===" -ForegroundColor Cyan
-Write-Host "Removing existing target directory to ensure fresh build..." -ForegroundColor Yellow
-
-if (Test-Path $HostTargetDir) {
-    Remove-Item -Recurse -Force $HostTargetDir
-    Write-Host "Cleaned target directory: $HostTargetDir" -ForegroundColor Green
-}
-
-# Step 2: Stop any containers using the image and remove it
-Write-Host "Stopping any containers using the image..." -ForegroundColor Yellow
-try {
-    $containers = docker ps -aq --filter "ancestor=$ImageName" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $containers) {
-        docker stop $containers 2>$null | Out-Null
-        docker rm $containers 2>$null | Out-Null
-        Write-Host "Stopped and removed existing containers" -ForegroundColor Green
-    }
-} catch {
-    Write-Host "No existing containers to clean up" -ForegroundColor Gray
-}
-
-Write-Host "Removing old Docker image..." -ForegroundColor Yellow
-try {
-    docker rmi -f $ImageName 2>$null | Out-Null
-    Write-Host "Removed old Docker image" -ForegroundColor Green
-} catch {
-    Write-Host "No existing image to remove" -ForegroundColor Gray
-}
-Write-Host "Building Docker image from scratch (no cache)..." -ForegroundColor Cyan
-
-docker build --no-cache --platform linux/arm/v7 -t $ImageName $DockerDir
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Docker build failed" -ForegroundColor Red
-    exit $LASTEXITCODE
-}
-Write-Host "Docker image built successfully" -ForegroundColor Green
-
-# Step 3: Ensure directories exist
-$TmpDir = Join-Path $RepoRoot "tmp"
-if (-not (Test-Path $TmpDir)) {
-    New-Item -ItemType Directory -Path $TmpDir | Out-Null
-}
-
+# Ensure target directory exists on host (for docker volume mount)
 if (-not (Test-Path $HostTargetDir)) {
     New-Item -ItemType Directory -Path $HostTargetDir | Out-Null
 }
 
-# Step 4: Build all packages
-Write-Host "Building all packages..." -ForegroundColor Cyan
-
-$BuildCmd = "export PATH=/usr/local/cargo/bin:`$PATH && export CARGO_TARGET_DIR=$TargetDir && echo 'Building rustyjack-ui...' && cargo build --target $Target -p rustyjack-ui && echo 'Building rustyjackd...' && cargo build --target $Target -p rustyjack-daemon && echo 'Building rustyjack-portal...' && cargo build --target $Target -p rustyjack-portal && echo 'Building rustyjack CLI...' && cargo build --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"
-
-# Pass cargo target cache volume to docker run script
-$env:DOCKER_VOLUMES_EXTRA = "$HostTargetDir`:$TargetDir"
-& "$RepoRoot\docker\arm32\run.ps1" bash -c $BuildCmd
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build failed" -ForegroundColor Red
-    exit $LASTEXITCODE
-}
-
-Write-Host "Build completed successfully" -ForegroundColor Green
-
-# Step 5: Copy binaries to prebuilt directory
-$DestDir = Join-Path $RepoRoot "prebuilt\arm32"
-if (-not (Test-Path $DestDir)) {
-    New-Item -ItemType Directory -Path $DestDir | Out-Null
-}
-
-$Bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
-foreach ($bin in $Bins) {
-    $Src = Join-Path $HostTargetDir "$Target\debug\$bin"
-    if (-not (Test-Path $Src)) {
-        Write-Host "Missing binary: $Src" -ForegroundColor Red
-        exit 1
+function Ensure-GitHooks {
+    if ($env:RUSTYJACK_SKIP_HOOKS -eq "1") { return }
+    $gitInside = & git -C $RepoRoot rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -ne 0) { return }
+    $hookScript = Join-Path $RepoRoot "scripts\\install_git_hooks.ps1"
+    $currentHooks = & git -C $RepoRoot config --local --get core.hooksPath 2>$null
+    $hooksPath = Join-Path $RepoRoot ".githooks"
+    if ($LASTEXITCODE -eq 0 -and $currentHooks -and $currentHooks.Trim() -eq ".githooks") {
+        Write-Host "Git hooks already configured (path: $hooksPath)." -ForegroundColor Green
+        return
     }
-    Copy-Item -Force $Src (Join-Path $DestDir $bin)
-    Write-Host "Copied $bin" -ForegroundColor Green
+    if (Test-Path $hookScript) {
+        Write-Host "Configuring git hooks (path: $hooksPath)..." -ForegroundColor Yellow
+        & $hookScript
+    }
 }
 
-Write-Host "=== BUILD COMPLETE ===" -ForegroundColor Cyan
-Write-Host "Binaries copied to $DestDir" -ForegroundColor Green
+Ensure-GitHooks
+
+function Test-Interactive {
+    try {
+        return [Environment]::UserInteractive -and $Host.UI -and $Host.UI.RawUI
+    } catch {
+        return $false
+    }
+}
+
+function Prompt-BuildMode {
+    while ($true) {
+        $reply = Read-Host "Build release or dev binaries? [r/b]"
+        if (-not $reply) { $reply = "b" }
+        switch -Regex ($reply) {
+            "^(r|R|release|RELEASE)$" {
+                $script:BuildMode = "release"
+                $script:BuildProfileFlag = "--release"
+                return
+            }
+            "^(b|B|dev|DEV|debug|DEBUG)$" {
+                $script:BuildMode = "debug"
+                $script:BuildProfileFlag = ""
+                return
+            }
+        }
+        Write-Host "Please answer r (release) or b (dev)." -ForegroundColor Yellow
+    }
+}
+
+function Compute-BuildInfo {
+    if ($script:BuildInfoReady) { return }
+    $script:BuildInfoReady = $true
+    $now = [DateTimeOffset]::UtcNow
+    $script:BuildInfoEpoch = $now.ToUnixTimeSeconds().ToString()
+    $script:BuildInfoIso = $now.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $script:BuildInfoGitHash = "unknown"
+    $script:BuildInfoGitDirty = "0"
+
+    $gitInside = & git rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $hash = & git rev-parse --short=12 HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $hash) {
+            $script:BuildInfoGitHash = $hash.Trim()
+        }
+        $por = & git status --porcelain 2>$null
+        if ($LASTEXITCODE -eq 0 -and $por) {
+            $script:BuildInfoGitDirty = "1"
+        }
+    }
+
+    $script:BuildInfoProfile = $script:BuildMode
+    if ($script:BuildMode -eq "release") {
+        $script:BuildInfoVariant = "release"
+    } else {
+        $script:BuildInfoVariant = "development"
+    }
+
+    $script:BuildInfoEnv = "export RUSTYJACK_BUILD_EPOCH='$script:BuildInfoEpoch'; " +
+        "export RUSTYJACK_BUILD_ISO='$script:BuildInfoIso'; " +
+        "export RUSTYJACK_GIT_HASH='$script:BuildInfoGitHash'; " +
+        "export RUSTYJACK_GIT_DIRTY='$script:BuildInfoGitDirty'; " +
+        "export RUSTYJACK_BUILD_PROFILE='$script:BuildInfoProfile'; " +
+        "export RUSTYJACK_BUILD_VARIANT='$script:BuildInfoVariant'; " +
+        "export RUSTYJACK_BUILD_TARGET='$Target'; " +
+        "export RUSTYJACK_BUILD_ARCH='arm32';"
+}
+
+function Test-FileNewerThanStamp {
+    param(
+        [string]$Path,
+        [DateTime]$StampTime
+    )
+    if (-not (Test-Path $Path)) { return $false }
+    $fileTime = (Get-Item $Path).LastWriteTime
+    return $fileTime -gt $StampTime
+}
+
+function Test-DirNewerThanStamp {
+    param(
+        [string]$Path,
+        [DateTime]$StampTime
+    )
+    if (-not (Test-Path $Path)) { return $false }
+    $hit = Get-ChildItem -Path $Path -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $StampTime } | Select-Object -First 1
+    return $null -ne $hit
+}
+
+function Get-FileEpoch {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return 0 }
+    try {
+        $time = (Get-Item $Path).LastWriteTimeUtc
+        return ([DateTimeOffset]::new($time)).ToUnixTimeSeconds()
+    } catch {
+        return 0
+    }
+}
+
+function Get-LatestSourceEpoch {
+    $maxEpoch = 0
+    $gitInside = & git -C $RepoRoot rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -ne 0) { return 0 }
+    $raw = & git -C $RepoRoot ls-files -z 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $raw) { return 0 }
+    $files = $raw -split "`0"
+    foreach ($file in $files) {
+        if (-not $file) { continue }
+        $normalized = $file.Replace("\\", "/")
+        if (-not ($normalized -eq "Cargo.toml" -or $normalized -eq "Cargo.lock" -or $normalized -eq ".cargo/config" -or $normalized -eq ".cargo/config.toml" -or $normalized -like "crates/*")) {
+            continue
+        }
+        $path = Join-Path $RepoRoot $normalized
+        if (-not (Test-Path $path)) { continue }
+        $epoch = Get-FileEpoch -Path $path
+        if ($epoch -gt $maxEpoch) {
+            $maxEpoch = $epoch
+        }
+    }
+    return $maxEpoch
+}
+
+function Get-SelectedBuildEpoch {
+    $info = Join-Path $HostTargetDir "$Target\$BuildMode\build_info.txt"
+    if (Test-Path $info) {
+        $line = Get-Content $info | Where-Object { $_ -match "^build_epoch=" } | Select-Object -First 1
+        if ($line) {
+            $value = $line -replace "^build_epoch=", ""
+            $parsed = 0L
+            if ([long]::TryParse($value, [ref]$parsed)) {
+                return $parsed
+            }
+        }
+    }
+
+    $bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
+    $minEpoch = 0
+    foreach ($bin in $bins) {
+        $path = Join-Path $HostTargetDir "$Target\$BuildMode\$bin"
+        if (-not (Test-Path $path)) { return 0 }
+        $epoch = Get-FileEpoch -Path $path
+        if ($epoch -le 0) { continue }
+        if ($minEpoch -eq 0 -or $epoch -lt $minEpoch) {
+            $minEpoch = $epoch
+        }
+    }
+    return $minEpoch
+}
+
+function Test-SelectedBinariesUpToDate {
+    $sourceEpoch = Get-LatestSourceEpoch
+    if ($sourceEpoch -le 0) {
+        Write-Host "WARN: unable to determine latest source timestamp; skipping freshness check." -ForegroundColor Yellow
+        return $true
+    }
+    $buildEpoch = Get-SelectedBuildEpoch
+    if ($buildEpoch -le 0) { return $false }
+    if ($buildEpoch -lt $sourceEpoch) { return $false }
+    return $true
+}
+
+if ($args.Count -gt 0) {
+    $ContainerArgs = $args
+} else {
+    $DefaultBuild = $true
+    if (Test-Interactive) {
+        Prompt-BuildMode
+    } else {
+        Write-Host "Non-interactive shell detected; defaulting to dev build." -ForegroundColor Yellow
+    }
+
+    $Packages = @(
+        @{name="rustyjack-ui"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-ui"; dir="crates/rustyjack-ui"},
+        @{name="rustyjackd"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-daemon"; dir="crates/rustyjack-daemon"},
+        @{name="rustyjack-portal"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-portal"; dir="crates/rustyjack-portal"},
+        @{name="rustyjack"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"; dir="crates/rustyjack-core"}
+    )
+
+    $changed = @()
+    $por = & git status --porcelain 2>$null
+    if ($LASTEXITCODE -eq 0 -and $por) {
+        $por -split "`n" | ForEach-Object {
+            $line = $_.Trim()
+            if ($line.Length -gt 3) {
+                $f = $line.Substring(3)
+                if ($f -match " -> ") {
+                    $f = $f.Split(" -> ")[-1]
+                }
+                $changed += $f
+            }
+        }
+    }
+
+    $changed = $changed | Where-Object { $_ -ne "" } | ForEach-Object { $_.Replace("\\", "/") } | Select-Object -Unique
+
+    $BuildParts = @()
+    $BuildCmds = @()
+
+    $workspaceChanged = $false
+    $stampTime = $null
+
+    if (-not (Test-Path $LastBuildStamp)) {
+        Write-Host "No build stamp found; rebuilding all packages." -ForegroundColor Yellow
+        $workspaceChanged = $true
+    } else {
+        $stampTime = (Get-Item $LastBuildStamp).LastWriteTime
+        $cargoFiles = @("Cargo.toml", "Cargo.lock", ".cargo/config.toml", ".cargo/config")
+        foreach ($f in $cargoFiles) {
+            $path = Join-Path $RepoRoot $f
+            if (Test-FileNewerThanStamp -Path $path -StampTime $stampTime) {
+                $workspaceChanged = $true
+                break
+            }
+        }
+
+        if (-not $workspaceChanged) {
+            $cratesRoot = Join-Path $RepoRoot "crates"
+            if (Test-Path $cratesRoot) {
+                foreach ($dir in Get-ChildItem -Path $cratesRoot -Directory) {
+                    switch ($dir.Name) {
+                        "rustyjack-ui" { continue }
+                        "rustyjack-daemon" { continue }
+                        "rustyjack-portal" { continue }
+                        default {
+                            if (Test-DirNewerThanStamp -Path $dir.FullName -StampTime $stampTime) {
+                                $workspaceChanged = $true
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if ($changed.Count -eq 0 -and -not $workspaceChanged) {
+        Write-Host "No local changes detected; falling back to artifact existence check." -ForegroundColor Yellow
+        foreach ($entry in $Packages) {
+            $bin = $entry.name
+            $srcPath = Join-Path $HostTargetDir "$Target\$BuildMode\$bin"
+            if (Test-Path $srcPath) {
+                Write-Host "Found existing target binary for $bin at $srcPath - skipping rebuild" -ForegroundColor Yellow
+            } else {
+                $BuildParts += $entry.cmd
+                $BuildCmds += $entry.cmd
+            }
+        }
+        if ($BuildParts.Count -eq 0) {
+            Write-Host "All target binaries exist - skipping docker build." -ForegroundColor Green
+        }
+    } else {
+        if ($workspaceChanged) {
+            Write-Host "Workspace changes detected; rebuilding all packages" -ForegroundColor Yellow
+            foreach ($entry in $Packages) {
+                $BuildParts += $entry.cmd
+                $BuildCmds += $entry.cmd
+            }
+        } else {
+            foreach ($entry in $Packages) {
+                $dir = $entry.dir
+                $dirPath = Join-Path $RepoRoot $dir
+                $shouldBuild = $false
+
+                if ($stampTime -ne $null -and (Test-DirNewerThanStamp -Path $dirPath -StampTime $stampTime)) {
+                    $shouldBuild = $true
+                } else {
+                    foreach ($f in $changed) {
+                        if ($f -like "$dir/*" -or $f -like "*/$dir/*") {
+                            $shouldBuild = $true
+                            break
+                        }
+                    }
+                }
+
+                if ($shouldBuild) {
+                    $BuildParts += $entry.cmd
+                    $BuildCmds += $entry.cmd
+                }
+            }
+        }
+
+        $BuildParts = $BuildParts | Select-Object -Unique
+        $BuildCmds = $BuildCmds | Select-Object -Unique
+
+        if ($BuildParts.Count -eq 0) {
+            Write-Host "No package-specific changes detected; skipping docker build." -ForegroundColor Green
+        }
+    }
+
+    if ($BuildParts.Count -gt 0) {
+        Compute-BuildInfo
+        $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; $BuildInfoEnv " + ($BuildCmds -join "; ")
+        $ContainerArgs = @("bash", "-c", $BuildCmd)
+    }
+
+    if ($DefaultBuild -and $BuildParts.Count -eq 0) {
+        if (Test-SelectedBinariesUpToDate) {
+            Write-Host "Selected $BuildMode binaries appear up-to-date." -ForegroundColor Green
+        } else {
+            Write-Host "Selected $BuildMode binaries are older than source; rebuilding." -ForegroundColor Yellow
+            $BuildParts = @()
+            $BuildCmds = @()
+            foreach ($entry in $Packages) {
+                $BuildParts += $entry.cmd
+                $BuildCmds += $entry.cmd
+            }
+            Compute-BuildInfo
+            $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; $BuildInfoEnv " + ($BuildCmds -join "; ")
+            $ContainerArgs = @("bash", "-c", $BuildCmd)
+        }
+    }
+}
+
+if ($args.Count -gt 0) {
+    $env:DOCKER_VOLUMES_EXTRA = "$HostTargetDir`:$TargetDir"
+    & $DockerRun @ContainerArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} elseif ($DefaultBuild) {
+    if ($BuildParts.Count -gt 0) {
+        Write-Host "Running build in Docker container..." -ForegroundColor Cyan
+        Write-Host "Building: $($BuildParts.Count) package(s)" -ForegroundColor Yellow
+        $BuildRan = $true
+        $env:DOCKER_VOLUMES_EXTRA = "$HostTargetDir`:$TargetDir"
+        & $DockerRun @ContainerArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } else {
+        Write-Host "Skipping build - no changes detected" -ForegroundColor Green
+    }
+}
+
+if ($DefaultBuild) {
+    $Bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
+    $MissingBinaries = @()
+    foreach ($bin in $Bins) {
+        $Src = Join-Path $HostTargetDir "$Target\$BuildMode\$bin"
+        if (-not (Test-Path $Src)) {
+            $MissingBinaries += $bin
+        }
+    }
+
+    if ($MissingBinaries.Count -gt 0 -and $BuildParts.Count -eq 0) {
+        Write-Host "WARNING: Expected binaries missing but no build was triggered" -ForegroundColor Yellow
+        Write-Host "Building all packages as fallback..." -ForegroundColor Yellow
+
+        Compute-BuildInfo
+        $AllPackageCmds = $Packages | ForEach-Object { $_.cmd }
+        $BuildCmd = "set -euo pipefail; export PATH=/usr/local/cargo/bin:`$PATH; export CARGO_TARGET_DIR=$TargetDir; $BuildInfoEnv " + ($AllPackageCmds -join "; ")
+        $ContainerArgs = @("bash", "-c", $BuildCmd)
+
+        $env:DOCKER_VOLUMES_EXTRA = "$HostTargetDir`:$TargetDir"
+        $BuildRan = $true
+        & $DockerRun @ContainerArgs
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Fallback build failed" -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+
+        Write-Host "Fallback build completed successfully" -ForegroundColor Green
+    }
+
+    if ($BuildRan) {
+        Set-Content -Path $LastBuildStamp -Value $BuildInfoEpoch
+        $BuildInfoFile = Join-Path $HostTargetDir "$Target\$BuildMode\build_info.txt"
+        $BuildInfoDir = Split-Path -Parent $BuildInfoFile
+        if (-not (Test-Path $BuildInfoDir)) {
+            New-Item -ItemType Directory -Path $BuildInfoDir | Out-Null
+        }
+        @(
+            "build_epoch=$BuildInfoEpoch",
+            "build_iso=$BuildInfoIso",
+            "git_hash=$BuildInfoGitHash",
+            "git_dirty=$BuildInfoGitDirty",
+            "build_profile=$BuildInfoProfile",
+            "build_variant=$BuildInfoVariant",
+            "target=$Target",
+            "arch=arm32"
+        ) | Set-Content -Path $BuildInfoFile
+    }
+
+    $PrebuiltVariant = if ($BuildMode -eq "release") { "release" } else { "development" }
+    $DestDir = Join-Path $RepoRoot "prebuilt\arm32\$PrebuiltVariant"
+    if (-not (Test-Path $DestDir)) {
+        New-Item -ItemType Directory -Path $DestDir | Out-Null
+    }
+
+    foreach ($bin in $Bins) {
+        $Src = Join-Path $HostTargetDir "$Target\$BuildMode\$bin"
+        if (-not (Test-Path $Src)) {
+            Write-Error "Missing binary: $Src"
+            exit 1
+        }
+        Copy-Item -Force $Src (Join-Path $DestDir $bin)
+    }
+
+    $BuildInfoFile = Join-Path $HostTargetDir "$Target\$BuildMode\build_info.txt"
+    if (Test-Path $BuildInfoFile) {
+        Copy-Item -Force $BuildInfoFile (Join-Path $DestDir "build_info.txt")
+    } else {
+        Write-Host "WARNING: build_info.txt not found in target directory" -ForegroundColor Yellow
+    }
+
+    Write-Host "Copied binaries to $DestDir" -ForegroundColor Green
+}
+
 exit 0

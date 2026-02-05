@@ -36,8 +36,8 @@ pub use types::{
     PortalStartRequest, PortalStatusResponse, RequestBody, RequestEnvelope, ResponseBody,
     ResponseEnvelope, ResponseOk, RfkillEntry, SetActiveInterfaceRequest,
     SetActiveInterfaceResponse, StatusResponse, SystemActionResponse, SystemLogsResponse,
-    SystemStatusResponse, UnmountStartRequest, VersionResponse, WifiCapabilitiesRequest,
-    WifiCapabilitiesResponse, WifiConnectStartRequest, WifiDisconnectRequest,
-    WifiDisconnectResponse, WifiInterfacesResponse, WifiScanStartRequest,
+    SystemStatusResponse, TxInMonitorCapability, UnmountStartRequest, VersionResponse,
+    WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiConnectStartRequest,
+    WifiDisconnectRequest, WifiDisconnectResponse, WifiInterfacesResponse, WifiScanStartRequest,
 };
 pub use wire::{decode_frame_length, encode_frame, FrameError};

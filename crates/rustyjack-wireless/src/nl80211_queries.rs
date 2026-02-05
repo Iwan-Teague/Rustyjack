@@ -175,8 +175,6 @@ pub fn get_link_status(interface: &str) -> Result<LinkStatus> {
     })
 }
 
-/// Interface capability information
-#[derive(Debug, Clone)]
 /// TX-in-monitor capability verdict
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxInMonitorCapability {
@@ -185,6 +183,8 @@ pub enum TxInMonitorCapability {
     Unknown,
 }
 
+/// Interface capability information
+#[derive(Debug, Clone)]
 pub struct InterfaceCapabilities {
     pub name: String,
     pub is_wireless: bool,

@@ -711,13 +711,13 @@ pub async fn handle_request(
                             // Convert TxInMonitorCapability to IPC type
                             let tx_cap = match caps.tx_in_monitor {
                                 rustyjack_core::system::ops::TxInMonitorCapability::Supported => {
-                                    Some(rustyjack_ipc::types::TxInMonitorCapability::Supported)
+                                    Some(rustyjack_ipc::TxInMonitorCapability::Supported)
                                 }
                                 rustyjack_core::system::ops::TxInMonitorCapability::NotSupported => {
-                                    Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported)
+                                    Some(rustyjack_ipc::TxInMonitorCapability::NotSupported)
                                 }
                                 rustyjack_core::system::ops::TxInMonitorCapability::Unknown => {
-                                    Some(rustyjack_ipc::types::TxInMonitorCapability::Unknown)
+                                    Some(rustyjack_ipc::TxInMonitorCapability::Unknown)
                                 }
                             };
                             InterfaceCapabilities {
@@ -765,13 +765,13 @@ pub async fn handle_request(
                     // Convert TxInMonitorCapability to IPC type
                     let tx_cap = match caps.tx_in_monitor {
                         rustyjack_core::wireless_native::TxInMonitorCapability::Supported => {
-                            Some(rustyjack_ipc::types::TxInMonitorCapability::Supported)
+                            Some(rustyjack_ipc::TxInMonitorCapability::Supported)
                         }
                         rustyjack_core::wireless_native::TxInMonitorCapability::NotSupported => {
-                            Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported)
+                            Some(rustyjack_ipc::TxInMonitorCapability::NotSupported)
                         }
                         rustyjack_core::wireless_native::TxInMonitorCapability::Unknown => {
-                            Some(rustyjack_ipc::types::TxInMonitorCapability::Unknown)
+                            Some(rustyjack_ipc::TxInMonitorCapability::Unknown)
                         }
                     };
                     // Legacy supports_injection derived from tx_in_monitor
