@@ -49,11 +49,25 @@ pub fn deauth_attack(core: &CoreBridge, config: &GuiConfig, iface: &str) -> Resu
         );
     }
 
-    if !caps.supports_injection {
-        bail!(
-            "{} cannot inject packets. Deauth attacks require packet injection capability. Consider using an external USB Wi-Fi adapter.",
-            iface
-        );
+    // Check TX-in-monitor capability - needed for deauth
+    use crate::core::TxInMonitorCapability;
+    match caps.tx_in_monitor {
+        TxInMonitorCapability::NotSupported => {
+            bail!(
+                "{} cannot inject packets in monitor mode. {}. Consider using an external USB Wi-Fi adapter with injection support (e.g., AR9271, RTL8812AU).",
+                iface, caps.tx_in_monitor_reason
+            );
+        }
+        TxInMonitorCapability::Unknown => {
+            // Allow but warn - user can proceed at their own risk
+            tracing::warn!(
+                "TX-in-monitor capability unknown for {}: {}",
+                iface, caps.tx_in_monitor_reason
+            );
+        }
+        TxInMonitorCapability::Supported => {
+            // Good to go
+        }
     }
 
     if config.settings.target_bssid.is_empty() {

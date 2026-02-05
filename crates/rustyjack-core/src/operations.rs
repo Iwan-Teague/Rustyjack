@@ -278,6 +278,7 @@ pub fn dispatch_command_with_cancel(
 
         Commands::Hardware(cmd) => match cmd {
             HardwareCommand::Detect => handle_hardware_detect(),
+            HardwareCommand::WifiProfile(args) => handle_hardware_wifi_profile(args),
         },
         Commands::Ethernet(sub) => match sub {
             EthernetCommand::Discover(args) => handle_eth_discover(root, args, cancel),
@@ -5974,4 +5975,140 @@ fn handle_hardware_detect() -> Result<HandlerResult> {
 
     tracing::info!("Hardware scan complete: {summary}");
     Ok((summary, data))
+}
+
+/// Show detailed Wi-Fi hardware profile for an interface
+fn handle_hardware_wifi_profile(
+    args: crate::cli::HardwareWifiProfileArgs,
+) -> Result<HandlerResult> {
+    use crate::wireless_native::{check_capabilities, TxInMonitorCapability};
+
+    let iface = &args.interface;
+    tracing::info!(interface = %iface, "Querying Wi-Fi hardware profile");
+
+    // Check if interface exists
+    let sys_path = std::path::Path::new("/sys/class/net").join(iface);
+    if !sys_path.exists() {
+        bail!("Interface {} does not exist", iface);
+    }
+
+    // Check if wireless
+    let wireless_path = sys_path.join("wireless");
+    if !wireless_path.exists() {
+        bail!("{} is not a wireless interface", iface);
+    }
+
+    // Get capabilities
+    let caps = check_capabilities(iface);
+
+    // Determine verdict
+    let (verdict, verdict_reason) = match caps.tx_in_monitor {
+        TxInMonitorCapability::Supported => (
+            "injection_capable",
+            "This adapter supports packet injection in monitor mode. Suitable for deauth, handshake capture, and other TX operations.",
+        ),
+        TxInMonitorCapability::NotSupported => (
+            "monitor_only",
+            "This adapter supports monitor mode but NOT packet injection. Suitable for passive capture (probe sniff, PMKID) but NOT deauth or active attacks.",
+        ),
+        TxInMonitorCapability::Unknown => (
+            "unknown",
+            "Injection capability could not be determined. The adapter may or may not support TX in monitor mode.",
+        ),
+    };
+
+    // Build supported modes list
+    let mut supported_modes = Vec::new();
+    if caps.supports_monitor_mode {
+        supported_modes.push("monitor");
+    }
+    if caps.supports_ap {
+        supported_modes.push("ap");
+    }
+    supported_modes.push("station"); // All wireless adapters support station mode
+
+    // Build band support
+    let mut bands = Vec::new();
+    if caps.supports_2ghz {
+        bands.push("2.4GHz");
+    }
+    if caps.supports_5ghz {
+        bands.push("5GHz");
+    }
+    if bands.is_empty() {
+        bands.push("unknown");
+    }
+
+    let data = json!({
+        "interface": iface,
+        "driver_name": caps.driver_name,
+        "supported_modes": supported_modes,
+        "supports_monitor": caps.supports_monitor_mode,
+        "supports_ap": caps.supports_ap,
+        "bands": bands,
+        "supports_2ghz": caps.supports_2ghz,
+        "supports_5ghz": caps.supports_5ghz,
+        "tx_in_monitor": {
+            "verdict": verdict,
+            "reason": caps.tx_in_monitor_reason,
+        },
+        "verdict": verdict,
+        "verdict_reason": verdict_reason,
+        "recommendations": build_wifi_recommendations(&caps, verdict),
+    });
+
+    let driver_str = caps.driver_name.as_deref().unwrap_or("unknown");
+    let summary = format!(
+        "{}: driver={}, monitor={}, injection={} ({})",
+        iface,
+        driver_str,
+        if caps.supports_monitor_mode { "yes" } else { "no" },
+        verdict,
+        bands.join("/")
+    );
+
+    tracing::info!(interface = %iface, verdict = %verdict, "Wi-Fi profile query complete");
+    Ok((summary, data))
+}
+
+/// Build recommendations based on capabilities
+fn build_wifi_recommendations(
+    caps: &crate::wireless_native::WirelessCapabilities,
+    verdict: &str,
+) -> Vec<String> {
+    let mut recs = Vec::new();
+
+    if verdict == "monitor_only" || verdict == "unknown" {
+        recs.push(
+            "For injection/deauth operations, consider using an external USB adapter \
+             with known injection support (e.g., Alfa AWUS036NHA with AR9271 chipset)."
+                .to_string(),
+        );
+    }
+
+    if let Some(ref driver) = caps.driver_name {
+        if driver == "brcmfmac" {
+            recs.push(
+                "The brcmfmac driver (Broadcom FullMAC) does not support TX in monitor mode. \
+                 This is a hardware/firmware limitation, not a software issue."
+                    .to_string(),
+            );
+        }
+    }
+
+    if caps.supports_monitor_mode && verdict == "injection_capable" {
+        recs.push(
+            "This adapter is suitable for all wireless operations including deauth and handshake capture."
+                .to_string(),
+        );
+    }
+
+    if !caps.supports_5ghz && caps.supports_2ghz {
+        recs.push(
+            "This adapter only supports 2.4GHz. For 5GHz targets, use a dual-band adapter."
+                .to_string(),
+        );
+    }
+
+    recs
 }

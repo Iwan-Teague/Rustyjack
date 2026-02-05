@@ -707,17 +707,33 @@ pub async fn handle_request(
                 let capabilities =
                     ops.get_interface_capabilities(iface)
                         .ok()
-                        .map(|caps| InterfaceCapabilities {
-                            is_wireless: caps.is_wireless,
-                            is_physical: caps.is_physical,
-                            supports_monitor: caps.supports_monitor,
-                            supports_ap: caps.supports_ap,
-                            supports_injection: caps.supports_injection,
-                            supports_5ghz: caps.supports_5ghz,
-                            supports_2ghz: caps.supports_2ghz,
-                            mac_address: caps.mac_address,
-                            driver: caps.driver,
-                            chipset: caps.chipset,
+                        .map(|caps| {
+                            // Convert TxInMonitorCapability to IPC type
+                            let tx_cap = match caps.tx_in_monitor {
+                                rustyjack_core::system::ops::TxInMonitorCapability::Supported => {
+                                    Some(rustyjack_ipc::types::TxInMonitorCapability::Supported)
+                                }
+                                rustyjack_core::system::ops::TxInMonitorCapability::NotSupported => {
+                                    Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported)
+                                }
+                                rustyjack_core::system::ops::TxInMonitorCapability::Unknown => {
+                                    Some(rustyjack_ipc::types::TxInMonitorCapability::Unknown)
+                                }
+                            };
+                            InterfaceCapabilities {
+                                is_wireless: caps.is_wireless,
+                                is_physical: caps.is_physical,
+                                supports_monitor: caps.supports_monitor,
+                                supports_ap: caps.supports_ap,
+                                supports_injection: caps.supports_injection,
+                                supports_5ghz: caps.supports_5ghz,
+                                supports_2ghz: caps.supports_2ghz,
+                                mac_address: caps.mac_address,
+                                driver: caps.driver,
+                                chipset: caps.chipset,
+                                tx_in_monitor: tx_cap,
+                                tx_in_monitor_reason: Some(caps.tx_in_monitor_reason),
+                            }
                         });
 
                 Ok(InterfaceStatusResponse {
@@ -746,13 +762,34 @@ pub async fn handle_request(
 
             match result {
                 Ok(caps) => {
+                    // Convert TxInMonitorCapability to IPC type
+                    let tx_cap = match caps.tx_in_monitor {
+                        rustyjack_core::wireless_native::TxInMonitorCapability::Supported => {
+                            Some(rustyjack_ipc::types::TxInMonitorCapability::Supported)
+                        }
+                        rustyjack_core::wireless_native::TxInMonitorCapability::NotSupported => {
+                            Some(rustyjack_ipc::types::TxInMonitorCapability::NotSupported)
+                        }
+                        rustyjack_core::wireless_native::TxInMonitorCapability::Unknown => {
+                            Some(rustyjack_ipc::types::TxInMonitorCapability::Unknown)
+                        }
+                    };
+                    // Legacy supports_injection derived from tx_in_monitor
+                    let supports_injection = matches!(
+                        caps.tx_in_monitor,
+                        rustyjack_core::wireless_native::TxInMonitorCapability::Supported
+                    );
                     ResponseBody::Ok(ResponseOk::WifiCapabilities(WifiCapabilitiesResponse {
                         native_available: caps.native_available,
                         has_root: caps.has_root,
                         interface_exists: caps.interface_exists,
                         interface_is_wireless: caps.interface_is_wireless,
                         supports_monitor_mode: caps.supports_monitor_mode,
-                        supports_injection: caps.supports_injection,
+                        supports_injection,
+                        tx_in_monitor: tx_cap,
+                        tx_in_monitor_reason: Some(caps.tx_in_monitor_reason),
+                        driver_name: caps.driver_name,
+                        supports_ap: caps.supports_ap,
                     }))
                 }
                 Err(err) => ResponseBody::Err(err),

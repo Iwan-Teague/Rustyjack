@@ -358,4 +358,194 @@ https://github.com/seemoo-lab/bcm-rpi3
 
 ---
 
+## 8) IMPLEMENTATION PLAN (February 2026)
+
+This section documents the actual implementation of fixes identified above.
+
+### Phase 1: Fix nl80211 Interface Type Parsing (Commit 1)
+
+**Target:** `crates/rustyjack-netlink/src/wireless.rs`
+
+The current code at line 1391-1395 blindly sets all modes as supported:
+```rust
+// BROKEN - marks everything as supported without parsing
+NL80211_ATTR_SUPPORTED_IFTYPES => {
+    caps.supports_monitor = true;
+    caps.supports_ap = true;
+    caps.supports_station = true;
+}
+```
+
+**Fix:** Parse the nested attributes properly to determine actual supported modes.
+
+### Phase 2: Add Driver Detection (Commit 2)
+
+**Add driver detection via sysfs:**
+- `/sys/class/net/{iface}/device/driver` → driver name
+- Known injection-incapable drivers: `brcmfmac`, `iwlwifi` (most), `mwifiex`
+- Known injection-capable drivers: `ath9k_htc`, `ath9k`, `rt2800usb`, `rtl8812au`
+
+**New capability field:** `supports_tx_in_monitor: Option<bool>` (None = unknown)
+
+### Phase 3: Update WirelessCapabilities Struct (Commit 3)
+
+**Changes to `crates/rustyjack-core/src/wireless_native.rs`:**
+```rust
+pub struct WirelessCapabilities {
+    pub native_available: bool,
+    pub has_root: bool,
+    pub interface_exists: bool,
+    pub interface_is_wireless: bool,
+    pub supports_monitor_mode: bool,
+    pub supports_tx_in_monitor: Option<bool>, // NEW: None=unknown, Some(true)=yes
+    pub supports_ap: bool,
+    pub supports_5ghz: bool,
+    pub driver_name: Option<String>,          // NEW
+    pub chipset_info: Option<String>,         // NEW
+}
+```
+
+### Phase 4: Update Preflight Checks (Commit 4)
+
+**Changes to `crates/rustyjack-ui/src/app/preflight.rs`:**
+- `preflight_deauth_attack`: Require `supports_tx_in_monitor == Some(true)`
+- `preflight_handshake_capture`: Require `supports_tx_in_monitor == Some(true)`
+- `preflight_pmkid_capture`: Require only `supports_monitor_mode`
+- `preflight_probe_sniff`: Require only `supports_monitor_mode`
+
+### Phase 5: Implement NetworkMutationGuard (Commit 5)
+
+**New file:** `crates/rustyjack-core/src/mutation_guard.rs`
+
+RAII guard that registers rollback actions and executes them on drop:
+```rust
+pub struct NetworkMutationGuard {
+    rollback_stack: Vec<Box<dyn FnOnce() -> anyhow::Result<()> + Send>>,
+    committed: bool,
+}
+
+impl NetworkMutationGuard {
+    pub fn new() -> Self { ... }
+    pub fn register_rollback(&mut self, f: impl FnOnce() -> anyhow::Result<()> + Send + 'static) { ... }
+    pub fn commit(mut self) { self.committed = true; }
+}
+
+impl Drop for NetworkMutationGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            for action in self.rollback_stack.drain(..).rev() {
+                let _ = action();
+            }
+        }
+    }
+}
+```
+
+### Phase 6: Harden systemd Units (Commit 6)
+
+**Add to `services/rustyjack-ui.service`:**
+```ini
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+```
+
+### Phase 7: Add Hardware Profile Command (Commit 7)
+
+**New handler in `operations.rs`:** `handle_hardware_wifi_profile`
+
+Returns structured JSON with:
+- interface, driver_name, wiphy_name
+- supported_modes (list)
+- supports_monitor, supports_ap, supports_tx_in_monitor
+- bands (2.4GHz, 5GHz)
+- verdict: "injection_capable" | "monitor_only" | "station_only"
+- verdict_reason: human-readable explanation
+
+---
+
+## 8.5) IMPLEMENTATION COMPLETE - SUMMARY
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `crates/rustyjack-netlink/src/wireless.rs` | Fixed nl80211 IFTYPES parsing, added TxInMonitorCapability enum, driver detection, injection denylist |
+| `crates/rustyjack-core/src/wireless_native.rs` | Updated WirelessCapabilities struct with tx_in_monitor fields, new detection methods |
+| `crates/rustyjack-core/src/mutation_guard.rs` | **NEW**: RAII cleanup framework for network mutations |
+| `crates/rustyjack-core/src/lib.rs` | Added mutation_guard module export |
+| `crates/rustyjack-core/src/system/ops.rs` | Added TxInMonitorCapability to InterfaceCapabilities |
+| `crates/rustyjack-core/src/operations.rs` | Added handle_hardware_wifi_profile command handler |
+| `crates/rustyjack-commands/src/lib.rs` | Added HardwareCommand::WifiProfile with args |
+| `crates/rustyjack-ipc/src/types.rs` | Added TxInMonitorCapability enum and new fields to IPC types |
+| `crates/rustyjack-daemon/src/dispatch.rs` | Updated IPC responses to include new capability fields |
+| `crates/rustyjack-ui/src/core.rs` | Added TxInMonitorCapability enum, updated InterfaceCapabilities |
+| `crates/rustyjack-ui/src/app/preflight.rs` | Updated deauth/handshake preflight to use tx_in_monitor |
+| `crates/rustyjack-ui/src/ops/shared/preflight.rs` | Updated shared preflight to use tx_in_monitor |
+| `crates/rustyjack-wireless/src/nl80211_queries.rs` | Added TxInMonitorCapability, use netlink detection |
+| `services/rustyjack-ui.service` | Added comprehensive systemd hardening directives |
+
+### Commit Plan
+
+1. **Commit: Fix nl80211 interface type parsing**
+   - Parse NL80211_ATTR_SUPPORTED_IFTYPES nested attributes properly
+   - Removes blind mode assumption
+
+2. **Commit: Add driver-based injection capability detection**
+   - Add TxInMonitorCapability enum with Supported/NotSupported/Unknown
+   - Add INJECTION_DENY_DRIVERS and INJECTION_ALLOW_DRIVERS lists
+   - Add driver detection from sysfs
+   - Update PhyCapabilities struct
+
+3. **Commit: Update WirelessCapabilities across crates**
+   - Update rustyjack-core, rustyjack-ipc, rustyjack-ui structs
+   - Add conversion between crate-specific capability types
+   - Maintain backward compatibility with supports_injection field
+
+4. **Commit: Update preflight checks for TX-in-monitor**
+   - Deauth requires TxInMonitorCapability::Supported
+   - Allow Unknown with warning
+   - Block NotSupported with clear explanation
+
+5. **Commit: Add NetworkMutationGuard RAII cleanup**
+   - Create mutation_guard.rs module
+   - Implement Drop-based rollback
+   - Add unit tests for rollback behavior
+
+6. **Commit: Harden rustyjack-ui.service**
+   - Add ProtectKernel*, RestrictNamespaces, RestrictSUIDSGID
+   - Add syscall filtering and resource limits
+   - Restrict to AF_UNIX only
+
+7. **Commit: Add hardware wifi-profile command**
+   - New CLI command: `hardware wifi-profile -i wlan0`
+   - Returns driver, capabilities, injection verdict, recommendations
+
+---
+
+## 9) TESTING CHECKLIST
+
+### A. Capability Detection Tests
+- [ ] On Pi Zero 2 W onboard WiFi (wlan0), tx_in_monitor should be `Some(false)` or `None`
+- [ ] On AR9271 USB adapter, tx_in_monitor should be `Some(true)`
+- [ ] Deauth preflight fails on onboard WiFi with clear message
+- [ ] Probe sniff preflight passes on onboard WiFi (monitor-only op)
+
+### B. Cleanup Tests
+- [ ] Hotspot start/cancel leaves no nftables rules
+- [ ] Repeated start/stop cycles don't accumulate state
+- [ ] DNS spoof cleanup restores /etc/resolv.conf
+
+### C. Systemd Hardening Tests
+```bash
+systemd-analyze security rustyjackd.service   # Target: ≤3.0
+systemd-analyze security rustyjack-ui.service # Target: ≤4.0
+```
+
+---
+
 *End of report.*

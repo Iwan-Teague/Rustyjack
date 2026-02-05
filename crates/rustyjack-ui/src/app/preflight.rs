@@ -71,11 +71,24 @@ impl App {
             )));
         }
 
-        if !caps.supports_injection {
-            return Ok(Some(format!(
-                "{} cannot inject packets. Deauth attacks require packet injection capability. Consider using an external USB Wi-Fi adapter.",
-                iface
-            )));
+        // Check TX-in-monitor capability - needed for deauth
+        match caps.tx_in_monitor {
+            crate::core::TxInMonitorCapability::NotSupported => {
+                return Ok(Some(format!(
+                    "{} cannot inject packets in monitor mode. {}. Consider using an external USB Wi-Fi adapter with injection support (e.g., AR9271, RTL8812AU).",
+                    iface, caps.tx_in_monitor_reason
+                )));
+            }
+            crate::core::TxInMonitorCapability::Unknown => {
+                // Allow but warn - user can proceed at their own risk
+                tracing::warn!(
+                    "TX-in-monitor capability unknown for {}: {}",
+                    iface, caps.tx_in_monitor_reason
+                );
+            }
+            crate::core::TxInMonitorCapability::Supported => {
+                // Good to go
+            }
         }
 
         if self.config.settings.target_bssid.is_empty() {
@@ -326,11 +339,24 @@ impl App {
             )));
         }
 
-        if !caps.supports_injection {
-            return Ok(Some(format!(
-                "{} cannot inject packets. Handshake capture requires injection capability.",
-                iface
-            )));
+        // Check TX-in-monitor capability - needed for active handshake capture with deauth
+        match caps.tx_in_monitor {
+            crate::core::TxInMonitorCapability::NotSupported => {
+                return Ok(Some(format!(
+                    "{} cannot inject packets in monitor mode. {}. Consider using an external USB Wi-Fi adapter with injection support.",
+                    iface, caps.tx_in_monitor_reason
+                )));
+            }
+            crate::core::TxInMonitorCapability::Unknown => {
+                // Allow but warn
+                tracing::warn!(
+                    "TX-in-monitor capability unknown for {}: {}",
+                    iface, caps.tx_in_monitor_reason
+                );
+            }
+            crate::core::TxInMonitorCapability::Supported => {
+                // Good to go
+            }
         }
 
         if self.config.settings.target_bssid.is_empty() {
