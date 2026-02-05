@@ -9,6 +9,8 @@
 #   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
 set -euo pipefail
 WARN_COUNT=0
+SKIP_HASH_CHECKS=0
+USB_COPY_TO_PREBUILT=0
 
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
@@ -16,8 +18,54 @@ warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
 
+prompt_yes_no() {
+  local prompt="$1"
+  local default="${2:-n}"
+  local reply=""
+  while true; do
+    if [ "$default" = "y" ]; then
+      if ! read -r -p "$prompt [Y/n]: " reply; then
+        reply=""
+      fi
+      reply="${reply:-y}"
+    else
+      if ! read -r -p "$prompt [y/N]: " reply; then
+        reply=""
+      fi
+      reply="${reply:-n}"
+    fi
+    case "$reply" in
+      y|Y|yes|YES) return 0 ;;
+      n|N|no|NO) return 1 ;;
+    esac
+    echo "Please answer y or n."
+  done
+}
+
+prompt_install_options() {
+  if [ -t 0 ]; then
+    step "Installer options"
+    if prompt_yes_no "Skip SHA256 integrity checks (faster on slow storage)?" "n"; then
+      SKIP_HASH_CHECKS=1
+    else
+      SKIP_HASH_CHECKS=0
+    fi
+    if prompt_yes_no "When prebuilts are found on USB, copy them into PREBUILT_DIR (slower but caches locally)?" "n"; then
+      USB_COPY_TO_PREBUILT=1
+    else
+      USB_COPY_TO_PREBUILT=0
+    fi
+  else
+    info "Non-interactive shell detected; using defaults (hash checks enabled, USB copy disabled)."
+  fi
+}
+
 hash_file() {
   local path="$1"
+  if [ "$SKIP_HASH_CHECKS" = "1" ]; then
+    echo ""
+    return 0
+  fi
   if cmd sha256sum; then
     sha256sum "$path" | awk '{print $1}'
     return 0
@@ -61,7 +109,11 @@ print_binary_info() {
     if [ -n "$hash" ]; then
       info "  ${label}: $size - $buildid - sha256=$hash"
     else
-      info "  ${label}: $size - $buildid - sha256=unavailable"
+      if [ "$SKIP_HASH_CHECKS" = "1" ]; then
+        info "  ${label}: $size - $buildid - sha256=skipped"
+      else
+        info "  ${label}: $size - $buildid - sha256=unavailable"
+      fi
     fi
   else
     warn "  ${label}: NOT FOUND at $path"
@@ -429,8 +481,13 @@ default_route_interface() {
 
 copy_prebuilt_from_usb() {
   local arch="$1"
-  local dest_dir="$PROJECT_ROOT/prebuilt/$arch"
+  local dest_dir=""
   local src_dir=""
+  if [ -n "${PREBUILT_DIR:-}" ]; then
+    dest_dir="$(resolve_prebuilt_root "$PREBUILT_DIR")"
+  else
+    dest_dir="$PROJECT_ROOT/prebuilt/$arch"
+  fi
 
   info "Searching for prebuilt binaries on mounted devices (arch=$arch)..."
 
@@ -478,7 +535,9 @@ copy_prebuilt_from_usb() {
   for bin in "${bins[@]}"; do
     if [ -f "$src_dir/$bin" ]; then
       print_binary_info "✓ $bin" "$src_dir/$bin"
-      src_hashes["$bin"]="$(hash_file "$src_dir/$bin" || true)"
+      if [ "$SKIP_HASH_CHECKS" != "1" ]; then
+        src_hashes["$bin"]="$(hash_file "$src_dir/$bin" || true)"
+      fi
     else
       warn "  ✗ $bin - MISSING"
       all_found=0
@@ -487,6 +546,16 @@ copy_prebuilt_from_usb() {
 
   if [ "$all_found" -eq 0 ]; then
     fail "Not all binaries found in $src_dir"
+  fi
+
+  if [ "$USB_COPY_TO_PREBUILT" != "1" ]; then
+    local src_real
+    src_real=$(readlink -f "$src_dir" 2>/dev/null || echo "$src_dir")
+    PREBUILT_DIR="$src_real"
+    info ""
+    info "Using USB prebuilts directly (skipping copy to $dest_dir)"
+    info "PREBUILT_DIR set to: $PREBUILT_DIR"
+    return 0
   fi
 
   info ""
@@ -518,28 +587,34 @@ copy_prebuilt_from_usb() {
     info "=========================================="
     info "Destination: $dest_dir"
     info ""
-    info "Verifying copied binaries..."
-
-    for bin in "${bins[@]}"; do
-      if [ -f "$dest_dir/$bin" ]; then
-        print_binary_info "✓ $bin" "$dest_dir/$bin"
-        local src_hash="${src_hashes[$bin]:-}"
-        local dest_hash=""
-        dest_hash=$(hash_file "$dest_dir/$bin" || true)
-        if [ -n "$src_hash" ] && [ -n "$dest_hash" ] && [ "$src_hash" != "$dest_hash" ]; then
-          warn "  ✗ $bin hash mismatch after copy (src=$src_hash dest=$dest_hash)"
-          fail "Binary copy failed integrity check"
+    if [ "$SKIP_HASH_CHECKS" != "1" ]; then
+      info "Verifying copied binaries..."
+      for bin in "${bins[@]}"; do
+        if [ -f "$dest_dir/$bin" ]; then
+          print_binary_info "✓ $bin" "$dest_dir/$bin"
+          local src_hash="${src_hashes[$bin]:-}"
+          local dest_hash=""
+          dest_hash=$(hash_file "$dest_dir/$bin" || true)
+          if [ -n "$src_hash" ] && [ -n "$dest_hash" ] && [ "$src_hash" != "$dest_hash" ]; then
+            warn "  ✗ $bin hash mismatch after copy (src=$src_hash dest=$dest_hash)"
+            fail "Binary copy failed integrity check"
+          fi
+        else
+          warn "  ✗ $bin - COPY FAILED"
         fi
-      else
-        warn "  ✗ $bin - COPY FAILED"
-      fi
-    done
+      done
+    else
+      info "Skipping copied-binary hash verification (SKIP_HASH_CHECKS=1)"
+    fi
     info "=========================================="
     return 0
   fi
 
   return 1
 }
+
+# Prompt for install speed options before making changes.
+prompt_install_options
 
 # ---- 1: locate active config.txt ----------------------------
 CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
@@ -841,28 +916,33 @@ for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
 done
 info ""
 
-info "Verifying installed binary hashes..."
-for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
-  src_path="$PREBUILT_ROOT/$bin_name"
-  dest_path="/usr/local/bin/$bin_name"
-  if [ -f "$src_path" ] && [ -f "$dest_path" ]; then
-    src_hash=$(hash_file "$src_path" || true)
-    dest_hash=$(hash_file "$dest_path" || true)
-    if [ -n "$src_hash" ] && [ -n "$dest_hash" ]; then
-      if [ "$src_hash" = "$dest_hash" ]; then
-        info "  ✓ $bin_name hash match ($src_hash)"
+if [ "$SKIP_HASH_CHECKS" != "1" ]; then
+  info "Verifying installed binary hashes..."
+  for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
+    src_path="$PREBUILT_ROOT/$bin_name"
+    dest_path="/usr/local/bin/$bin_name"
+    if [ -f "$src_path" ] && [ -f "$dest_path" ]; then
+      src_hash=$(hash_file "$src_path" || true)
+      dest_hash=$(hash_file "$dest_path" || true)
+      if [ -n "$src_hash" ] && [ -n "$dest_hash" ]; then
+        if [ "$src_hash" = "$dest_hash" ]; then
+          info "  ✓ $bin_name hash match ($src_hash)"
+        else
+          warn "  ✗ $bin_name hash mismatch (src=$src_hash dest=$dest_hash)"
+          fail "Binary integrity check failed for $bin_name"
+        fi
       else
-        warn "  ✗ $bin_name hash mismatch (src=$src_hash dest=$dest_hash)"
-        fail "Binary integrity check failed for $bin_name"
+        warn "  [WARN] $bin_name hash unavailable (missing sha256sum/shasum)"
       fi
     else
-      warn "  [WARN] $bin_name hash unavailable (missing sha256sum/shasum)"
+      warn "  ✗ $bin_name hash check skipped (missing source or destination)"
     fi
-  else
-    warn "  ✗ $bin_name hash check skipped (missing source or destination)"
-  fi
-done
-info ""
+  done
+  info ""
+else
+  info "Skipping installed binary hash verification (SKIP_HASH_CHECKS=1)"
+  info ""
+fi
 
 # Verify binaries can execute (check for missing libraries)
 info "Verifying binary compatibility..."
