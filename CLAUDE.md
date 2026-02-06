@@ -2,13 +2,18 @@
 
 ## Project Overview
 
-**RustyJack** is a portable network security toolkit for Raspberry Pi Zero 2 W running Raspberry Pi OS Lite (32-bit Trixie). It combines a native Rust offensive security framework with an embedded LCD UI (Waveshare 1.44" 128x128 ST7735S display).
+**RustyJack** is a portable network security toolkit for Raspberry Pi Zero 2 W running Raspberry Pi OS Lite or Debian (Trixie). It combines a native Rust offensive security framework with an embedded LCD UI (Waveshare 1.44" 128x128 ST7735S display).
 
 **Key Principle: Pure Rust with no external binaries.** All system operations are implemented natively - no iptables, wpa_cli, dnsmasq, dhclient, nmcli, or rfkill binaries. Temporary exceptions exist for shell scripts during installation only.
 
+**Reality check (current state):**
+- Installers still pull `wpa_supplicant` (and `wpa_cli` as a fallback), `hostapd`, `dnsmasq`, and `isc-dhcp-client` for compatibility. These are not fully eliminated yet.
+- `/etc/resolv.conf` is claimed as a symlink to `/var/lib/rustyjack/resolv.conf` (not a plain file).
+- 64-bit arm64 deployments on Debian 13 (Trixie) are in active use; 32-bit remains a supported target but should be revalidated when changing low-level networking.
+
 ### Target Platform
 - **Hardware:** Raspberry Pi Zero 2 W with Ethernet HAT + Waveshare 1.44" LCD HAT
-- **OS:** Raspbian 32-bit CLI (Trixie) - tested configuration
+- **OS:** Debian 13 / Raspberry Pi OS Lite (Trixie); arm64 is supported (preferred for prebuilts), 32-bit remains supported
 - **External Requirements:** USB WiFi adapter with monitor+injection for wireless attacks (built-in BCM43436 cannot monitor/inject)
 
 ### License
@@ -55,7 +60,7 @@ MIT
 
 | Crate | Purpose | Replaces |
 |-------|---------|----------|
-| `rustyjack-netlink` | Networking stack: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables | iptables, wpa_cli, dnsmasq, dhclient, nmcli, rfkill |
+| `rustyjack-netlink` | Networking stack: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables | iptables, dhclient, rfkill (aims to replace wpa_cli/dnsmasq/nmcli; see reality check) |
 | `rustyjack-evasion` | MAC/hostname randomization, TX power control | macchanger |
 | `rustyjack-encryption` | AES-GCM encryption, secure key handling | - |
 | `rustyjack-wpa` | WPA/WPA2 handshake processing, PMK/PTK computation | - |
@@ -95,7 +100,7 @@ MIT
 - ARP spoofing and MITM
 
 ### Hotspot
-- Rust-native AP (no hostapd/dnsmasq)
+- Rust-native AP (no hostapd/dnsmasq at runtime; installers still include them for compatibility)
 - Built-in DHCP and DNS servers
 - NAT via nf_tables netlink
 
@@ -265,7 +270,7 @@ journalctl -u rustyjackd -f
 - Check interface isolation in Settings → Hardware
 
 ### DNS resolution issues
-- Check that `/etc/resolv.conf` is a plain file (not a symlink)
+- Check that `/etc/resolv.conf` is a symlink to `/var/lib/rustyjack/resolv.conf` and is writable by root
 - Verify NetworkManager is purged: `dpkg -s network-manager` should show "not installed"
 - Installation removes NetworkManager completely via `apt-get purge`
 

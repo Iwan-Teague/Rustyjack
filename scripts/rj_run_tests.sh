@@ -7,10 +7,14 @@ RUN_WIRELESS=0
 RUN_ETHERNET=0
 RUN_ENCRYPTION=0
 RUN_LOOT=0
+RUN_MAC=0
+RUN_DAEMON=0
 DANGEROUS=0
 RUN_UI=1
 OUTROOT="${RJ_OUTROOT:-/var/tmp/rustyjack-tests}"
 RUN_ID="${RJ_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+
+chmod +x "$ROOT_DIR"/rj_test_*.sh "$ROOT_DIR"/rustyjack_comprehensive_test.sh 2>/dev/null || true
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +26,8 @@ Options:
   --ethernet    Run ethernet tests
   --encryption  Run encryption tests
   --loot        Run loot tests
+  --mac         Run MAC randomization tests
+  --daemon      Run daemon/IPC security tests
   --dangerous   Enable dangerous tests (passed to suites)
   --no-ui       Disable UI automation
   --outroot DIR Output root (default: /var/tmp/rustyjack-tests)
@@ -37,24 +43,30 @@ if [[ $# -eq 0 ]]; then
   echo "  2) Ethernet"
   echo "  3) Encryption"
   echo "  4) Loot"
+  echo "  5) MAC Randomization"
+  echo "  6) Daemon/IPC"
   echo "  0) All"
   read -r choice
   case "$choice" in
-    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1 ;;
+    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1 ;;
     1) RUN_WIRELESS=1 ;;
     2) RUN_ETHERNET=1 ;;
     3) RUN_ENCRYPTION=1 ;;
     4) RUN_LOOT=1 ;;
+    5) RUN_MAC=1 ;;
+    6) RUN_DAEMON=1 ;;
     *) echo "Unknown choice" >&2; exit 2 ;;
   esac
 else
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; shift ;;
+      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; shift ;;
       --wireless) RUN_WIRELESS=1; shift ;;
       --ethernet) RUN_ETHERNET=1; shift ;;
       --encryption) RUN_ENCRYPTION=1; shift ;;
       --loot) RUN_LOOT=1; shift ;;
+      --mac) RUN_MAC=1; shift ;;
+      --daemon) RUN_DAEMON=1; shift ;;
       --dangerous) DANGEROUS=1; shift ;;
       --no-ui) RUN_UI=0; shift ;;
       --outroot) OUTROOT="$2"; shift 2 ;;
@@ -86,6 +98,12 @@ if [[ $RUN_ENCRYPTION -eq 1 ]]; then
 fi
 if [[ $RUN_LOOT -eq 1 ]]; then
   "$ROOT_DIR/rj_test_loot.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_MAC -eq 1 ]]; then
+  "$ROOT_DIR/rj_test_mac_randomization.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_DAEMON -eq 1 ]]; then
+  "$ROOT_DIR/rj_test_daemon.sh" "${COMMON_ARGS[@]}"
 fi
 
 echo "Tests complete. Results in: $OUTROOT/$RUN_ID"

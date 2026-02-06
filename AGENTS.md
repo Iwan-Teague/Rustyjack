@@ -4,21 +4,22 @@ This project targets a Raspberry Pi Zero 2 W equipped with an Ethernet HAT and a
 
 Hardware specifics drawn from waveshare_gpio_pin_mapping.md and waveshare_button_mapping.md:
 - Display pins (BCM): DC=25, RST=27, BL=24; SPI: SCLK=11, MOSI=10, CS=8. Backlight lives on BCM24 and can be toggled with `gpioset gpiochip0 24=1`.
-- Input pins (BCM): UP=6, DOWN=19, LEFT=5, RIGHT=26, PRESS=13; KEY1=21, KEY2=20, KEY3=16. Button mapping in the UI: Up/Down move selection, Left is back, Right/Select accepts, Key1 refreshes, Key2 returns to main menu, Key3 opens reboot confirmation.
+- Input pins (BCM): UP=6, DOWN=19, LEFT=5, RIGHT=26, PRESS=13; KEY1=21, KEY2=20, KEY3=16. Button mapping in the UI: Up/Down move selection, Left is back, Right/Select accepts, Key1 refreshes, Key2 cancels (no-op in menus/dashboards; cancels dialogs/ops), Key3 opens reboot confirmation.
 - GPIO pull-ups are expected in `/boot/firmware/config.txt` (or `/boot/config.txt`), using `gpio=6,19,5,26,13,21,20,16=pu`; the installers write this line and request a reboot so input remains stable.
 
 Software/runtime expectations:
 - Built and run on Linux (Pi OS) with root privileges via systemd service, so `CAP_NET_ADMIN` is available.
-- Dependencies are installed by `install_rustyjack.sh`, `install_rustyjack_dev.sh`, and `install_rustyjack_prebuilt.sh`: `wpasupplicant` (`wpa_cli`), `wireless-tools`, plus build and firmware packages. When adding features that call new system binaries, update all installers accordingly.
+- Dependencies are installed by `install_rustyjack.sh`, `install_rustyjack_dev.sh`, and `install_rustyjack_prebuilt.sh`: `wpasupplicant` (for WPA auth + `wpa_cli` fallback), `isc-dhcp-client`, `hostapd`, `dnsmasq`, `rfkill`, `i2c-tools`, `git`, `curl`, plus build/firmware packages (dev/build includes `build-essential`, `pkg-config`, `libssl-dev`, `dkms`, `bc`, `libelf-dev`). When adding features that call new system binaries, update all installers accordingly.
 - **IMPORTANT: NetworkManager is REMOVED, not just disabled.** Installers run `apt-get purge network-manager` to completely remove NetworkManager from the system. Do NOT assume `nmcli` is available. All network management is done through pure Rust netlink operations.
 - Installers now:
   - Remount `/` read-write if needed (fresh Pi images can boot `ro`).
   - **Purge NetworkManager completely** via `apt-get purge network-manager` and mask the service.
-  - Claim `/etc/resolv.conf` for Rustyjack (plain root-owned file, not a symlink) and reclaim it after apt installs so route/DNS enforcement can write reliably.
+  - Claim `/etc/resolv.conf` for Rustyjack (symlink to `/var/lib/rustyjack/resolv.conf`, root-owned) and reclaim it after apt installs so route/DNS enforcement can write reliably.
   - Disable competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). This ensures Rustyjack has sole control of DNS on the dedicated device.
+  - Ensure `/var/lib/rustyjack/logs` exists and is owned by `rustyjack-ui:rustyjack` so the UI can write logs.
 
 MAC randomization flow:
-- UI uses `rustyjack-evasion::MacManager` with vendor-aware policy engine for secure, locally administered MACs. Prefers vendor-matched OUIs based on the current interface's OUI. After changing MAC it triggers DHCP renewal via netlink and signals reconnect via `wpa_cli reconnect` (nmcli is no longer available).
+- UI uses `rustyjack-evasion::MacManager` with vendor-aware policy engine for secure, locally administered MACs. Prefers vendor-matched OUIs based on the current interface's OUI. After changing MAC it triggers DHCP renewal via netlink; reconnect is best-effort and does not rely on `nmcli`.
 
 Built-in wireless (Raspberry Pi Zero 2 W):
 - Chipset: Cypress/Infineon CYW43436 (2.4 GHz 802.11b/g/n, single-stream HT20, ~72 Mbps max link). No 5 GHz support.
@@ -57,9 +58,11 @@ Loot storage:
 - Reports: `loot/reports/<network>/report_<timestamp>.txt` with combined insights and next steps.
 - Audit logs: Operation history with timestamps and command tracking.
 
-Systemd services (4):
+Systemd services (5 + socket):
 - `rustyjackd.service` — Privileged daemon (root, CAP_NET_ADMIN/CAP_NET_RAW/CAP_SYS_ADMIN).
+- `rustyjackd.socket` — Daemon socket (used by prebuilt/socket activation flows).
 - `rustyjack-ui.service` — Unprivileged LCD UI (rustyjack-ui user, supplementary groups: gpio, spi, rustyjack).
+- `rustyjack-wpa_supplicant@wlan0.service` — WiFi client authentication service.
 - `rustyjack-portal.service` — Captive portal server (rustyjack-portal user, port 3000).
 - `rustyjack.service` — Alias for rustyjack-ui.service.
 
@@ -71,3 +74,7 @@ Important implementation notes:
 
 Style guard:
 - Don't add any emojis and remove emojis if found in the code.
+
+Reality check / current gaps:
+- Goal: Pure Rust networking and tooling (no external binaries). Current state: installers still include `wpa_supplicant`, `hostapd`, `dnsmasq`, and `isc-dhcp-client` for compatibility. Remove these only after confirming Rust-native replacements cover all flows on target hardware.
+- Goal: Dedicated-device DNS ownership. Current state: installers claim `/etc/resolv.conf` and disable competing DNS managers; this is correct for a dedicated appliance but may be too aggressive for multi-purpose hosts.

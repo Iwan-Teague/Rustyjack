@@ -108,7 +108,7 @@ Runtime directories are created by the installers under `/var/lib/rustyjack`:
 | RIGHT   | 26.      | Select/forward              |
 | PRESS   | 13       | Center press (select)       |
 | KEY1    | 21       | Refresh/redraw              |
-| KEY2    | 20       | Jump to main menu           |
+| KEY2    | 20       | Cancel (no-op in menus; cancels dialogs/ops) |
 | KEY3    | 16       | Reboot confirmation dialog  |
 
 Pins and colors can be customized in `gui_conf.json`; defaults are created automatically.
@@ -121,7 +121,7 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 | Left                 | Back/exit dialog                                     |
 | Right / Center press | Select/confirm                                       |
 | Key1                 | Refresh current view                                 |
-| Key2                 | Jump to main menu                                    |
+| Key2                 | Cancel (no-op in menus; cancels dialogs/ops)         |
 | Key3                 | Open reboot confirmation (requires explicit confirm) |
 
 ## UI Features
@@ -164,7 +164,7 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 
 ### Obfuscation & Identity
 
-- **MAC controls**: Auto MAC toggle, Randomize Now (vendor-aware: reuses interface OUI when possible, sets locally administered bit, renews DHCP and signals `wpa_cli`/`nmcli`), Set Vendor MAC (pick from `rustyjack-evasion` vendor table), Restore MAC (uses saved original or hardware address).
+- **MAC controls**: Auto MAC toggle, Randomize Now (vendor-aware: reuses interface OUI when possible, sets locally administered bit, renews DHCP via netlink; reconnect is best-effort), Set Vendor MAC (pick from `rustyjack-evasion` vendor table), Restore MAC (uses saved original or hardware address).
 - **Hostname**: Auto toggle + Randomize Now (via `SystemCommand::RandomizeHostname`).
 - **TX Power**: Stealth 1 dBm, Low 5 dBm, Medium 12 dBm, High 18 dBm, Maximum (via `rustyjack-netlink`).
 - **Passive mode toggle**: Stores preference (used for mode presets); Passive Recon action is informational.
@@ -237,13 +237,13 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 2. SSH to the Pi, become root: `sudo su -`.
 3. Clone the project: `git clone https://github.com/Iwan-Teague/Rusty-Jack.git Rustyjack && cd Rustyjack`.
 4. Run the installer: `chmod +x install_rustyjack.sh && ./install_rustyjack.sh`
-   - Installs packages: build-essential, pkg-config, libssl-dev, DKMS toolchain, `procps`, `wireless-tools`, `wpa_supplicant`, firmware for Realtek/Atheros/Ralink, git, i2c-tools, curl.
+   - Installs packages: base runtime (`wpa_supplicant`, git, i2c-tools, curl; firmware for Realtek/Atheros/Ralink as available). Prebuilt/USB installs also include `hostapd`, `dnsmasq`, `isc-dhcp-client`, `rfkill`. Source builds add build toolchain (`build-essential`, `pkg-config`, `libssl-dev`, DKMS toolchain) and kernel headers when available.
    - **Removes NetworkManager**: Runs `apt-get purge network-manager` to completely remove NetworkManager from the system (not just disabled).
    - Enables I2C/SPI overlays, `dtoverlay=spi0-2cs`, and GPIO pull-ups for all buttons.
    - Ensures ~2 GB swap for compilation, builds `rustyjack-ui` (release), installs to `/usr/local/bin/`.
    - Creates `/var/lib/rustyjack/loot/{Wireless,Ethernet,reports}`, `/var/lib/rustyjack/wifi/profiles/sample.json`, and keeps WLAN interfaces up.
-   - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT=/var/lib/rustyjack`, installs/enables `rustyjack-ui.service` + `rustyjackd.socket`, starts the service, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
-   - **Claims `/etc/resolv.conf`**: Replaces any symlinks with a plain root-owned file managed by RustyJack. Disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). NetworkManager is completely removed to prevent DNS conflicts.
+   - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT=/var/lib/rustyjack`, installs/enables systemd units (typically `rustyjackd.service` + `rustyjack-ui.service`; prebuilt may use `rustyjackd.socket`), starts services, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
+   - **Claims `/etc/resolv.conf`**: Symlinks to `/var/lib/rustyjack/resolv.conf` and disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). NetworkManager is completely removed to prevent DNS conflicts.
    - Remounts `/` read-write if needed on fresh images to allow installs/edits.
 5. After reboot, the LCD shows the menu. Service status: `systemctl status rustyjack-ui`.
 
@@ -258,6 +258,7 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 
 **Loot Directories**:
 - `loot/`: wireless, Ethernet, and scan captures; pipelines are under `loot/Wireless/<target>/pipelines/`; reports live in `loot/reports/`.
+- `logs/`: UI/daemon logs under `/var/lib/rustyjack/logs` (owned by `rustyjack-ui:rustyjack`).
 - `loot/Scan/`: Rust-native scan reports from `rustyjack-core scan run`.
 - `DNSSpoof/sites/`: portal templates for DNS spoof/MITM; captures go to `DNSSpoof/captures/`.
 
@@ -272,7 +273,9 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 
 **Systemd Services**:
 - `rustyjackd.service` - Privileged daemon (root) with CAP_NET_ADMIN, CAP_NET_RAW, CAP_SYS_ADMIN capabilities
+- `rustyjackd.socket` - Daemon socket (used for socket activation in some installs)
 - `rustyjack-ui.service` - Unprivileged LCD UI service (rustyjack-ui user, supplementary groups: gpio, spi, rustyjack)
+- `rustyjack-wpa_supplicant@wlan0.service` - WiFi client authentication service
 - `rustyjack-portal.service` - Captive portal HTTP server (rustyjack-portal user, port 3000)
 - `rustyjack.service` - Alias for rustyjack-ui.service
 
@@ -304,7 +307,7 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 - Hotspot: set upstream/AP interfaces when starting; randomize SSID/password from the hotspot menu if conflicts occur.
 
 **Network & DNS**:
-- DNS resolution issues: Check that `/etc/resolv.conf` is a plain file (not a symlink) and verify NetworkManager is purged with `dpkg -s network-manager` (should show "not installed").
+- DNS resolution issues: Check that `/etc/resolv.conf` is a symlink to `/var/lib/rustyjack/resolv.conf` and verify NetworkManager is purged with `dpkg -s network-manager` (should show "not installed").
 - NetworkManager conflicts: If you see DNS or networking issues after installation, confirm NetworkManager was fully removed: `sudo apt-get purge network-manager && sudo apt-get autoremove`.
 
 **USB & Storage**:
