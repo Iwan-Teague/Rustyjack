@@ -1,0 +1,20 @@
+# Wireless menu sweep (non-destructive)
+# Main menu -> Wireless
+sleep 1
+
+down 4
+select
+
+# Get Connected submenu
+select
+left
+
+# Post Connection submenu
+sleep 0.5
+
+down 1
+select
+left
+
+# Back to main menu
+left

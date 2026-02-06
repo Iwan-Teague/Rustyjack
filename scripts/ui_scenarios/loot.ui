@@ -1,0 +1,6 @@
+# Loot menu sweep (non-destructive)
+sleep 1
+
+down 8
+select
+left

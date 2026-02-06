@@ -1,4 +1,9 @@
 use std::{
+    env,
+    fs::OpenOptions,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver},
     thread,
     time::{Duration, Instant},
 };
@@ -53,6 +58,8 @@ mod platform {
 
     pub struct ButtonPad {
         buttons: Vec<ButtonInput>,
+        virtual_rx: Option<Receiver<Button>>,
+        pending_virtual: Option<Button>,
         __debounce: Duration,
         last_press: Instant,
     }
@@ -89,6 +96,8 @@ mod platform {
             let debounce = Duration::from_millis(120);
             Ok(Self {
                 buttons,
+                virtual_rx: spawn_virtual_input(),
+                pending_virtual: None,
                 __debounce: debounce,
                 last_press: Instant::now() - debounce,
             })
@@ -141,6 +150,14 @@ mod platform {
         }
 
         fn poll(&mut self) -> Result<Option<Button>> {
+            if let Some(kind) = self.next_virtual_button() {
+                if self.last_press.elapsed() < self.__debounce {
+                    self.pending_virtual = Some(kind);
+                    return Ok(None);
+                }
+                self.last_press = Instant::now();
+                return Ok(Some(kind));
+            }
             for btn in &self.buttons {
                 if btn.is_pressed()? {
                     if self.last_press.elapsed() < self.__debounce {
@@ -151,6 +168,84 @@ mod platform {
                 }
             }
             Ok(None)
+        }
+
+        fn next_virtual_button(&mut self) -> Option<Button> {
+            if let Some(kind) = self.pending_virtual.take() {
+                return Some(kind);
+            }
+            let rx = self.virtual_rx.as_ref()?;
+            rx.try_recv().ok()
+        }
+    }
+
+    fn spawn_virtual_input() -> Option<Receiver<Button>> {
+        let path = env::var("RUSTYJACK_UI_VINPUT").ok()?;
+        let debug = env::var("RUSTYJACK_UI_VINPUT_DEBUG").is_ok();
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let fifo = PathBuf::from(path);
+            loop {
+                let file = match OpenOptions::new().read(true).open(&fifo) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        if debug {
+                            eprintln!(
+                                "virtual-input: failed to open {}: {}",
+                                fifo.display(),
+                                err
+                            );
+                        }
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                };
+                let reader = BufReader::new(file);
+                for line in reader.lines() {
+                    let line = match line {
+                        Ok(line) => line,
+                        Err(err) => {
+                            if debug {
+                                eprintln!("virtual-input: read error: {}", err);
+                            }
+                            break;
+                        }
+                    };
+                    if let Some(button) = parse_virtual_button(&line) {
+                        if tx.send(button).is_err() {
+                            return;
+                        }
+                    } else if debug {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            eprintln!("virtual-input: unknown token '{}'", trimmed);
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+
+        Some(rx)
+    }
+
+    fn parse_virtual_button(line: &str) -> Option<Button> {
+        let token = line.trim();
+        if token.is_empty() || token.starts_with('#') {
+            return None;
+        }
+        let token = token.to_ascii_lowercase();
+        match token.as_str() {
+            "up" | "u" => Some(Button::Up),
+            "down" | "d" => Some(Button::Down),
+            "left" | "l" | "back" => Some(Button::Left),
+            "right" | "r" => Some(Button::Right),
+            "select" | "ok" | "enter" | "press" => Some(Button::Select),
+            "key1" | "k1" | "refresh" => Some(Button::Key1),
+            "key2" | "k2" | "cancel" => Some(Button::Key2),
+            "key3" | "k3" | "reboot" => Some(Button::Key3),
+            _ => None,
         }
     }
 }

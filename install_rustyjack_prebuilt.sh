@@ -18,6 +18,36 @@ info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
 warn()  { WARN_COUNT=$((WARN_COUNT + 1)); printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
+show_service_logs() {
+  local service="$1"
+  local lines="${2:-80}"
+  local max_lines="${3:-80}"
+  warn "Recent logs for $service (deduped, up to $max_lines lines):"
+  journalctl -u "$service" -n "$lines" --no-pager 2>/dev/null | awk -v max="$max_lines" '
+    $0==prev { next }
+    { prev=$0; print; count++ }
+    count>=max { exit }
+  ' | while IFS= read -r line; do
+    warn "  $line"
+  done
+}
+show_apt_logs() {
+  warn "Recent APT logs:"
+  if [ -f /var/log/apt/term.log ]; then
+    tail -n 120 /var/log/apt/term.log 2>/dev/null | awk '$0==prev{next}{prev=$0; print; count++} count>=80{exit}' | while IFS= read -r line; do
+      warn "  $line"
+    done
+  else
+    warn "  /var/log/apt/term.log not found"
+  fi
+  if [ -f /var/log/dpkg.log ]; then
+    tail -n 120 /var/log/dpkg.log 2>/dev/null | awk '$0==prev{next}{prev=$0; print; count++} count>=80{exit}' | while IFS= read -r line; do
+      warn "  $line"
+    done
+  else
+    warn "  /var/log/dpkg.log not found"
+  fi
+}
 
 prompt_yes_no() {
   local prompt="$1"
@@ -158,6 +188,7 @@ ensure_wpa_supplicant() {
   fi
   warn "wpa_supplicant not found; attempting to install..."
   if ! sudo apt-get install -y --no-install-recommends wpasupplicant; then
+    show_apt_logs
     fail "Failed to install wpa_supplicant"
   fi
   if wpa_supplicant_present; then
@@ -730,6 +761,7 @@ FIRMWARE_PACKAGES=(
 
 step "Updating APT and installing dependencies..."
 if ! sudo apt-get update -qq; then
+  show_apt_logs
   fail "APT update failed. Ensure no other package manager is running and rerun."
 fi
 
@@ -761,8 +793,12 @@ if install_plan=$(sudo apt-get -qq --just-print install "${INSTALL_PACKAGES[@]}"
       if ((${#available_firmware[@]})); then
         warn "APT install failed; retrying without firmware bundles"
         INSTALL_PACKAGES=("${PACKAGES[@]}")
-        sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed. Check output above."
+        if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+          show_apt_logs
+          fail "APT install failed. Check output above."
+        fi
       else
+        show_apt_logs
         fail "APT install failed. Check output above."
       fi
     fi
@@ -775,8 +811,12 @@ else
     if ((${#available_firmware[@]})); then
       warn "APT install failed; retrying without firmware bundles"
       INSTALL_PACKAGES=("${PACKAGES[@]}")
-      sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}" || fail "APT install failed."
+      if ! sudo apt-get install -y --no-install-recommends "${INSTALL_PACKAGES[@]}"; then
+        show_apt_logs
+        fail "APT install failed."
+      fi
     else
+      show_apt_logs
       fail "APT install failed. Check output above."
     fi
   fi
@@ -1446,6 +1486,7 @@ done
 
 sudo chown -R root:rustyjack "$RUNTIME_ROOT"
 sudo chmod -R g+rwX "$RUNTIME_ROOT"
+sudo chown -R rustyjack-ui:rustyjack "$RUNTIME_ROOT/logs" 2>/dev/null || true
 sudo chmod 2770 "$RUNTIME_ROOT/logs" 2>/dev/null || true
 sudo find "$RUNTIME_ROOT/logs" -type f -name "*.log*" -exec chmod g+rw {} + 2>/dev/null || true
 sudo find "$RUNTIME_ROOT/wifi/profiles" -type f -exec chmod 660 {} \; 2>/dev/null || true
@@ -1693,6 +1734,7 @@ if sudo systemctl start rustyjackd.socket 2>/dev/null; then
   info "Daemon socket started successfully"
 else
   warn "Failed to start rustyjackd.socket"
+  show_service_logs rustyjackd.socket
   warn "Socket status:"
   systemctl status rustyjackd.socket 2>&1 | head -n 10 | while IFS= read -r line; do
     warn "  $line"
@@ -1746,6 +1788,7 @@ if sudo systemctl start rustyjack-wpa_supplicant@wlan0.service 2>/dev/null; then
   info "wpa_supplicant service started successfully"
 else
   warn "Failed to start rustyjack-wpa_supplicant@wlan0.service"
+  show_service_logs rustyjack-wpa_supplicant@wlan0.service
 fi
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service
@@ -1758,8 +1801,26 @@ purge_network_manager
 disable_conflicting_services
 
 # Start the services now
-sudo systemctl start rustyjack-ui.service && info "Rustyjack UI service started successfully" || warn "Failed to start UI service - check 'systemctl status rustyjack-ui'"
-sudo systemctl start rustyjack-portal.service && info "Rustyjack Portal service started successfully" || warn "Failed to start Portal service - check 'systemctl status rustyjack-portal'"
+info "Waiting for daemon socket before starting UI..."
+for _ in $(seq 1 10); do
+  if systemctl is-active --quiet rustyjackd.service && [ -S /run/rustyjack/rustyjackd.sock ]; then
+    break
+  fi
+  sleep 1
+done
+
+if sudo systemctl start rustyjack-ui.service; then
+  info "Rustyjack UI service started successfully"
+else
+  warn "Failed to start UI service - check 'systemctl status rustyjack-ui'"
+  show_service_logs rustyjack-ui.service
+fi
+if sudo systemctl start rustyjack-portal.service; then
+  info "Rustyjack Portal service started successfully"
+else
+  warn "Failed to start Portal service - check 'systemctl status rustyjack-portal'"
+  show_service_logs rustyjack-portal.service
+fi
 
 # Final adjustments
 claim_resolv_conf
@@ -1856,6 +1917,23 @@ else
   warn "[X] wpa_cli not found - WiFi client mode needs wpa_supplicant"
 fi
 
+if [ -d "$RUNTIME_ROOT/logs" ]; then
+  log_owner=$(stat -c "%U" "$RUNTIME_ROOT/logs" 2>/dev/null || echo "?")
+  log_group=$(stat -c "%G" "$RUNTIME_ROOT/logs" 2>/dev/null || echo "?")
+  if [ "$log_owner" = "rustyjack-ui" ] && [ "$log_group" = "rustyjack" ]; then
+    info "[OK] Log directory ownership: $log_owner:$log_group"
+  else
+    warn "[X] Log directory ownership is $log_owner:$log_group (expected rustyjack-ui:rustyjack)"
+  fi
+  if sudo -u rustyjack-ui test -w "$RUNTIME_ROOT/logs" 2>/dev/null; then
+    info "[OK] UI user can write to log directory"
+  else
+    warn "[X] UI user cannot write to log directory - check permissions on $RUNTIME_ROOT/logs"
+  fi
+else
+  warn "[X] Log directory missing at $RUNTIME_ROOT/logs"
+fi
+
 # Rustyjack replaces core networking binaries with Rust implementations
 info "[OK] Rustyjack provides native Rust implementations for:"
 info "     netlink interface control (native Rust)"
@@ -1876,6 +1954,7 @@ if systemctl is-active --quiet rustyjackd.socket; then
   fi
 else
   warn "[X] Daemon socket is not active - run: systemctl status rustyjackd.socket"
+  show_service_logs rustyjackd.socket 50
 fi
 
 if systemctl is-active --quiet rustyjackd.service; then
@@ -1883,18 +1962,21 @@ if systemctl is-active --quiet rustyjackd.service; then
 else
   warn "[X] Daemon service is not running - run: systemctl status rustyjackd.service"
   warn "    Check logs with: journalctl -u rustyjackd.service -n 50"
+  show_service_logs rustyjackd.service 50
 fi
 
 if systemctl is-active --quiet rustyjack-ui.service; then
   info "[OK] UI service is running"
 else
   warn "[X] UI service is not running - run: systemctl status rustyjack-ui.service"
+  show_service_logs rustyjack-ui.service 50
 fi
 
 if systemctl is-active --quiet rustyjack-portal.service; then
   info "[OK] Portal service is running"
 else
   warn "[NOTE] Portal service is not running (may be optional depending on configuration)"
+  show_service_logs rustyjack-portal.service 50
 fi
 
 info "Prebuilt installation finished. Reboot is recommended."

@@ -1,0 +1,48 @@
+# Encryption menu automation (requires test key configured)
+sleep 1
+
+# Open Encryption menu
+down 7
+select
+
+# Toggle master encryption ON
+select
+sleep 0.8
+select
+
+# Toggle loot encryption ON
+down 2
+select
+select
+sleep 1.2
+select
+
+# Toggle WiFi profiles encryption ON
+down 1
+select
+select
+sleep 1.2
+select
+
+# Toggle WiFi profiles encryption OFF
+select
+select
+sleep 1.2
+select
+
+# Toggle loot encryption OFF
+up 1
+select
+select
+sleep 1.2
+select
+
+# Toggle master encryption OFF
+up 2
+select
+select
+sleep 1.2
+select
+
+# Back to main menu
+left

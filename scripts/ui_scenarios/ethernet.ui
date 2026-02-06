@@ -1,0 +1,6 @@
+# Ethernet menu sweep (non-destructive)
+sleep 1
+
+down 5
+select
+left
