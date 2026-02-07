@@ -312,13 +312,44 @@ is_rustyjack_root() {
   return 0
 }
 
+usb_debug_dump() {
+  info "USB diagnostics:"
+  if cmd lsblk; then
+    lsblk -o NAME,TRAN,SIZE,MODEL,FSTYPE,MOUNTPOINT 2>/dev/null | while IFS= read -r line; do
+      info "  $line"
+    done
+  else
+    warn "  lsblk not available"
+  fi
+  if cmd lsusb; then
+    lsusb 2>/dev/null | while IFS= read -r line; do
+      info "  $line"
+    done
+  else
+    warn "  lsusb not available"
+  fi
+  if cmd mount; then
+    mount 2>/dev/null | grep -E '(/media/|/mnt/|/run/media/)' | while IFS= read -r line; do
+      info "  $line"
+    done
+  fi
+  if cmd dmesg; then
+    info "  dmesg (last 40 lines):"
+    dmesg -T 2>/dev/null | tail -n 40 | while IFS= read -r line; do
+      info "  $line"
+    done
+  fi
+}
+
 find_rustyjack_source() {
   if [ -n "${SOURCE_ROOT:-}" ]; then
     if is_rustyjack_root "$SOURCE_ROOT"; then
       echo "$SOURCE_ROOT"
       return 0
     fi
-    fail "SOURCE_ROOT does not look like a Rustyjack project: $SOURCE_ROOT"
+    warn "SOURCE_ROOT does not look like a Rustyjack project: $SOURCE_ROOT"
+    warn "Expected: Cargo.toml and prebuilt/arm32/rustyjack-ui"
+    return 1
   fi
 
   local script_root
@@ -331,11 +362,24 @@ find_rustyjack_source() {
   local base
   for base in /media /mnt /run/media; do
     [ -d "$base" ] || continue
+    info "Scanning $base for Rustyjack (arm32 prebuilts)..."
     local hit
     hit=$(find "$base" -maxdepth 5 -type f -path "*/prebuilt/arm32/rustyjack-ui" 2>/dev/null | head -n 1 || true)
     if [ -n "$hit" ]; then
       echo "${hit%/prebuilt/arm32/rustyjack-ui}"
       return 0
+    fi
+    local arm64_hit
+    arm64_hit=$(find "$base" -maxdepth 6 -type f -path "*/prebuilt/arm64/rustyjack-ui" 2>/dev/null | head -n 1 || true)
+    if [ -n "$arm64_hit" ]; then
+      warn "Found arm64 prebuilts at: ${arm64_hit%/prebuilt/arm64/rustyjack-ui}"
+      warn "This USB installer expects prebuilt/arm32. Use install_rustyjack_prebuilt.sh for arm64."
+    fi
+    local arm64_release
+    arm64_release=$(find "$base" -maxdepth 7 -type f -path "*/Prebuilt/arm64/release/rustyjack-ui" 2>/dev/null | head -n 1 || true)
+    if [ -n "$arm64_release" ]; then
+      warn "Found USB layout Prebuilt/arm64/release at: ${arm64_release%/Prebuilt/arm64/release/rustyjack-ui}"
+      warn "This script expects a full repo with prebuilt/arm32. Use install_rustyjack_prebuilt.sh."
     fi
   done
 
@@ -392,6 +436,7 @@ fi
 step "Locating Rustyjack project on mounted storage..."
 SOURCE_ROOT="$(find_rustyjack_source || true)"
 if [ -z "$SOURCE_ROOT" ]; then
+  usb_debug_dump
   fail "Rustyjack project not found on mounted USB. Set SOURCE_ROOT=/path/to/Rustyjack."
 fi
 info "Found Rustyjack source: $SOURCE_ROOT"

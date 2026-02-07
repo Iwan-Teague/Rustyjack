@@ -12,6 +12,7 @@ rj_init() {
 
   export RJ_OUTROOT="$outroot"
   export RJ_RUN_ID="$run_id"
+  export RJ_START_TS="${RJ_START_TS:-$(rj_now)}"
 
   OUT="$outroot/$run_id/$suite"
   LOG="$OUT/run.log"
@@ -29,6 +30,10 @@ rj_init() {
   rj_log "Output: $OUT"
 }
 
+rj_slug() {
+  echo "$*" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g'
+}
+
 rj_log() {
   local msg="$*"
   printf '%s %s\n' "$(rj_now)" "$msg" | tee -a "$LOG" >/dev/null
@@ -42,6 +47,11 @@ rj_ok() {
 rj_fail() {
   rj_log "[FAIL] $*"
   TESTS_FAIL=$((TESTS_FAIL + 1))
+  if [[ -n "${RJ_FAILURE_HOOK:-}" ]]; then
+    if declare -F "$RJ_FAILURE_HOOK" >/dev/null 2>&1; then
+      "$RJ_FAILURE_HOOK" "$*" || true
+    fi
+  fi
 }
 
 rj_skip() {
@@ -61,16 +71,53 @@ PY
   fi
 }
 
+rj_tail_dedup() {
+  local file="$1"
+  local lines="${2:-${RJ_LOG_TAIL_LINES:-120}}"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  tail -n "$lines" "$file" 2>/dev/null | awk '
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+  '
+}
+
 rj_run_cmd() {
   local name="$1"; shift
+  local safe
+  safe="$(rj_slug "$name")"
+  local outfile="$OUT/artifacts/${safe}.log"
   TESTS_RUN=$((TESTS_RUN + 1))
-  rj_log "[CMD] $name :: $*"
-  if "$@" >>"$LOG" 2>&1; then
+  rj_log "[CMD] $name :: $* (output: $outfile)"
+  if "$@" >"$outfile" 2>&1; then
     rj_ok "$name"
     rj_summary_event "pass" "$name" ""
   else
     local rc=$?
     rj_fail "$name (rc=$rc)"
+    rj_log "[TAIL] $name output (deduped)"
+    rj_tail_dedup "$outfile" "${RJ_LOG_TAIL_LINES:-120}" | while IFS= read -r line; do
+      rj_log "  $line"
+    done
     rj_summary_event "fail" "$name" "rc=$rc"
   fi
   return 0
@@ -80,14 +127,52 @@ rj_run_cmd_capture() {
   local name="$1"; shift
   local outfile="$1"; shift
   TESTS_RUN=$((TESTS_RUN + 1))
-  rj_log "[CMD] $name :: $*"
-  if "$@" >"$outfile" 2>>"$LOG"; then
+  mkdir -p "$(dirname "$outfile")" 2>/dev/null || true
+  rj_log "[CMD] $name :: $* (output: $outfile)"
+  if "$@" >"$outfile" 2>&1; then
     rj_ok "$name"
     rj_summary_event "pass" "$name" "saved=$outfile"
   else
     local rc=$?
     rj_fail "$name (rc=$rc)"
+    rj_log "[TAIL] $name output (deduped)"
+    rj_tail_dedup "$outfile" "${RJ_LOG_TAIL_LINES:-120}" | while IFS= read -r line; do
+      rj_log "  $line"
+    done
     rj_summary_event "fail" "$name" "rc=$rc; saved=$outfile"
+  fi
+  return 0
+}
+
+rj_run_cmd_expect_fail() {
+  local name="$1"; shift
+  local outfile="$1"; shift
+  TESTS_RUN=$((TESTS_RUN + 1))
+  mkdir -p "$(dirname "$outfile")" 2>/dev/null || true
+  rj_log "[CMD] $name (expect failure) :: $* (output: $outfile)"
+  if "$@" >"$outfile" 2>&1; then
+    rj_fail "$name succeeded but expected failure"
+    rj_summary_event "fail" "$name" "unexpected success"
+  else
+    rj_ok "$name failed as expected"
+    rj_summary_event "pass" "$name" "expected failure"
+  fi
+  return 0
+}
+
+rj_run_cmd_capture_allow_fail() {
+  local name="$1"; shift
+  local outfile="$1"; shift
+  TESTS_RUN=$((TESTS_RUN + 1))
+  mkdir -p "$(dirname "$outfile")" 2>/dev/null || true
+  rj_log "[CMD] $name (allow fail) :: $* (output: $outfile)"
+  if "$@" >"$outfile" 2>&1; then
+    rj_log "[CMD] $name exited 0 (allowed)"
+    rj_summary_event "info" "$name" "rc=0"
+  else
+    local rc=$?
+    rj_log "[CMD] $name exited rc=$rc (allowed)"
+    rj_summary_event "info" "$name" "rc=$rc"
   fi
   return 0
 }
@@ -112,9 +197,92 @@ rj_capture_journal() {
   local unit="$1"
   local outfile="$2"
   if command -v journalctl >/dev/null 2>&1; then
-    journalctl -u "$unit" --no-pager >"$outfile" 2>/dev/null || true
+    if [[ -n "${RJ_START_TS:-}" ]]; then
+      journalctl -u "$unit" --since "$RJ_START_TS" --no-pager >"$outfile" 2>/dev/null || true
+    else
+      journalctl -u "$unit" --no-pager >"$outfile" 2>/dev/null || true
+    fi
   else
     rj_skip "journalctl not available"
+  fi
+}
+
+rj_json_get() {
+  local file="$1"
+  local path="$2"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo ""
+    return 1
+  fi
+  python3 - "$file" "$path" <<'PY'
+import json, sys
+path = sys.argv[2].split(".")
+try:
+    with open(sys.argv[1], "r") as fh:
+        data = json.load(fh)
+except Exception:
+    print("")
+    sys.exit(1)
+cur = data
+for key in path:
+    if not key:
+        continue
+    if isinstance(cur, dict) and key in cur:
+        cur = cur[key]
+    else:
+        cur = None
+        break
+if cur is None:
+    print("")
+elif isinstance(cur, bool):
+    print("true" if cur else "false")
+else:
+    print(cur)
+PY
+}
+
+rj_snapshot_network() {
+  local label="$1"
+  local outdir="${2:-$OUT/artifacts}"
+  mkdir -p "$outdir" 2>/dev/null || true
+  if command -v ip >/dev/null 2>&1; then
+    ip -br link show >"$outdir/net_${label}_link.txt" 2>&1 || true
+    ip -br addr show >"$outdir/net_${label}_addr.txt" 2>&1 || true
+    ip route show >"$outdir/net_${label}_route.txt" 2>&1 || true
+    ip rule show >"$outdir/net_${label}_rule.txt" 2>&1 || true
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -tunap >"$outdir/net_${label}_ss.txt" 2>&1 || true
+  fi
+  if [ -f /etc/resolv.conf ]; then
+    cat /etc/resolv.conf >"$outdir/net_${label}_resolv.txt" 2>&1 || true
+  fi
+}
+
+rj_compare_snapshot() {
+  local before="$1"
+  local after="$2"
+  local label="${3:-network}"
+  local outdir="${4:-$OUT/artifacts}"
+  local changed=0
+  local f
+  for f in link addr route rule resolv; do
+    local a="$outdir/net_${before}_${f}.txt"
+    local b="$outdir/net_${after}_${f}.txt"
+    if [[ ! -f "$a" || ! -f "$b" ]]; then
+      continue
+    fi
+    if ! diff -u "$a" "$b" >"$outdir/net_${label}_${f}.diff" 2>/dev/null; then
+      rj_fail "Isolation check failed: $label ($f changed)"
+      rj_log "[DIFF] $outdir/net_${label}_${f}.diff"
+      rj_tail_dedup "$outdir/net_${label}_${f}.diff" 80 | while IFS= read -r line; do
+        rj_log "  $line"
+      done
+      changed=1
+    fi
+  done
+  if [[ "$changed" -eq 0 ]]; then
+    rj_ok "Isolation check passed: $label"
   fi
 }
 
