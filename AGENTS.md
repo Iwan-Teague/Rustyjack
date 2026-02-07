@@ -1,6 +1,12 @@
 # AGENTS.md
 
-This project targets a Raspberry Pi Zero 2 W equipped with an Ethernet HAT and a Waveshare 128×128 LCD HAT (ST7735S). The UI is rendered in landscape by default via `RUSTYJACK_DISPLAY_ROTATION=landscape` and the installer sets that environment variable for the systemd service.
+This project targets a Raspberry Pi Zero 2 W equipped with an Ethernet HAT and a Waveshare LCD HAT (ST7735S profile default `128x128`). The UI renders with runtime display capabilities/layout metrics, keeps the physical control model fixed at exactly 8 buttons, and defaults to landscape via `RUSTYJACK_DISPLAY_ROTATION=landscape` (set by installer service env).
+
+Display support policy:
+- Lowest supported layout target is `128x128`.
+- Smaller displays are allowed in best-effort mode and should log `UNSUPPORTED_DISPLAY_SIZE` warnings.
+- Startup flow is `detect backend -> query capabilities -> calibrate only when needed -> cache effective geometry`.
+- Recalculation is manual-only from `Settings -> Display`.
 
 Hardware specifics drawn from waveshare_gpio_pin_mapping.md and waveshare_button_mapping.md:
 - Display pins (BCM): DC=25, RST=27, BL=24; SPI: SCLK=11, MOSI=10, CS=8. Backlight lives on BCM24 and can be toggled with `gpioset gpiochip0 24=1`.
@@ -68,6 +74,8 @@ Systemd services (5 + socket):
 
 Important implementation notes:
 - MAC randomization: `rustyjack-evasion::MacManager` sets locally administered, unicast MACs with CSPRNG; vendor-match OUI from the current interface when available.
+- Display runtime: effective geometry is cached in `gui_conf.json` (`display` block). Manual reruns/reset are under `Settings -> Display`.
+- Display warnings emitted when applicable: `DISPLAY_MODE_MISMATCH`, `DISPLAY_UNVERIFIED_GEOMETRY`, `UNSUPPORTED_DISPLAY_SIZE`.
 - UI dialogs/windows must require explicit user confirmation before advancing; do not auto-dismiss after a timeout or hide errors without acknowledgment.
 - Anti-forensics: Secure delete uses 7-pass overwrite (DoD standard), RAM wipe on shutdown, complete system purge removes all binaries/services/loot.
 - FDE operations are **destructive and irreversible** — always verify user intent and warn about data loss.

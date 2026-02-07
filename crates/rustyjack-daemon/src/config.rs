@@ -24,6 +24,7 @@ pub const OPS_OVERRIDE_FILENAME: &str = "ops_override.json";
 pub struct DaemonConfig {
     pub socket_path: PathBuf,
     pub max_frame: u32,
+    #[cfg(feature = "core_dispatch")]
     pub allow_core_dispatch: bool,
     pub job_retention: usize,
     pub socket_group: Option<String>,
@@ -32,7 +33,6 @@ pub struct DaemonConfig {
     pub admin_group: String,
     pub operator_group: String,
     pub root_path: PathBuf,
-    pub network_manager_integration: bool,
     pub max_connections: usize,
     pub max_requests_per_second: u32,
     pub ops: OpsConfig,
@@ -50,8 +50,8 @@ impl DaemonConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(MAX_FRAME);
-        let allow_core_dispatch =
-            cfg!(feature = "core_dispatch") && env_bool("RUSTYJACKD_ALLOW_CORE_DISPATCH", false);
+        #[cfg(feature = "core_dispatch")]
+        let allow_core_dispatch = env_bool("RUSTYJACKD_ALLOW_CORE_DISPATCH", false);
         let job_retention = env::var("RUSTYJACKD_JOB_RETENTION")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -73,9 +73,6 @@ impl DaemonConfig {
             .ok()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_ROOT_PATH));
-        let network_manager_integration = env::var("RUSTYJACKD_NM_INTEGRATION")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
         let max_connections = env::var("RUSTYJACKD_MAX_CONNECTIONS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -161,6 +158,7 @@ impl DaemonConfig {
         Self {
             socket_path,
             max_frame,
+            #[cfg(feature = "core_dispatch")]
             allow_core_dispatch,
             job_retention,
             socket_group,
@@ -169,7 +167,6 @@ impl DaemonConfig {
             admin_group,
             operator_group,
             root_path,
-            network_manager_integration,
             max_connections,
             max_requests_per_second,
             ops,

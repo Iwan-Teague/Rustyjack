@@ -83,7 +83,8 @@ impl App {
                 // Allow but warn - user can proceed at their own risk
                 tracing::warn!(
                     "TX-in-monitor capability unknown for {}: {}",
-                    iface, caps.tx_in_monitor_reason
+                    iface,
+                    caps.tx_in_monitor_reason
                 );
             }
             crate::core::TxInMonitorCapability::Supported => {
@@ -351,7 +352,8 @@ impl App {
                 // Allow but warn
                 tracing::warn!(
                     "TX-in-monitor capability unknown for {}: {}",
-                    iface, caps.tx_in_monitor_reason
+                    iface,
+                    caps.tx_in_monitor_reason
                 );
             }
             crate::core::TxInMonitorCapability::Supported => {
@@ -434,92 +436,10 @@ impl App {
         Ok(None)
     }
 
-    /// Preflight check for ethernet operations
-    pub(crate) fn preflight_ethernet_operation(
-        &mut self,
-        iface: &str,
-        requires_ip: bool,
-    ) -> Result<Option<String>> {
-        let status = match self.core.interface_status(iface) {
-            Ok(s) => s,
-            Err(e) => return Ok(Some(format!("Failed to check interface status: {}", e))),
-        };
-
-        if !status.exists {
-            return Ok(Some(format!(
-                "{} does not exist. Select a valid Ethernet interface.",
-                iface
-            )));
-        }
-
-        if status.is_wireless {
-            return Ok(Some(format!(
-                "{} is a wireless interface. This operation requires an Ethernet adapter.",
-                iface
-            )));
-        }
-
-        if !status.is_up {
-            return Ok(Some(format!(
-                "{} is currently DOWN. The interface must be active for Ethernet operations.",
-                iface
-            )));
-        }
-
-        if requires_ip {
-            if status.ip.is_none() {
-                return Ok(Some(format!(
-                    "{} has no IP address. This operation requires network connectivity. Try 'DHCP Request' first.",
-                    iface
-                )));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Preflight check for MITM attack
-    pub(crate) fn preflight_mitm(&mut self, iface: &str) -> Result<Option<String>> {
-        let status = match self.core.interface_status(iface) {
-            Ok(s) => s,
-            Err(e) => return Ok(Some(format!("Failed to check interface status: {}", e))),
-        };
-
-        if !status.exists {
-            return Ok(Some(format!(
-                "{} does not exist. Select a valid interface.",
-                iface
-            )));
-        }
-
-        if status.is_wireless {
-            return Ok(Some(format!(
-                "{} is a wireless interface. Ethernet MITM requires a wired adapter.",
-                iface
-            )));
-        }
-
-        if !status.is_up {
-            return Ok(Some(format!(
-                "{} is currently DOWN. MITM requires an active network connection.",
-                iface
-            )));
-        }
-
-        if status.ip.is_none() {
-            return Ok(Some(format!(
-                "{} has no IP address. MITM requires you to be connected to the target network.",
-                iface
-            )));
-        }
-
-        Ok(None)
-    }
-
     /// Helper to show preflight error with proper text wrapping
     pub(crate) fn show_preflight_error(&mut self, title: &str, error_msg: &str) -> Result<()> {
-        use crate::display::{wrap_text, DIALOG_MAX_CHARS};
-        let lines = wrap_text(error_msg, DIALOG_MAX_CHARS);
+        use crate::display::wrap_text;
+        let lines = wrap_text(error_msg, self.display.chars_per_line());
         self.show_message(title, lines)?;
         self.go_home()
     }

@@ -4240,9 +4240,9 @@ fn handle_wifi_deauth(
     enforce_single_interface(&args.interface)?;
     check_cancel(cancel)?;
 
-    // Check wireless capabilities
+    // Deauth requires TX in monitor mode (injection), not just monitor support.
     let caps = wireless_native::check_capabilities(&args.interface);
-    if !caps.is_attack_capable() {
+    if !caps.is_injection_capable() {
         let mut reasons = Vec::new();
         if !caps.has_root {
             reasons.push("not running as root");
@@ -4253,8 +4253,14 @@ fn handle_wifi_deauth(
         if !caps.supports_monitor_mode {
             reasons.push("monitor mode not supported");
         }
+        if !matches!(
+            caps.tx_in_monitor,
+            wireless_native::TxInMonitorCapability::Supported
+        ) {
+            reasons.push(&caps.tx_in_monitor_reason);
+        }
         bail!(
-            "Interface {} is not capable of attacks: {}",
+            "Interface {} is not capable of deauth/injection attacks: {}",
             args.interface,
             reasons.join(", ")
         );
@@ -6075,7 +6081,11 @@ fn handle_hardware_wifi_profile(
         "{}: driver={}, monitor={}, injection={} ({})",
         iface,
         driver_str,
-        if caps.supports_monitor_mode { "yes" } else { "no" },
+        if caps.supports_monitor_mode {
+            "yes"
+        } else {
+            "no"
+        },
         verdict,
         bands.join("/")
     );

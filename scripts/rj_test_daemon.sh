@@ -63,10 +63,11 @@ if [[ $RUN_AUTH -eq 1 || $RUN_PROTOCOL -eq 1 || $RUN_COMPREHENSIVE -eq 1 ]]; the
   NEEDS_PY=1
 fi
 
-if [[ $NEEDS_PY -eq 1 ]] && ! command -v python3 >/dev/null 2>&1; then
-  rj_fail "python3 required for daemon RPC tests"
-  rj_write_report
-  exit 0
+if [[ $NEEDS_PY -eq 1 ]]; then
+  if ! rj_ensure_tool python3 "python3" "Python 3 (daemon RPC tests)"; then
+    rj_write_report
+    exit 0
+  fi
 fi
 
 if [[ $RUN_COMPAT -eq 1 ]]; then
@@ -90,12 +91,12 @@ else
 fi
 
 if [[ $RUN_UNIT -eq 1 ]]; then
-  if command -v cargo >/dev/null 2>&1; then
+  if rj_ensure_tool cargo "cargo" "Rust toolchain (unit tests)"; then
     rj_run_cmd "unit_rustyjack_daemon" cargo test -p rustyjack-daemon --lib -- --nocapture
     rj_run_cmd "unit_rustyjack_ipc" cargo test -p rustyjack-ipc --lib -- --nocapture
     rj_run_cmd "unit_rustyjack_client" cargo test -p rustyjack-client --lib -- --nocapture
   else
-    rj_skip "cargo not available; skipping unit tests"
+    rj_skip "Unit tests skipped (cargo unavailable)"
   fi
 else
   rj_skip "Unit tests disabled"

@@ -10,6 +10,9 @@ RUN_LOOT=0
 RUN_MAC=0
 RUN_DAEMON=0
 RUN_INSTALLERS=0
+RUN_USB=0
+RUN_UI_LAYOUT=0
+RUN_THEME=0
 DANGEROUS=0
 RUN_UI=1
 OUTROOT="${RJ_OUTROOT:-/var/tmp/rustyjack-tests}"
@@ -30,6 +33,9 @@ Options:
   --mac         Run MAC randomization tests
   --daemon      Run daemon/IPC security tests
   --installers  Run installer script tests
+  --usb         Run USB mount detect/read/write tests
+  --ui-layout   Run dynamic UI layout/resolution tests
+  --theme       Run UI theme/palette stabilization tests
   --dangerous   Enable dangerous tests (passed to suites)
   --no-ui       Disable UI automation
   --outroot DIR Output root (default: /var/tmp/rustyjack-tests)
@@ -48,10 +54,13 @@ if [[ $# -eq 0 ]]; then
   echo "  5) MAC Randomization"
   echo "  6) Daemon/IPC"
   echo "  7) Installers"
+  echo "  8) USB Mount"
+  echo "  9) UI Layout/Display"
+  echo " 10) Theme/Palette"
   echo "  0) All"
   read -r choice
   case "$choice" in
-    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1 ;;
+    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1 ;;
     1) RUN_WIRELESS=1 ;;
     2) RUN_ETHERNET=1 ;;
     3) RUN_ENCRYPTION=1 ;;
@@ -59,12 +68,15 @@ if [[ $# -eq 0 ]]; then
     5) RUN_MAC=1 ;;
     6) RUN_DAEMON=1 ;;
     7) RUN_INSTALLERS=1 ;;
+    8) RUN_USB=1 ;;
+    9) RUN_UI_LAYOUT=1 ;;
+    10) RUN_THEME=1 ;;
     *) echo "Unknown choice" >&2; exit 2 ;;
   esac
 else
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; shift ;;
+      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1; shift ;;
       --wireless) RUN_WIRELESS=1; shift ;;
       --ethernet) RUN_ETHERNET=1; shift ;;
       --encryption) RUN_ENCRYPTION=1; shift ;;
@@ -72,6 +84,9 @@ else
       --mac) RUN_MAC=1; shift ;;
       --daemon) RUN_DAEMON=1; shift ;;
       --installers) RUN_INSTALLERS=1; shift ;;
+      --usb) RUN_USB=1; shift ;;
+      --ui-layout) RUN_UI_LAYOUT=1; shift ;;
+      --theme) RUN_THEME=1; shift ;;
       --dangerous) DANGEROUS=1; shift ;;
       --no-ui) RUN_UI=0; shift ;;
       --outroot) OUTROOT="$2"; shift 2 ;;
@@ -112,6 +127,15 @@ if [[ $RUN_DAEMON -eq 1 ]]; then
 fi
 if [[ $RUN_INSTALLERS -eq 1 ]]; then
   "$ROOT_DIR/rj_test_installers.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_USB -eq 1 ]]; then
+  "$ROOT_DIR/rj_test_usb.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_UI_LAYOUT -eq 1 ]]; then
+  "$ROOT_DIR/rj_test_ui_layout.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_THEME -eq 1 ]]; then
+  "$ROOT_DIR/rj_test_theme.sh" "${COMMON_ARGS[@]}"
 fi
 
 echo "Tests complete. Results in: $OUTROOT/$RUN_ID"

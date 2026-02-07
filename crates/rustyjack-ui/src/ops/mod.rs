@@ -25,6 +25,7 @@ pub enum OperationOutcome {
 }
 
 pub trait Operation {
+    #[allow(dead_code)]
     fn id(&self) -> &'static str;
     fn title(&self) -> &'static str;
 

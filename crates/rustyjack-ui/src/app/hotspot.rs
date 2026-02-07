@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     fs,
     io::Write,
-    thread,
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -933,7 +932,6 @@ impl App {
         }
 
         use std::fs;
-        use std::thread;
         use std::time::{Duration, Instant};
 
         let rx_path = format!("/sys/class/net/{}/statistics/rx_bytes", upstream_iface);
@@ -1007,7 +1005,7 @@ impl App {
             }
 
             // Small sleep to avoid busy waiting
-            thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(100));
         }
 
         Ok(())

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::{bail, Result};
 use rustyjack_commands::{
     Commands, WifiCommand, WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs,

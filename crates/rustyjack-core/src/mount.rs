@@ -4,6 +4,7 @@ use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -154,21 +155,41 @@ pub fn mount_device(policy: &MountPolicy, req: MountRequest) -> Result<MountResp
     }
     ensure_fs_supported(&fs_type)?;
 
-    let existing = list_mounts_under(policy)?;
-    for entry in &existing {
-        if entry.device == device {
-            return Ok(entry.clone());
-        }
-    }
-    if existing.len() >= policy.max_devices {
-        bail!("maximum mount count reached");
-    }
-
     let mode = if policy.allow_rw {
         req.mode
     } else {
         policy.default_mode
     };
+
+    let existing = list_mounts_under(policy)?;
+    let mut remounting_existing = false;
+    for entry in &existing {
+        if entry.device != device {
+            continue;
+        }
+
+        if mode == MountMode::ReadWrite && entry.readonly {
+            info!(
+                target: "usb",
+                device = %entry.device.display(),
+                mountpoint = %entry.mountpoint.display(),
+                "remounting_readwrite"
+            );
+            do_unmount(&entry.mountpoint, false).with_context(|| {
+                format!(
+                    "unmounting existing readonly mount {}",
+                    entry.mountpoint.display()
+                )
+            })?;
+            remounting_existing = true;
+            break;
+        }
+
+        return Ok(entry.clone());
+    }
+    if existing.len() >= policy.max_devices && !remounting_existing {
+        bail!("maximum mount count reached");
+    }
 
     let mount_name = sanitize_mount_name(preferred_name.as_deref(), dev_name);
     let mountpoint = policy.mount_root.join(&mount_name);
@@ -677,9 +698,11 @@ fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Resul
     }
 
     let data_str = match fs {
-        FsType::Vfat | FsType::Exfat => "utf8,uid=0,gid=0,fmask=0077,dmask=0077",
-        FsType::Ext2 | FsType::Ext3 | FsType::Ext4 => "errors=remount-ro",
-        FsType::Unknown(_) => "",
+        // Map FAT/exFAT ownership to the mountpoint owner/group so the unprivileged UI process
+        // can access mounted media when it belongs to the runtime group.
+        FsType::Vfat | FsType::Exfat => fat_mount_data(target)?,
+        FsType::Ext2 | FsType::Ext3 | FsType::Ext4 => "errors=remount-ro".to_string(),
+        FsType::Unknown(_) => String::new(),
     };
     let data = CString::new(data_str)?;
 
@@ -699,6 +722,17 @@ fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Resul
         ));
     }
     Ok(())
+}
+
+fn fat_mount_data(target: &Path) -> Result<String> {
+    let meta = fs::metadata(target)
+        .with_context(|| format!("reading metadata for mountpoint {}", target.display()))?;
+    let uid = meta.uid();
+    let gid = meta.gid();
+    Ok(format!(
+        "utf8,uid={},gid={},fmask=0007,dmask=0007",
+        uid, gid
+    ))
 }
 
 fn do_unmount(target: &Path, detach: bool) -> Result<()> {
@@ -893,4 +927,35 @@ fn read_block_size_bytes(name: &str) -> Result<u64> {
         .parse::<u64>()
         .context("parsing size sectors")?;
     Ok(sectors * 512)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fat_mount_data_uses_mountpoint_owner_ids() {
+        let unique = format!(
+            "rustyjack_mount_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        );
+        let mountpoint = std::env::temp_dir().join(unique);
+        fs::create_dir(&mountpoint).expect("create temp mountpoint");
+
+        let expected_meta = fs::metadata(&mountpoint).expect("read temp mountpoint metadata");
+        let expected = format!(
+            "utf8,uid={},gid={},fmask=0007,dmask=0007",
+            expected_meta.uid(),
+            expected_meta.gid()
+        );
+
+        let actual = fat_mount_data(&mountpoint).expect("build fat mount options");
+        assert_eq!(actual, expected);
+
+        fs::remove_dir(&mountpoint).expect("remove temp mountpoint");
+    }
 }

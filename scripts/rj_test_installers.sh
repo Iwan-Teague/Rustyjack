@@ -100,7 +100,7 @@ for script in "${INSTALL_SCRIPTS[@]}"; do
   fi
 
   if [[ $RUN_SHELLCHECK -eq 1 ]]; then
-    if command -v shellcheck >/dev/null 2>&1; then
+    if rj_ensure_tool shellcheck "shellcheck" "shellcheck (lint)"; then
       rj_run_cmd "shellcheck_${script##*/}" shellcheck -x -s bash "$script"
     else
       rj_skip "shellcheck not available"

@@ -9,19 +9,44 @@ use rustyjack_encryption::clear_encryption_key;
 use zeroize::Zeroize;
 
 use crate::{
-    config::GuiConfig,
-    display::DIALOG_VISIBLE_LINES,
+    config::{GuiConfig, ThemePreset},
+    display::CalibrationEdge,
+    input::Button,
     menu::{ColorTarget, TxPowerSetting},
     util::shorten_for_display,
 };
 
 use super::state::App;
 
+const THEME_MIN_CONTRAST_RATIO: f32 = 4.5;
+const COLOR_CHOICES: [(&str, &str); 10] = [
+    ("White", "#FFFFFF"),
+    ("Black", "#000000"),
+    ("Green", "#00FF00"),
+    ("Red", "#FF0000"),
+    ("Blue", "#0000FF"),
+    ("Navy", "#000080"),
+    ("Purple", "#AA00FF"),
+    ("Amber", "#FFBF00"),
+    ("Cyan", "#00FFFF"),
+    ("Gray", "#808080"),
+];
+
+struct ThemeUpdateStatus {
+    normalized: bool,
+    save_error: Option<String>,
+    contrast_warnings: Vec<String>,
+}
+
 impl App {
     pub(crate) fn reload_config(&mut self) -> Result<()> {
         self.config = GuiConfig::load(&self.root)?;
         self.display.update_palette(&self.config.colors);
-        self.show_message("Config", ["Reloaded"])
+        if self.config.theme_config_repaired {
+            self.show_message("Config", ["Reloaded", "Theme config repaired"])
+        } else {
+            self.show_message("Config", ["Reloaded"])
+        }
     }
 
     pub(crate) fn save_config(&mut self) -> Result<()> {
@@ -30,39 +55,96 @@ impl App {
     }
 
     pub(crate) fn pick_color(&mut self, target: ColorTarget) -> Result<()> {
-        // List-based selection to keep navigation consistent
-        let choices = [
-            ("White", "#FFFFFF"),
-            ("Black", "#000000"),
-            ("Green", "#00FF00"),
-            ("Red", "#FF0000"),
-            ("Blue", "#0000FF"),
-            ("Navy", "#000080"),
-            ("Purple", "#AA00FF"),
-        ];
-        let labels: Vec<String> = choices.iter().map(|(name, _)| name.to_string()).collect();
-
+        let labels: Vec<String> = COLOR_CHOICES
+            .iter()
+            .map(|(name, hex)| format!("{name} ({hex})"))
+            .collect();
         if let Some(idx) = self.choose_from_menu("Pick Color", &labels)? {
-            let (_name, hex) = choices[idx];
-            self.apply_color(target, hex);
-            self.show_message("Colors", ["Updated"])
+            let (_name, hex) = COLOR_CHOICES[idx];
+            let status = self.mutate_theme_config_and_refresh(|colors| target.set(colors, hex));
+            self.show_theme_update_result(
+                "Colors",
+                vec![
+                    format!(
+                        "{} set to {}",
+                        target.label(),
+                        target.get(&self.config.colors)
+                    ),
+                    "Updated".to_string(),
+                ],
+                status,
+            )
         } else {
             Ok(())
         }
     }
 
-    pub(crate) fn apply_color(&mut self, target: ColorTarget, value: &str) {
-        match target {
-            ColorTarget::Background => self.config.colors.background = value.to_string(),
-            ColorTarget::Border => self.config.colors.border = value.to_string(),
-            ColorTarget::Text => self.config.colors.text = value.to_string(),
-            ColorTarget::SelectedText => self.config.colors.selected_text = value.to_string(),
-            ColorTarget::SelectedBackground => {
-                self.config.colors.selected_background = value.to_string()
+    pub(crate) fn apply_theme_preset(&mut self) -> Result<()> {
+        let labels: Vec<String> = ThemePreset::ALL
+            .iter()
+            .map(|preset| preset.label().to_string())
+            .collect();
+        let Some(idx) = self.choose_from_menu("Theme Preset", &labels)? else {
+            return Ok(());
+        };
+        let preset = ThemePreset::ALL[idx];
+        let status = self.mutate_theme_config_and_refresh(|colors| preset.apply(colors));
+        self.show_theme_update_result(
+            "Colors",
+            vec![format!("Preset: {}", preset.label()), "Updated".to_string()],
+            status,
+        )
+    }
+
+    fn mutate_theme_config_and_refresh<F>(&mut self, mutate: F) -> ThemeUpdateStatus
+    where
+        F: FnOnce(&mut crate::config::ColorScheme),
+    {
+        let path = self.root.join("gui_conf.json");
+        let mut normalized = false;
+        let mut save_error = None;
+        match self.config.mutate_theme_and_persist(&path, mutate) {
+            Ok(result) => {
+                normalized = result.normalized;
             }
-            ColorTarget::Toolbar => self.config.colors.toolbar = value.to_string(),
+            Err(err) => {
+                save_error = Some(shorten_for_display(&err.to_string(), 90));
+            }
         }
         self.display.update_palette(&self.config.colors);
+
+        ThemeUpdateStatus {
+            normalized,
+            save_error,
+            contrast_warnings: self
+                .config
+                .colors
+                .contrast_warnings(THEME_MIN_CONTRAST_RATIO),
+        }
+    }
+
+    fn show_theme_update_result(
+        &mut self,
+        title: &str,
+        mut lines: Vec<String>,
+        status: ThemeUpdateStatus,
+    ) -> Result<()> {
+        if status.normalized {
+            lines.push("Normalized invalid values".to_string());
+        }
+        if let Some(err) = status.save_error {
+            lines.push("Save failed".to_string());
+            lines.push(err);
+        } else {
+            lines.push("Saved".to_string());
+        }
+        if !status.contrast_warnings.is_empty() {
+            lines.push("Contrast warning".to_string());
+            for warning in status.contrast_warnings.iter().take(3) {
+                lines.push(warning.clone());
+            }
+        }
+        self.show_message(title, lines)
     }
 
     pub(crate) fn apply_log_setting(&mut self) -> Result<()> {
@@ -92,6 +174,316 @@ impl App {
             "OFF"
         };
         self.show_message("Logs", [format!("Logging {}", state)])
+    }
+
+    pub(crate) fn show_display_backend_info(&mut self) -> Result<()> {
+        let configured = self
+            .config
+            .display
+            .backend_preference
+            .as_ref()
+            .map(|b| b.as_str())
+            .unwrap_or("auto");
+        let effective = self.display.capabilities().backend.as_str();
+        self.show_message(
+            "Display Backend",
+            [
+                format!("Configured: {configured}"),
+                format!("Effective: {effective}"),
+                "Use env: RUSTYJACK_DISPLAY_BACKEND".to_string(),
+            ],
+        )
+    }
+
+    pub(crate) fn show_display_rotation_info(&mut self) -> Result<()> {
+        let configured = self
+            .config
+            .display
+            .rotation
+            .as_ref()
+            .map(|r| r.as_str())
+            .unwrap_or("auto");
+        let effective = self.display.capabilities().orientation.as_str();
+        self.show_message(
+            "Display Rotation",
+            [
+                format!("Configured: {configured}"),
+                format!("Effective: {effective}"),
+                "Use env: RUSTYJACK_DISPLAY_ROTATION".to_string(),
+            ],
+        )
+    }
+
+    pub(crate) fn show_display_resolution_info(&mut self) -> Result<()> {
+        let override_width = self
+            .config
+            .display
+            .width_override
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let override_height = self
+            .config
+            .display
+            .height_override
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let diag = self.display.diagnostics();
+        self.show_message(
+            "Display Resolution",
+            [
+                format!("Override: {}x{}", override_width, override_height),
+                format!(
+                    "Detected: {}x{}",
+                    diag.detected_width_px, diag.detected_height_px
+                ),
+                format!(
+                    "Effective: {}x{}",
+                    diag.effective_width_px, diag.effective_height_px
+                ),
+                format!("Source: {}", diag.geometry_source.as_str()),
+            ],
+        )
+    }
+
+    pub(crate) fn show_display_offset_info(&mut self) -> Result<()> {
+        let offset_x = self
+            .config
+            .display
+            .offset_x
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "auto".to_string());
+        let offset_y = self
+            .config
+            .display
+            .offset_y
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "auto".to_string());
+        let diag = self.display.diagnostics();
+        self.show_message(
+            "Display Offsets",
+            [
+                format!("Configured: x={offset_x} y={offset_y}"),
+                format!(
+                    "Effective: x={} y={}",
+                    diag.effective_offset_x, diag.effective_offset_y
+                ),
+            ],
+        )
+    }
+
+    pub(crate) fn run_display_discovery_action(&mut self) -> Result<()> {
+        self.display
+            .run_display_discovery(&mut self.config.display)?;
+        let path = self.root.join("gui_conf.json");
+        self.save_config_file(&path)?;
+        self.display.reset_probe_dirty();
+
+        if self.display.needs_startup_calibration() {
+            self.show_message(
+                "Display Discovery",
+                [
+                    "Discovery complete",
+                    "Geometry is unverified",
+                    "Run Display Calibration",
+                ],
+            )
+        } else {
+            self.show_message("Display Discovery", ["Discovery complete"])
+        }
+    }
+
+    pub(crate) fn run_display_calibration_flow(&mut self, manual: bool) -> Result<()> {
+        if manual
+            && !self.confirm_yes_no_bool(
+                "Display Calibration",
+                [
+                    "Calibrate visible edges?",
+                    "LEFT/RIGHT for vertical",
+                    "UP/DOWN for horizontal",
+                    "SELECT confirms each edge",
+                ],
+            )?
+        {
+            return Ok(());
+        }
+
+        let (default_left, default_top, default_right, default_bottom) =
+            self.display.default_calibration_edges();
+
+        let mut left = self.config.display.calibrated_left.unwrap_or(default_left);
+        let mut top = self.config.display.calibrated_top.unwrap_or(default_top);
+        let mut right = self
+            .config
+            .display
+            .calibrated_right
+            .unwrap_or(default_right);
+        let mut bottom = self
+            .config
+            .display
+            .calibrated_bottom
+            .unwrap_or(default_bottom);
+
+        for edge in CalibrationEdge::ALL {
+            let default_value = match edge {
+                CalibrationEdge::Left => default_left,
+                CalibrationEdge::Top => default_top,
+                CalibrationEdge::Right => default_right,
+                CalibrationEdge::Bottom => default_bottom,
+            };
+            loop {
+                let candidate = match edge {
+                    CalibrationEdge::Left => left,
+                    CalibrationEdge::Top => top,
+                    CalibrationEdge::Right => right,
+                    CalibrationEdge::Bottom => bottom,
+                };
+                let overlay = self.stats.snapshot();
+                self.display
+                    .draw_calibration_step(edge, candidate, default_value, &overlay)?;
+
+                let button = self.buttons.wait_for_press()?;
+                match (edge, button) {
+                    (_, Button::Key2) => {
+                        if manual {
+                            self.show_message("Display Calibration", ["Cancelled"])?;
+                        }
+                        return Ok(());
+                    }
+                    (_, Button::Key1) => match edge {
+                        CalibrationEdge::Left => left = default_value,
+                        CalibrationEdge::Top => top = default_value,
+                        CalibrationEdge::Right => right = default_value,
+                        CalibrationEdge::Bottom => bottom = default_value,
+                    },
+                    (CalibrationEdge::Left, Button::Left) => {
+                        left = left.saturating_sub(1).max(default_left);
+                        left = left.min(right.saturating_sub(1));
+                    }
+                    (CalibrationEdge::Left, Button::Right) => {
+                        left = (left + 1).min(right.saturating_sub(1));
+                    }
+                    (CalibrationEdge::Right, Button::Left) => {
+                        right = right.saturating_sub(1).max(left.saturating_add(1));
+                    }
+                    (CalibrationEdge::Right, Button::Right) => {
+                        right = (right + 1).min(default_right);
+                    }
+                    (CalibrationEdge::Top, Button::Up) => {
+                        top = top.saturating_sub(1).max(default_top);
+                        top = top.min(bottom.saturating_sub(1));
+                    }
+                    (CalibrationEdge::Top, Button::Down) => {
+                        top = (top + 1).min(bottom.saturating_sub(1));
+                    }
+                    (CalibrationEdge::Bottom, Button::Up) => {
+                        bottom = bottom.saturating_sub(1).max(top.saturating_add(1));
+                    }
+                    (CalibrationEdge::Bottom, Button::Down) => {
+                        bottom = (bottom + 1).min(default_bottom);
+                    }
+                    (_, Button::Select) => break,
+                    (_, Button::Left)
+                        if !matches!(edge, CalibrationEdge::Left | CalibrationEdge::Right) => {}
+                    (_, Button::Right)
+                        if !matches!(edge, CalibrationEdge::Left | CalibrationEdge::Right) => {}
+                    _ => {}
+                }
+            }
+        }
+
+        if let Err(err) = self.display.validate_calibration(left, top, right, bottom) {
+            self.show_message(
+                "Display Calibration",
+                [
+                    "Invalid calibration".to_string(),
+                    shorten_for_display(&err.to_string(), self.display.chars_per_line()),
+                ],
+            )?;
+            return Ok(());
+        }
+
+        if manual
+            && !self.confirm_yes_no_bool(
+                "Apply Calibration?",
+                [
+                    format!("L:{left} T:{top}"),
+                    format!("R:{right} B:{bottom}"),
+                    "Select Yes to save".to_string(),
+                ],
+            )?
+        {
+            self.show_message("Display Calibration", ["Not saved"])?;
+            return Ok(());
+        }
+
+        self.display
+            .apply_calibration(&mut self.config.display, left, top, right, bottom)?;
+        let path = self.root.join("gui_conf.json");
+        self.save_config_file(&path)?;
+        self.display.reset_probe_dirty();
+
+        if manual {
+            self.show_message("Display Calibration", ["Calibration saved"])?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reset_display_calibration_action(&mut self) -> Result<()> {
+        if !self.confirm_yes_no_bool(
+            "Reset Calibration",
+            ["Clear saved edges?", "You can recalibrate any time"],
+        )? {
+            return Ok(());
+        }
+        self.display.reset_calibration(&mut self.config.display)?;
+        let path = self.root.join("gui_conf.json");
+        self.save_config_file(&path)?;
+        self.display.reset_probe_dirty();
+        self.show_message("Display Calibration", ["Calibration reset"])
+    }
+
+    pub(crate) fn reset_display_cache_action(&mut self) -> Result<()> {
+        if !self.confirm_yes_no_bool(
+            "Reset Display Cache",
+            ["Clear discovery cache?", "Use Discovery to repopulate"],
+        )? {
+            return Ok(());
+        }
+        self.display.reset_cache(&mut self.config.display)?;
+        let path = self.root.join("gui_conf.json");
+        self.save_config_file(&path)?;
+        self.display.reset_probe_dirty();
+        self.show_message("Display Cache", ["Cache reset"])
+    }
+
+    pub(crate) fn show_display_diagnostics(&mut self) -> Result<()> {
+        let diag = self.display.diagnostics();
+        let mut lines = vec![
+            format!("Backend: {}", diag.backend.as_str()),
+            format!(
+                "Detected: {}x{}",
+                diag.detected_width_px, diag.detected_height_px
+            ),
+            format!(
+                "Effective: {}x{}",
+                diag.effective_width_px, diag.effective_height_px
+            ),
+            format!(
+                "Offset: {},{}",
+                diag.effective_offset_x, diag.effective_offset_y
+            ),
+            format!("Source: {}", diag.geometry_source.as_str()),
+            format!("Probe done: {}", diag.probe_completed),
+            format!("Cal done: {}", diag.calibration_completed),
+            format!(
+                "Fingerprint: {}",
+                shorten_for_display(&diag.profile_fingerprint, self.display.chars_per_line())
+            ),
+        ];
+        for warning in &diag.warnings {
+            lines.push(format!("Warn: {}", warning.code()));
+        }
+        self.show_message("Display Diagnostics", lines)
     }
 
     pub(crate) fn tx_power_label(level: TxPowerSetting) -> (&'static str, &'static str) {
@@ -434,7 +826,9 @@ impl App {
                             {
                                 issue_lines.push(shorten_for_display(path, 18));
                             }
-                            if issue_lines.len() >= (DIALOG_VISIBLE_LINES as usize - 1) {
+                            if issue_lines.len()
+                                >= self.display.dialog_visible_lines().saturating_sub(1)
+                            {
                                 issue_lines.push("More...".to_string());
                                 break;
                             }

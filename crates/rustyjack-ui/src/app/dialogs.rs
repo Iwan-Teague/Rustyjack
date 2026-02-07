@@ -1,7 +1,5 @@
 use anyhow::Result;
 
-use crate::ui::layout::MENU_VISIBLE_ITEMS;
-
 use super::state::{App, ButtonAction};
 
 impl App {
@@ -29,11 +27,12 @@ impl App {
 
         loop {
             let total = items.len();
+            let visible_items = self.display.menu_visible_items();
             // Clamp offset so selected is visible
             if index < offset {
                 offset = index;
-            } else if index >= offset + MENU_VISIBLE_ITEMS {
-                offset = index.saturating_sub(MENU_VISIBLE_ITEMS - 1);
+            } else if index >= offset + visible_items {
+                offset = index.saturating_sub(visible_items.saturating_sub(1));
             }
 
             let overlay = self.stats.snapshot();
@@ -42,7 +41,7 @@ impl App {
             let slice: Vec<String> = items
                 .iter()
                 .skip(offset)
-                .take(MENU_VISIBLE_ITEMS)
+                .take(visible_items)
                 .cloned()
                 .collect();
             // Display menu with selected relative index

@@ -1,10 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use rustyjack_commands::{Commands, HardwareCommand};
 use rustyjack_ipc::{InterfaceSelectJobResult, JobState};
 
-use crate::{types::InterfaceSummary, util::shorten_for_display};
+use crate::util::shorten_for_display;
 
 use super::state::{App, ButtonAction};
 
@@ -22,76 +21,6 @@ impl App {
         Ok(self
             .choose_from_list(title, &labels)?
             .map(|idx| names[idx].clone()))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn choose_interface_prompt(&mut self, title: &str) -> Result<Option<String>> {
-        let (_, data) = self
-            .core
-            .dispatch(Commands::Hardware(HardwareCommand::Detect))?;
-        let mut names: Vec<String> = Vec::new();
-        if let Some(arr) = data.get("ethernet_ports").and_then(|v| v.as_array()) {
-            for item in arr {
-                if let Ok(info) = serde_json::from_value::<InterfaceSummary>(item.clone()) {
-                    names.push(info.name);
-                }
-            }
-        }
-        if let Some(arr) = data.get("wifi_modules").and_then(|v| v.as_array()) {
-            for item in arr {
-                if let Ok(info) = serde_json::from_value::<InterfaceSummary>(item.clone()) {
-                    names.push(info.name);
-                }
-            }
-        }
-        names.sort();
-        names.dedup();
-        self.choose_interface_name(title, &names)
-    }
-
-    /// Choose a wireless interface (wifi_modules) with active preselection if present
-    pub(crate) fn choose_wifi_interface(&mut self, title: &str) -> Result<Option<String>> {
-        let (_, data) = self
-            .core
-            .dispatch(Commands::Hardware(HardwareCommand::Detect))?;
-        let mut wifi = Vec::new();
-        if let Some(arr) = data.get("wifi_modules").and_then(|v| v.as_array()) {
-            for item in arr {
-                if let Ok(info) = serde_json::from_value::<InterfaceSummary>(item.clone()) {
-                    wifi.push(info.name);
-                }
-            }
-        }
-
-        if wifi.is_empty() {
-            self.show_message("WiFi", ["No wireless interfaces found"])?;
-            return Ok(None);
-        }
-
-        wifi.sort();
-        wifi.dedup();
-
-        // Auto-select if only one
-        if wifi.len() == 1 {
-            return Ok(Some(wifi[0].clone()));
-        }
-
-        // Build labels with active marker
-        let active = self.config.settings.active_network_interface.clone();
-        let labels: Vec<String> = wifi
-            .iter()
-            .map(|n| {
-                if !active.is_empty() && *n == active {
-                    format!("* {}", n)
-                } else {
-                    n.clone()
-                }
-            })
-            .collect();
-
-        Ok(self
-            .choose_from_list(title, &labels)?
-            .map(|idx| wifi[idx].clone()))
     }
 
     pub(crate) fn run_interface_selection_job(

@@ -57,8 +57,10 @@ pub struct InterfaceSummary {
     pub kind: String,
     pub oper_state: String,
     pub ip: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub admin_up: bool,
+    #[allow(dead_code)]
     #[serde(default)]
     pub carrier: Option<bool>,
 }

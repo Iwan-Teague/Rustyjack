@@ -45,14 +45,6 @@ pub fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCred> {
     })
 }
 
-pub fn authorization_for(uid: u32) -> AuthorizationTier {
-    if uid == 0 {
-        AuthorizationTier::Admin
-    } else {
-        AuthorizationTier::Operator
-    }
-}
-
 /// Determine authorization tier based on uid and supplementary groups.
 ///
 /// Checks:
@@ -496,16 +488,6 @@ mod tests {
             AuthorizationTier::ReadOnly,
             AuthorizationTier::ReadOnly
         ));
-    }
-
-    #[test]
-    fn test_authorization_for_root_is_admin() {
-        assert_eq!(authorization_for(0), AuthorizationTier::Admin);
-    }
-
-    #[test]
-    fn test_authorization_for_non_root_is_operator() {
-        assert_eq!(authorization_for(1000), AuthorizationTier::Operator);
     }
 
     #[test]

@@ -8,7 +8,7 @@ pub mod result;
 
 use anyhow::Result;
 
-use crate::display::{wrap_text, DIALOG_MAX_CHARS, DIALOG_VISIBLE_LINES};
+use crate::display::wrap_text;
 use crate::ui::{input::UiInput, UiContext};
 
 pub(crate) fn show_scrollable_dialog(
@@ -23,9 +23,11 @@ pub(crate) fn show_scrollable_dialog(
 
     let wrapped_body: Vec<String> = body
         .iter()
-        .flat_map(|line| wrap_text(line, DIALOG_MAX_CHARS))
+        .flat_map(|line| wrap_text(line, ctx.display.chars_per_line()))
         .collect();
     let total_lines = wrapped_body.len();
+    let max_offset =
+        crate::ui::layout::max_scroll_offset(total_lines, ctx.display.dialog_visible_lines());
 
     let mut offset = 0usize;
     let mut needs_redraw = true;
@@ -46,7 +48,7 @@ pub(crate) fn show_scrollable_dialog(
                 }
             }
             UiInput::Down => {
-                if offset + DIALOG_VISIBLE_LINES < total_lines {
+                if offset < max_offset {
                     offset += 1;
                     needs_redraw = true;
                 }

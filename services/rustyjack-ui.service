@@ -9,6 +9,12 @@ Type=simple
 WorkingDirectory=/var/lib/rustyjack
 ExecStart=/usr/local/bin/rustyjack-ui
 Environment=RUSTYJACK_DISPLAY_ROTATION=landscape
+Environment=RUSTYJACK_DISPLAY_BACKEND=st7735
+# Optional overrides:
+# Environment=RUSTYJACK_DISPLAY_WIDTH=128
+# Environment=RUSTYJACK_DISPLAY_HEIGHT=128
+# Environment=RUSTYJACK_DISPLAY_OFFSET_X=0
+# Environment=RUSTYJACK_DISPLAY_OFFSET_Y=0
 Environment=RUSTYJACK_ROOT=/var/lib/rustyjack
 Restart=on-failure
 RestartSec=2

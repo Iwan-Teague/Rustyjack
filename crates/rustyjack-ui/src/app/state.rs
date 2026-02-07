@@ -10,9 +10,9 @@ use crate::{
     input::ButtonPad,
     menu::MenuTree,
     stats::StatsSampler,
-    ui::layout::MENU_VISIBLE_ITEMS,
 };
 
+#[allow(dead_code)]
 pub const INDEFINITE_SECS: u32 = 86_400; // 24h stand-in for "run until stopped"
 
 pub struct App {
@@ -87,6 +87,7 @@ impl MenuState {
         self.stack.last().map(|s| s.as_str()).unwrap_or("a")
     }
 
+    #[allow(dead_code)]
     pub(crate) fn path(&self) -> &str {
         self.current_id()
     }
@@ -105,7 +106,7 @@ impl MenuState {
         }
     }
 
-    pub(crate) fn move_up(&mut self, total: usize) {
+    pub(crate) fn move_up(&mut self, total: usize, visible_items: usize) {
         if total == 0 {
             self.selection = 0;
             return;
@@ -118,12 +119,14 @@ impl MenuState {
         // Ensure selection is inside visible window
         if self.selection < self.offset {
             self.offset = self.selection;
-        } else if self.selection >= self.offset + MENU_VISIBLE_ITEMS {
-            self.offset = self.selection.saturating_sub(MENU_VISIBLE_ITEMS - 1);
+        } else if self.selection >= self.offset + visible_items {
+            self.offset = self
+                .selection
+                .saturating_sub(visible_items.saturating_sub(1));
         }
     }
 
-    pub(crate) fn move_down(&mut self, total: usize) {
+    pub(crate) fn move_down(&mut self, total: usize, visible_items: usize) {
         if total == 0 {
             self.selection = 0;
             return;
@@ -132,8 +135,10 @@ impl MenuState {
         // Ensure selection is inside visible window
         if self.selection < self.offset {
             self.offset = self.selection;
-        } else if self.selection >= self.offset + MENU_VISIBLE_ITEMS {
-            self.offset = self.selection.saturating_sub(MENU_VISIBLE_ITEMS - 1);
+        } else if self.selection >= self.offset + visible_items {
+            self.offset = self
+                .selection
+                .saturating_sub(visible_items.saturating_sub(1));
         }
     }
 
@@ -163,6 +168,7 @@ pub(crate) struct UsbDevice {
     #[allow(dead_code)]
     pub(crate) transport: Option<String>,
     pub(crate) is_partition: bool,
+    #[allow(dead_code)]
     pub(crate) parent: Option<String>,
 }
 
@@ -189,6 +195,7 @@ impl UsbAccessRequirement {
 pub(crate) struct MountEntry {
     pub(crate) device: String,
     pub(crate) mount_point: String,
+    #[allow(dead_code)]
     pub(crate) fs_type: String,
     pub(crate) options: String,
 }

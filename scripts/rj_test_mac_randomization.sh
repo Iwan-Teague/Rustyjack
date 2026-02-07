@@ -216,10 +216,10 @@ else
 fi
 
 if [[ "$RUN_UNIT" -eq 1 ]]; then
-  if command -v cargo >/dev/null 2>&1; then
+  if rj_ensure_tool cargo "cargo" "Rust toolchain (unit tests)"; then
     rj_run_cmd "unit_rustyjack_evasion" cargo test -p rustyjack-evasion --lib -- --nocapture
   else
-    rj_skip "cargo not available; skipping unit tests"
+    rj_skip "Unit tests skipped (cargo unavailable)"
   fi
 else
   rj_skip "Unit tests disabled"

@@ -11,7 +11,6 @@ use rustyjack_ipc::{DaemonError, ErrorCode, JobInfo, JobKind, JobSpec, JobState,
 use crate::locks::LockKind;
 use crate::state::DaemonState;
 
-mod blocking;
 mod cancel_bridge;
 mod kinds;
 

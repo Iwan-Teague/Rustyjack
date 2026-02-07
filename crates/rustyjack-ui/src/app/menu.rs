@@ -1,8 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    thread,
-    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -13,14 +11,9 @@ use rustyjack_ipc::{JobState, OpsConfig};
 use crate::{
     config::GuiConfig,
     core::CoreBridge,
-    display::{
-        wrap_text, DashboardView, Display, StatusOverlay, DIALOG_MAX_CHARS, DIALOG_VISIBLE_LINES,
-    },
+    display::{wrap_text, DashboardView, Display, StatusOverlay},
     input::{Button, ButtonPad},
-    menu::{
-        menu_title, ColorTarget, MenuAction, MenuEntry, MenuTree, OpsCategory, PipelineType,
-        TxPowerSetting,
-    },
+    menu::{menu_title, MenuAction, MenuEntry, MenuTree, OpsCategory},
     ops::{
         ethernet::{
             EthernetDiscoveryOp, EthernetInventoryOp, EthernetMitmOp, EthernetPortScanOp,
@@ -34,12 +27,13 @@ use crate::{
         OperationContext,
     },
     stats::StatsSampler,
-    ui::{layout::MENU_VISIBLE_ITEMS, UiContext},
+    ui::UiContext,
     util::shorten_for_display,
 };
 
 use super::state::{App, ButtonAction, CancelDecision, ConfirmChoice, MenuState};
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActionRoute {
     Navigation,
@@ -48,12 +42,14 @@ pub(crate) enum ActionRoute {
     Info,
 }
 
+#[cfg(test)]
 pub(crate) fn action_route(action: &MenuAction) -> ActionRoute {
     match action {
         MenuAction::Submenu(_) => ActionRoute::Navigation,
         MenuAction::RefreshConfig => ActionRoute::Local("reload_config"),
         MenuAction::SaveConfig => ActionRoute::Local("save_config"),
         MenuAction::SetColor(_) => ActionRoute::Local("pick_color"),
+        MenuAction::ApplyThemePreset => ActionRoute::Local("apply_theme_preset"),
         MenuAction::RestartSystem => ActionRoute::Local("restart_system"),
         MenuAction::SystemUpdate => ActionRoute::Local("system_update"),
         MenuAction::SecureShutdown => ActionRoute::Local("secure_shutdown"),
@@ -62,6 +58,15 @@ pub(crate) fn action_route(action: &MenuAction) -> ActionRoute {
         MenuAction::ViewDashboards => ActionRoute::Local("dashboard_view"),
         MenuAction::ToggleDiscord => ActionRoute::Local("toggle_discord"),
         MenuAction::ToggleLogs => ActionRoute::Local("toggle_logs"),
+        MenuAction::DisplayBackendInfo => ActionRoute::Local("show_display_backend"),
+        MenuAction::DisplayRotationInfo => ActionRoute::Local("show_display_rotation"),
+        MenuAction::DisplayResolutionInfo => ActionRoute::Local("show_display_resolution"),
+        MenuAction::DisplayOffsetInfo => ActionRoute::Local("show_display_offsets"),
+        MenuAction::RunDisplayDiscovery => ActionRoute::Local("run_display_discovery"),
+        MenuAction::RunDisplayCalibration => ActionRoute::Local("run_display_calibration"),
+        MenuAction::ResetDisplayCalibration => ActionRoute::Local("reset_display_calibration"),
+        MenuAction::ResetDisplayCache => ActionRoute::Local("reset_display_cache"),
+        MenuAction::ShowDisplayDiagnostics => ActionRoute::Local("show_display_diagnostics"),
         MenuAction::ExportLogsToUsb => ActionRoute::Local("export_logs_to_usb"),
         MenuAction::TransferToUSB => ActionRoute::Local("transfer_to_usb"),
         MenuAction::HardwareDetect => ActionRoute::Local("show_hardware_detect"),
@@ -600,68 +605,6 @@ impl App {
             .to_string()
     }
 
-    pub(crate) fn interface_admin_up(&self, interface: &str) -> bool {
-        if interface.is_empty() {
-            return false;
-        }
-        let flags_path = format!("/sys/class/net/{}/flags", interface);
-        let flags = match fs::read_to_string(&flags_path) {
-            Ok(val) => val.trim().to_string(),
-            Err(_) => return false,
-        };
-        let hex = flags.trim_start_matches("0x");
-        let parsed = u32::from_str_radix(hex, 16).or_else(|_| flags.parse::<u32>());
-        match parsed {
-            Ok(value) => value & 0x1 != 0,
-            Err(_) => false,
-        }
-    }
-
-    pub(crate) fn interface_is_up(&self, interface: &str) -> bool {
-        self.interface_admin_up(interface)
-    }
-
-    pub(crate) fn wait_for_interface_up(&self, interface: &str, timeout: Duration) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < timeout {
-            if self.interface_is_up(interface) {
-                return true;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-        self.interface_is_up(interface)
-    }
-
-    pub(crate) fn wait_for_interface_up_with_ip(&self, interface: &str, timeout: Duration) -> bool {
-        let start = Instant::now();
-
-        // Wait for interface to be administratively UP (not just existence)
-        // For ethernet:
-        // - No carrier: fails immediately at daemon (~1 second)
-        // - Has carrier, DHCP works: succeeds in 5-10 seconds
-        // - Has carrier, slow DHCP: succeeds within 15 seconds (3 retries × 5s)
-        // - No DHCP server: fails after ~15 seconds
-        while start.elapsed() < timeout {
-            if self.interface_is_up(interface) {
-                // Interface is up - wait a bit more to ensure DHCP fully completes
-                let remaining = timeout.saturating_sub(start.elapsed());
-                if remaining > Duration::from_millis(500) {
-                    thread::sleep(Duration::from_millis(500));
-                    // Check one more time to ensure it stays up
-                    if self.interface_is_up(interface) {
-                        return true;
-                    }
-                } else {
-                    return true;
-                }
-            }
-            thread::sleep(Duration::from_millis(200));
-        }
-
-        // Final check: interface is up
-        self.interface_is_up(interface)
-    }
-
     pub(crate) fn interface_has_carrier(&self, interface: &str) -> bool {
         if interface.is_empty() {
             return false;
@@ -855,8 +798,8 @@ impl App {
     pub fn new() -> Result<Self> {
         let core = CoreBridge::with_root(None)?;
         let root = core.root().to_path_buf();
-        let config = GuiConfig::load(&root)?;
-        let mut display = Display::new(&config.colors)?;
+        let mut config = GuiConfig::load(&root)?;
+        let mut display = Display::new(&config.colors, &mut config.display)?;
         let buttons = ButtonPad::new(&config.pins)?;
 
         // Show splash screen during initialization
@@ -880,6 +823,27 @@ impl App {
             dashboard_view: None,
             active_mitm: None,
         };
+        if app.config.theme_config_repaired {
+            app.show_message(
+                "Theme",
+                [
+                    "Theme config repaired",
+                    "Invalid colors were reset",
+                    "to safe defaults",
+                ],
+            )?;
+            app.config.theme_config_repaired = false;
+        }
+        if app.display.probe_dirty() {
+            let config_path = app.root.join("gui_conf.json");
+            app.save_config_warn(&config_path, "saving display probe cache");
+            app.display.reset_probe_dirty();
+        }
+        if app.display.needs_startup_calibration() {
+            if let Err(err) = app.run_display_calibration_flow(false) {
+                tracing::warn!("Startup display calibration failed: {:#}", err);
+            }
+        }
         // Apply log preference from config at startup so the backend honors it
         if let Err(err) = app.apply_log_setting() {
             tracing::warn!("Failed to apply logging config: {}", err);
@@ -926,8 +890,12 @@ impl App {
                 let entries = self.render_menu()?;
                 let button = self.buttons.wait_for_press()?;
                 match self.map_button(button) {
-                    ButtonAction::Up => self.menu_state.move_up(entries.len()),
-                    ButtonAction::Down => self.menu_state.move_down(entries.len()),
+                    ButtonAction::Up => self
+                        .menu_state
+                        .move_up(entries.len(), self.display.menu_visible_items()),
+                    ButtonAction::Down => self
+                        .menu_state
+                        .move_down(entries.len(), self.display.menu_visible_items()),
                     ButtonAction::Back => {
                         self.menu_state.back();
                     }
@@ -972,6 +940,30 @@ impl App {
                         "OFF"
                     };
                     entry.label = format!("Logs [{}]", state);
+                }
+                MenuAction::DisplayBackendInfo => {
+                    entry.label =
+                        format!("Backend: {}", self.display.capabilities().backend.as_str());
+                }
+                MenuAction::DisplayRotationInfo => {
+                    entry.label = format!(
+                        "Rotation: {}",
+                        self.display.capabilities().orientation.as_str()
+                    );
+                }
+                MenuAction::DisplayResolutionInfo => {
+                    let diag = self.display.diagnostics();
+                    entry.label = format!(
+                        "Res: {}x{}",
+                        diag.effective_width_px, diag.effective_height_px
+                    );
+                }
+                MenuAction::DisplayOffsetInfo => {
+                    let diag = self.display.diagnostics();
+                    entry.label = format!(
+                        "Offsets: {},{}",
+                        diag.effective_offset_x, diag.effective_offset_y
+                    );
                 }
                 MenuAction::ToggleMacRandomization => {
                     let state = if self.config.settings.mac_randomization_enabled {
@@ -1094,14 +1086,23 @@ impl App {
         if self.menu_state.offset >= total {
             self.menu_state.offset = 0;
         }
+        let visible_items = self.display.menu_visible_items();
+        if self.menu_state.selection < self.menu_state.offset {
+            self.menu_state.offset = self.menu_state.selection;
+        } else if self.menu_state.selection >= self.menu_state.offset + visible_items {
+            self.menu_state.offset = self
+                .menu_state
+                .selection
+                .saturating_sub(visible_items.saturating_sub(1));
+        }
 
         let start = self.menu_state.offset.min(total);
-        let _end = (start + MENU_VISIBLE_ITEMS).min(total);
+        let _end = (start + visible_items).min(total);
 
         let labels: Vec<String> = entries
             .iter()
             .skip(start)
-            .take(MENU_VISIBLE_ITEMS)
+            .take(visible_items)
             .map(|entry| entry.label.clone())
             .collect();
 
@@ -1127,12 +1128,22 @@ impl App {
             MenuAction::RefreshConfig => self.reload_config()?,
             MenuAction::SaveConfig => self.save_config()?,
             MenuAction::SetColor(target) => self.pick_color(target)?,
+            MenuAction::ApplyThemePreset => self.apply_theme_preset()?,
             MenuAction::RestartSystem => self.restart_system()?,
             MenuAction::SystemUpdate => self.system_update()?,
             MenuAction::SecureShutdown => self.secure_shutdown()?,
             MenuAction::Loot(section) => self.show_loot(section)?,
             MenuAction::DiscordUpload => self.discord_upload()?,
             MenuAction::ToggleLogs => self.toggle_logs()?,
+            MenuAction::DisplayBackendInfo => self.show_display_backend_info()?,
+            MenuAction::DisplayRotationInfo => self.show_display_rotation_info()?,
+            MenuAction::DisplayResolutionInfo => self.show_display_resolution_info()?,
+            MenuAction::DisplayOffsetInfo => self.show_display_offset_info()?,
+            MenuAction::RunDisplayDiscovery => self.run_display_discovery_action()?,
+            MenuAction::RunDisplayCalibration => self.run_display_calibration_flow(true)?,
+            MenuAction::ResetDisplayCalibration => self.reset_display_calibration_action()?,
+            MenuAction::ResetDisplayCache => self.reset_display_cache_action()?,
+            MenuAction::ShowDisplayDiagnostics => self.show_display_diagnostics()?,
             MenuAction::ViewDashboards => {
                 self.dashboard_view = Some(DashboardView::SystemHealth);
             }
@@ -1211,7 +1222,7 @@ impl App {
 
     pub(crate) fn run_operation<O: crate::ops::Operation>(&mut self, mut op: O) -> Result<()> {
         let result = {
-            let mut ui = UiContext::new(
+            let ui = UiContext::new(
                 &mut self.display,
                 &mut self.buttons,
                 &self.stats,
@@ -1224,16 +1235,6 @@ impl App {
         };
         result?;
         self.go_home()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn simple_command(&mut self, command: Commands, success: &str) -> Result<()> {
-        if let Err(err) = self.core.dispatch(command) {
-            self.show_message("Error", [format!("{:#}", err)])?;
-        } else {
-            self.show_message("Success", [success.to_string()])?;
-        }
-        Ok(())
     }
 
     pub(crate) fn show_message<I, S>(&mut self, title: &str, lines: I) -> Result<()>
@@ -1250,9 +1251,11 @@ impl App {
         let wrapped_body: Vec<String> = content
             .iter()
             .skip(1)
-            .flat_map(|line| wrap_text(line, DIALOG_MAX_CHARS))
+            .flat_map(|line| wrap_text(line, self.display.chars_per_line()))
             .collect();
         let total_lines = wrapped_body.len();
+        let max_offset =
+            crate::ui::layout::max_scroll_offset(total_lines, self.display.dialog_visible_lines());
 
         let mut offset: usize = 0;
         let mut needs_redraw = true;
@@ -1274,7 +1277,7 @@ impl App {
                     }
                 }
                 ButtonAction::Down => {
-                    if offset + DIALOG_VISIBLE_LINES < total_lines {
+                    if offset < max_offset {
                         offset += 1;
                         needs_redraw = true;
                     }
@@ -1308,20 +1311,6 @@ impl App {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn execute_with_progress<F, T>(
-        &mut self,
-        title: &str,
-        message: &str,
-        operation: F,
-    ) -> Result<T>
-    where
-        F: FnOnce() -> Result<T>,
-    {
-        self.show_progress(title, [message, "Please wait..."])?;
-        let result = operation();
-        result
-    }
 }
 
 #[cfg(test)]

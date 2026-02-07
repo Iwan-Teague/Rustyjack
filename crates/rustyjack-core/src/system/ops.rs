@@ -417,7 +417,8 @@ impl NetOps for RealNetOps {
                     driver: None,
                     chipset: None,
                     tx_in_monitor: TxInMonitorCapability::NotSupported,
-                    tx_in_monitor_reason: "Wired interface - TX-in-monitor not applicable".to_string(),
+                    tx_in_monitor_reason: "Wired interface - TX-in-monitor not applicable"
+                        .to_string(),
                 };
 
                 // Get MAC address

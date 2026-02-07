@@ -198,6 +198,31 @@ ensure_wpa_supplicant() {
   fail "wpa_supplicant still missing after install"
 }
 
+verify_usb_filesystem_support() {
+  step "Verifying USB filesystem support..."
+  local fs_list
+  fs_list=$(awk '{print $NF}' /proc/filesystems 2>/dev/null || true)
+
+  local missing=()
+  if ! echo "$fs_list" | grep -qx "vfat"; then
+    missing+=("vfat")
+  fi
+  if ! echo "$fs_list" | grep -qx "exfat"; then
+    missing+=("exfat")
+  fi
+  if ! echo "$fs_list" | grep -qx "ext4"; then
+    missing+=("ext4")
+  fi
+
+  if ((${#missing[@]})); then
+    warn "Missing kernel filesystem support: ${missing[*]}"
+    warn "Rustyjack USB mounts require vfat, exfat, and ext4 support (ext4 provides ext2/ext3 compatibility on Pi OS)."
+    fail "Kernel filesystem support is incomplete. Install a Pi kernel with vfat/exfat/ext4 enabled and rerun."
+  fi
+
+  info "[OK] Kernel filesystem support present: vfat exfat ext4"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   fail "This installer must run as root."
 fi
@@ -750,6 +775,8 @@ PACKAGES=(
   wpasupplicant
   # networking tools
   isc-dhcp-client hostapd dnsmasq rfkill
+  # USB filesystem support for Rustyjack mount policy (vfat/exfat/ext)
+  dosfstools e2fsprogs exfatprogs
   # misc
   git i2c-tools curl
 )
@@ -832,11 +859,13 @@ add_dtparam dtparam=i2c1=on
 add_dtparam dtparam=spi=on
 add_dtparam dtparam=wifi=on
 
-MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
+MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev vfat exfat ext4)
 for m in "${MODULES[@]}"; do
   grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
   sudo modprobe "$m" || true
 done
+
+verify_usb_filesystem_support
 
 # ensure overlay spi0-2cs
 grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
@@ -1658,6 +1687,12 @@ Type=simple
 WorkingDirectory=$RUNTIME_ROOT
 ExecStart=/usr/local/bin/$BINARY_NAME
 Environment=RUSTYJACK_DISPLAY_ROTATION=landscape
+Environment=RUSTYJACK_DISPLAY_BACKEND=st7735
+# Optional display overrides:
+# Environment=RUSTYJACK_DISPLAY_WIDTH=128
+# Environment=RUSTYJACK_DISPLAY_HEIGHT=128
+# Environment=RUSTYJACK_DISPLAY_OFFSET_X=0
+# Environment=RUSTYJACK_DISPLAY_OFFSET_Y=0
 Restart=on-failure
 RestartSec=2
 User=rustyjack-ui
