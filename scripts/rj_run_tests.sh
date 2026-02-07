@@ -9,6 +9,7 @@ RUN_ENCRYPTION=0
 RUN_LOOT=0
 RUN_MAC=0
 RUN_DAEMON=0
+RUN_INSTALLERS=0
 DANGEROUS=0
 RUN_UI=1
 OUTROOT="${RJ_OUTROOT:-/var/tmp/rustyjack-tests}"
@@ -28,6 +29,7 @@ Options:
   --loot        Run loot tests
   --mac         Run MAC randomization tests
   --daemon      Run daemon/IPC security tests
+  --installers  Run installer script tests
   --dangerous   Enable dangerous tests (passed to suites)
   --no-ui       Disable UI automation
   --outroot DIR Output root (default: /var/tmp/rustyjack-tests)
@@ -45,28 +47,31 @@ if [[ $# -eq 0 ]]; then
   echo "  4) Loot"
   echo "  5) MAC Randomization"
   echo "  6) Daemon/IPC"
+  echo "  7) Installers"
   echo "  0) All"
   read -r choice
   case "$choice" in
-    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1 ;;
+    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1 ;;
     1) RUN_WIRELESS=1 ;;
     2) RUN_ETHERNET=1 ;;
     3) RUN_ENCRYPTION=1 ;;
     4) RUN_LOOT=1 ;;
     5) RUN_MAC=1 ;;
     6) RUN_DAEMON=1 ;;
+    7) RUN_INSTALLERS=1 ;;
     *) echo "Unknown choice" >&2; exit 2 ;;
   esac
 else
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; shift ;;
+      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; shift ;;
       --wireless) RUN_WIRELESS=1; shift ;;
       --ethernet) RUN_ETHERNET=1; shift ;;
       --encryption) RUN_ENCRYPTION=1; shift ;;
       --loot) RUN_LOOT=1; shift ;;
       --mac) RUN_MAC=1; shift ;;
       --daemon) RUN_DAEMON=1; shift ;;
+      --installers) RUN_INSTALLERS=1; shift ;;
       --dangerous) DANGEROUS=1; shift ;;
       --no-ui) RUN_UI=0; shift ;;
       --outroot) OUTROOT="$2"; shift 2 ;;
@@ -104,6 +109,9 @@ if [[ $RUN_MAC -eq 1 ]]; then
 fi
 if [[ $RUN_DAEMON -eq 1 ]]; then
   "$ROOT_DIR/rj_test_daemon.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_INSTALLERS -eq 1 ]]; then
+  "$ROOT_DIR/rj_test_installers.sh" "${COMMON_ARGS[@]}"
 fi
 
 echo "Tests complete. Results in: $OUTROOT/$RUN_ID"

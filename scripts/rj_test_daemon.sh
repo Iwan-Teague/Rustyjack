@@ -11,6 +11,9 @@ RUN_COMPREHENSIVE=1
 DANGEROUS=0
 RUN_AUTH=1
 RUN_PROTOCOL=1
+RUN_UNIT=1
+RUN_COMPAT=1
+RUN_ISOLATION=1
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +25,9 @@ Options:
   --skip-comprehensive Skip the comprehensive daemon suite
   --no-auth            Skip auth/authorization tests
   --no-protocol        Skip protocol-abuse tests
+  --no-unit            Skip unit tests
+  --no-compat          Skip compatibility checks
+  --no-isolation       Skip isolation checks
   --dangerous          Enable dangerous tests in comprehensive suite
   --no-ui              Ignored (compat with rj_run_tests)
   --ui                 Ignored (compat with rj_run_tests)
@@ -37,6 +43,9 @@ while [[ $# -gt 0 ]]; do
     --skip-comprehensive) RUN_COMPREHENSIVE=0; shift ;;
     --no-auth) RUN_AUTH=0; shift ;;
     --no-protocol) RUN_PROTOCOL=0; shift ;;
+    --no-unit) RUN_UNIT=0; shift ;;
+    --no-compat) RUN_COMPAT=0; shift ;;
+    --no-isolation) RUN_ISOLATION=0; shift ;;
     --dangerous) DANGEROUS=1; shift ;;
     --no-ui) shift ;;
     --ui) shift ;;
@@ -49,10 +58,47 @@ done
 rj_init "daemon"
 rj_require_root
 
-if ! command -v python3 >/dev/null 2>&1; then
+NEEDS_PY=0
+if [[ $RUN_AUTH -eq 1 || $RUN_PROTOCOL -eq 1 || $RUN_COMPREHENSIVE -eq 1 ]]; then
+  NEEDS_PY=1
+fi
+
+if [[ $NEEDS_PY -eq 1 ]] && ! command -v python3 >/dev/null 2>&1; then
   rj_fail "python3 required for daemon RPC tests"
   rj_write_report
   exit 0
+fi
+
+if [[ $RUN_COMPAT -eq 1 ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    rj_ok "python3 available"
+  else
+    rj_skip "python3 not available"
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    rj_ok "systemctl available"
+  else
+    rj_skip "systemctl not available"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    rj_ok "ss available"
+  else
+    rj_skip "ss not available"
+  fi
+else
+  rj_skip "Compatibility checks disabled"
+fi
+
+if [[ $RUN_UNIT -eq 1 ]]; then
+  if command -v cargo >/dev/null 2>&1; then
+    rj_run_cmd "unit_rustyjack_daemon" cargo test -p rustyjack-daemon --lib -- --nocapture
+    rj_run_cmd "unit_rustyjack_ipc" cargo test -p rustyjack-ipc --lib -- --nocapture
+    rj_run_cmd "unit_rustyjack_client" cargo test -p rustyjack-client --lib -- --nocapture
+  else
+    rj_skip "cargo not available; skipping unit tests"
+  fi
+else
+  rj_skip "Unit tests disabled"
 fi
 
 FAIL_CONTEXT_CAPTURED=0
@@ -67,8 +113,8 @@ capture_failure_context() {
     systemctl status rustyjackd.socket >"$OUT/artifacts/rustyjackd.socket.status.txt" 2>&1 || true
   fi
   if command -v journalctl >/dev/null 2>&1; then
-    journalctl -u "$SERVICE" -n 200 --no-pager >"$OUT/journal/${SERVICE}.log" 2>/dev/null || true
-    journalctl -u rustyjackd.socket -n 200 --no-pager >"$OUT/journal/rustyjackd.socket.log" 2>/dev/null || true
+    rj_capture_journal "$SERVICE" "$OUT/journal/${SERVICE}.log"
+    rj_capture_journal "rustyjackd.socket" "$OUT/journal/rustyjackd.socket.log"
   fi
   if command -v ss >/dev/null 2>&1; then
     ss -xap >"$OUT/artifacts/ss_unix.txt" 2>&1 || true
@@ -80,11 +126,7 @@ capture_failure_context() {
     stat "$SOCKET" >"$OUT/artifacts/socket_stat.txt" 2>&1 || true
   fi
 }
-
-rj_fail_ctx() {
-  rj_fail "$*"
-  capture_failure_context
-}
+export RJ_FAILURE_HOOK=capture_failure_context
 
 run_as_user() {
   local user="$1"; shift
@@ -97,42 +139,12 @@ run_as_user() {
   fi
 }
 
-json_get() {
-  local file="$1"
-  local path="$2"
-  python3 - "$file" "$path" <<'PY'
-import json, sys
-path = sys.argv[2].split(".")
-try:
-    with open(sys.argv[1], "r") as fh:
-        data = json.load(fh)
-except Exception:
-    print("")
-    sys.exit(1)
-cur = data
-for key in path:
-    if key == "":
-        continue
-    if isinstance(cur, dict) and key in cur:
-        cur = cur[key]
-    else:
-        cur = None
-        break
-if cur is None:
-    print("")
-elif isinstance(cur, bool):
-    print("true" if cur else "false")
-else:
-    print(cur)
-PY
-}
-
 # --- Basic daemon sanity ---
 if command -v systemctl >/dev/null 2>&1; then
   if systemctl is-active --quiet "$SERVICE"; then
     rj_ok "daemon_service_active ($SERVICE)"
   else
-    rj_fail_ctx "daemon_service_active ($SERVICE not running)"
+    rj_fail "daemon_service_active ($SERVICE not running)"
   fi
 else
   rj_skip "systemctl not available"
@@ -141,7 +153,7 @@ fi
 if [[ -S "$SOCKET" ]]; then
   rj_ok "daemon_socket_present ($SOCKET)"
 else
-  rj_fail_ctx "daemon_socket_present (missing: $SOCKET)"
+  rj_fail "daemon_socket_present (missing: $SOCKET)"
 fi
 
 if [[ -e "$SOCKET" ]]; then
@@ -152,7 +164,7 @@ if [[ -e "$SOCKET" ]]; then
   if [[ "${sock_mode:2:1}" == "0" ]]; then
     rj_ok "daemon_socket_perms_secure (others=0)"
   else
-    rj_fail_ctx "daemon_socket_perms_secure (others=${sock_mode:2:1})"
+    rj_fail "daemon_socket_perms_secure (others=${sock_mode:2:1})"
   fi
 fi
 
@@ -276,6 +288,10 @@ if __name__ == "__main__":
 PYEOF
 chmod 755 "$RPC_HELPER"
 
+if [[ $RUN_ISOLATION -eq 1 ]]; then
+  rj_snapshot_network "daemon_pre"
+fi
+
 rpc_call() {
   local id="$1" body="$2" data_json="$3" user="$4"
   local req="$OUT/rpc/requests/${id}_${body}.json"
@@ -295,17 +311,17 @@ rpc_expect_ok() {
   local id="$1" body="$2" data_json="$3" user="$4"
   ((TESTS_RUN++)) || true
   if ! rpc_call "$id" "$body" "$data_json" "$user"; then
-    rj_fail_ctx "rpc_ok_$id (transport rc=$RPC_LAST_RC)"
+    rj_fail "rpc_ok_$id (transport rc=$RPC_LAST_RC)"
     return 0
   fi
   local typ
-  typ=$(json_get "$RPC_LAST_RESP" "response_body_type")
+  typ=$(rj_json_get "$RPC_LAST_RESP" "response_body_type" || true)
   if [[ "$typ" == "Ok" ]]; then
     rj_ok "rpc_ok_$id"
   else
     local err
-    err=$(json_get "$RPC_LAST_RESP" "response_error.message")
-    rj_fail_ctx "rpc_ok_$id (expected Ok, got $typ) ${err:+err=$err}"
+    err=$(rj_json_get "$RPC_LAST_RESP" "response_error.message" || true)
+    rj_fail "rpc_ok_$id (expected Ok, got $typ) ${err:+err=$err}"
   fi
 }
 
@@ -314,23 +330,23 @@ rpc_expect_err() {
   ((TESTS_RUN++)) || true
   if ! rpc_call "$id" "$body" "$data_json" "$user"; then
     local err_type
-    err_type=$(json_get "$RPC_LAST_RESP" "error_type")
+    err_type=$(rj_json_get "$RPC_LAST_RESP" "error_type" || true)
     if [[ "$err_type" == "connect_permission_denied" ]]; then
       rj_ok "rpc_err_$id (connect denied)"
       return 0
     fi
-    rj_fail_ctx "rpc_err_$id (transport rc=$RPC_LAST_RC, error_type=$err_type)"
+    rj_fail "rpc_err_$id (transport rc=$RPC_LAST_RC, error_type=$err_type)"
     return 0
   fi
   local typ err_type
-  typ=$(json_get "$RPC_LAST_RESP" "response_body_type")
-  err_type=$(json_get "$RPC_LAST_RESP" "error_type")
+  typ=$(rj_json_get "$RPC_LAST_RESP" "response_body_type" || true)
+  err_type=$(rj_json_get "$RPC_LAST_RESP" "error_type" || true)
   if [[ "$typ" == "Err" ]]; then
     rj_ok "rpc_err_$id"
   elif [[ "$err_type" == "connect_permission_denied" ]]; then
     rj_ok "rpc_err_$id (connect denied)"
   else
-    rj_fail_ctx "rpc_err_$id (expected Err, got $typ)"
+    rj_fail "rpc_err_$id (expected Err, got $typ)"
   fi
 }
 
@@ -338,10 +354,10 @@ rpc_expect_err() {
 LOGCFG_ENABLED="true"
 LOGCFG_LEVEL="Info"
 rpc_call "BASE" "LoggingConfigGet" "null" "root" || true
-base_body=$(json_get "$OUT/rpc/responses/BASE_LoggingConfigGet.json" "response_body_type")
+base_body=$(rj_json_get "$OUT/rpc/responses/BASE_LoggingConfigGet.json" "response_body_type" || true)
 if [[ "$base_body" == "Ok" ]]; then
-  base_enabled=$(json_get "$OUT/rpc/responses/BASE_LoggingConfigGet.json" "response.body.data.data.enabled")
-  base_level=$(json_get "$OUT/rpc/responses/BASE_LoggingConfigGet.json" "response.body.data.data.level")
+  base_enabled=$(rj_json_get "$OUT/rpc/responses/BASE_LoggingConfigGet.json" "response.body.data.data.enabled" || true)
+  base_level=$(rj_json_get "$OUT/rpc/responses/BASE_LoggingConfigGet.json" "response.body.data.data.level" || true)
   [[ -n "$base_enabled" ]] && LOGCFG_ENABLED="$base_enabled"
   [[ -n "$base_level" ]] && LOGCFG_LEVEL="$base_level"
   rj_log "Baseline logging config: enabled=$LOGCFG_ENABLED level=$LOGCFG_LEVEL"
@@ -408,8 +424,8 @@ if [[ "$RUN_AUTH" -eq 1 ]]; then
   # Probe read-only user connectivity
   ((TESTS_RUN++)) || true
   rpc_call "A1" "Health" "null" "$RO_USER" || true
-  ro_err=$(json_get "$OUT/rpc/responses/A1_Health.json" "error_type")
-  ro_body=$(json_get "$OUT/rpc/responses/A1_Health.json" "response_body_type")
+  ro_err=$(rj_json_get "$OUT/rpc/responses/A1_Health.json" "error_type" || true)
+  ro_body=$(rj_json_get "$OUT/rpc/responses/A1_Health.json" "response_body_type" || true)
   if [[ "$ro_err" == "connect_permission_denied" ]]; then
     rj_ok "ro_user_connect_denied (socket perms enforce group access)"
     RO_CAN_CONNECT=0
@@ -417,7 +433,7 @@ if [[ "$RUN_AUTH" -eq 1 ]]; then
     rj_ok "ro_user_can_connect"
     RO_CAN_CONNECT=1
   else
-    rj_fail_ctx "ro_user_connectivity_unexpected (err=$ro_err body=$ro_body)"
+    rj_fail "ro_user_connectivity_unexpected (err=$ro_err body=$ro_body)"
     RO_CAN_CONNECT=0
   fi
 
@@ -477,7 +493,7 @@ PYTEST
   if grep -q '"error"' "$OUT/artifacts/proto_mismatch.json" 2>/dev/null || grep -qi "incompat" "$OUT/artifacts/proto_mismatch.json"; then
     rj_ok "protocol_version_mismatch_rejected"
   else
-    rj_fail_ctx "protocol_version_mismatch_rejected"
+    rj_fail "protocol_version_mismatch_rejected"
   fi
 
   # Oversized frame (should be rejected / connection closed)
@@ -508,6 +524,13 @@ else
   rj_skip "Protocol abuse tests disabled"
 fi
 
+if [[ $RUN_ISOLATION -eq 1 ]]; then
+  rj_snapshot_network "daemon_post"
+  rj_compare_snapshot "daemon_pre" "daemon_post" "daemon_rpc_readonly"
+else
+  rj_skip "Isolation checks disabled"
+fi
+
 # --- Comprehensive suite ---
 if [[ "$RUN_COMPREHENSIVE" -eq 1 ]]; then
   if [[ -x "$ROOT_DIR/rustyjack_comprehensive_test.sh" ]]; then
@@ -517,7 +540,7 @@ if [[ "$RUN_COMPREHENSIVE" -eq 1 ]]; then
     if "$ROOT_DIR/rustyjack_comprehensive_test.sh" --outroot "$comp_out" ${DANGEROUS:+--dangerous} >>"$LOG" 2>&1; then
       rj_ok "comprehensive_suite"
     else
-      rj_fail_ctx "comprehensive_suite (failures detected)"
+      rj_fail "comprehensive_suite (failures detected)"
     fi
   else
     rj_skip "rustyjack_comprehensive_test.sh not executable"
