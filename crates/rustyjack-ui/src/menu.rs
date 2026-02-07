@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 
+use crate::config::ColorScheme;
+
 #[allow(dead_code)]
 #[derive(Clone)]
 pub enum MenuAction {
@@ -9,6 +11,7 @@ pub enum MenuAction {
     RefreshConfig,
     SaveConfig,
     SetColor(ColorTarget),
+    ApplyThemePreset,
     RestartSystem,
     SystemUpdate,
     SecureShutdown,
@@ -17,6 +20,15 @@ pub enum MenuAction {
     ViewDashboards,
     ToggleDiscord,
     ToggleLogs,
+    DisplayBackendInfo,
+    DisplayRotationInfo,
+    DisplayResolutionInfo,
+    DisplayOffsetInfo,
+    RunDisplayDiscovery,
+    RunDisplayCalibration,
+    ResetDisplayCalibration,
+    ResetDisplayCache,
+    ShowDisplayDiagnostics,
     ExportLogsToUsb,
     TransferToUSB,
     HardwareDetect,
@@ -207,6 +219,7 @@ impl MenuTree {
         nodes.insert("asl", MenuNode::Static(logs_menu));
         nodes.insert("asd", MenuNode::Static(discord_menu));
         nodes.insert("asc", MenuNode::Static(config_menu));
+        nodes.insert("asdp", MenuNode::Static(display_menu));
         nodes.insert("asif", MenuNode::Static(interface_menu));
         nodes.insert("ap", MenuNode::Static(pipeline_menu));
         nodes.insert("ao", MenuNode::Static(obfuscation_menu)); // Obfuscation & Evasion
@@ -232,20 +245,64 @@ impl MenuTree {
         }
     }
 
+    #[cfg(test)]
     pub fn node_ids(&self) -> Vec<&'static str> {
         self.nodes.keys().copied().collect()
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorTarget {
     Background,
-    #[allow(dead_code)]
     Border,
     Text,
     SelectedText,
     SelectedBackground,
     Toolbar,
+}
+
+impl ColorTarget {
+    pub const ALL: [Self; 6] = [
+        Self::Background,
+        Self::Border,
+        Self::Text,
+        Self::SelectedText,
+        Self::SelectedBackground,
+        Self::Toolbar,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Background => "Background",
+            Self::Border => "Border",
+            Self::Text => "Text",
+            Self::SelectedText => "Selected Text",
+            Self::SelectedBackground => "Selected BG",
+            Self::Toolbar => "Toolbar",
+        }
+    }
+
+    pub fn get(self, colors: &ColorScheme) -> &str {
+        match self {
+            Self::Background => &colors.background,
+            Self::Border => &colors.border,
+            Self::Text => &colors.text,
+            Self::SelectedText => &colors.selected_text,
+            Self::SelectedBackground => &colors.selected_background,
+            Self::Toolbar => &colors.toolbar,
+        }
+    }
+
+    pub fn set(self, colors: &mut ColorScheme, value: &str) {
+        match self {
+            Self::Background => colors.background = value.to_string(),
+            Self::Border => colors.border = value.to_string(),
+            Self::Text => colors.text = value.to_string(),
+            Self::SelectedText => colors.selected_text = value.to_string(),
+            Self::SelectedBackground => colors.selected_background = value.to_string(),
+            Self::Toolbar => colors.toolbar = value.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -504,6 +561,7 @@ fn tx_power_menu() -> Vec<MenuEntry> {
 fn settings_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("Active Interface", MenuAction::Submenu("asif")),
+        MenuEntry::new("Display", MenuAction::Submenu("asdp")),
         MenuEntry::new("Discord", MenuAction::Submenu("asd")),
         MenuEntry::new("Colors", MenuAction::Submenu("aea")),
         MenuEntry::new("Logs", MenuAction::Submenu("asl")),
@@ -516,6 +574,26 @@ fn interface_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("View Status", MenuAction::ViewInterfaceStatus),
         MenuEntry::new("Select Interface", MenuAction::SelectActiveInterface),
+    ]
+}
+
+fn display_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new("Display Backend", MenuAction::DisplayBackendInfo),
+        MenuEntry::new("Rotation", MenuAction::DisplayRotationInfo),
+        MenuEntry::new("Resolution Override", MenuAction::DisplayResolutionInfo),
+        MenuEntry::new("Offsets", MenuAction::DisplayOffsetInfo),
+        MenuEntry::new("Run Display Discovery", MenuAction::RunDisplayDiscovery),
+        MenuEntry::new("Run Display Calibration", MenuAction::RunDisplayCalibration),
+        MenuEntry::new(
+            "Reset Display Calibration",
+            MenuAction::ResetDisplayCalibration,
+        ),
+        MenuEntry::new("Reset Display Cache", MenuAction::ResetDisplayCache),
+        MenuEntry::new(
+            "Show Display Diagnostics",
+            MenuAction::ShowDisplayDiagnostics,
+        ),
     ]
 }
 
@@ -536,19 +614,12 @@ fn discord_menu() -> Vec<MenuEntry> {
 }
 
 fn colors_menu() -> Vec<MenuEntry> {
-    vec![
-        MenuEntry::new("Background", MenuAction::SetColor(ColorTarget::Background)),
-        MenuEntry::new("Text", MenuAction::SetColor(ColorTarget::Text)),
-        MenuEntry::new(
-            "Selected Text",
-            MenuAction::SetColor(ColorTarget::SelectedText),
-        ),
-        MenuEntry::new(
-            "Selected BG",
-            MenuAction::SetColor(ColorTarget::SelectedBackground),
-        ),
-        MenuEntry::new("Toolbar", MenuAction::SetColor(ColorTarget::Toolbar)),
-    ]
+    let mut entries: Vec<MenuEntry> = ColorTarget::ALL
+        .iter()
+        .map(|target| MenuEntry::new(target.label(), MenuAction::SetColor(*target)))
+        .collect();
+    entries.push(MenuEntry::new("Apply Preset", MenuAction::ApplyThemePreset));
+    entries
 }
 
 fn config_menu() -> Vec<MenuEntry> {
@@ -596,6 +667,7 @@ pub fn menu_title(id: &str) -> &'static str {
         "asl" => "Logs",
         "asd" => "Discord",
         "asc" => "Config",
+        "asdp" => "Display",
         "ap" => "Attack Pipelines",
         "ao" => "Obfuscation & Evasion",
         "aom" => "MAC Address",
@@ -606,5 +678,48 @@ pub fn menu_title(id: &str) -> &'static str {
         "encusb" => "USB Settings",
         "encadv" => "Encryption: Advanced",
         _ => "Menu",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_display_menu_has_manual_rerun_actions() {
+        let tree = MenuTree::new();
+        let entries = tree.entries("asdp").expect("display menu entries");
+        let actions: Vec<&MenuAction> = entries.iter().map(|entry| &entry.action).collect();
+
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, MenuAction::RunDisplayDiscovery)));
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, MenuAction::RunDisplayCalibration)));
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, MenuAction::ResetDisplayCalibration)));
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, MenuAction::ResetDisplayCache)));
+    }
+
+    #[test]
+    fn colors_menu_exposes_all_theme_roles_and_preset_entry() {
+        let tree = MenuTree::new();
+        let entries = tree.entries("aea").expect("colors menu entries");
+
+        for target in ColorTarget::ALL {
+            assert!(entries.iter().any(|entry| {
+                matches!(
+                    entry.action,
+                    MenuAction::SetColor(current) if current == target
+                )
+            }));
+        }
+        assert!(entries
+            .iter()
+            .any(|entry| matches!(entry.action, MenuAction::ApplyThemePreset)));
     }
 }

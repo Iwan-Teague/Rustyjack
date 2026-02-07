@@ -31,6 +31,7 @@ pub enum TxInMonitorCapability {
     Unknown,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct InterfaceCapabilities {
     pub name: String,
@@ -53,11 +54,13 @@ pub struct InterfaceCapabilities {
 
 impl InterfaceCapabilities {
     /// Check if the interface can perform TX-in-monitor operations (injection)
+    #[allow(dead_code)]
     pub fn is_injection_capable(&self) -> bool {
         matches!(self.tx_in_monitor, TxInMonitorCapability::Supported)
     }
 
     /// Check if injection capability is unknown (may or may not work)
+    #[allow(dead_code)]
     pub fn is_injection_unknown(&self) -> bool {
         matches!(self.tx_in_monitor, TxInMonitorCapability::Unknown)
     }
@@ -129,6 +132,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn system_logs(&self) -> Result<String> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -252,6 +256,7 @@ impl CoreBridge {
         }
     }
 
+    #[allow(dead_code)]
     pub fn poll_job(&self, job_id: JobId) -> Result<Value> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -326,6 +331,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn wifi_connect(
         &self,
         interface: &str,
@@ -355,6 +361,7 @@ impl CoreBridge {
 
     // ===== Hotspot Operations =====
 
+    #[allow(dead_code)]
     pub fn hotspot_start(
         &self,
         interface: &str,
@@ -375,6 +382,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn hotspot_stop(&self) -> Result<bool> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -385,6 +393,7 @@ impl CoreBridge {
 
     // ===== Portal Operations =====
 
+    #[allow(dead_code)]
     pub fn portal_start(&self, interface: &str, port: u16) -> Result<JobId> {
         let interface = interface.to_string();
         self.block_on(async move {
@@ -394,6 +403,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn portal_stop(&self) -> Result<bool> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -402,6 +412,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn portal_status(&self) -> Result<Value> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -428,6 +439,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn hostname_randomize_now(&self) -> Result<String> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -438,6 +450,7 @@ impl CoreBridge {
 
     // ===== Mount Operations =====
 
+    #[allow(dead_code)]
     pub fn mount_list(&self) -> Result<Value> {
         self.block_on(async move {
             let mut client = self.create_client().await?;
@@ -446,6 +459,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn mount_device(&self, device: &str, filesystem: Option<String>) -> Result<JobId> {
         let device = device.to_string();
         self.block_on(async move {
@@ -455,6 +469,7 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn unmount_device(&self, device: &str) -> Result<JobId> {
         let device = device.to_string();
         self.block_on(async move {
@@ -466,6 +481,7 @@ impl CoreBridge {
 
     // ===== Interface Selection =====
 
+    #[allow(dead_code)]
     pub fn set_active_interface(&self, interface: &str) -> Result<Value> {
         let interface = interface.to_string();
         self.block_on(async move {
@@ -568,11 +584,13 @@ impl CoreBridge {
         })
     }
 
+    #[allow(dead_code)]
     pub fn interface_is_up(&self, interface: &str) -> Result<bool> {
         let status = self.interface_status(interface)?;
         Ok(status.is_up)
     }
 
+    #[allow(dead_code)]
     pub fn get_interface_ip(&self, _interface: &str) -> Result<Option<std::net::Ipv4Addr>> {
         let status = self.interface_status(_interface)?;
         match status.ip {

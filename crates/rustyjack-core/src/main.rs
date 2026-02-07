@@ -3,7 +3,6 @@ use anyhow::Result;
 use clap::Parser;
 use rustyjack_core::{dispatch_command, logs_enabled, resolve_root, Cli, OutputFormat};
 use serde_json::{json, Value};
-use tracing_subscriber::util::SubscriberInitExt;
 
 fn main() {
     if logs_enabled() {

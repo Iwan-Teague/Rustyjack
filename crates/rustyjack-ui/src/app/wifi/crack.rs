@@ -3,7 +3,6 @@ use std::{
     io::{BufRead, BufReader},
     path::Path,
     sync::mpsc::{self, TryRecvError},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -255,8 +254,6 @@ impl App {
         bundle: HandshakeBundle,
         dictionary: DictionaryOption,
     ) -> Result<CrackOutcome> {
-        use std::thread;
-
         let passwords = match &dictionary {
             DictionaryOption::Quick { .. } => {
                 let mut list = generate_common_passwords();
@@ -284,7 +281,7 @@ impl App {
         let stop_flag = cracker.stop_handle();
 
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
+        std::thread::spawn(move || {
             let mut cb = |p: CrackProgress| {
                 if tx
                     .send(CrackUpdate::Progress {
@@ -405,7 +402,7 @@ impl App {
             }
 
             self.draw_crack_progress(attempts, total_attempts, rate, &current)?;
-            thread::sleep(Duration::from_millis(350));
+            std::thread::sleep(Duration::from_millis(350));
         }
 
         Ok(finished.unwrap_or(CrackOutcome {

@@ -12,6 +12,8 @@ use anyhow::Result;
 
 use crate::config::PinConfig;
 
+pub const BUTTON_COUNT: usize = 8;
+
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
@@ -30,6 +32,7 @@ mod platform {
     use super::*;
     use anyhow::{anyhow, Context};
     use linux_embedded_hal::gpio_cdev::{Chip, LineHandle, LineRequestFlags};
+    use std::collections::HashSet;
 
     struct ButtonInput {
         kind: Button,
@@ -66,6 +69,42 @@ mod platform {
 
     impl ButtonPad {
         pub fn new(pins: &PinConfig) -> Result<Self> {
+            let pin_map = [
+                ("Up", pins.key_up_pin, Button::Up),
+                ("Down", pins.key_down_pin, Button::Down),
+                ("Left", pins.key_left_pin, Button::Left),
+                ("Right", pins.key_right_pin, Button::Right),
+                ("Select", pins.key_press_pin, Button::Select),
+                ("Key1", pins.key1_pin, Button::Key1),
+                ("Key2", pins.key2_pin, Button::Key2),
+                ("Key3", pins.key3_pin, Button::Key3),
+            ];
+
+            if pin_map.len() != BUTTON_COUNT {
+                return Err(anyhow!(
+                    "button map invariant failed: expected {} controls, got {}",
+                    BUTTON_COUNT,
+                    pin_map.len()
+                ));
+            }
+
+            let mut seen_pins = HashSet::new();
+            for (name, pin, _) in pin_map {
+                if pin == 0 {
+                    return Err(anyhow!(
+                        "button map invariant failed: missing GPIO mapping for {}",
+                        name
+                    ));
+                }
+                if !seen_pins.insert(pin) {
+                    return Err(anyhow!(
+                        "button map invariant failed: duplicate GPIO pin {} for {}",
+                        pin,
+                        name
+                    ));
+                }
+            }
+
             let mut chip = Chip::new("/dev/gpiochip0")?;
             let mut buttons = Vec::new();
             buttons.push(ButtonInput::new(Button::Up, pins.key_up_pin, &mut chip)?);
@@ -92,6 +131,20 @@ mod platform {
             buttons.push(ButtonInput::new(Button::Key1, pins.key1_pin, &mut chip)?);
             buttons.push(ButtonInput::new(Button::Key2, pins.key2_pin, &mut chip)?);
             buttons.push(ButtonInput::new(Button::Key3, pins.key3_pin, &mut chip)?);
+
+            if buttons.len() != BUTTON_COUNT {
+                return Err(anyhow!(
+                    "button map invariant failed: expected {} controls, initialized {}",
+                    BUTTON_COUNT,
+                    buttons.len()
+                ));
+            }
+
+            for button in &buttons {
+                button
+                    .is_pressed()
+                    .with_context(|| format!("button {:?} GPIO line not readable", button.kind))?;
+            }
 
             let debounce = Duration::from_millis(120);
             Ok(Self {
@@ -191,11 +244,7 @@ mod platform {
                     Ok(file) => file,
                     Err(err) => {
                         if debug {
-                            eprintln!(
-                                "virtual-input: failed to open {}: {}",
-                                fifo.display(),
-                                err
-                            );
+                            eprintln!("virtual-input: failed to open {}: {}", fifo.display(), err);
                         }
                         thread::sleep(Duration::from_secs(1));
                         continue;

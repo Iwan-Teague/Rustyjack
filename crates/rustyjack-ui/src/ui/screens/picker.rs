@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::ui::{input::UiInput, layout::MENU_VISIBLE_ITEMS, screens::cancel_confirm, UiContext};
+use crate::ui::{input::UiInput, screens::cancel_confirm, UiContext};
 
 pub enum PickerChoice {
     Selected(usize),
@@ -23,17 +23,18 @@ pub fn choose(
 
     loop {
         let total = items.len();
+        let visible_items = ctx.display.menu_visible_items();
         if index < offset {
             offset = index;
-        } else if index >= offset + MENU_VISIBLE_ITEMS {
-            offset = index.saturating_sub(MENU_VISIBLE_ITEMS - 1);
+        } else if index >= offset + visible_items {
+            offset = index.saturating_sub(visible_items.saturating_sub(1));
         }
 
         let overlay = ctx.overlay();
         let slice: Vec<String> = items
             .iter()
             .skip(offset)
-            .take(MENU_VISIBLE_ITEMS)
+            .take(visible_items)
             .cloned()
             .collect();
         let displayed_selected = index.saturating_sub(offset);

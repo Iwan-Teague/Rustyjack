@@ -435,23 +435,6 @@ async fn write_frame(stream: &mut UnixStream, payload: &[u8], max_frame: u32) ->
     Ok(())
 }
 
-async fn send_error(
-    stream: &mut UnixStream,
-    version: u32,
-    request_id: u64,
-    err: DaemonError,
-    max_frame: u32,
-) -> Result<()> {
-    let envelope = ResponseEnvelope {
-        v: version,
-        request_id,
-        body: ResponseBody::Err(err),
-    };
-    let payload = serde_json::to_vec(&envelope)?;
-    write_frame(stream, &payload, max_frame).await?;
-    Ok(())
-}
-
 async fn send_error_timed(
     stream: &mut UnixStream,
     version: u32,

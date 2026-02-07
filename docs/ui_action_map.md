@@ -15,6 +15,7 @@ Legend:
 | RefreshConfig | `App::reload_config` | Local | N/A |
 | SaveConfig | `App::save_config` | Local | N/A |
 | SetColor | `App::pick_color` | Local | N/A |
+| ApplyThemePreset | `App::apply_theme_preset` | Local | N/A |
 | ViewDashboards | `dashboard_view` | Local | N/A |
 | RestartSystem | `App::restart_system` | `SystemCommand::Reboot` | Power |
 | SecureShutdown | `App::secure_shutdown` | `SystemCommand::Poweroff` | Power |
@@ -23,6 +24,15 @@ Legend:
 | DiscordUpload | `App::discord_upload` | `NotifyCommand::Discord(Send)` | System |
 | ToggleDiscord | `App::toggle_discord` | Local | N/A |
 | ToggleLogs | `App::toggle_logs` | `LoggingConfigSet` endpoint | System |
+| DisplayBackendInfo | `App::show_display_backend_info` | Local | N/A |
+| DisplayRotationInfo | `App::show_display_rotation_info` | Local | N/A |
+| DisplayResolutionInfo | `App::show_display_resolution_info` | Local | N/A |
+| DisplayOffsetInfo | `App::show_display_offset_info` | Local | N/A |
+| RunDisplayDiscovery | `App::run_display_discovery_action` | Local (updates cached display probe state) | N/A |
+| RunDisplayCalibration | `App::run_display_calibration_flow` | Local (manual calibration flow) | N/A |
+| ResetDisplayCalibration | `App::reset_display_calibration_action` | Local | N/A |
+| ResetDisplayCache | `App::reset_display_cache_action` | Local | N/A |
+| ShowDisplayDiagnostics | `App::show_display_diagnostics` | Local | N/A |
 | ExportLogsToUsb | `App::export_logs_to_usb` | `SystemCommand::ExportLogsToUsb` | Storage |
 | TransferToUSB | `App::transfer_to_usb` | `SystemCommand::UsbMount/UsbUnmount` | Storage |
 | HardwareDetect | `App::show_hardware_detect` | `HardwareCommand::Detect` | None |

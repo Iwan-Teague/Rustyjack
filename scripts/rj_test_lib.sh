@@ -39,6 +39,73 @@ rj_log() {
   printf '%s %s\n' "$(rj_now)" "$msg" | tee -a "$LOG" >/dev/null
 }
 
+rj_prompt_yesno() {
+  local prompt="$1"
+  local default="${2:-N}"
+  if [[ "${RJ_AUTO_INSTALL:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${RJ_NONINTERACTIVE:-0}" == "1" ]]; then
+    return 1
+  fi
+  if [[ ! -t 0 ]]; then
+    return 1
+  fi
+  local reply
+  if [[ "$default" == "Y" ]]; then
+    read -r -p "$prompt [Y/n]: " reply
+    reply="${reply:-y}"
+  else
+    read -r -p "$prompt [y/N]: " reply
+    reply="${reply:-n}"
+  fi
+  case "$reply" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+rj_ensure_tool() {
+  local tool="$1"
+  local pkgs="$2"
+  local desc="${3:-$tool}"
+  if command -v "$tool" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  rj_log "[WARN] Missing required tool: $tool ($desc)"
+  if ! rj_prompt_yesno "Install $desc now?"; then
+    rj_skip "Skipping tests that require $tool"
+    return 1
+  fi
+
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    rj_fail "Cannot install $tool without root privileges"
+    return 1
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    rj_fail "apt-get not available to install $tool"
+    return 1
+  fi
+
+  rj_log "[INFO] Installing $desc via apt-get ($pkgs)"
+  if ! apt-get update >>"$LOG" 2>&1; then
+    rj_fail "apt-get update failed while installing $tool"
+    return 1
+  fi
+  if ! apt-get install -y --no-install-recommends $pkgs >>"$LOG" 2>&1; then
+    rj_fail "apt-get install failed for $tool ($pkgs)"
+    return 1
+  fi
+  if command -v "$tool" >/dev/null 2>&1; then
+    rj_log "[INFO] Installed $tool successfully"
+    return 0
+  fi
+
+  rj_fail "Tool $tool still missing after install"
+  return 1
+}
+
 rj_ok() {
   rj_log "[PASS] $*"
   TESTS_PASS=$((TESTS_PASS + 1))

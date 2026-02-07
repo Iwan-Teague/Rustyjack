@@ -59,6 +59,7 @@ impl<'a> UiContext<'a> {
         Ok(button.map(map_button))
     }
 
+    #[allow(dead_code)]
     pub fn try_read_input_timeout(&mut self, timeout: Duration) -> Result<Option<UiInput>> {
         let button = self.buttons.try_read_timeout(timeout)?;
         Ok(button.map(map_button))

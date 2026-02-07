@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**RustyJack** is a portable network security toolkit for Raspberry Pi Zero 2 W running Raspberry Pi OS Lite or Debian (Trixie). It combines a native Rust offensive security framework with an embedded LCD UI (Waveshare 1.44" 128x128 ST7735S display).
+**RustyJack** is a portable network security toolkit for Raspberry Pi Zero 2 W running Raspberry Pi OS Lite or Debian (Trixie). It combines a native Rust offensive security framework with an embedded LCD UI (Waveshare 1.44" ST7735S default profile `128x128`, runtime geometry/layout aware).
 
 **Key Principle: Pure Rust with no external binaries.** All system operations are implemented natively - no iptables, wpa_cli, dnsmasq, dhclient, nmcli, or rfkill binaries. Temporary exceptions exist for shell scripts during installation only.
 
@@ -13,6 +13,7 @@
 
 ### Target Platform
 - **Hardware:** Raspberry Pi Zero 2 W with Ethernet HAT + Waveshare 1.44" LCD HAT
+- **Display model:** Runtime capability/layout metrics; default ST7735 profile is `128x128`, larger backends use same 8-button UX model
 - **OS:** Debian 13 / Raspberry Pi OS Lite (Trixie); arm64 is supported (preferred for prebuilts), 32-bit remains supported
 - **External Requirements:** USB WiFi adapter with monitor+injection for wireless attacks (built-in BCM43436 cannot monitor/inject)
 
@@ -43,6 +44,8 @@ MIT
 - All privileged operations go through daemon IPC
 - Job-based architecture for long-running operations with cancellation
 - Hardened systemd units with strict sandboxing
+- Display startup flow is backend-aware: detect backend, query mode, calibrate if needed, cache effective geometry
+- UI layout metrics are runtime-derived (no fixed menu/dialog visible constants in core flow)
 
 ---
 
@@ -181,14 +184,25 @@ Outputs to `prebuilt/arm32/`
 ### gui_conf.json (auto-created)
 - GPIO pin mappings
 - Color palette
+- Display state (probe/calibration completion flags, calibrated edges, effective geometry cache, profile fingerprint)
 - Active interface, target info
 - Evasion toggles
 - Hotspot settings
 
+### Display Runtime Notes
+- `Settings -> Display` exposes manual `Run Display Discovery`, `Run Display Calibration`, `Reset Display Calibration`, `Reset Display Cache`, and diagnostics.
+- Calibration captures `LEFT/TOP/RIGHT/BOTTOM` edges with fixed 8-button controls (`LEFT/RIGHT` for vertical edges, `UP/DOWN` for horizontal edges, `Select` to confirm).
+- Startup logs/warnings include `DISPLAY_MODE_MISMATCH`, `DISPLAY_UNVERIFIED_GEOMETRY`, and `UNSUPPORTED_DISPLAY_SIZE`.
+
 ### Environment Variables
 ```bash
 RUSTYJACK_ROOT=/var/lib/rustyjack
+RUSTYJACK_DISPLAY_BACKEND=st7735      # st7735|framebuffer|drm
 RUSTYJACK_DISPLAY_ROTATION=landscape  # or portrait
+RUSTYJACK_DISPLAY_WIDTH=128           # optional override
+RUSTYJACK_DISPLAY_HEIGHT=128          # optional override
+RUSTYJACK_DISPLAY_OFFSET_X=0          # optional override
+RUSTYJACK_DISPLAY_OFFSET_Y=0          # optional override
 RUSTYJACK_LOGS_DISABLED=1             # disables logging when set
 RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 RUSTYJACKD_READ_TIMEOUT_MS=5000

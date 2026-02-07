@@ -7,7 +7,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::Local;
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -1430,86 +1430,4 @@ impl App {
         }
     }
 
-    pub(crate) fn browse_inventory(&mut self, devices: Vec<Value>) -> Result<()> {
-        let labels: Vec<String> = devices
-            .iter()
-            .map(|d| {
-                let ip = d.get("ip").and_then(|v| v.as_str()).unwrap_or("?");
-                let host = d.get("hostname").and_then(|v| v.as_str()).unwrap_or("");
-                if host.is_empty() {
-                    format!(" {ip}")
-                } else {
-                    format!(" {ip} ({host})")
-                }
-            })
-            .collect();
-
-        loop {
-            let Some(idx) = self.choose_from_menu("Devices", &labels)? else {
-                break;
-            };
-            if let Some(dev) = devices.get(idx) {
-                let ip = dev.get("ip").and_then(|v| v.as_str()).unwrap_or("?");
-                let host = dev.get("hostname").and_then(|v| v.as_str()).unwrap_or("");
-                let os = dev.get("os_hint").and_then(|v| v.as_str()).unwrap_or("");
-                let ports: Vec<String> = dev
-                    .get("open_ports")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|p| p.as_u64().map(|v| v.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let services: Vec<String> = dev
-                    .get("services")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|s| {
-                                let proto =
-                                    s.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
-                                let detail = s.get("detail").and_then(|v| v.as_str()).unwrap_or("");
-                                if proto.is_empty() && detail.is_empty() {
-                                    None
-                                } else {
-                                    Some(format!(
-                                        "{}{}",
-                                        proto,
-                                        if detail.is_empty() {
-                                            "".into()
-                                        } else {
-                                            format!(": {}", detail)
-                                        }
-                                    ))
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mut lines = Vec::new();
-                lines.push(format!("IP: {}", ip));
-                if !host.is_empty() {
-                    lines.push(format!("Host: {}", host));
-                }
-                if !os.is_empty() {
-                    lines.push(format!("OS: {}", os));
-                }
-                if !ports.is_empty() {
-                    lines.push(format!("Ports: {}", ports.join(", ")));
-                }
-                if !services.is_empty() {
-                    lines.push("Services:".to_string());
-                    for svc in services.iter().take(4) {
-                        lines.push(format!(" - {}", shorten_for_display(svc, 18)));
-                    }
-                    if services.len() > 4 {
-                        lines.push(format!(" +{} more", services.len() - 4));
-                    }
-                }
-                self.show_message("Device", lines)?;
-            }
-        }
-        Ok(())
-    }
 }

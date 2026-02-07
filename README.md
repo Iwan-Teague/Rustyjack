@@ -10,6 +10,8 @@ Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joys
 - [Architecture](#architecture)
 - [Hardware & Wiring](#hardware--wiring)
 - [Controls](#controls)
+- [Display Backends & Dynamic Resolution](#display-backends--dynamic-resolution)
+- [Display Calibration](#display-calibration)
 - [UI Features](#ui-features)
 - [Installation](#installation)
 - [Configuration & Paths](#configuration--paths)
@@ -45,7 +47,7 @@ DNSSpoof/                Captive portal templates (not a Rust crate - HTML/JS te
 scripts/                 Wi-Fi driver installer, USB hotplug helper, FDE scripts (udev rule included)
 wordlists/               Bundled password lists for handshake cracking
 img/                     Splash assets for the LCD (`rustyjack.png`)
-services/rustyjack-ui.service     Systemd unit (unprivileged UI, sets display rotation and RUSTYJACK_ROOT)
+services/rustyjack-ui.service     Systemd unit (unprivileged UI, sets display backend/rotation and RUSTYJACK_ROOT)
 services/rustyjackd.service       Systemd unit (root daemon, privileged operations + IPC)
 services/rustyjack-portal.service Systemd unit (captive portal server, unprivileged)
 install_rustyjack*.sh    Production/dev/prebuilt installers for Pi OS targets
@@ -84,7 +86,7 @@ Runtime directories are created by the installers under `/var/lib/rustyjack`:
 
 ## Hardware & Wiring
 
-- Target: Raspberry Pi Zero 2 W + Ethernet HAT + Waveshare 1.44" LCD HAT (ST7735S, 128x128).
+- Target: Raspberry Pi Zero 2 W + Ethernet HAT + Waveshare 1.44" LCD HAT (ST7735S, default 128x128 profile).
 - Display rotation: `RUSTYJACK_DISPLAY_ROTATION=landscape` (default); set to `portrait` to rotate back.
 - Backlight: BCM24 held high by the UI; you can test with `gpioset gpiochip0 24=1`.
 - Buttons are active-low; installers add GPIO pull-ups via `/boot/firmware/config.txt` (or `/boot/config.txt`): `gpio=6,19,5,26,13,21,20,16=pu`.
@@ -124,6 +126,43 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 | Key2                 | Cancel (no-op in menus; cancels dialogs/ops)         |
 | Key3                 | Open reboot confirmation (requires explicit confirm) |
 
+## Display Backends & Dynamic Resolution
+
+- Runtime flow: `detect backend -> query capabilities -> calibrate only when needed -> cache effective geometry`.
+- Supported baseline: `128x128` is the lowest supported layout target.
+- Displays smaller than `128x128` are allowed in best-effort mode and emit `UNSUPPORTED_DISPLAY_SIZE` warnings.
+- Cached geometry is reused on normal boots when probe/calibration completion flags are set; no automatic recalculation loop.
+- Recalculation is manual-only from `Settings -> Display`.
+- Effective geometry precedence: `override (env/config) > backend detected mode > backend profile`.
+
+Runtime warnings/events:
+- `DISPLAY_MODE_MISMATCH`
+- `DISPLAY_UNVERIFIED_GEOMETRY`
+- `UNSUPPORTED_DISPLAY_SIZE`
+
+`rustyjack-ui` currently renders through the ST7735 path by default (`RUSTYJACK_DISPLAY_BACKEND=st7735`) and keeps that path fully functional for Pi Zero 2 W + Waveshare HAT.
+
+## Display Calibration
+
+Use `Settings -> Display -> Run Display Calibration`.
+
+Workflow:
+1. Calibrate `LEFT`
+2. Calibrate `TOP`
+3. Calibrate `RIGHT`
+4. Calibrate `BOTTOM`
+
+Controls:
+- Vertical edges (`LEFT`, `RIGHT`): `LEFT/RIGHT` adjusts by 1 px
+- Horizontal edges (`TOP`, `BOTTOM`): `UP/DOWN` adjusts by 1 px
+- `Select`: confirm current edge
+- `Key1`: reset current edge to profile default
+- `Key2`: cancel calibration and keep previous saved values
+
+Saved values include calibrated edges, completion flags, effective geometry, backend/rotation, offsets, and profile fingerprint in `gui_conf.json`.
+
+Deep-dive reference: `docs/display_dynamic_resolution.md`.
+
 ## UI Features
 
 ### System, modes, and dashboards
@@ -131,6 +170,7 @@ Pins and colors can be customized in `gui_conf.json`; defaults are created autom
 - **Operation Mode**: Stealth (blocks active ops, forces MAC/hostname randomization + 1 dBm TX), Default, Aggressive (max TX), Custom (keep manual toggles).
 - **Dashboards**: Cycle System Health, Target Status, and MAC Status views from the main menu.
 - **Colors**: Pick palette entries directly from the UI.
+- **Display settings**: `Settings -> Display` supports manual discovery/calibration reruns, cache/calibration reset, and diagnostics inspection.
 - **Logs toggle**: Enables/disables logging by setting/clearing `RUSTYJACK_LOGS_DISABLED`; **Purge Logs** removes log files under loot.
 - **System**: Restart, Secure Shutdown (best-effort RAM wipe then poweroff), Complete Purge (removes binaries, services, loot, udev helpers; exits UI), FDE Prepare/Migrate (full-disk encryption setup), USB Mount/Unmount (with read-only/read-write mode selection).
 - **Wi-Fi driver installer**: Runs `scripts/wifi_driver_installer.sh`, detecting USB chipsets and installing/compiling drivers; progress is shown in the UI (`/var/log/rustyjack_wifi_driver.log`).
@@ -264,7 +304,12 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 
 **Environment Variables**:
 - `RUSTYJACK_ROOT=/var/lib/rustyjack` - Root directory for all runtime data
+- `RUSTYJACK_DISPLAY_BACKEND={st7735|framebuffer|drm}` - Backend preference (default service value: `st7735`)
 - `RUSTYJACK_DISPLAY_ROTATION={landscape|portrait}` - LCD display orientation (default: landscape)
+- `RUSTYJACK_DISPLAY_WIDTH=<px>` - Optional explicit width override
+- `RUSTYJACK_DISPLAY_HEIGHT=<px>` - Optional explicit height override
+- `RUSTYJACK_DISPLAY_OFFSET_X=<px>` - Optional panel offset X override
+- `RUSTYJACK_DISPLAY_OFFSET_Y=<px>` - Optional panel offset Y override
 - `RUSTYJACK_LOGS_DISABLED` - When set, disables logging globally
 - `RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock` - Daemon IPC socket path
 - `RUSTYJACKD_ALLOW_CORE_DISPATCH=true` - Enables IPC command dispatch (required)

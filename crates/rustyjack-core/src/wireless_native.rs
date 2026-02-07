@@ -400,8 +400,7 @@ impl WirelessCapabilities {
 
     /// Check if injection capability is unknown (conservative: may or may not work)
     pub fn is_injection_unknown(&self) -> bool {
-        self.supports_monitor_mode
-            && matches!(self.tx_in_monitor, TxInMonitorCapability::Unknown)
+        self.supports_monitor_mode && matches!(self.tx_in_monitor, TxInMonitorCapability::Unknown)
     }
 
     /// Legacy method for backward compatibility - checks monitor capability only
@@ -432,8 +431,7 @@ pub fn check_capabilities(interface: &str) -> WirelessCapabilities {
     let mut supports_2ghz = false;
     let mut driver_name = None;
     let mut tx_in_monitor = TxInMonitorCapability::Unknown;
-    let mut tx_in_monitor_reason =
-        "Could not query interface capabilities".to_string();
+    let mut tx_in_monitor_reason = "Could not query interface capabilities".to_string();
 
     // Query detailed capabilities via nl80211
     if interface_exists && interface_is_wireless {
@@ -1020,7 +1018,7 @@ mod tests {
     fn test_capabilities() {
         let caps = check_capabilities("wlan0");
         // Just verify it doesn't panic
-        let _ = caps.is_attack_capable();
+        let _ = caps.is_monitor_capable();
     }
 
     #[test]

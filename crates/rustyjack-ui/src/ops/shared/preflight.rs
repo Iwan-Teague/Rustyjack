@@ -62,7 +62,8 @@ pub fn deauth_attack(core: &CoreBridge, config: &GuiConfig, iface: &str) -> Resu
             // Allow but warn - user can proceed at their own risk
             tracing::warn!(
                 "TX-in-monitor capability unknown for {}: {}",
-                iface, caps.tx_in_monitor_reason
+                iface,
+                caps.tx_in_monitor_reason
             );
         }
         TxInMonitorCapability::Supported => {

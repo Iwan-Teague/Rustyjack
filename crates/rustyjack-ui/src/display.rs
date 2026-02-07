@@ -1,6 +1,13 @@
-use crate::config::{ColorScheme, PinConfig};
 use crate::input::ButtonPad;
+use crate::{
+    config::{
+        ColorScheme, DisplayBackend, DisplayConfig, DisplayGeometrySource, DisplayRotation,
+        PinConfig,
+    },
+    ui::layout::{ellipsize, UiLayoutMetrics},
+};
 use anyhow::Result;
+use chrono::Utc;
 use embedded_graphics::{
     image::Image,
     mono_font::{ascii::FONT_6X10, MonoTextStyle, MonoTextStyleBuilder},
@@ -10,74 +17,103 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 
-pub(crate) const DIALOG_MAX_CHARS: usize = 20;
-pub(crate) const DIALOG_VISIBLE_LINES: usize = 7;
+pub(crate) const MIN_SUPPORTED_DIMENSION_PX: u32 = 128;
+const DISPLAY_TESTS_VERSION: u32 = 1;
 
-/// Wraps text at specified character width, breaking on word boundaries when possible
-pub(crate) fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if text.len() <= max_width {
-        return vec![text.to_string()];
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayWarning {
+    DisplayModeMismatch,
+    DisplayUnverifiedGeometry,
+    UnsupportedDisplaySize,
+}
 
-    let mut lines = Vec::new();
-    let mut current_line = String::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalibrationEdge {
+    Left,
+    Top,
+    Right,
+    Bottom,
+}
 
-    for word in text.split_whitespace() {
-        if current_line.is_empty() {
-            // First word on line
-            if word.len() > max_width {
-                // Word itself is too long, force-break it
-                let mut remaining = word;
-                while remaining.len() > max_width {
-                    lines.push(remaining[..max_width].to_string());
-                    remaining = &remaining[max_width..];
-                }
-                current_line = remaining.to_string();
-            } else {
-                current_line = word.to_string();
-            }
-        } else if current_line.len() + 1 + word.len() <= max_width {
-            // Word fits on current line
-            current_line.push(' ');
-            current_line.push_str(word);
-        } else {
-            // Word doesn't fit, start new line
-            lines.push(current_line);
-            if word.len() > max_width {
-                // Word itself is too long, force-break it
-                let mut remaining = word;
-                while remaining.len() > max_width {
-                    lines.push(remaining[..max_width].to_string());
-                    remaining = &remaining[max_width..];
-                }
-                current_line = remaining.to_string();
-            } else {
-                current_line = word.to_string();
-            }
+impl CalibrationEdge {
+    pub const ALL: [Self; 4] = [Self::Left, Self::Top, Self::Right, Self::Bottom];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Left => "LEFT",
+            Self::Top => "TOP",
+            Self::Right => "RIGHT",
+            Self::Bottom => "BOTTOM",
         }
     }
 
-    if !current_line.is_empty() {
-        lines.push(current_line);
-    }
-
-    if lines.is_empty() {
-        vec![text.to_string()]
-    } else {
-        lines
+    pub fn help_text(self) -> &'static str {
+        match self {
+            Self::Left | Self::Right => "LEFT/RIGHT adjust edge",
+            Self::Top | Self::Bottom => "UP/DOWN adjust edge",
+        }
     }
 }
 
-fn ellipsize(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
-        return text.to_string();
+impl DisplayWarning {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::DisplayModeMismatch => "DISPLAY_MODE_MISMATCH",
+            Self::DisplayUnverifiedGeometry => "DISPLAY_UNVERIFIED_GEOMETRY",
+            Self::UnsupportedDisplaySize => "UNSUPPORTED_DISPLAY_SIZE",
+        }
     }
-    if max_chars <= 3 {
-        return text.chars().take(max_chars).collect();
+}
+
+#[derive(Debug, Clone)]
+pub struct DisplayCapabilities {
+    pub width_px: u32,
+    pub height_px: u32,
+    pub orientation: DisplayRotation,
+    pub backend: DisplayBackend,
+    pub safe_padding_px: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct DisplayDiagnostics {
+    pub backend: DisplayBackend,
+    pub detected_width_px: u32,
+    pub detected_height_px: u32,
+    pub effective_width_px: u32,
+    pub effective_height_px: u32,
+    pub effective_offset_x: i32,
+    pub effective_offset_y: i32,
+    pub geometry_source: DisplayGeometrySource,
+    pub profile_fingerprint: String,
+    pub probe_completed: bool,
+    pub calibration_completed: bool,
+    pub warnings: Vec<DisplayWarning>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DisplayGeometry {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    offset_x: i32,
+    offset_y: i32,
+}
+
+impl DisplayGeometry {
+    fn width(self) -> u32 {
+        self.right
+            .saturating_sub(self.left)
+            .saturating_add(1)
+            .max(1) as u32
     }
-    let keep = max_chars - 3;
-    let head: String = text.chars().take(keep).collect();
-    format!("{head}...")
+
+    fn height(self) -> u32 {
+        self.bottom
+            .saturating_sub(self.top)
+            .saturating_add(1)
+            .max(1) as u32
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -89,7 +125,7 @@ fn on_off(enabled: bool) -> &'static str {
     }
 }
 use image::GenericImageView;
-use std::path::Path;
+use std::{fs, path::Path};
 
 #[cfg(target_os = "linux")]
 use anyhow::Context;
@@ -108,50 +144,53 @@ use linux_embedded_hal::{
 use st7735_lcd::{Orientation, ST7735};
 use std::{thread::sleep, time::Duration as StdDuration};
 
-#[cfg(target_os = "linux")]
-const LCD_WIDTH: u16 = 129;
-#[cfg(target_os = "linux")]
-const LCD_HEIGHT: u16 = 130;
-// Offset adjusted to utilize full screen width and avoid dead pixels
-// ST7735S has a 132x162 buffer but Waveshare 1.44" uses ~128x128 visible
-// Increased dimensions to 129x130 to fill dead rows/columns on edge
-// X offset of 2 shifts content to use full visible area
-#[cfg(target_os = "linux")]
-// Offset X is 0 by default to align drawing to left edge on most displays.
-// Some ST7735 modules exposed an extra left column when set to 2 — this caused
-// a white backlight column to show on the edge of some panels. Set default to
-// 0 so UI fills the entire visible area on typical Waveshare 1.44" modules.
-const LCD_OFFSET_X: u16 = 0;
-#[cfg(target_os = "linux")]
-// Use zero vertical offset to avoid leaving the bottom row unused; some
-// panels had a dead row when an offset of 1 was applied.
-const LCD_OFFSET_Y: u16 = 0;
+pub use crate::ui::layout::wrap_text;
 
 #[cfg(target_os = "linux")]
-const TOOLBAR_HEIGHT: u32 = 14;
+const ST7735_PROFILE_WIDTH: u32 = 128;
 #[cfg(target_os = "linux")]
-const OPS_LINE_HEIGHT: u32 = 10;
+const ST7735_PROFILE_HEIGHT: u32 = 128;
 #[cfg(target_os = "linux")]
-const OPS_LINE_COUNT: usize = 3;
+const ST7735_DEFAULT_OFFSET_X: i32 = 0;
 #[cfg(target_os = "linux")]
-const HEADER_HEIGHT: u32 = TOOLBAR_HEIGHT;
+const ST7735_DEFAULT_OFFSET_Y: i32 = 0;
+
 #[cfg(target_os = "linux")]
-const MENU_TOP: i32 = (HEADER_HEIGHT as i32) + 2;
+fn env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
 #[cfg(target_os = "linux")]
-const DIALOG_BODY_TOP: i32 = (HEADER_HEIGHT as i32) + 8;
+fn env_i32(name: &str, default: i32) -> i32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(default)
+}
+
 #[cfg(target_os = "linux")]
-const FILE_POS_TOP: i32 = (HEADER_HEIGHT as i32) + 2;
+fn env_backend(name: &str) -> Option<DisplayBackend> {
+    let value = std::env::var(name).ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "st7735" => Some(DisplayBackend::St7735),
+        "framebuffer" | "fb" | "fbdev" => Some(DisplayBackend::Framebuffer),
+        "drm" => Some(DisplayBackend::Drm),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "linux")]
-const FILE_BODY_TOP: i32 = (HEADER_HEIGHT as i32) + 14;
-#[cfg(target_os = "linux")]
-const DASHBOARD_OPS_TOP: i32 = TOOLBAR_HEIGHT as i32;
-#[cfg(target_os = "linux")]
-const DASHBOARD_BODY_TOP: i32 =
-    (TOOLBAR_HEIGHT + (OPS_LINE_HEIGHT * OPS_LINE_COUNT as u32)) as i32 + 2;
-#[cfg(target_os = "linux")]
-const OPS_MAX_CHARS: usize = 21;
-#[cfg(target_os = "linux")]
-const MENU_MAX_CHARS: usize = 20;
+fn env_rotation(name: &str) -> Option<DisplayRotation> {
+    let value = std::env::var(name).ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "portrait" => Some(DisplayRotation::Portrait),
+        "landscape" => Some(DisplayRotation::Landscape),
+        _ => None,
+    }
+}
 
 #[cfg(target_os = "linux")]
 pub struct Display {
@@ -165,11 +204,21 @@ pub struct Display {
     text_style_regular: MonoTextStyle<'static, Rgb565>,
     text_style_highlight: MonoTextStyle<'static, Rgb565>,
     text_style_small: MonoTextStyle<'static, Rgb565>,
+    layout: UiLayoutMetrics,
+    capabilities: DisplayCapabilities,
+    diagnostics: DisplayDiagnostics,
+    pending_calibration: bool,
+    probe_dirty: bool,
 }
 
 #[cfg(not(target_os = "linux"))]
 pub struct Display {
     palette: Palette,
+    layout: UiLayoutMetrics,
+    capabilities: DisplayCapabilities,
+    diagnostics: DisplayDiagnostics,
+    pending_calibration: bool,
+    probe_dirty: bool,
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -184,8 +233,428 @@ pub struct Palette {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+struct RuntimeProbe {
+    backend: DisplayBackend,
+    rotation: DisplayRotation,
+    detected_width: u32,
+    detected_height: u32,
+    geometry: DisplayGeometry,
+    source: DisplayGeometrySource,
+    warnings: Vec<DisplayWarning>,
+    fingerprint: String,
+    pending_calibration: bool,
+    probe_dirty: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn detect_backend(config: &DisplayConfig) -> DisplayBackend {
+    env_backend("RUSTYJACK_DISPLAY_BACKEND")
+        .or_else(|| config.backend_preference.clone())
+        .unwrap_or(DisplayBackend::St7735)
+}
+
+#[cfg(target_os = "linux")]
+fn detect_rotation(config: &DisplayConfig) -> DisplayRotation {
+    env_rotation("RUSTYJACK_DISPLAY_ROTATION")
+        .or_else(|| config.rotation.clone())
+        .unwrap_or(DisplayRotation::Landscape)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_fb_virtual_size(input: &str) -> Option<(u32, u32)> {
+    let mut parts = input.trim().split(',');
+    let w = parts.next()?.trim().parse::<u32>().ok()?;
+    let h = parts.next()?.trim().parse::<u32>().ok()?;
+    Some((w, h))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_mode(mode: &str) -> Option<(u32, u32)> {
+    let trimmed = mode.trim();
+    let (w, h) = trimmed.split_once('x')?;
+    Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+}
+
+#[cfg(target_os = "linux")]
+fn query_backend_mode(backend: &DisplayBackend) -> Option<(u32, u32)> {
+    match backend {
+        DisplayBackend::St7735 => Some((ST7735_PROFILE_WIDTH, ST7735_PROFILE_HEIGHT)),
+        DisplayBackend::Framebuffer => {
+            let data = fs::read_to_string("/sys/class/graphics/fb0/virtual_size").ok()?;
+            parse_fb_virtual_size(&data)
+        }
+        DisplayBackend::Drm => {
+            let entries = fs::read_dir("/sys/class/drm").ok()?;
+            for entry in entries.flatten() {
+                let path = entry.path().join("modes");
+                if !path.exists() {
+                    continue;
+                }
+                if let Ok(data) = fs::read_to_string(&path) {
+                    if let Some(mode) = data.lines().find_map(parse_mode) {
+                        return Some(mode);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn profile_mode(backend: &DisplayBackend) -> (u32, u32) {
+    match backend {
+        DisplayBackend::St7735 => (ST7735_PROFILE_WIDTH, ST7735_PROFILE_HEIGHT),
+        DisplayBackend::Framebuffer | DisplayBackend::Drm => {
+            (ST7735_PROFILE_WIDTH, ST7735_PROFILE_HEIGHT)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn backend_offsets(config: &DisplayConfig) -> (i32, i32) {
+    let default_x = match config.backend_preference {
+        Some(DisplayBackend::St7735) | None => ST7735_DEFAULT_OFFSET_X,
+        _ => 0,
+    };
+    let default_y = match config.backend_preference {
+        Some(DisplayBackend::St7735) | None => ST7735_DEFAULT_OFFSET_Y,
+        _ => 0,
+    };
+    let offset_x = env_i32(
+        "RUSTYJACK_DISPLAY_OFFSET_X",
+        config.offset_x.unwrap_or(default_x),
+    );
+    let offset_y = env_i32(
+        "RUSTYJACK_DISPLAY_OFFSET_Y",
+        config.offset_y.unwrap_or(default_y),
+    );
+    (offset_x, offset_y)
+}
+
+#[cfg(target_os = "linux")]
+fn build_fingerprint(
+    backend: &DisplayBackend,
+    rotation: &DisplayRotation,
+    detected_width: u32,
+    detected_height: u32,
+    safe_padding: u32,
+) -> String {
+    format!(
+        "{}:{}x{}:{}:pad{}:v{}",
+        backend.as_str(),
+        detected_width,
+        detected_height,
+        rotation.as_str(),
+        safe_padding,
+        DISPLAY_TESTS_VERSION
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn calibration_geometry(config: &DisplayConfig, base: &DisplayGeometry) -> Option<DisplayGeometry> {
+    let left = config.calibrated_left?;
+    let top = config.calibrated_top?;
+    let right = config.calibrated_right?;
+    let bottom = config.calibrated_bottom?;
+    if right <= left || bottom <= top {
+        return None;
+    }
+    let width = right.saturating_sub(left).saturating_add(1);
+    let height = bottom.saturating_sub(top).saturating_add(1);
+    Some(DisplayGeometry {
+        left: 0,
+        top: 0,
+        right: width.saturating_sub(1),
+        bottom: height.saturating_sub(1),
+        offset_x: base.offset_x + left,
+        offset_y: base.offset_y + top,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_runtime_probe(config: &mut DisplayConfig, force_discovery: bool) -> RuntimeProbe {
+    let backend = detect_backend(config);
+    let rotation = detect_rotation(config);
+    let (profile_width, profile_height) = profile_mode(&backend);
+    let (detected_width, detected_height) =
+        query_backend_mode(&backend).unwrap_or((profile_width, profile_height));
+
+    let override_width = env_u32(
+        "RUSTYJACK_DISPLAY_WIDTH",
+        config.width_override.unwrap_or(0),
+    );
+    let override_height = env_u32(
+        "RUSTYJACK_DISPLAY_HEIGHT",
+        config.height_override.unwrap_or(0),
+    );
+    let has_override = override_width > 0 && override_height > 0;
+    let (offset_x, offset_y) = backend_offsets(config);
+
+    let mut warnings = Vec::new();
+    let fingerprint = build_fingerprint(
+        &backend,
+        &rotation,
+        detected_width,
+        detected_height,
+        config.safe_padding_px,
+    );
+    if has_override && (override_width != detected_width || override_height != detected_height) {
+        warnings.push(DisplayWarning::DisplayModeMismatch);
+    }
+
+    let use_cached = !force_discovery
+        && config.display_probe_completed
+        && config.display_tests_version == DISPLAY_TESTS_VERSION
+        && config.effective_width.is_some()
+        && config.effective_height.is_some()
+        && config.effective_backend.as_ref() == Some(&backend);
+
+    let geometry = if use_cached {
+        let mut cached_width = config.effective_width.unwrap_or(profile_width).max(1);
+        let mut cached_height = config.effective_height.unwrap_or(profile_height).max(1);
+        if matches!(backend, DisplayBackend::St7735) {
+            cached_width = cached_width.min(detected_width.max(1));
+            cached_height = cached_height.min(detected_height.max(1));
+        }
+        if config
+            .display_profile_fingerprint
+            .as_ref()
+            .filter(|fp| *fp == &fingerprint)
+            .is_none()
+        {
+            warnings.push(DisplayWarning::DisplayModeMismatch);
+        }
+        DisplayGeometry {
+            left: 0,
+            top: 0,
+            right: cached_width as i32 - 1,
+            bottom: cached_height as i32 - 1,
+            offset_x: config.effective_offset_x.unwrap_or(offset_x),
+            offset_y: config.effective_offset_y.unwrap_or(offset_y),
+        }
+    } else {
+        let mut width = if has_override {
+            override_width
+        } else {
+            detected_width.max(1)
+        };
+        let mut height = if has_override {
+            override_height
+        } else {
+            detected_height.max(1)
+        };
+        if matches!(backend, DisplayBackend::St7735) {
+            width = width.min(detected_width.max(1));
+            height = height.min(detected_height.max(1));
+        }
+        DisplayGeometry {
+            left: 0,
+            top: 0,
+            right: width as i32 - 1,
+            bottom: height as i32 - 1,
+            offset_x,
+            offset_y,
+        }
+    };
+
+    let mut source = if use_cached {
+        DisplayGeometrySource::Cached
+    } else if has_override {
+        DisplayGeometrySource::Override
+    } else if matches!(backend, DisplayBackend::Framebuffer | DisplayBackend::Drm) {
+        DisplayGeometrySource::Detected
+    } else {
+        DisplayGeometrySource::Profile
+    };
+
+    let mut effective_geometry = geometry;
+    if !use_cached {
+        if let Some(calibrated) = calibration_geometry(config, &geometry) {
+            effective_geometry = calibrated;
+            source = DisplayGeometrySource::Calibrated;
+        }
+    }
+
+    let calibration_required = matches!(backend, DisplayBackend::St7735)
+        && !has_override
+        && !config.display_calibration_completed;
+
+    let geometry_verified = !matches!(backend, DisplayBackend::St7735)
+        || has_override
+        || config.display_calibration_completed;
+    if !geometry_verified {
+        warnings.push(DisplayWarning::DisplayUnverifiedGeometry);
+    }
+    if effective_geometry.width() < MIN_SUPPORTED_DIMENSION_PX
+        || effective_geometry.height() < MIN_SUPPORTED_DIMENSION_PX
+    {
+        warnings.push(DisplayWarning::UnsupportedDisplaySize);
+    }
+
+    let mut probe_dirty = false;
+    if !use_cached {
+        if config.effective_width != Some(effective_geometry.width())
+            || config.effective_height != Some(effective_geometry.height())
+            || config.effective_offset_x != Some(effective_geometry.offset_x)
+            || config.effective_offset_y != Some(effective_geometry.offset_y)
+            || config.effective_backend.as_ref() != Some(&backend)
+            || config.effective_rotation.as_ref() != Some(&rotation)
+            || config.display_profile_fingerprint.as_deref() != Some(fingerprint.as_str())
+            || !config.display_probe_completed
+            || config.display_tests_version != DISPLAY_TESTS_VERSION
+        {
+            probe_dirty = true;
+        }
+
+        config.display_probe_completed = true;
+        config.display_tests_version = DISPLAY_TESTS_VERSION;
+        config.display_profile_fingerprint = Some(fingerprint.clone());
+        config.effective_width = Some(effective_geometry.width());
+        config.effective_height = Some(effective_geometry.height());
+        config.effective_offset_x = Some(effective_geometry.offset_x);
+        config.effective_offset_y = Some(effective_geometry.offset_y);
+        config.effective_backend = Some(backend.clone());
+        config.effective_rotation = Some(rotation.clone());
+        config.display_geometry_source = Some(source.clone());
+    }
+
+    RuntimeProbe {
+        backend,
+        rotation,
+        detected_width,
+        detected_height,
+        geometry: effective_geometry,
+        source,
+        warnings,
+        fingerprint,
+        pending_calibration: calibration_required && !use_cached,
+        probe_dirty,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_reuses_cached_geometry_when_probe_completed() {
+        let mut cfg = DisplayConfig {
+            display_probe_completed: true,
+            display_calibration_completed: true,
+            display_tests_version: DISPLAY_TESTS_VERSION,
+            effective_width: Some(128),
+            effective_height: Some(128),
+            effective_offset_x: Some(0),
+            effective_offset_y: Some(0),
+            effective_backend: Some(DisplayBackend::St7735),
+            effective_rotation: Some(DisplayRotation::Landscape),
+            display_profile_fingerprint: Some(build_fingerprint(
+                &DisplayBackend::St7735,
+                &DisplayRotation::Landscape,
+                128,
+                128,
+                0,
+            )),
+            ..DisplayConfig::default()
+        };
+
+        let probe = resolve_runtime_probe(&mut cfg, false);
+        assert_eq!(probe.source, DisplayGeometrySource::Cached);
+        assert!(!probe.probe_dirty);
+        assert_eq!(probe.geometry.width(), 128);
+        assert_eq!(probe.geometry.height(), 128);
+    }
+
+    #[test]
+    fn invalid_calibration_geometry_is_rejected() {
+        let base = DisplayGeometry {
+            left: 0,
+            top: 0,
+            right: 127,
+            bottom: 127,
+            offset_x: 0,
+            offset_y: 0,
+        };
+        let mut cfg = DisplayConfig::default();
+        cfg.calibrated_left = Some(10);
+        cfg.calibrated_right = Some(5);
+        cfg.calibrated_top = Some(0);
+        cfg.calibrated_bottom = Some(10);
+        assert!(calibration_geometry(&cfg, &base).is_none());
+    }
+
+    #[test]
+    fn small_display_emits_unsupported_warning() {
+        let mut cfg = DisplayConfig {
+            width_override: Some(96),
+            height_override: Some(64),
+            ..DisplayConfig::default()
+        };
+        let probe = resolve_runtime_probe(&mut cfg, true);
+        assert!(probe
+            .warnings
+            .iter()
+            .any(|w| matches!(w, DisplayWarning::UnsupportedDisplaySize)));
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl Display {
-    pub fn new(colors: &ColorScheme) -> Result<Self> {
+    pub fn new(colors: &ColorScheme, display_config: &mut DisplayConfig) -> Result<Self> {
+        let probe = resolve_runtime_probe(display_config, false);
+        let capabilities = DisplayCapabilities {
+            width_px: probe.geometry.width(),
+            height_px: probe.geometry.height(),
+            orientation: probe.rotation.clone(),
+            backend: probe.backend.clone(),
+            safe_padding_px: display_config.safe_padding_px,
+        };
+        let layout = UiLayoutMetrics::from_dimensions(
+            capabilities.width_px,
+            capabilities.height_px,
+            capabilities.safe_padding_px,
+        );
+        let diagnostics = DisplayDiagnostics {
+            backend: probe.backend.clone(),
+            detected_width_px: probe.detected_width,
+            detected_height_px: probe.detected_height,
+            effective_width_px: capabilities.width_px,
+            effective_height_px: capabilities.height_px,
+            effective_offset_x: probe.geometry.offset_x,
+            effective_offset_y: probe.geometry.offset_y,
+            geometry_source: probe.source.clone(),
+            profile_fingerprint: probe.fingerprint.clone(),
+            probe_completed: display_config.display_probe_completed,
+            calibration_completed: display_config.display_calibration_completed,
+            warnings: probe.warnings.clone(),
+        };
+
+        tracing::info!(
+            backend = probe.backend.as_str(),
+            detected_width = probe.detected_width,
+            detected_height = probe.detected_height,
+            effective_width = capabilities.width_px,
+            effective_height = capabilities.height_px,
+            offset_x = probe.geometry.offset_x,
+            offset_y = probe.geometry.offset_y,
+            source = probe.source.as_str(),
+            calibration_completed = display_config.display_calibration_completed,
+            "Display startup probe"
+        );
+        for warning in &diagnostics.warnings {
+            tracing::warn!(
+                event = warning.code(),
+                backend = probe.backend.as_str(),
+                detected_width = probe.detected_width,
+                detected_height = probe.detected_height,
+                effective_width = capabilities.width_px,
+                effective_height = capabilities.height_px,
+                "Display warning"
+            );
+        }
+
         // Open SPI device using SpidevDevice (embedded-hal 1.0 compatible)
         let mut spi = SpidevDevice::open("/dev/spidev0.0").context("opening SPI device")?;
 
@@ -262,37 +731,32 @@ impl Display {
             rst,
             false,
             false,
-            LCD_WIDTH as u32,
-            LCD_HEIGHT as u32,
+            ST7735_PROFILE_WIDTH,
+            ST7735_PROFILE_HEIGHT,
         );
         lcd.init(&mut delay)
             .map_err(|_| anyhow::anyhow!("LCD init failed"))?;
-        // Rotate the display 90° clockwise by default (Landscape). Many Waveshare
-        // HATs look better in landscape mode on the Pi Zero form factor.
-        // Allow override with RUSTYJACK_DISPLAY_ROTATION={portrait|landscape}
-        let orientation = match std::env::var("RUSTYJACK_DISPLAY_ROTATION").as_deref() {
-            Ok("portrait") => Orientation::Portrait,
-            Ok("landscape") => Orientation::Landscape,
-            // fallback default: rotate 90° clockwise
-            _ => Orientation::Landscape,
+        let orientation = match probe.rotation {
+            DisplayRotation::Portrait => Orientation::Portrait,
+            DisplayRotation::Landscape => Orientation::Landscape,
         };
         lcd.set_orientation(&orientation)
             .map_err(|_| anyhow::anyhow!("LCD orientation failed"))?;
-        lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
-
-        // Clear screen to black on startup — make sure we clear to the full
-        // logical buffer to avoid stray pixels along edges on some modules.
-        // Use an explicit rectangle slightly larger than the reported visible
-        // LCD size so the driver buffer area is covered.
-        Rectangle::new(
-            Point::new(0, 0),
-            Size::new((LCD_WIDTH as u32) + 1, (LCD_HEIGHT as u32) + 1),
-        )
-        .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
-        .draw(&mut lcd)
-        .map_err(|_| anyhow::anyhow!("LCD clear failed"))?;
+        let offset_x = probe.geometry.offset_x.max(0) as u16;
+        let offset_y = probe.geometry.offset_y.max(0) as u16;
+        lcd.set_offset(offset_x, offset_y);
 
         let palette = Palette::from_scheme(colors);
+
+        // Clear screen using the configured theme background so startup does
+        // not flash a hard-coded color.
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new(capabilities.width_px, capabilities.height_px),
+        )
+        .into_styled(PrimitiveStyle::with_fill(palette.background))
+        .draw(&mut lcd)
+        .map_err(|_| anyhow::anyhow!("LCD clear failed"))?;
         let text_style_regular = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
             .text_color(palette.text)
@@ -313,6 +777,11 @@ impl Display {
             text_style_highlight,
             text_style_small,
             backlight,
+            layout,
+            capabilities,
+            diagnostics,
+            pending_calibration: probe.pending_calibration,
+            probe_dirty: probe.probe_dirty,
         })
     }
 
@@ -481,12 +950,18 @@ impl Display {
                             rst,
                             inv,
                             bgr,
-                            LCD_WIDTH as u32,
-                            LCD_HEIGHT as u32,
+                            ST7735_PROFILE_WIDTH,
+                            ST7735_PROFILE_HEIGHT,
                         );
                         let _ = lcd.init(&mut delay);
                         let _ = lcd.set_orientation(&orient);
-                        lcd.set_offset(LCD_OFFSET_X, LCD_OFFSET_Y);
+                        let offset_x =
+                            env_i32("RUSTYJACK_DISPLAY_OFFSET_X", ST7735_DEFAULT_OFFSET_X).max(0)
+                                as u16;
+                        let offset_y =
+                            env_i32("RUSTYJACK_DISPLAY_OFFSET_Y", ST7735_DEFAULT_OFFSET_Y).max(0)
+                                as u16;
+                        lcd.set_offset(offset_x, offset_y);
 
                         // Clear and draw a border in a diagnostic colour so it's easy
                         // to see which configuration is currently being displayed.
@@ -495,7 +970,7 @@ impl Display {
                         // Request display area to include the final hardware column
                         Rectangle::new(
                             Point::new(0, 0),
-                            Size::new((LCD_WIDTH as u32) + 1, (LCD_HEIGHT as u32) + 1),
+                            Size::new(ST7735_PROFILE_WIDTH, ST7735_PROFILE_HEIGHT),
                         )
                         .into_styled(PrimitiveStyle::with_stroke(color, 3))
                         .draw(&mut lcd)
@@ -553,11 +1028,262 @@ impl Display {
             .build();
     }
 
+    pub fn layout(&self) -> &UiLayoutMetrics {
+        &self.layout
+    }
+
+    pub fn capabilities(&self) -> &DisplayCapabilities {
+        &self.capabilities
+    }
+
+    pub fn diagnostics(&self) -> &DisplayDiagnostics {
+        &self.diagnostics
+    }
+
+    pub fn menu_visible_items(&self) -> usize {
+        self.layout.menu_visible_items
+    }
+
+    pub fn dialog_visible_lines(&self) -> usize {
+        self.layout.dialog_visible_lines
+    }
+
+    pub fn chars_per_line(&self) -> usize {
+        self.layout.chars_per_line
+    }
+
+    pub fn title_chars_per_line(&self) -> usize {
+        self.layout.title_chars_per_line
+    }
+
+    pub fn needs_startup_calibration(&self) -> bool {
+        self.pending_calibration
+    }
+
+    pub fn probe_dirty(&self) -> bool {
+        self.probe_dirty
+    }
+
+    pub fn reset_probe_dirty(&mut self) {
+        self.probe_dirty = false;
+    }
+
+    pub fn run_display_discovery(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        let probe = resolve_runtime_probe(config, true);
+        self.pending_calibration = probe.pending_calibration;
+        self.probe_dirty = true;
+        self.capabilities = DisplayCapabilities {
+            width_px: probe.geometry.width(),
+            height_px: probe.geometry.height(),
+            orientation: probe.rotation.clone(),
+            backend: probe.backend.clone(),
+            safe_padding_px: config.safe_padding_px,
+        };
+        self.layout = UiLayoutMetrics::from_dimensions(
+            self.capabilities.width_px,
+            self.capabilities.height_px,
+            self.capabilities.safe_padding_px,
+        );
+        self.diagnostics = DisplayDiagnostics {
+            backend: probe.backend,
+            detected_width_px: probe.detected_width,
+            detected_height_px: probe.detected_height,
+            effective_width_px: self.capabilities.width_px,
+            effective_height_px: self.capabilities.height_px,
+            effective_offset_x: probe.geometry.offset_x,
+            effective_offset_y: probe.geometry.offset_y,
+            geometry_source: probe.source,
+            profile_fingerprint: probe.fingerprint,
+            probe_completed: config.display_probe_completed,
+            calibration_completed: config.display_calibration_completed,
+            warnings: probe.warnings,
+        };
+
+        let orientation = match self.capabilities.orientation {
+            DisplayRotation::Portrait => Orientation::Portrait,
+            DisplayRotation::Landscape => Orientation::Landscape,
+        };
+        self.lcd
+            .set_orientation(&orientation)
+            .map_err(|_| anyhow::anyhow!("LCD orientation failed"))?;
+        self.lcd.set_offset(
+            self.diagnostics.effective_offset_x.max(0) as u16,
+            self.diagnostics.effective_offset_y.max(0) as u16,
+        );
+        Ok(())
+    }
+
+    pub fn validate_calibration(&self, left: i32, top: i32, right: i32, bottom: i32) -> Result<()> {
+        if right <= left || bottom <= top {
+            anyhow::bail!("invalid calibration bounds: non-positive area");
+        }
+        if left < 0 || top < 0 {
+            anyhow::bail!("invalid calibration bounds: negative edge");
+        }
+        let max_w = self.diagnostics.detected_width_px.max(1) as i32;
+        let max_h = self.diagnostics.detected_height_px.max(1) as i32;
+        if right >= max_w || bottom >= max_h {
+            anyhow::bail!("invalid calibration bounds: exceeds detected mode");
+        }
+        Ok(())
+    }
+
+    pub fn apply_calibration(
+        &mut self,
+        config: &mut DisplayConfig,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    ) -> Result<()> {
+        self.validate_calibration(left, top, right, bottom)?;
+        let width = right.saturating_sub(left).saturating_add(1) as u32;
+        let height = bottom.saturating_sub(top).saturating_add(1) as u32;
+
+        config.calibrated_left = Some(left);
+        config.calibrated_top = Some(top);
+        config.calibrated_right = Some(right);
+        config.calibrated_bottom = Some(bottom);
+        config.last_calibrated_at = Some(Utc::now().to_rfc3339());
+        config.display_calibration_completed = true;
+        config.display_geometry_source = Some(DisplayGeometrySource::Calibrated);
+        config.effective_width = Some(width);
+        config.effective_height = Some(height);
+        config.effective_offset_x = Some(self.diagnostics.effective_offset_x + left);
+        config.effective_offset_y = Some(self.diagnostics.effective_offset_y + top);
+        config.calibration_version = config.calibration_version.max(1);
+
+        self.pending_calibration = false;
+        self.probe_dirty = true;
+        self.run_display_discovery(config)?;
+        Ok(())
+    }
+
+    pub fn reset_calibration(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        config.clear_calibration();
+        self.pending_calibration = true;
+        self.run_display_discovery(config)
+    }
+
+    pub fn reset_cache(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        config.clear_cache();
+        self.pending_calibration = true;
+        self.run_display_discovery(config)
+    }
+
+    pub fn default_calibration_edges(&self) -> (i32, i32, i32, i32) {
+        (
+            0,
+            0,
+            self.diagnostics.detected_width_px.saturating_sub(1) as i32,
+            self.diagnostics.detected_height_px.saturating_sub(1) as i32,
+        )
+    }
+
+    pub fn draw_calibration_step(
+        &mut self,
+        edge: CalibrationEdge,
+        candidate: i32,
+        defaults: i32,
+        status: &StatusOverlay,
+    ) -> Result<()> {
+        self.clear()?;
+        self.draw_toolbar_with_title(Some("Display Calib"), status)?;
+
+        let content_x = self.layout.safe_padding_px as i32;
+        let content_w = self.layout.content_width() as i32;
+        let content_y = self.layout.content_top as i32;
+        let content_h = self.layout.content_height() as i32;
+        let guide = PrimitiveStyle::with_stroke(Rgb565::WHITE, 1);
+        let shade = PrimitiveStyle::with_fill(Rgb565::new(3, 3, 3));
+
+        match edge {
+            CalibrationEdge::Left | CalibrationEdge::Right => {
+                let x = candidate.clamp(content_x, content_x + content_w.saturating_sub(1));
+                if edge == CalibrationEdge::Left && x > content_x {
+                    Rectangle::new(
+                        Point::new(content_x, content_y),
+                        Size::new((x - content_x) as u32, content_h as u32),
+                    )
+                    .into_styled(shade)
+                    .draw(&mut self.lcd)
+                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                }
+                if edge == CalibrationEdge::Right && x < content_x + content_w - 1 {
+                    Rectangle::new(
+                        Point::new(x + 1, content_y),
+                        Size::new((content_x + content_w - x - 1) as u32, content_h as u32),
+                    )
+                    .into_styled(shade)
+                    .draw(&mut self.lcd)
+                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                }
+                Rectangle::new(Point::new(x, content_y), Size::new(1, content_h as u32))
+                    .into_styled(guide)
+                    .draw(&mut self.lcd)
+                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+            }
+            CalibrationEdge::Top | CalibrationEdge::Bottom => {
+                let y = candidate.clamp(content_y, content_y + content_h.saturating_sub(1));
+                if edge == CalibrationEdge::Top && y > content_y {
+                    Rectangle::new(
+                        Point::new(content_x, content_y),
+                        Size::new(content_w as u32, (y - content_y) as u32),
+                    )
+                    .into_styled(shade)
+                    .draw(&mut self.lcd)
+                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                }
+                if edge == CalibrationEdge::Bottom && y < content_y + content_h - 1 {
+                    Rectangle::new(
+                        Point::new(content_x, y + 1),
+                        Size::new(content_w as u32, (content_y + content_h - y - 1) as u32),
+                    )
+                    .into_styled(shade)
+                    .draw(&mut self.lcd)
+                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                }
+                Rectangle::new(Point::new(content_x, y), Size::new(content_w as u32, 1))
+                    .into_styled(guide)
+                    .draw(&mut self.lcd)
+                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+            }
+        }
+
+        let edge_label = edge.label();
+        let help = edge.help_text();
+        let lines = [
+            format!("Edge: {edge_label}"),
+            format!("Value: {candidate}px"),
+            format!("Default: {defaults}px"),
+            help.to_string(),
+            "SEL=Confirm K1=Reset".to_string(),
+            "LEFT/K2=Cancel".to_string(),
+        ];
+        let mut y = self.layout.content_top as i32;
+        for line in lines.iter() {
+            let clipped = ellipsize(line, self.layout.chars_per_line);
+            Text::with_baseline(
+                &clipped,
+                Point::new(content_x + 2, y),
+                self.text_style_small,
+                Baseline::Top,
+            )
+            .draw(&mut self.lcd)
+            .map_err(|_| anyhow::anyhow!("Draw error"))?;
+            y += self.layout.line_height_px as i32;
+            if y > self.layout.content_bottom as i32 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     pub fn clear(&mut self) -> Result<()> {
         let style = PrimitiveStyle::with_fill(self.palette.background);
         Rectangle::new(
             Point::new(0, 0),
-            Size::new((LCD_WIDTH as u32) + 1, (LCD_HEIGHT as u32) + 1),
+            Size::new(self.capabilities.width_px, self.capabilities.height_px),
         )
         .into_styled(style)
         .draw(&mut self.lcd)
@@ -566,13 +1292,13 @@ impl Display {
     }
 
     pub fn show_splash_screen(&mut self, image_path: &Path) -> Result<()> {
-        // Clear screen to black
-        let style = PrimitiveStyle::with_fill(Rgb565::BLACK);
+        // Clear with theme background so splash matches configured colors.
+        let style = PrimitiveStyle::with_fill(self.palette.background);
         // If clearing the simulated display in non-linux builds, cover the
         // full buffer area including the last column/row used by hardware
         Rectangle::new(
             Point::new(0, 0),
-            Size::new((LCD_WIDTH as u32) + 1, (LCD_HEIGHT as u32) + 1),
+            Size::new(self.capabilities.width_px, self.capabilities.height_px),
         )
         .into_styled(style)
         .draw(&mut self.lcd)
@@ -597,8 +1323,8 @@ impl Display {
                         // Center the image on the screen
                         let bmp_width = bmp.bounding_box().size.width as i32;
                         let bmp_height = bmp.bounding_box().size.height as i32;
-                        let x = (LCD_WIDTH as i32 - bmp_width) / 2;
-                        let y = (LCD_HEIGHT as i32 - bmp_height) / 2;
+                        let x = (self.capabilities.width_px as i32 - bmp_width) / 2;
+                        let y = (self.capabilities.height_px as i32 - bmp_height) / 2;
 
                         let image = Image::new(&bmp, Point::new(x.max(0), y.max(0)));
                         image
@@ -611,11 +1337,12 @@ impl Display {
                     let img = image::open(image_to_load)?;
 
                     // Resize to fit screen if needed
-                    let img = if img.width() > LCD_WIDTH as u32 || img.height() > LCD_HEIGHT as u32
+                    let img = if img.width() > self.capabilities.width_px
+                        || img.height() > self.capabilities.height_px
                     {
                         img.resize(
-                            LCD_WIDTH as u32,
-                            LCD_HEIGHT as u32,
+                            self.capabilities.width_px,
+                            self.capabilities.height_px,
                             image::imageops::FilterType::Lanczos3,
                         )
                     } else {
@@ -625,8 +1352,8 @@ impl Display {
                     let rgb_img = img.to_rgb8();
 
                     // Draw pixel by pixel
-                    let x_offset = ((LCD_WIDTH as u32 - rgb_img.width()) / 2) as i32;
-                    let y_offset = ((LCD_HEIGHT as u32 - rgb_img.height()) / 2) as i32;
+                    let x_offset = ((self.capabilities.width_px - rgb_img.width()) / 2) as i32;
+                    let y_offset = ((self.capabilities.height_px - rgb_img.height()) / 2) as i32;
 
                     for (x, y, pixel) in rgb_img.enumerate_pixels() {
                         let rgb888 = Rgb888::new(pixel[0], pixel[1], pixel[2]);
@@ -634,9 +1361,9 @@ impl Display {
                         let px_x = x_offset + x as i32;
                         let px_y = y_offset + y as i32;
                         if px_x >= 0
-                            && px_x < LCD_WIDTH as i32
+                            && px_x < self.capabilities.width_px as i32
                             && px_y >= 0
-                            && px_y < LCD_HEIGHT as i32
+                            && px_y < self.capabilities.height_px as i32
                         {
                             embedded_graphics::Pixel(Point::new(px_x, px_y), rgb565)
                                 .draw(&mut self.lcd)
@@ -651,7 +1378,7 @@ impl Display {
         // Image not found or load failed, show text fallback
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
-            .text_color(Rgb565::new(21, 0, 31)) // Purple #AA00FF in Rgb565
+            .text_color(self.palette.text)
             .build();
         Text::with_baseline("RUSTYJACK", Point::new(30, 60), text_style, Baseline::Top)
             .draw(&mut self.lcd)
@@ -676,7 +1403,7 @@ impl Display {
         let style = PrimitiveStyle::with_fill(self.palette.toolbar);
         Rectangle::new(
             Point::new(0, 0),
-            Size::new((LCD_WIDTH as u32) + 1, HEADER_HEIGHT),
+            Size::new(self.capabilities.width_px, self.layout.header_height),
         )
         .into_styled(style)
         .draw(&mut self.lcd)
@@ -684,12 +1411,10 @@ impl Display {
 
         // Draw title in top left if provided, clipped to avoid overlapping temp
         if let Some(t) = title {
-            // Leave room for temp display but allow longer labels
-            const MAX_TITLE_CHARS: usize = 16;
-            let title_text = ellipsize(t, MAX_TITLE_CHARS);
+            let title_text = ellipsize(t, self.layout.title_chars_per_line);
             Text::with_baseline(
                 &title_text,
-                Point::new(4, 4),
+                Point::new(self.layout.safe_padding_px as i32 + 2, 3),
                 self.text_style_small,
                 Baseline::Top,
             )
@@ -697,12 +1422,15 @@ impl Display {
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
         }
 
-        // Temperature in top right corner (right-aligned, max 3 chars "99C")
+        // Temperature in top-right corner
         let temp_text = format!("{:.0}C", status.temp_c.min(99.0));
-        let temp_x = LCD_WIDTH as i32 - 22; // 3 chars * 6px + 4px margin = 22px from right
+        let temp_x = (self
+            .capabilities
+            .width_px
+            .saturating_sub(self.layout.toolbar_temp_width_px)) as i32;
         Text::with_baseline(
             &temp_text,
-            Point::new(temp_x, 4),
+            Point::new(temp_x, 3),
             self.text_style_regular,
             Baseline::Top,
         )
@@ -729,21 +1457,22 @@ impl Display {
             ops_tag(status.ops_loot),
             ops_tag(status.ops_process),
         );
-        let mut ops_lines = wrap_text(&ops_text, OPS_MAX_CHARS);
-        if ops_lines.len() > OPS_LINE_COUNT {
-            ops_lines.truncate(OPS_LINE_COUNT);
-        }
-        let mut ops_y = DASHBOARD_OPS_TOP;
-        for line in ops_lines {
+        let mut ops_lines = wrap_text(&ops_text, self.layout.chars_per_line);
+        let max_ops_lines = ((self.layout.content_height() / self.layout.line_height_px)
+            .max(1)
+            .min(3)) as usize;
+        ops_lines.truncate(max_ops_lines);
+        let mut ops_y = self.layout.header_height as i32;
+        for line in ops_lines.into_iter() {
             Text::with_baseline(
                 &line,
-                Point::new(4, ops_y),
+                Point::new(self.layout.safe_padding_px as i32 + 2, ops_y),
                 self.text_style_small,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            ops_y += OPS_LINE_HEIGHT as i32;
+            ops_y += self.layout.line_height_px as i32;
         }
         Ok(())
     }
@@ -758,25 +1487,36 @@ impl Display {
         self.clear()?;
         self.draw_toolbar_with_title(Some(title), status)?;
 
-        // Menu items start right below toolbar (y=16)
-        let mut y = MENU_TOP;
+        let mut y = self.layout.content_top as i32;
+        let row_h = self.layout.menu_row_height as i32;
         for (idx, label) in items.iter().enumerate() {
             if idx == selected {
-                Rectangle::new(Point::new(0, y - 2), Size::new((LCD_WIDTH as u32) + 1, 12))
-                    .into_styled(PrimitiveStyle::with_fill(self.palette.selected_background))
-                    .draw(&mut self.lcd)
-                    .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                Rectangle::new(
+                    Point::new(0, y.saturating_sub(1)),
+                    Size::new(self.capabilities.width_px, self.layout.menu_row_height),
+                )
+                .into_styled(PrimitiveStyle::with_fill(self.palette.selected_background))
+                .draw(&mut self.lcd)
+                .map_err(|_| anyhow::anyhow!("Draw error"))?;
             }
             let style = if idx == selected {
                 self.text_style_highlight
             } else {
                 self.text_style_regular
             };
-            let display_label = ellipsize(label, MENU_MAX_CHARS);
-            Text::with_baseline(&display_label, Point::new(4, y), style, Baseline::Top)
-                .draw(&mut self.lcd)
-                .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 12;
+            let display_label = ellipsize(label, self.layout.chars_per_line);
+            Text::with_baseline(
+                &display_label,
+                Point::new(self.layout.safe_padding_px as i32 + 2, y),
+                style,
+                Baseline::Top,
+            )
+            .draw(&mut self.lcd)
+            .map_err(|_| anyhow::anyhow!("Draw error"))?;
+            y += row_h;
+            if y > self.layout.content_bottom as i32 {
+                break;
+            }
         }
         Ok(())
     }
@@ -805,28 +1545,30 @@ impl Display {
         // Flatten and wrap body text before applying offset
         let wrapped: Vec<String> = body
             .iter()
-            .flat_map(|line| wrap_text(line, DIALOG_MAX_CHARS))
+            .flat_map(|line| wrap_text(line, self.layout.chars_per_line))
             .collect();
 
-        let max_offset = wrapped.len().saturating_sub(DIALOG_VISIBLE_LINES);
+        let max_offset = wrapped
+            .len()
+            .saturating_sub(self.layout.dialog_visible_lines);
         let clamped_offset = body_offset.min(max_offset);
 
         // Body content below the toolbar
-        let mut y = DIALOG_BODY_TOP;
+        let mut y = self.layout.content_top as i32;
         let mut shown = 0usize;
         for line in wrapped.iter().skip(clamped_offset) {
-            if shown >= DIALOG_VISIBLE_LINES {
+            if shown >= self.layout.dialog_visible_lines {
                 break; // Only render what fits on-screen
             }
             Text::with_baseline(
                 line,
-                Point::new(4, y),
+                Point::new(self.layout.safe_padding_px as i32 + 2, y),
                 self.text_style_regular,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 10; // 10px per line
+            y += self.layout.line_height_px as i32;
             shown += 1;
         }
         Ok(())
@@ -845,36 +1587,19 @@ impl Display {
         status: &StatusOverlay,
     ) -> Result<()> {
         self.clear()?;
-
-        // Draw toolbar background
-        let style = PrimitiveStyle::with_fill(Rgb565::new(20, 20, 20));
-        Rectangle::new(
-            Point::new(0, 0),
-            Size::new((LCD_WIDTH as u32) + 1, HEADER_HEIGHT),
-        )
-        .into_styled(style)
-        .draw(&mut self.lcd)
-        .map_err(|_| anyhow::anyhow!("Draw error"))?;
-
-        // Calculate max chars that fit in toolbar (leave space for temp on right)
-        // Toolbar width ~129, temp takes ~22px on right, title starts at x=4
-        // Available width for title: ~100px = ~16 chars at 6px/char
-        const MAX_TITLE_CHARS: usize = 15;
+        self.draw_toolbar_with_title(None, status)?;
 
         // Apply scrolling offset to filename if it's too long
-        let display_title = if filename.len() > MAX_TITLE_CHARS {
+        let max_title_chars = self.layout.title_chars_per_line;
+        let display_title = if filename.chars().count() > max_title_chars {
             let scroll_text = format!("{}   ", filename); // Add padding for wrap-around
             let start = title_offset % scroll_text.len();
-            let mut visible: String = scroll_text
+            let visible: String = scroll_text
                 .chars()
                 .cycle()
                 .skip(start)
-                .take(MAX_TITLE_CHARS)
+                .take(max_title_chars)
                 .collect();
-            // Ensure we don't cut off mid-character
-            if visible.len() > MAX_TITLE_CHARS {
-                visible.truncate(MAX_TITLE_CHARS);
-            }
             visible
         } else {
             filename.to_string()
@@ -882,20 +1607,8 @@ impl Display {
 
         Text::with_baseline(
             &display_title,
-            Point::new(4, 3),
+            Point::new(self.layout.safe_padding_px as i32 + 2, 3),
             self.text_style_small,
-            Baseline::Top,
-        )
-        .draw(&mut self.lcd)
-        .map_err(|_| anyhow::anyhow!("Draw error"))?;
-
-        // Temperature in top right corner
-        let temp_text = format!("{:.0}C", status.temp_c.min(99.0));
-        let temp_x = LCD_WIDTH as i32 - 22;
-        Text::with_baseline(
-            &temp_text,
-            Point::new(temp_x, 3),
-            self.text_style_regular,
             Baseline::Top,
         )
         .draw(&mut self.lcd)
@@ -905,7 +1618,10 @@ impl Display {
         let pos_text = format!("{}/{}", line_offset + 1, total_lines);
         Text::with_baseline(
             &pos_text,
-            Point::new(4, FILE_POS_TOP),
+            Point::new(
+                self.layout.safe_padding_px as i32 + 2,
+                self.layout.content_top as i32,
+            ),
             self.text_style_small,
             Baseline::Top,
         )
@@ -913,28 +1629,25 @@ impl Display {
         .map_err(|_| anyhow::anyhow!("Draw error"))?;
 
         // Draw file content starting below position indicator
-        let mut y = FILE_BODY_TOP;
-        const MAX_CHARS: usize = 21;
+        let mut y = self.layout.content_top as i32 + self.layout.line_height_px as i32 + 2;
+        let max_chars = self.layout.chars_per_line;
+        let body_bottom = self.layout.footer_y as i32 - self.layout.line_height_px as i32;
 
         for line in lines {
-            if y > 118 {
+            if y > body_bottom {
                 break;
             }
             // Truncate long lines rather than wrap for file viewing
-            let display_line = if line.len() > MAX_CHARS {
-                format!("{}...", &line[..MAX_CHARS.saturating_sub(3)])
-            } else {
-                line.clone()
-            };
+            let display_line = ellipsize(line, max_chars);
             Text::with_baseline(
                 &display_line,
-                Point::new(4, y),
+                Point::new(self.layout.safe_padding_px as i32 + 2, y),
                 self.text_style_regular,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 10;
+            y += self.layout.line_height_px as i32;
         }
 
         // Draw footer hint
@@ -947,7 +1660,10 @@ impl Display {
         };
         Text::with_baseline(
             footer,
-            Point::new(4, 120),
+            Point::new(
+                self.layout.safe_padding_px as i32 + 2,
+                self.layout.footer_y as i32,
+            ),
             self.text_style_small,
             Baseline::Top,
         )
@@ -967,16 +1683,15 @@ impl Display {
         self.clear()?;
         self.draw_toolbar(status)?;
 
-        // No border - cleaner look
-
-        // Draw title (wrap if needed)
-        const MAX_CHARS: usize = 20;
-        let wrapped_title = wrap_text(title, MAX_CHARS);
-        let y = 38;
+        let wrapped_title = wrap_text(title, self.layout.chars_per_line);
+        let y = self.layout.content_top as i32 + 12;
         for (idx, line) in wrapped_title.iter().take(1).enumerate() {
             Text::with_baseline(
                 line,
-                Point::new(4, y + (idx as i32 * 10)),
+                Point::new(
+                    self.layout.safe_padding_px as i32 + 2,
+                    y + (idx as i32 * self.layout.line_height_px as i32),
+                ),
                 self.text_style_highlight,
                 Baseline::Top,
             )
@@ -984,26 +1699,25 @@ impl Display {
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
         }
 
-        // Draw message (wrap instead of truncate)
-        let wrapped_msg = wrap_text(message, MAX_CHARS);
-        let mut msg_y = 50;
+        let wrapped_msg = wrap_text(message, self.layout.chars_per_line);
+        let mut msg_y = y + self.layout.line_height_px as i32 + 2;
         for line in wrapped_msg.iter().take(2) {
             Text::with_baseline(
                 line,
-                Point::new(4, msg_y),
+                Point::new(self.layout.safe_padding_px as i32 + 2, msg_y),
                 self.text_style_regular,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            msg_y += 10;
+            msg_y += self.layout.line_height_px as i32;
         }
 
         // Draw progress bar
-        let bar_width = 120u32;
+        let bar_width = self.layout.content_width().saturating_sub(8).max(30);
         let bar_height = 8u32;
-        let x = 4;
-        let y = 70;
+        let x = self.layout.safe_padding_px as i32 + 2;
+        let y = (msg_y + 4).min(self.layout.footer_y as i32 - 14);
 
         Rectangle::new(Point::new(x, y), Size::new(bar_width, bar_height))
             .into_styled(PrimitiveStyle::with_stroke(self.palette.border, 1))
@@ -1025,7 +1739,7 @@ impl Display {
         let pct_text = format!("{:.1}%", percentage);
         Text::with_baseline(
             &pct_text,
-            Point::new(4, 82),
+            Point::new(self.layout.safe_padding_px as i32 + 2, y + 12),
             self.text_style_small,
             Baseline::Top,
         )
@@ -1056,60 +1770,62 @@ impl Display {
         let disk_percent = (status.disk_used_gb / status.disk_total_gb.max(0.1)) * 100.0;
         let disk_bar_len = ((disk_percent / 100.0) * 100.0).min(100.0) as u32;
 
-        let mut y = DASHBOARD_BODY_TOP;
+        let mut y = self.layout.header_height as i32 + (self.layout.line_height_px as i32 * 3) + 4;
+        let left = self.layout.safe_padding_px as i32 + 2;
+        let body_limit = self.layout.footer_y as i32 - (self.layout.line_height_px as i32 * 2);
 
         let cpu_text = format!("CPU:{:.0}C {:.0}%", status.temp_c, status.cpu_percent);
-        if y <= 119 {
+        if y <= body_limit {
             Text::with_baseline(
                 &cpu_text,
-                Point::new(4, y),
+                Point::new(left, y),
                 self.text_style_small,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 10;
-            self.draw_progress_bar(Point::new(4, y), cpu_bar_len)?;
+            y += self.layout.line_height_px as i32;
+            self.draw_progress_bar(Point::new(left, y), cpu_bar_len)?;
             y += 12;
         }
 
         let mem_text = format!("MEM:{}M/{:.0}%", status.mem_used_mb, mem_percent);
-        if y <= 119 {
+        if y <= body_limit {
             Text::with_baseline(
                 &mem_text,
-                Point::new(4, y),
+                Point::new(left, y),
                 self.text_style_small,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 10;
-            self.draw_progress_bar(Point::new(4, y), mem_bar_len)?;
+            y += self.layout.line_height_px as i32;
+            self.draw_progress_bar(Point::new(left, y), mem_bar_len)?;
             y += 12;
         }
 
         let disk_text = format!("DSK:{:.1}G/{:.0}%", status.disk_used_gb, disk_percent);
-        if y <= 119 {
+        if y <= body_limit {
             Text::with_baseline(
                 &disk_text,
-                Point::new(4, y),
+                Point::new(left, y),
                 self.text_style_small,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += 10;
-            self.draw_progress_bar(Point::new(4, y), disk_bar_len)?;
+            y += self.layout.line_height_px as i32;
+            self.draw_progress_bar(Point::new(left, y), disk_bar_len)?;
             y += 14;
         }
 
         let uptime_hrs = status.uptime_secs / 3600;
         let uptime_mins = (status.uptime_secs % 3600) / 60;
         let uptime_text = format!("Up:{}h{}m", uptime_hrs, uptime_mins);
-        if y <= 119 {
+        if y <= body_limit {
             Text::with_baseline(
                 &uptime_text,
-                Point::new(4, y),
+                Point::new(left, y),
                 self.text_style_small,
                 Baseline::Top,
             )
@@ -1119,7 +1835,10 @@ impl Display {
 
         Text::with_baseline(
             "LEFT=Exit SEL=Next",
-            Point::new(12, 115),
+            Point::new(
+                self.layout.safe_padding_px as i32 + 2,
+                self.layout.footer_y as i32,
+            ),
             self.text_style_small,
             Baseline::Top,
         )
@@ -1166,28 +1885,33 @@ impl Display {
             format!("Module: {}", interface_label),
         ];
 
-        let mut y = DASHBOARD_BODY_TOP;
-        const MAX_CHARS: usize = 21;
+        let mut y = self.layout.header_height as i32 + (self.layout.line_height_px as i32 * 3) + 4;
+        let max_chars = self.layout.chars_per_line;
+        let left = self.layout.safe_padding_px as i32 + 2;
+        let body_limit = self.layout.footer_y as i32 - self.layout.line_height_px as i32;
         for line in entries.iter() {
-            for wrapped in wrap_text(line, MAX_CHARS) {
-                if y > 119 {
+            for wrapped in wrap_text(line, max_chars) {
+                if y > body_limit {
                     break;
                 }
                 Text::with_baseline(
                     &wrapped,
-                    Point::new(4, y),
+                    Point::new(left, y),
                     self.text_style_small,
                     Baseline::Top,
                 )
                 .draw(&mut self.lcd)
                 .map_err(|_| anyhow::anyhow!("Draw error"))?;
-                y += 12;
+                y += self.layout.line_height_px as i32 + 2;
             }
         }
 
         Text::with_baseline(
             "LEFT=Exit SEL=Next",
-            Point::new(12, 115),
+            Point::new(
+                self.layout.safe_padding_px as i32 + 2,
+                self.layout.footer_y as i32,
+            ),
             self.text_style_small,
             Baseline::Top,
         )
@@ -1225,28 +1949,33 @@ impl Display {
             format!("Current: {}", current_mac),
         ];
 
-        let mut y = DASHBOARD_BODY_TOP;
-        const MAX_CHARS: usize = 21;
+        let mut y = self.layout.header_height as i32 + (self.layout.line_height_px as i32 * 3) + 4;
+        let max_chars = self.layout.chars_per_line;
+        let left = self.layout.safe_padding_px as i32 + 2;
+        let body_limit = self.layout.footer_y as i32 - self.layout.line_height_px as i32;
         for line in entries.iter() {
-            for wrapped in wrap_text(line, MAX_CHARS) {
-                if y > 119 {
+            for wrapped in wrap_text(line, max_chars) {
+                if y > body_limit {
                     break;
                 }
                 Text::with_baseline(
                     &wrapped,
-                    Point::new(4, y),
+                    Point::new(left, y),
                     self.text_style_small,
                     Baseline::Top,
                 )
                 .draw(&mut self.lcd)
                 .map_err(|_| anyhow::anyhow!("Draw error"))?;
-                y += 12;
+                y += self.layout.line_height_px as i32 + 2;
             }
         }
 
         Text::with_baseline(
             "LEFT=Exit SEL=Next",
-            Point::new(12, 115),
+            Point::new(
+                self.layout.safe_padding_px as i32 + 2,
+                self.layout.footer_y as i32,
+            ),
             self.text_style_small,
             Baseline::Top,
         )
@@ -1334,28 +2063,33 @@ impl Display {
             entries.push("No interfaces found".to_string());
         }
 
-        let mut y = DASHBOARD_BODY_TOP;
-        const MAX_CHARS: usize = 21;
+        let mut y = self.layout.header_height as i32 + (self.layout.line_height_px as i32 * 3) + 4;
+        let max_chars = self.layout.chars_per_line;
+        let left = self.layout.safe_padding_px as i32 + 2;
+        let body_limit = self.layout.footer_y as i32 - self.layout.line_height_px as i32;
         for line in entries.iter() {
-            for wrapped in wrap_text(line, MAX_CHARS) {
-                if y > 102 {
+            for wrapped in wrap_text(line, max_chars) {
+                if y > body_limit {
                     break;
                 }
                 Text::with_baseline(
                     &wrapped,
-                    Point::new(4, y),
+                    Point::new(left, y),
                     self.text_style_small,
                     Baseline::Top,
                 )
                 .draw(&mut self.lcd)
                 .map_err(|_| anyhow::anyhow!("Draw error"))?;
-                y += 10;
+                y += self.layout.line_height_px as i32;
             }
         }
 
         Text::with_baseline(
             "LEFT=Exit SEL=Next",
-            Point::new(12, 115),
+            Point::new(
+                self.layout.safe_padding_px as i32 + 2,
+                self.layout.footer_y as i32,
+            ),
             self.text_style_small,
             Baseline::Top,
         )
@@ -1365,7 +2099,7 @@ impl Display {
     }
 
     fn draw_progress_bar(&mut self, pos: Point, fill_width: u32) -> Result<()> {
-        let bar_width = 100u32;
+        let bar_width = self.layout.content_width().saturating_sub(12).max(30);
         let bar_height = 6u32;
 
         Rectangle::new(pos, Size::new(bar_width, bar_height))
@@ -1394,14 +2128,159 @@ impl Display {
 
 #[cfg(not(target_os = "linux"))]
 impl Display {
-    pub fn new(colors: &ColorScheme) -> Result<Self> {
+    pub fn new(colors: &ColorScheme, display_config: &mut DisplayConfig) -> Result<Self> {
+        let width = display_config.effective_width.unwrap_or(128);
+        let height = display_config.effective_height.unwrap_or(128);
+        let backend = display_config
+            .effective_backend
+            .clone()
+            .unwrap_or(DisplayBackend::St7735);
+        let rotation = display_config
+            .effective_rotation
+            .clone()
+            .unwrap_or(DisplayRotation::Landscape);
+        let layout =
+            UiLayoutMetrics::from_dimensions(width, height, display_config.safe_padding_px);
         Ok(Self {
             palette: Palette::from_scheme(colors),
+            layout,
+            capabilities: DisplayCapabilities {
+                width_px: width,
+                height_px: height,
+                orientation: rotation,
+                backend: backend.clone(),
+                safe_padding_px: display_config.safe_padding_px,
+            },
+            diagnostics: DisplayDiagnostics {
+                backend,
+                detected_width_px: width,
+                detected_height_px: height,
+                effective_width_px: width,
+                effective_height_px: height,
+                effective_offset_x: 0,
+                effective_offset_y: 0,
+                geometry_source: display_config
+                    .display_geometry_source
+                    .clone()
+                    .unwrap_or(DisplayGeometrySource::Profile),
+                profile_fingerprint: display_config
+                    .display_profile_fingerprint
+                    .clone()
+                    .unwrap_or_else(|| "simulated".to_string()),
+                probe_completed: display_config.display_probe_completed,
+                calibration_completed: display_config.display_calibration_completed,
+                warnings: Vec::new(),
+            },
+            pending_calibration: false,
+            probe_dirty: false,
         })
     }
 
     pub fn update_palette(&mut self, colors: &ColorScheme) {
         self.palette = Palette::from_scheme(colors);
+    }
+
+    pub fn layout(&self) -> &UiLayoutMetrics {
+        &self.layout
+    }
+
+    pub fn capabilities(&self) -> &DisplayCapabilities {
+        &self.capabilities
+    }
+
+    pub fn diagnostics(&self) -> &DisplayDiagnostics {
+        &self.diagnostics
+    }
+
+    pub fn menu_visible_items(&self) -> usize {
+        self.layout.menu_visible_items
+    }
+
+    pub fn dialog_visible_lines(&self) -> usize {
+        self.layout.dialog_visible_lines
+    }
+
+    pub fn chars_per_line(&self) -> usize {
+        self.layout.chars_per_line
+    }
+
+    pub fn title_chars_per_line(&self) -> usize {
+        self.layout.title_chars_per_line
+    }
+
+    pub fn needs_startup_calibration(&self) -> bool {
+        self.pending_calibration
+    }
+
+    pub fn probe_dirty(&self) -> bool {
+        self.probe_dirty
+    }
+
+    pub fn reset_probe_dirty(&mut self) {
+        self.probe_dirty = false;
+    }
+
+    pub fn run_display_discovery(&mut self, _config: &mut DisplayConfig) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn validate_calibration(
+        &self,
+        _left: i32,
+        _top: i32,
+        _right: i32,
+        _bottom: i32,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn apply_calibration(
+        &mut self,
+        config: &mut DisplayConfig,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    ) -> Result<()> {
+        config.calibrated_left = Some(left);
+        config.calibrated_top = Some(top);
+        config.calibrated_right = Some(right);
+        config.calibrated_bottom = Some(bottom);
+        config.display_calibration_completed = true;
+        self.probe_dirty = true;
+        Ok(())
+    }
+
+    pub fn reset_calibration(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        config.clear_calibration();
+        self.probe_dirty = true;
+        Ok(())
+    }
+
+    pub fn reset_cache(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        config.clear_cache();
+        self.probe_dirty = true;
+        Ok(())
+    }
+
+    pub fn default_calibration_edges(&self) -> (i32, i32, i32, i32) {
+        (
+            0,
+            0,
+            self.capabilities.width_px as i32 - 1,
+            self.capabilities.height_px as i32 - 1,
+        )
+    }
+
+    pub fn draw_calibration_step(
+        &mut self,
+        edge: CalibrationEdge,
+        candidate: i32,
+        _defaults: i32,
+        _: &StatusOverlay,
+    ) -> Result<()> {
+        println!("Calibrate {} -> {}", edge.label(), candidate);
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -1459,14 +2338,16 @@ impl Display {
             println!("--- {first} ---");
             let wrapped: Vec<String> = rest
                 .iter()
-                .flat_map(|line| wrap_text(line, DIALOG_MAX_CHARS))
+                .flat_map(|line| wrap_text(line, self.layout.chars_per_line))
                 .collect();
-            let max_offset = wrapped.len().saturating_sub(DIALOG_VISIBLE_LINES);
+            let max_offset = wrapped
+                .len()
+                .saturating_sub(self.layout.dialog_visible_lines);
             let clamped_offset = body_offset.min(max_offset);
             for line in wrapped
                 .iter()
                 .skip(clamped_offset)
-                .take(DIALOG_VISIBLE_LINES)
+                .take(self.layout.dialog_visible_lines)
             {
                 println!("{line}");
             }
@@ -1672,4 +2553,29 @@ pub enum DashboardView {
     TargetStatus,
     MacStatus,
     NetworkInterfaces,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn palette_from_scheme_uses_fallbacks_for_invalid_hex() {
+        let scheme = ColorScheme {
+            background: "invalid".to_string(),
+            border: "#12".to_string(),
+            text: "xyzxyz".to_string(),
+            selected_text: "#ABCDE".to_string(),
+            selected_background: "#12345G".to_string(),
+            toolbar: "qwerty".to_string(),
+        };
+
+        let palette = Palette::from_scheme(&scheme);
+        assert_eq!(palette.background, Rgb565::BLACK);
+        assert_eq!(palette.border, Rgb565::WHITE);
+        assert_eq!(palette.text, Rgb565::WHITE);
+        assert_eq!(palette.selected_text, Rgb565::WHITE);
+        assert_eq!(palette.selected_background, Rgb565::BLACK);
+        assert_eq!(palette.toolbar, Rgb565::new(20, 20, 20));
+    }
 }

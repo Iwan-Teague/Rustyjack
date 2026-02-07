@@ -1,7 +1,6 @@
 use std::{
     fs,
     fs::File,
-    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
 };
 
@@ -69,7 +68,7 @@ impl App {
     }
 
     pub(crate) fn select_usb_partition(&mut self, title: &str) -> Result<Option<UsbDevice>> {
-        let devices = match self.list_usb_partitions() {
+        let mut devices = match self.list_usb_partitions() {
             Ok(d) => d,
             Err(e) => {
                 self.show_message(
@@ -84,10 +83,23 @@ impl App {
         };
 
         if devices.is_empty() {
-            self.show_message(
-                title,
-                ["No USB partitions detected", "Insert USB and retry"],
-            )?;
+            devices = match self.list_usb_disks() {
+                Ok(d) => d,
+                Err(e) => {
+                    self.show_message(
+                        title,
+                        [
+                            "Failed to list USB devices",
+                            &shorten_for_display(&e.to_string(), 90),
+                        ],
+                    )?;
+                    return Ok(None);
+                }
+            };
+        }
+
+        if devices.is_empty() {
+            self.show_message(title, ["No USB devices detected", "Insert USB and retry"])?;
             return Ok(None);
         }
 

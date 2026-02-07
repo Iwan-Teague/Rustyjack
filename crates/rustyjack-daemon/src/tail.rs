@@ -2,10 +2,6 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-pub fn tail_lines(path: &Path, max_lines: usize, max_bytes: usize) -> io::Result<String> {
-    tail_lines_with_truncation(path, max_lines, max_bytes).map(|(content, _)| content)
-}
-
 pub fn tail_lines_with_truncation(
     path: &Path,
     max_lines: usize,

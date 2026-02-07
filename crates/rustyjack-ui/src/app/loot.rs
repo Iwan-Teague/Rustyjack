@@ -299,16 +299,18 @@ impl App {
         lines: &[String],
         truncated: bool,
     ) -> Result<()> {
-        const LINES_PER_PAGE: usize = 7; // Fits below expanded header
-        const MAX_TITLE_CHARS: usize = 15;
+        let lines_per_page = self.display.layout().file_view_visible_lines.max(1);
+        let max_title_chars = self.display.title_chars_per_line().max(1);
 
         let total_lines = lines.len();
         let mut line_offset = 0;
         let mut needs_redraw = true; // Track when redraw is needed
 
         // Clamp title without animation to avoid constant redraws
-        let display_title = if title.len() > MAX_TITLE_CHARS {
-            format!("{}...", &title[..MAX_TITLE_CHARS.saturating_sub(3)])
+        let display_title = if title.chars().count() > max_title_chars {
+            let keep = max_title_chars.saturating_sub(3);
+            let head: String = title.chars().take(keep).collect();
+            format!("{head}...")
         } else {
             title.to_string()
         };
@@ -316,7 +318,7 @@ impl App {
         loop {
             if needs_redraw {
                 let overlay = self.stats.snapshot();
-                let end = (line_offset + LINES_PER_PAGE).min(total_lines);
+                let end = (line_offset + lines_per_page).min(total_lines);
                 let visible_lines: Vec<String> = lines[line_offset..end].to_vec();
 
                 self.display.draw_file_viewer(
@@ -335,7 +337,7 @@ impl App {
             if let Some(button) = self.buttons.try_read_timeout(Duration::from_millis(100))? {
                 match self.map_button(button) {
                     ButtonAction::Down => {
-                        if line_offset + LINES_PER_PAGE < total_lines {
+                        if line_offset + lines_per_page < total_lines {
                             line_offset += 1;
                             needs_redraw = true;
                         }
@@ -348,9 +350,9 @@ impl App {
                     }
                     ButtonAction::Select => {
                         // Page down
-                        if line_offset + LINES_PER_PAGE < total_lines {
-                            line_offset = (line_offset + LINES_PER_PAGE)
-                                .min(total_lines.saturating_sub(LINES_PER_PAGE));
+                        if line_offset + lines_per_page < total_lines {
+                            line_offset = (line_offset + lines_per_page)
+                                .min(total_lines.saturating_sub(lines_per_page));
                             needs_redraw = true;
                         }
                     }
