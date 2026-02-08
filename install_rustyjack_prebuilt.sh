@@ -12,6 +12,7 @@ set -euo pipefail
 WARN_COUNT=0
 SKIP_HASH_CHECKS=0
 USB_COPY_TO_PREBUILT=0
+SPI_REBOOT_REQUIRED=0
 
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
@@ -1413,7 +1414,16 @@ for dir in img scripts wordlists DNSSpoof; do
   fi
 done
 sudo mkdir -p "$RUNTIME_ROOT/loot"/{Wireless,Ethernet,reports,Hotspot,logs,Portal} 2>/dev/null || true
-sudo mkdir -p "$RUNTIME_ROOT/portal" 2>/dev/null || true
+sudo mkdir -p "$RUNTIME_ROOT/logs" 2>/dev/null || true
+sudo mkdir -p "$RUNTIME_ROOT/portal/site" 2>/dev/null || true
+if [ ! -f "$RUNTIME_ROOT/portal/site/index.html" ]; then
+  if [ -f "$PROJECT_ROOT/DNSSpoof/sites/portal/index.html" ]; then
+    sudo cp -a "$PROJECT_ROOT/DNSSpoof/sites/portal/." "$RUNTIME_ROOT/portal/site/" || fail "Failed to install default portal site assets"
+    info "Installed default portal site assets to $RUNTIME_ROOT/portal/site"
+  else
+    warn "[X] Default portal site missing at $PROJECT_ROOT/DNSSpoof/sites/portal"
+  fi
+fi
 sudo mkdir -p "$RUNTIME_ROOT/wifi/profiles"
 sudo chown root:root "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
 sudo chmod 700 "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
@@ -1731,6 +1741,8 @@ Environment=RUSTYJACK_PORTAL_PORT=3000
 Environment=RUSTYJACK_PORTAL_BIND=0.0.0.0
 Environment=RUSTYJACK_DAEMON_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+Environment=RUSTYJACK_PORTAL_SITE_DIR=$RUNTIME_ROOT/portal/site
+Environment=RUSTYJACK_PORTAL_CAPTURE_DIR=$RUNTIME_ROOT/loot/Portal
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=$RUNTIME_ROOT/portal $RUNTIME_ROOT/loot/Portal $RUNTIME_ROOT/logs
@@ -1944,6 +1956,7 @@ if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then
   info "[OK] SPI device found"
 else
   warn "[X] SPI device NOT found - reboot may be required"
+  SPI_REBOOT_REQUIRED=1
 fi
 
 if cmd wpa_cli; then
@@ -1967,6 +1980,12 @@ if [ -d "$RUNTIME_ROOT/logs" ]; then
   fi
 else
   warn "[X] Log directory missing at $RUNTIME_ROOT/logs"
+fi
+
+if [ -f "$RUNTIME_ROOT/portal/site/index.html" ]; then
+  info "[OK] Portal site index present: $RUNTIME_ROOT/portal/site/index.html"
+else
+  warn "[X] Portal site index missing at $RUNTIME_ROOT/portal/site/index.html"
 fi
 
 # Rustyjack replaces core networking binaries with Rust implementations
@@ -2014,13 +2033,17 @@ else
   show_service_logs rustyjack-portal.service 50
 fi
 
-info "Prebuilt installation finished. Reboot is recommended."
-if [ "$WARN_COUNT" -gt 0 ]; then
-  warn "Warnings detected ($WARN_COUNT). Skipping reboot to allow debugging."
-elif [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+info "Prebuilt installation finished."
+if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+  if [ "$WARN_COUNT" -gt 0 ]; then
+    info "Warnings detected ($WARN_COUNT). Rebooting to apply overlay and service changes."
+  fi
   info "Rebooting in 5 seconds..."
   sleep 5
   sudo reboot
 else
-  info "SKIP_REBOOT set - skipping reboot."
+  info "SKIP_REBOOT set - installer finished without reboot."
+  if [ "$SPI_REBOOT_REQUIRED" -eq 1 ]; then
+    warn "Manual reboot required for SPI device availability."
+  fi
 fi

@@ -9,6 +9,7 @@
 # ------------------------------------------------------------
 set -euo pipefail
 WARN_COUNT=0
+SPI_REBOOT_REQUIRED=0
 
 # ---- helpers ------------------------------------------------
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
@@ -666,6 +667,7 @@ done
 
 # Create loot directories
 sudo mkdir -p "$RUNTIME_ROOT/loot"/{Wireless,Ethernet,Scan,reports,Hotspot,logs}
+sudo mkdir -p "$RUNTIME_ROOT/logs"
 sudo chmod -R 755 "$RUNTIME_ROOT/loot"
 
 sudo mkdir -p "$RUNTIME_ROOT/wifi/profiles"
@@ -755,10 +757,14 @@ done
 # Create portal directories with proper ownership
 sudo mkdir -p "$RUNTIME_ROOT/portal/site"
 sudo mkdir -p "$RUNTIME_ROOT/loot/Portal"
-sudo chown -R rustyjack-portal:rustyjack-portal "$RUNTIME_ROOT/portal"
-sudo chown -R rustyjack-portal:rustyjack-portal "$RUNTIME_ROOT/loot/Portal"
-sudo chmod -R 755 "$RUNTIME_ROOT/portal"
-sudo chmod -R 755 "$RUNTIME_ROOT/loot/Portal"
+if [ ! -f "$RUNTIME_ROOT/portal/site/index.html" ]; then
+  if [ -f "$PROJECT_ROOT/DNSSpoof/sites/portal/index.html" ]; then
+    sudo cp -a "$PROJECT_ROOT/DNSSpoof/sites/portal/." "$RUNTIME_ROOT/portal/site/" || fail "Failed to install default portal site assets"
+    info "Installed default portal site assets to $RUNTIME_ROOT/portal/site"
+  else
+    warn "[X] Default portal site missing at $PROJECT_ROOT/DNSSpoof/sites/portal"
+  fi
+fi
 
 sudo chown -R root:rustyjack "$RUNTIME_ROOT"
 sudo chmod -R g+rwX "$RUNTIME_ROOT"
@@ -767,6 +773,8 @@ sudo chmod 2770 "$RUNTIME_ROOT/logs" 2>/dev/null || true
 sudo find "$RUNTIME_ROOT/logs" -type f -name "*.log*" -exec chmod g+rw {} + 2>/dev/null || true
 sudo find "$RUNTIME_ROOT/wifi/profiles" -type f -exec chmod 660 {} \; 2>/dev/null || true
 sudo chmod 770 "$RUNTIME_ROOT/wifi/profiles" 2>/dev/null || true
+sudo chown -R rustyjack-portal:rustyjack-portal "$RUNTIME_ROOT/portal" "$RUNTIME_ROOT/loot/Portal" 2>/dev/null || true
+sudo chmod -R 755 "$RUNTIME_ROOT/portal" "$RUNTIME_ROOT/loot/Portal" 2>/dev/null || true
 
 DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
@@ -953,6 +961,8 @@ Environment=RUSTYJACK_PORTAL_PORT=3000
 Environment=RUSTYJACK_PORTAL_BIND=0.0.0.0
 Environment=RUSTYJACK_DAEMON_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+Environment=RUSTYJACK_PORTAL_SITE_DIR=$RUNTIME_ROOT/portal/site
+Environment=RUSTYJACK_PORTAL_CAPTURE_DIR=$RUNTIME_ROOT/loot/Portal
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=$RUNTIME_ROOT/portal $RUNTIME_ROOT/loot/Portal $RUNTIME_ROOT/logs
@@ -1028,6 +1038,7 @@ if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then
   info "[OK] SPI device found"
 else
   warn "[X] SPI device NOT found - reboot may be required"
+  SPI_REBOOT_REQUIRED=1
 fi
 
 if cmd wpa_cli; then
@@ -1051,6 +1062,12 @@ if [ -d "$RUNTIME_ROOT/logs" ]; then
   fi
 else
   warn "[X] Log directory missing at $RUNTIME_ROOT/logs"
+fi
+
+if [ -f "$RUNTIME_ROOT/portal/site/index.html" ]; then
+  info "[OK] Portal site index present: $RUNTIME_ROOT/portal/site/index.html"
+else
+  warn "[X] Portal site index missing at $RUNTIME_ROOT/portal/site/index.html"
 fi
 
 # Rustyjack replaces core networking binaries with Rust implementations
@@ -1127,12 +1144,16 @@ info "  - RUST_BACKTRACE=1 enabled"
 info "=========================================="
 echo ""
 
-if [ "$WARN_COUNT" -gt 0 ]; then
-  warn "Warnings detected ($WARN_COUNT). Skipping reboot to allow debugging."
-elif [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
+  if [ "$WARN_COUNT" -gt 0 ]; then
+    info "Warnings detected ($WARN_COUNT). Rebooting to apply configuration and overlay changes."
+  fi
   info "System rebooting in 5 seconds - press Ctrl+C to abort."
   sleep 5
   sudo reboot
 else
   info "SKIP_REBOOT set - skipping reboot."
+  if [ "$SPI_REBOOT_REQUIRED" -eq 1 ]; then
+    warn "Manual reboot required for SPI device availability."
+  fi
 fi
