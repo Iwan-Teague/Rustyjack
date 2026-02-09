@@ -36,7 +36,18 @@ rj_slug() {
 
 rj_log() {
   local msg="$*"
-  printf '%s %s\n' "$(rj_now)" "$msg" | tee -a "$LOG" >/dev/null
+  local line
+  line="$(printf '%s %s' "$(rj_now)" "$msg")"
+
+  if [[ -n "${LOG:-}" ]]; then
+    if [[ "${RJ_LOG_STDOUT:-1}" == "1" ]]; then
+      printf '%s\n' "$line" | tee -a "$LOG"
+    else
+      printf '%s\n' "$line" >>"$LOG"
+    fi
+  else
+    printf '%s\n' "$line"
+  fi
 }
 
 rj_prompt_yesno() {
@@ -137,12 +148,14 @@ rj_ensure_tool() {
   fi
 
   rj_log "[INFO] Installing $desc via apt-get ($pkgs)"
-  if ! apt-get update >>"$LOG" 2>&1; then
+  rj_log "[INFO] Running: apt-get update"
+  if ! apt-get update 2>&1 | tee -a "$LOG"; then
     rj_set_tool_state "$tool" "failed"
     rj_fail "apt-get update failed while installing $tool"
     return 1
   fi
-  if ! apt-get install -y --no-install-recommends $pkgs >>"$LOG" 2>&1; then
+  rj_log "[INFO] Running: apt-get install -y --no-install-recommends $pkgs"
+  if ! apt-get install -y --no-install-recommends $pkgs 2>&1 | tee -a "$LOG"; then
     rj_set_tool_state "$tool" "failed"
     rj_fail "apt-get install failed for $tool ($pkgs)"
     return 1
@@ -421,6 +434,10 @@ Artifacts:
 - $SUMMARY
 - $REPORT
 EOF
+
+  rj_log "[SUMMARY] Tests=$TESTS_RUN Passed=$TESTS_PASS Failed=$TESTS_FAIL Skipped=$TESTS_SKIP"
+  rj_log "[SUMMARY] Report: $REPORT"
+  rj_log "[SUMMARY] Log: $LOG"
 }
 
 rj_ui_enable() {

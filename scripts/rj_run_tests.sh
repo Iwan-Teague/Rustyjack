@@ -107,35 +107,87 @@ if [[ $DANGEROUS -eq 1 ]]; then
   COMMON_ARGS+=(--dangerous)
 fi
 
-if [[ $RUN_WIRELESS -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_wireless.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_ETHERNET -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_ethernet.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_ENCRYPTION -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_encryption.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_LOOT -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_loot.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_MAC -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_mac_randomization.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_DAEMON -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_daemon.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_INSTALLERS -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_installers.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_USB -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_usb.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_UI_LAYOUT -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_ui_layout.sh" "${COMMON_ARGS[@]}"
-fi
-if [[ $RUN_THEME -eq 1 ]]; then
-  "$ROOT_DIR/rj_test_theme.sh" "${COMMON_ARGS[@]}"
+if [[ $RUN_WIRELESS -eq 0 && $RUN_ETHERNET -eq 0 && $RUN_ENCRYPTION -eq 0 && \
+      $RUN_LOOT -eq 0 && $RUN_MAC -eq 0 && $RUN_DAEMON -eq 0 && \
+      $RUN_INSTALLERS -eq 0 && $RUN_USB -eq 0 && $RUN_UI_LAYOUT -eq 0 && \
+      $RUN_THEME -eq 0 ]]; then
+  echo "No test suites selected. Use --all or choose a suite."
+  exit 2
 fi
 
-echo "Tests complete. Results in: $OUTROOT/$RUN_ID"
+SUITES_RUN=0
+SUITES_PASS=0
+SUITES_FAIL=0
+SUITE_RESULTS=()
+
+run_suite() {
+  local label="$1"
+  local script="$2"
+  shift 2
+
+  SUITES_RUN=$((SUITES_RUN + 1))
+  echo "================================================================"
+  echo "[SUITE] $label"
+  echo "[START] $(date -Is) :: $script"
+
+  if "$script" "$@"; then
+    SUITES_PASS=$((SUITES_PASS + 1))
+    SUITE_RESULTS+=("[PASS] $label")
+    echo "[DONE]  $(date -Is) :: $label (pass)"
+  else
+    local rc=$?
+    SUITES_FAIL=$((SUITES_FAIL + 1))
+    SUITE_RESULTS+=("[FAIL] $label (rc=$rc)")
+    echo "[DONE]  $(date -Is) :: $label (fail rc=$rc)"
+  fi
+}
+
+echo "Rustyjack test run starting"
+echo "Run ID: $RUN_ID"
+echo "Results root: $OUTROOT/$RUN_ID"
+echo "Common args: ${COMMON_ARGS[*]:-(none)}"
+
+if [[ $RUN_WIRELESS -eq 1 ]]; then
+  run_suite "Wireless" "$ROOT_DIR/rj_test_wireless.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_ETHERNET -eq 1 ]]; then
+  run_suite "Ethernet" "$ROOT_DIR/rj_test_ethernet.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_ENCRYPTION -eq 1 ]]; then
+  run_suite "Encryption" "$ROOT_DIR/rj_test_encryption.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_LOOT -eq 1 ]]; then
+  run_suite "Loot" "$ROOT_DIR/rj_test_loot.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_MAC -eq 1 ]]; then
+  run_suite "MAC Randomization" "$ROOT_DIR/rj_test_mac_randomization.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_DAEMON -eq 1 ]]; then
+  run_suite "Daemon/IPC" "$ROOT_DIR/rj_test_daemon.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_INSTALLERS -eq 1 ]]; then
+  run_suite "Installers" "$ROOT_DIR/rj_test_installers.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_USB -eq 1 ]]; then
+  run_suite "USB Mount" "$ROOT_DIR/rj_test_usb.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_UI_LAYOUT -eq 1 ]]; then
+  run_suite "UI Layout/Display" "$ROOT_DIR/rj_test_ui_layout.sh" "${COMMON_ARGS[@]}"
+fi
+if [[ $RUN_THEME -eq 1 ]]; then
+  run_suite "Theme/Palette" "$ROOT_DIR/rj_test_theme.sh" "${COMMON_ARGS[@]}"
+fi
+
+echo "================================================================"
+echo "Suite summary:"
+for result in "${SUITE_RESULTS[@]}"; do
+  echo "  $result"
+done
+echo "Suites run: $SUITES_RUN"
+echo "Suites passed: $SUITES_PASS"
+echo "Suites failed: $SUITES_FAIL"
+echo "Results root: $OUTROOT/$RUN_ID"
+
+if [[ $SUITES_FAIL -gt 0 ]]; then
+  exit 1
+fi
