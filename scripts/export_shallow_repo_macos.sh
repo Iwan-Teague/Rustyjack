@@ -11,6 +11,11 @@ if ! command -v zip >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "rsync not found in PATH."
+  exit 1
+fi
+
 repo_root="$(git rev-parse --show-toplevel)"
 repo_name="$(basename "$repo_root")"
 timestamp="$(date +%Y%m%d-%H%M%S)"
@@ -20,26 +25,19 @@ zip_path="${repo_root}/${repo_name}_shallow_${timestamp}.zip"
 
 mkdir -p "$clone_dir"
 
-# Copy only rust source, docs, and systemd unit files from the local tree.
-while IFS= read -r -d '' src; do
-  rel="${src#"$repo_root"/}"
-  dest="$clone_dir/$rel"
-  mkdir -p "$(dirname "$dest")"
-  cp -p "$src" "$dest"
-done < <(find "$repo_root" -type f \( \
-  -name '*.rs' -o \
-  -name '*.toml' -o \
-  -name '*.lock' -o \
-  -name '*.md' -o \
-  -name '*.txt' -o \
-  -name '*.service' -o \
-  -name '*.socket' -o \
-  -name 'LICENSE*' -o \
-  -name 'COPYING*' -o \
-  -name 'NOTICE*' \
-\) -print0)
-
-find "$clone_dir" -type d -empty -delete
+# Shallow export model:
+# copy the repo as-is, excluding git metadata and build/binary artifacts.
+rsync -a \
+  --exclude='.git' \
+  --exclude='.git/' \
+  --exclude='target' \
+  --exclude='target-*' \
+  --exclude='build' \
+  --exclude='build-*' \
+  --exclude='prebuilt' \
+  --exclude='bin' \
+  --exclude='*.zip' \
+  "$repo_root/" "$clone_dir/"
 
 (
   cd "$work_dir"

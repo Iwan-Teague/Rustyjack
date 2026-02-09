@@ -65,43 +65,95 @@ rj_prompt_yesno() {
   esac
 }
 
+rj_tool_state_file() {
+  local tool="$1"
+  local outroot="${RJ_OUTROOT:-/var/tmp/rustyjack-tests}"
+  local run_id="${RJ_RUN_ID:-adhoc}"
+  local state_dir="${RJ_TOOL_STATE_DIR:-$outroot/$run_id/.state/tools}"
+
+  if ! mkdir -p "$state_dir" 2>/dev/null; then
+    state_dir="/tmp/rustyjack-tests-tool-state"
+    mkdir -p "$state_dir" 2>/dev/null || true
+  fi
+
+  printf '%s/%s.state\n' "$state_dir" "$(rj_slug "$tool")"
+}
+
+rj_get_tool_state() {
+  local tool="$1"
+  local file
+  file="$(rj_tool_state_file "$tool")"
+  if [[ -f "$file" ]]; then
+    cat "$file" 2>/dev/null || true
+  fi
+}
+
+rj_set_tool_state() {
+  local tool="$1"
+  local state="$2"
+  local file
+  file="$(rj_tool_state_file "$tool")"
+  printf '%s\n' "$state" >"$file" 2>/dev/null || true
+}
+
 rj_ensure_tool() {
   local tool="$1"
   local pkgs="$2"
   local desc="${3:-$tool}"
   if command -v "$tool" >/dev/null 2>&1; then
+    rj_set_tool_state "$tool" "present"
     return 0
   fi
 
+  local prior_state
+  prior_state="$(rj_get_tool_state "$tool")"
+  case "$prior_state" in
+    declined)
+      rj_skip "Skipping tests that require $tool (install previously declined in this run)"
+      return 1
+      ;;
+    failed)
+      rj_skip "Skipping tests that require $tool (prior install attempt failed in this run)"
+      return 1
+      ;;
+  esac
+
   rj_log "[WARN] Missing required tool: $tool ($desc)"
   if ! rj_prompt_yesno "Install $desc now?"; then
+    rj_set_tool_state "$tool" "declined"
     rj_skip "Skipping tests that require $tool"
     return 1
   fi
 
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    rj_set_tool_state "$tool" "failed"
     rj_fail "Cannot install $tool without root privileges"
     return 1
   fi
   if ! command -v apt-get >/dev/null 2>&1; then
+    rj_set_tool_state "$tool" "failed"
     rj_fail "apt-get not available to install $tool"
     return 1
   fi
 
   rj_log "[INFO] Installing $desc via apt-get ($pkgs)"
   if ! apt-get update >>"$LOG" 2>&1; then
+    rj_set_tool_state "$tool" "failed"
     rj_fail "apt-get update failed while installing $tool"
     return 1
   fi
   if ! apt-get install -y --no-install-recommends $pkgs >>"$LOG" 2>&1; then
+    rj_set_tool_state "$tool" "failed"
     rj_fail "apt-get install failed for $tool ($pkgs)"
     return 1
   fi
   if command -v "$tool" >/dev/null 2>&1; then
+    rj_set_tool_state "$tool" "present"
     rj_log "[INFO] Installed $tool successfully"
     return 0
   fi
 
+  rj_set_tool_state "$tool" "failed"
   rj_fail "Tool $tool still missing after install"
   return 1
 }
