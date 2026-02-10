@@ -306,7 +306,7 @@ fn required_locks(kind: &JobKind) -> Vec<LockKind> {
         JobKind::PortalStart { .. } => vec![LockKind::Portal],
         JobKind::MountStart { .. } => vec![LockKind::Mount],
         JobKind::UnmountStart { .. } => vec![LockKind::Mount],
-        JobKind::InterfaceSelect { .. } => vec![LockKind::Uplink],
+        JobKind::InterfaceSelect { .. } => Vec::new(),
         JobKind::CoreCommand { .. } => vec![LockKind::Wifi],
     }
 }

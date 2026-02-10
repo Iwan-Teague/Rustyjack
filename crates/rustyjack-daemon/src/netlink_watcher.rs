@@ -282,15 +282,14 @@ fn run_ops_enforcement(
 ) -> anyhow::Result<rustyjack_core::system::IsolationOutcome> {
     use rustyjack_core::system::ops::NetOps;
     use rustyjack_core::system::{
-        apply_interface_isolation_with_ops_block_all, apply_interface_isolation_with_ops_strict,
-        IsolationEngine, RealNetOps,
+        apply_interface_isolation_with_ops_block_all, apply_interface_isolation_with_ops_passive,
+        apply_interface_isolation_with_ops_strict, RealNetOps,
     };
     use std::sync::Arc;
 
     let ops: Arc<dyn NetOps> = Arc::new(RealNetOps);
     if ops_cfg.wifi_ops && ops_cfg.eth_ops {
-        let engine = IsolationEngine::new(Arc::clone(&ops), root);
-        return engine.enforce();
+        return apply_interface_isolation_with_ops_passive(Arc::clone(&ops), root);
     }
 
     let interfaces = ops.list_interfaces()?;

@@ -70,7 +70,7 @@ impl DaemonState {
             let max_retries = 3;
 
             loop {
-                match engine.enforce() {
+                match engine.enforce_passive() {
                     Ok(outcome) => {
                         info!(
                             "Startup enforcement succeeded: allowed={:?}, blocked={:?}",

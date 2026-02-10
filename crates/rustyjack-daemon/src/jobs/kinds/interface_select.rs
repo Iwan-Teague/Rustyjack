@@ -6,7 +6,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::jobs::cancel_bridge::create_cancel_flag;
 use crate::state::DaemonState;
-use rustyjack_ipc::{DaemonError, ErrorCode, InterfaceSelectDhcpResult, InterfaceSelectJobResult};
+use rustyjack_ipc::{
+    DaemonError, ErrorCode, InterfaceSelectDhcpResult, InterfaceSelectJobResult,
+    InterfaceSelectRollbackResult, InterfaceSelectStatusResult,
+};
 
 pub async fn run<F, Fut>(
     interface: String,
@@ -18,6 +21,8 @@ where
     F: FnMut(&str, u8, &str) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    let _lock = state.locks.acquire_uplink().await;
+
     if cancel.is_cancelled() {
         return Err(DaemonError::new(
             ErrorCode::Cancelled,
@@ -69,6 +74,23 @@ where
                 gateway: d.gateway.map(|gw| gw.to_string()),
                 dns_servers: d.dns_servers.iter().map(|ip| ip.to_string()).collect(),
             });
+            let selected_status =
+                outcome
+                    .selected_status
+                    .as_ref()
+                    .map(|status| InterfaceSelectStatusResult {
+                        interface: status.interface.clone(),
+                        is_up: status.is_up,
+                        oper_state: status.oper_state.clone(),
+                        carrier: status.carrier,
+                        ip: status.ip.map(|ip| ip.to_string()),
+                    });
+            let rollback = InterfaceSelectRollbackResult {
+                attempted: outcome.rollback.attempted,
+                restored_previous: outcome.rollback.restored_previous,
+                previous_interface: outcome.rollback.previous_interface.clone(),
+                message: outcome.rollback.message.clone(),
+            };
 
             let response = InterfaceSelectJobResult {
                 interface: outcome.interface,
@@ -77,6 +99,10 @@ where
                 carrier: outcome.carrier,
                 dhcp,
                 notes: outcome.notes,
+                warnings: outcome.warnings,
+                previous_interface: outcome.previous_interface,
+                selected_status,
+                rollback: Some(rollback),
             };
 
             serde_json::to_value(response).map_err(|e| {

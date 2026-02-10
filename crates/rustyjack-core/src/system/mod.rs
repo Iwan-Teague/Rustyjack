@@ -2190,6 +2190,14 @@ pub fn apply_interface_isolation_with_ops_block_all(
     apply_interface_isolation_with_ops_strict_impl(ops, &[], true)
 }
 
+pub fn apply_interface_isolation_with_ops_passive(
+    ops: Arc<dyn crate::system::ops::NetOps>,
+    root: PathBuf,
+) -> Result<crate::system::ops::IsolationOutcome> {
+    let engine = crate::system::IsolationEngine::new(ops, root);
+    engine.enforce_passive()
+}
+
 fn apply_interface_isolation_with_ops_strict_impl(
     ops: Arc<dyn crate::system::ops::NetOps>,
     allowed: &[String],
