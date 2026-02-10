@@ -141,6 +141,14 @@ pub struct InterfaceSelectJobResult {
     pub carrier: Option<bool>,
     pub dhcp: Option<InterfaceSelectDhcpResult>,
     pub notes: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub previous_interface: Option<String>,
+    #[serde(default)]
+    pub selected_status: Option<InterfaceSelectStatusResult>,
+    #[serde(default)]
+    pub rollback: Option<InterfaceSelectRollbackResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,4 +156,21 @@ pub struct InterfaceSelectDhcpResult {
     pub ip: Option<String>,
     pub gateway: Option<String>,
     pub dns_servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceSelectStatusResult {
+    pub interface: String,
+    pub is_up: bool,
+    pub oper_state: String,
+    pub carrier: Option<bool>,
+    pub ip: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceSelectRollbackResult {
+    pub attempted: bool,
+    pub restored_previous: bool,
+    pub previous_interface: Option<String>,
+    pub message: Option<String>,
 }

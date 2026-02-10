@@ -11,10 +11,11 @@ mod wire;
 pub use authz::{AuthorizationTier, AuthzSummary};
 pub use error::{DaemonError, ErrorCode};
 pub use job::{
-    HotspotStartRequestIpc, InterfaceSelectDhcpResult, InterfaceSelectJobResult, JobEvent, JobId,
-    JobInfo, JobKind, JobSpec, JobStarted, JobState, MountStartRequestIpc, PortalStartRequestIpc,
-    Progress, ScanModeIpc, ScanRequestIpc, UnmountStartRequestIpc, UpdateRequestIpc,
-    WifiConnectRequestIpc, WifiScanRequestIpc,
+    HotspotStartRequestIpc, InterfaceSelectDhcpResult, InterfaceSelectJobResult,
+    InterfaceSelectRollbackResult, InterfaceSelectStatusResult, JobEvent, JobId, JobInfo, JobKind,
+    JobSpec, JobStarted, JobState, MountStartRequestIpc, PortalStartRequestIpc, Progress,
+    ScanModeIpc, ScanRequestIpc, UnmountStartRequestIpc, UpdateRequestIpc, WifiConnectRequestIpc,
+    WifiScanRequestIpc,
 };
 pub use rustyjack_commands::{
     BridgeCommand, Commands, DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand,
@@ -29,15 +30,15 @@ pub use types::{
     HotspotActionResponse, HotspotApSupport, HotspotClient, HotspotClientsResponse,
     HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotStartRequest,
     HotspotWarningsResponse, InterfaceCapabilities, InterfaceStatusRequest,
-    InterfaceStatusResponse, JobCancelRequest, JobCancelResponse, JobStartRequest,
-    JobStatusRequest, JobStatusResponse, LegacyCommand, LogComponent, LogLevel, LogTailRequest,
-    LogTailResponse, LoggingConfigResponse, LoggingConfigSetRequest, LoggingConfigSetResponse,
-    MountInfo, MountListResponse, MountStartRequest, OpsConfig, OpsStatus, PortalActionResponse,
-    PortalStartRequest, PortalStatusResponse, RequestBody, RequestEnvelope, ResponseBody,
-    ResponseEnvelope, ResponseOk, RfkillEntry, SetActiveInterfaceRequest,
-    SetActiveInterfaceResponse, StatusResponse, SystemActionResponse, SystemLogsResponse,
-    SystemStatusResponse, TxInMonitorCapability, UnmountStartRequest, VersionResponse,
-    WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiConnectStartRequest,
+    InterfaceStatusResponse, InterfacesListResponse, JobCancelRequest, JobCancelResponse,
+    JobStartRequest, JobStatusRequest, JobStatusResponse, LegacyCommand, LogComponent, LogLevel,
+    LogTailRequest, LogTailResponse, LoggingConfigResponse, LoggingConfigSetRequest,
+    LoggingConfigSetResponse, MountInfo, MountListResponse, MountStartRequest, OpsConfig,
+    OpsStatus, PortalActionResponse, PortalStartRequest, PortalStatusResponse, RequestBody,
+    RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk, RfkillEntry,
+    SetActiveInterfaceRequest, SetActiveInterfaceResponse, StatusResponse, SystemActionResponse,
+    SystemLogsResponse, SystemStatusResponse, TxInMonitorCapability, UnmountStartRequest,
+    VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiConnectStartRequest,
     WifiDisconnectRequest, WifiDisconnectResponse, WifiInterfacesResponse, WifiScanStartRequest,
 };
 pub use wire::{decode_frame_length, encode_frame, FrameError};

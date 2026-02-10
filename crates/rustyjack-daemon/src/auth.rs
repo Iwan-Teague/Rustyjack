@@ -191,6 +191,7 @@ pub fn required_tier(endpoint: Endpoint) -> AuthorizationTier {
         Endpoint::ActiveInterfaceGet => AuthorizationTier::ReadOnly,
         Endpoint::ActiveInterfaceClear => AuthorizationTier::Operator,
         Endpoint::InterfaceStatusGet => AuthorizationTier::ReadOnly,
+        Endpoint::InterfacesListGet => AuthorizationTier::ReadOnly,
         Endpoint::WifiCapabilitiesGet => AuthorizationTier::ReadOnly,
         Endpoint::HotspotWarningsGet => AuthorizationTier::Operator,
         Endpoint::HotspotDiagnosticsGet => AuthorizationTier::Operator,
@@ -229,6 +230,7 @@ pub fn required_tier_for_request(endpoint: Endpoint, body: &RequestBody) -> Auth
         | E::SystemStatusGet
         | E::SystemLogsGet
         | E::InterfaceStatusGet
+        | E::InterfacesListGet
         | E::WifiCapabilitiesGet
         | E::WifiInterfacesList
         | E::HotspotWarningsGet
@@ -331,6 +333,7 @@ pub fn required_ops_for_request(endpoint: Endpoint, body: &RequestBody) -> Requi
         | E::SystemLogsGet
         | E::ActiveInterfaceGet
         | E::InterfaceStatusGet
+        | E::InterfacesListGet
         | E::WifiCapabilitiesGet
         | E::WifiInterfacesList
         | E::HotspotWarningsGet
