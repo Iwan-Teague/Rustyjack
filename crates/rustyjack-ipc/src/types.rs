@@ -73,6 +73,7 @@ pub enum Endpoint {
     ActiveInterfaceGet,
     ActiveInterfaceClear,
     InterfaceStatusGet,
+    InterfacesListGet,
     WifiCapabilitiesGet,
     HotspotWarningsGet,
     HotspotDiagnosticsGet,
@@ -149,6 +150,7 @@ pub enum RequestBody {
     ActiveInterfaceGet,
     ActiveInterfaceClear,
     InterfaceStatusGet(InterfaceStatusRequest),
+    InterfacesListGet,
     WifiCapabilitiesGet(WifiCapabilitiesRequest),
     HotspotWarningsGet,
     HotspotDiagnosticsGet(HotspotDiagnosticsRequest),
@@ -216,6 +218,7 @@ pub enum ResponseOk {
     ActiveInterface(ActiveInterfaceResponse),
     ActiveInterfaceCleared(ActiveInterfaceClearResponse),
     InterfaceStatus(InterfaceStatusResponse),
+    InterfacesList(InterfacesListResponse),
     WifiCapabilities(WifiCapabilitiesResponse),
     HotspotWarnings(HotspotWarningsResponse),
     HotspotDiagnostics(HotspotDiagnosticsResponse),
@@ -415,6 +418,11 @@ pub struct InterfaceStatusResponse {
     pub carrier: Option<bool>,
     pub ip: Option<String>,
     pub capabilities: Option<InterfaceCapabilities>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfacesListResponse {
+    pub interfaces: Vec<InterfaceStatusResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -785,6 +793,7 @@ pub fn endpoint_for_body(body: &RequestBody) -> Endpoint {
         RequestBody::ActiveInterfaceGet => Endpoint::ActiveInterfaceGet,
         RequestBody::ActiveInterfaceClear => Endpoint::ActiveInterfaceClear,
         RequestBody::InterfaceStatusGet(_) => Endpoint::InterfaceStatusGet,
+        RequestBody::InterfacesListGet => Endpoint::InterfacesListGet,
         RequestBody::WifiCapabilitiesGet(_) => Endpoint::WifiCapabilitiesGet,
         RequestBody::HotspotWarningsGet => Endpoint::HotspotWarningsGet,
         RequestBody::HotspotDiagnosticsGet(_) => Endpoint::HotspotDiagnosticsGet,

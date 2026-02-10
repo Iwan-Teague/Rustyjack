@@ -573,7 +573,7 @@ fn settings_menu() -> Vec<MenuEntry> {
 fn interface_menu() -> Vec<MenuEntry> {
     vec![
         MenuEntry::new("View Status", MenuAction::ViewInterfaceStatus),
-        MenuEntry::new("Select Interface", MenuAction::SelectActiveInterface),
+        MenuEntry::new("Switch Interface", MenuAction::SelectActiveInterface),
     ]
 }
 

@@ -7,12 +7,12 @@ use rustyjack_ipc::{
     CoreDispatchResponse, DaemonError, DiskUsageRequest, DiskUsageResponse, ErrorCode,
     GpioDiagnosticsResponse, HealthResponse, HostnameResponse, HotspotClientsResponse,
     HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse,
-    InterfaceCapabilities, InterfaceStatusRequest, InterfaceStatusResponse, JobCancelRequest,
-    JobCancelResponse, JobSpec, JobStartRequest, JobStarted, JobStatusRequest, JobStatusResponse,
-    LogComponent, LogLevel, OpsStatus, RequestBody, RequestEnvelope, ResponseBody,
-    ResponseEnvelope, ResponseOk, StatusResponse, SystemActionResponse, SystemLogsResponse,
-    SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest, WifiCapabilitiesResponse,
-    PROTOCOL_VERSION,
+    InterfaceCapabilities, InterfaceStatusRequest, InterfaceStatusResponse, InterfacesListResponse,
+    JobCancelRequest, JobCancelResponse, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,
+    JobStatusResponse, LogComponent, LogLevel, OpsStatus, RequestBody, RequestEnvelope,
+    ResponseBody, ResponseEnvelope, ResponseOk, StatusResponse, SystemActionResponse,
+    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
+    WifiCapabilitiesResponse, PROTOCOL_VERSION,
 };
 
 #[cfg(feature = "core_dispatch")]
@@ -107,6 +107,146 @@ fn classify_interface_kind(interface: &str) -> Result<InterfaceKind, DaemonError
     } else {
         Ok(InterfaceKind::Wired)
     }
+}
+
+fn convert_interface_capabilities(
+    caps: rustyjack_core::system::ops::InterfaceCapabilities,
+) -> InterfaceCapabilities {
+    let tx_cap = match caps.tx_in_monitor {
+        rustyjack_core::system::ops::TxInMonitorCapability::Supported => {
+            Some(rustyjack_ipc::TxInMonitorCapability::Supported)
+        }
+        rustyjack_core::system::ops::TxInMonitorCapability::NotSupported => {
+            Some(rustyjack_ipc::TxInMonitorCapability::NotSupported)
+        }
+        rustyjack_core::system::ops::TxInMonitorCapability::Unknown => {
+            Some(rustyjack_ipc::TxInMonitorCapability::Unknown)
+        }
+    };
+
+    InterfaceCapabilities {
+        is_wireless: caps.is_wireless,
+        is_physical: caps.is_physical,
+        supports_monitor: caps.supports_monitor,
+        supports_ap: caps.supports_ap,
+        supports_injection: caps.supports_injection,
+        supports_5ghz: caps.supports_5ghz,
+        supports_2ghz: caps.supports_2ghz,
+        mac_address: caps.mac_address,
+        driver: caps.driver,
+        chipset: caps.chipset,
+        tx_in_monitor: tx_cap,
+        tx_in_monitor_reason: Some(caps.tx_in_monitor_reason),
+    }
+}
+
+fn build_interface_status_with_ops(
+    ops: &impl rustyjack_core::system::ops::NetOps,
+    iface: &str,
+) -> InterfaceStatusResponse {
+    use std::fs;
+    use std::path::Path;
+
+    let sys_path = Path::new("/sys/class/net").join(iface);
+    let exists = sys_path.exists();
+    if !exists {
+        return InterfaceStatusResponse {
+            interface: iface.to_string(),
+            exists,
+            is_wireless: false,
+            oper_state: "missing".to_string(),
+            is_up: false,
+            carrier: None,
+            ip: None,
+            capabilities: None,
+        };
+    }
+
+    let oper_state = fs::read_to_string(sys_path.join("operstate"))
+        .unwrap_or_else(|_| "unknown".to_string())
+        .trim()
+        .to_string();
+
+    let is_up = if let Ok(flags_hex) = fs::read_to_string(sys_path.join("flags")) {
+        if let Ok(flags) = u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16) {
+            (flags & 0x1) != 0
+        } else {
+            oper_state == "up"
+        }
+    } else {
+        oper_state == "up"
+    };
+
+    let carrier = fs::read_to_string(sys_path.join("carrier"))
+        .ok()
+        .and_then(|val| match val.trim() {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        });
+
+    let is_wireless = sys_path.join("wireless").exists();
+    let ip = ops
+        .get_ipv4_address(iface)
+        .ok()
+        .flatten()
+        .map(|addr| addr.to_string());
+
+    let capabilities = ops
+        .get_interface_capabilities(iface)
+        .ok()
+        .map(convert_interface_capabilities);
+
+    InterfaceStatusResponse {
+        interface: iface.to_string(),
+        exists,
+        is_wireless,
+        oper_state,
+        is_up,
+        carrier,
+        ip,
+        capabilities,
+    }
+}
+
+fn list_interface_statuses(
+    filter_physical: bool,
+) -> Result<Vec<InterfaceStatusResponse>, rustyjack_core::services::error::ServiceError> {
+    use rustyjack_core::services::error::ServiceError;
+    use rustyjack_core::system::ops::RealNetOps;
+    use std::fs;
+
+    let ops = RealNetOps;
+    let mut names = Vec::new();
+
+    let entries = fs::read_dir("/sys/class/net")
+        .map_err(|e| ServiceError::Internal(format!("failed to read interfaces: {}", e)))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|e| ServiceError::Internal(format!("failed to list interfaces: {}", e)))?;
+        let iface = entry.file_name().to_string_lossy().to_string();
+        if iface == "lo" {
+            continue;
+        }
+        names.push(iface);
+    }
+
+    names.sort();
+
+    let mut statuses = Vec::new();
+    for iface in names {
+        let status = build_interface_status_with_ops(&ops, &iface);
+        if filter_physical {
+            if let Some(caps) = status.capabilities.as_ref() {
+                if !caps.is_physical {
+                    continue;
+                }
+            }
+        }
+        statuses.push(status);
+    }
+
+    Ok(statuses)
 }
 
 async fn dispatch_core_command(
@@ -645,112 +785,32 @@ pub async fn handle_request(
         RequestBody::InterfaceStatusGet(InterfaceStatusRequest { interface }) => {
             let result = run_blocking("interface_status_get", move || {
                 use rustyjack_core::services::error::ServiceError;
-                use rustyjack_core::system::ops::{NetOps, RealNetOps};
-                use std::fs;
-                use std::path::Path;
 
                 let iface = interface.trim();
                 if iface.is_empty() {
                     return Err(ServiceError::InvalidInput("interface".to_string()));
                 }
 
-                let sys_path = Path::new("/sys/class/net").join(iface);
-                let exists = sys_path.exists();
-                if !exists {
-                    return Ok(InterfaceStatusResponse {
-                        interface: iface.to_string(),
-                        exists,
-                        is_wireless: false,
-                        oper_state: "missing".to_string(),
-                        is_up: false,
-                        carrier: None,
-                        ip: None,
-                        capabilities: None,
-                    });
-                }
-
-                let oper_state = fs::read_to_string(sys_path.join("operstate"))
-                    .unwrap_or_else(|_| "unknown".to_string())
-                    .trim()
-                    .to_string();
-
-                // RC5: Report admin-up (IFF_UP flag) instead of operstate
-                // Admin-up is what we set with netlink, operstate is derived policy
-                // An interface can be admin-UP but operstate "down" when disconnected
-                let is_up = if let Ok(flags_hex) = fs::read_to_string(sys_path.join("flags")) {
-                    if let Ok(flags) =
-                        u32::from_str_radix(flags_hex.trim().trim_start_matches("0x"), 16)
-                    {
-                        (flags & 0x1) != 0 // IFF_UP is bit 0
-                    } else {
-                        oper_state == "up" // fallback to operstate
-                    }
-                } else {
-                    oper_state == "up" // fallback to operstate
-                };
-                let carrier = fs::read_to_string(sys_path.join("carrier"))
-                    .ok()
-                    .and_then(|val| match val.trim() {
-                        "0" => Some(false),
-                        "1" => Some(true),
-                        _ => None,
-                    });
-                let is_wireless = sys_path.join("wireless").exists();
-
-                let ops = RealNetOps;
-                let ip = ops
-                    .get_ipv4_address(iface)
-                    .ok()
-                    .flatten()
-                    .map(|addr| addr.to_string());
-
-                let capabilities =
-                    ops.get_interface_capabilities(iface)
-                        .ok()
-                        .map(|caps| {
-                            // Convert TxInMonitorCapability to IPC type
-                            let tx_cap = match caps.tx_in_monitor {
-                                rustyjack_core::system::ops::TxInMonitorCapability::Supported => {
-                                    Some(rustyjack_ipc::TxInMonitorCapability::Supported)
-                                }
-                                rustyjack_core::system::ops::TxInMonitorCapability::NotSupported => {
-                                    Some(rustyjack_ipc::TxInMonitorCapability::NotSupported)
-                                }
-                                rustyjack_core::system::ops::TxInMonitorCapability::Unknown => {
-                                    Some(rustyjack_ipc::TxInMonitorCapability::Unknown)
-                                }
-                            };
-                            InterfaceCapabilities {
-                                is_wireless: caps.is_wireless,
-                                is_physical: caps.is_physical,
-                                supports_monitor: caps.supports_monitor,
-                                supports_ap: caps.supports_ap,
-                                supports_injection: caps.supports_injection,
-                                supports_5ghz: caps.supports_5ghz,
-                                supports_2ghz: caps.supports_2ghz,
-                                mac_address: caps.mac_address,
-                                driver: caps.driver,
-                                chipset: caps.chipset,
-                                tx_in_monitor: tx_cap,
-                                tx_in_monitor_reason: Some(caps.tx_in_monitor_reason),
-                            }
-                        });
-
-                Ok(InterfaceStatusResponse {
-                    interface: iface.to_string(),
-                    exists,
-                    is_wireless,
-                    oper_state,
-                    is_up,
-                    carrier,
-                    ip,
-                    capabilities,
-                })
+                let ops = rustyjack_core::system::ops::RealNetOps;
+                Ok(build_interface_status_with_ops(&ops, iface))
             })
             .await;
 
             match result {
                 Ok(status) => ResponseBody::Ok(ResponseOk::InterfaceStatus(status)),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::InterfacesListGet => {
+            let result =
+                run_blocking("interfaces_list_get", || list_interface_statuses(true)).await;
+
+            match result {
+                Ok(interfaces) => {
+                    ResponseBody::Ok(ResponseOk::InterfacesList(InterfacesListResponse {
+                        interfaces,
+                    }))
+                }
                 Err(err) => ResponseBody::Err(err),
             }
         }
@@ -1290,7 +1350,7 @@ pub async fn handle_request(
                     let ops = Arc::new(RealNetOps);
                     let engine = IsolationEngine::new(ops, root);
 
-                    match engine.enforce() {
+                    match engine.enforce_passive() {
                         Ok(outcome) => {
                             tracing::info!(
                                 "Hotplug enforcement: allowed={:?}, blocked={:?}, errors={}",

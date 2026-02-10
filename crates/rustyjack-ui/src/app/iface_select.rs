@@ -1,13 +1,30 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use rustyjack_ipc::{InterfaceSelectJobResult, JobState};
+use rustyjack_ipc::{InterfaceSelectJobResult, InterfaceStatusResponse, JobState};
 
 use crate::util::shorten_for_display;
 
 use super::state::{App, ButtonAction};
 
 impl App {
+    fn format_interface_label(status: &InterfaceStatusResponse) -> String {
+        let admin = if status.is_up { "UP" } else { "DOWN" };
+        let carrier = match status.carrier {
+            Some(true) => "car:up",
+            Some(false) => "car:down",
+            None => "car:?",
+        };
+        let ip = status.ip.as_deref().unwrap_or("-");
+        format!(
+            "{} {} {} {}",
+            status.interface,
+            admin,
+            carrier,
+            shorten_for_display(ip, 14)
+        )
+    }
+
     pub(crate) fn choose_interface_name(
         &mut self,
         title: &str,
@@ -40,6 +57,7 @@ impl App {
                         title,
                         [
                             &format!("Interface: {}", selected_name),
+                            "Processing...",
                             &msg,
                             "KEY2 = Cancel",
                         ],
@@ -51,6 +69,7 @@ impl App {
                     title,
                     [
                         &format!("Interface: {}", selected_name),
+                        "Processing...",
                         "Queued...",
                         "KEY2 = Cancel",
                     ],
@@ -70,6 +89,7 @@ impl App {
                                     title,
                                     [
                                         &format!("Interface: {}", selected_name),
+                                        "Processing...",
                                         "Cancelling...",
                                         "Please wait",
                                     ],
@@ -122,13 +142,25 @@ impl App {
                 JobState::Failed | JobState::Cancelled => {
                     let mut lines = vec![format!("Interface: {}", selected_name)];
                     if let Some(err) = status.error {
+                        let mut combined = err.message.clone();
                         lines.push(err.message);
                         if let Some(detail) = err.detail {
+                            combined.push(' ');
+                            combined.push_str(&detail);
                             lines.push(shorten_for_display(&detail, 120));
+                        }
+                        let combined_lower = combined.to_lowercase();
+                        if combined_lower.contains("rollback restored") {
+                            lines.push("Rollback restored previous uplink.".to_string());
+                        } else if combined_lower.contains("rollback failed") {
+                            lines.push(
+                                "Rollback failed; recover with eth0 if possible.".to_string(),
+                            );
                         }
                     } else {
                         lines.push("Interface selection failed".to_string());
                     }
+                    lines.push("If stranded, reconnect SSH and select eth0.".to_string());
                     self.show_message("Interface Error", lines.iter().map(|s| s.as_str()))?;
                     return Ok(None);
                 }
@@ -143,6 +175,7 @@ impl App {
         self.config.settings.active_network_interface = result.interface.clone();
         let config_path = self.root.join("gui_conf.json");
         let mut lines = Vec::new();
+        let selected_status = self.core.interface_status(&result.interface)?;
 
         match self.config.save(&config_path) {
             Ok(()) => lines.push("Config saved".to_string()),
@@ -150,6 +183,14 @@ impl App {
         }
 
         lines.push(format!("Active: {}", result.interface));
+        lines.push(format!(
+            "Admin state: {}",
+            if selected_status.is_up { "UP" } else { "DOWN" }
+        ));
+        lines.push(format!("Operstate: {}", selected_status.oper_state));
+        if let Some(ip) = selected_status.ip.as_deref() {
+            lines.push(format!("Kernel IP: {}", ip));
+        }
         if !result.blocked.is_empty() {
             lines.push(format!("Blocked: {}", result.blocked.join(", ")));
         }
@@ -170,30 +211,50 @@ impl App {
                 lines.push(format!("DNS: {}", dhcp.dns_servers.join(", ")));
             }
         }
+        for warning in result.warnings {
+            lines.push(format!("Warning: {}", warning));
+        }
         for note in result.notes {
             lines.push(note);
         }
+        if let Some(rollback) = result.rollback {
+            if rollback.attempted {
+                lines.push(format!(
+                    "Rollback: {}",
+                    if rollback.restored_previous {
+                        "restored previous"
+                    } else {
+                        "attempted with issues"
+                    }
+                ));
+            }
+        }
 
-        self.show_message("Interface Set", lines.iter().map(|s| s.as_str()))
+        if selected_status.is_up {
+            self.show_message("Active interface set", lines.iter().map(|s| s.as_str()))
+        } else {
+            lines.push("Warning: selected interface is not admin-UP.".to_string());
+            lines.push("Check cable, rfkill, or Wi-Fi association.".to_string());
+            self.show_message("Interface Set (warning)", lines.iter().map(|s| s.as_str()))
+        }
     }
 
     pub(crate) fn select_active_interface(&mut self) -> Result<()> {
-        // List all interfaces via daemon RPC
-        let data = self.core.wifi_interfaces()?;
-        let ifaces: rustyjack_ipc::WifiInterfacesResponse = serde_json::from_value(data)?;
+        let mut interfaces = self.core.interfaces_list()?.interfaces;
+        interfaces.sort_by(|a, b| a.interface.cmp(&b.interface));
 
-        if ifaces.interfaces.is_empty() {
+        if interfaces.is_empty() {
             return self.show_message("Interfaces", ["No interfaces found"]);
         }
 
-        // Build menu labels (just names since daemon doesn't provide full details yet)
-        let labels = ifaces.interfaces.clone();
+        let labels: Vec<String> = interfaces
+            .iter()
+            .map(Self::format_interface_label)
+            .collect();
 
-        // Let user select
-        if let Some(idx) = self.choose_from_menu("Select Interface", &labels)? {
-            let selected_name = &ifaces.interfaces[idx];
+        if let Some(idx) = self.choose_from_menu("Switch Active Interface", &labels)? {
+            let selected_name = interfaces[idx].interface.clone();
 
-            // Confirm selection with dialog
             let overlay = self.stats.snapshot();
             let content = vec![
                 format!("Interface: {}", selected_name),
@@ -228,18 +289,17 @@ impl App {
                 }
             }
 
-            // Call set-active-interface RPC
             self.show_progress(
-                "Setting Interface",
+                "Switching Interface",
                 &[
-                    &format!("Activating {}", selected_name),
-                    "Blocking others...",
+                    &format!("Switching to {}", selected_name),
+                    "Processing...",
                     "Please wait",
                 ],
             )?;
 
             if let Some(result) =
-                self.run_interface_selection_job(selected_name, "Setting Interface")?
+                self.run_interface_selection_job(&selected_name, "Switching Interface")?
             {
                 self.render_interface_selection_success(result)?;
             }
@@ -250,18 +310,21 @@ impl App {
     }
 
     pub(crate) fn view_interface_status(&mut self) -> Result<()> {
-        // Get current state - daemon only returns interface names
-        let data = self.core.wifi_interfaces()?;
-        let ifaces: rustyjack_ipc::WifiInterfacesResponse = serde_json::from_value(data)?;
+        let mut interfaces = self.core.interfaces_list()?.interfaces;
+        interfaces.sort_by(|a, b| a.interface.cmp(&b.interface));
 
-        // Show available interfaces
-        let mut status_lines = vec!["Available Interfaces:".to_string(), "".to_string()];
+        let mut status_lines = vec!["Interfaces:".to_string(), "".to_string()];
 
-        for iface_name in &ifaces.interfaces {
-            status_lines.push(format!("  {}", iface_name));
+        for iface in &interfaces {
+            status_lines.push(Self::format_interface_label(iface));
+            status_lines.push(format!(
+                "  oper:{} ip:{}",
+                iface.oper_state,
+                iface.ip.clone().unwrap_or_else(|| "-".to_string())
+            ));
         }
 
-        if ifaces.interfaces.is_empty() {
+        if interfaces.is_empty() {
             status_lines.push("  (none found)".to_string());
         }
 

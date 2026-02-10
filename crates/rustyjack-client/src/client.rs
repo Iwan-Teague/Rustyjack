@@ -9,13 +9,13 @@ use rustyjack_ipc::{
     DiskUsageRequest, DiskUsageResponse, DnsSpoofCommand, EthernetCommand, FeatureFlag,
     GpioDiagnosticsResponse, HardwareCommand, HealthResponse, HelloAck, HostnameResponse,
     HotspotClientsResponse, HotspotCommand, HotspotDiagnosticsRequest, HotspotDiagnosticsResponse,
-    HotspotWarningsResponse, InterfaceStatusRequest, InterfaceStatusResponse, JobCancelRequest,
-    JobCancelResponse, JobKind, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,
-    JobStatusResponse, LootCommand, MitmCommand, NotifyCommand, OpsConfig, ProcessCommand,
-    RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk, ReverseCommand,
-    ScanCommand, StatusCommand, StatusResponse, SystemActionResponse, SystemCommand,
-    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
-    WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
+    HotspotWarningsResponse, InterfaceStatusRequest, InterfaceStatusResponse,
+    InterfacesListResponse, JobCancelRequest, JobCancelResponse, JobKind, JobSpec, JobStartRequest,
+    JobStarted, JobStatusRequest, JobStatusResponse, LootCommand, MitmCommand, NotifyCommand,
+    OpsConfig, ProcessCommand, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
+    ResponseOk, ReverseCommand, ScanCommand, StatusCommand, StatusResponse, SystemActionResponse,
+    SystemCommand, SystemLogsResponse, SystemStatusResponse, VersionResponse,
+    WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -425,6 +425,14 @@ impl DaemonClient {
         });
         match self.request(body).await? {
             ResponseBody::Ok(ResponseOk::InterfaceStatus(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn interfaces_list(&mut self) -> Result<InterfacesListResponse> {
+        match self.request(RequestBody::InterfacesListGet).await? {
+            ResponseBody::Ok(ResponseOk::InterfacesList(resp)) => Ok(resp),
             ResponseBody::Err(err) => Err(daemon_error(err)),
             _ => Err(anyhow!("unexpected response body")),
         }
