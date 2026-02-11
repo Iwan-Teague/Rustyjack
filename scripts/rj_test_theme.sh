@@ -472,3 +472,4 @@ rj_capture_journal "$UI_SERVICE" "$OUT/journal/${UI_SERVICE}.log"
 rj_capture_journal "$DAEMON_SERVICE" "$OUT/journal/${DAEMON_SERVICE}.log"
 rj_write_report
 rj_log "Theme tests completed. Output: $OUT"
+rj_exit_by_fail_count

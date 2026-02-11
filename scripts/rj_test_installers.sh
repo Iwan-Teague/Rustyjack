@@ -141,3 +141,4 @@ fi
 rj_write_report
 
 rj_log "Installer tests completed. Output: $OUT"
+rj_exit_by_fail_count

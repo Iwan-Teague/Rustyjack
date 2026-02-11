@@ -153,3 +153,4 @@ rj_capture_journal "rustyjackd.service" "$OUT/journal/rustyjackd.log"
 rj_write_report
 
 rj_log "Loot tests completed. Output: $OUT"
+rj_exit_by_fail_count

@@ -464,3 +464,4 @@ cat >>"$REPORT" <<EOF
 EOF
 
 rj_log "MAC randomization tests completed. Output: $OUT"
+rj_exit_by_fail_count

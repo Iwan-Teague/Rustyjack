@@ -57,6 +57,7 @@ done
 
 rj_init "daemon"
 rj_require_root
+mkdir -p "$OUT/rpc/requests" "$OUT/rpc/responses"
 
 NEEDS_PY=0
 if [[ $RUN_AUTH -eq 1 || $RUN_PROTOCOL -eq 1 || $RUN_COMPREHENSIVE -eq 1 ]]; then
@@ -566,3 +567,4 @@ cat >>"$REPORT" <<EOF
 EOF
 
 rj_log "Daemon tests completed. Output: $OUT"
+rj_exit_by_fail_count

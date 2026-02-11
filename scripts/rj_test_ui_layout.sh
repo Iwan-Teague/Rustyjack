@@ -47,3 +47,4 @@ rj_run_cmd "ui_core_dispatch_guard" cargo test -p rustyjack-ui --test core_dispa
 
 rj_write_report
 rj_log "UI layout/display tests completed. Output: $OUT"
+rj_exit_by_fail_count

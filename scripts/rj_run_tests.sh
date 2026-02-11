@@ -116,6 +116,8 @@ fi
 
 export RJ_OUTROOT="$OUTROOT"
 export RJ_RUN_ID="$RUN_ID"
+export RJ_NONINTERACTIVE="${RJ_NONINTERACTIVE:-1}"
+export RJ_AUTO_INSTALL="${RJ_AUTO_INSTALL:-0}"
 
 COMMON_ARGS=()
 if [[ $RUN_UI -eq 0 ]]; then

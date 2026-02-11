@@ -261,7 +261,7 @@ rj_run_cmd_capture() {
   TESTS_RUN=$((TESTS_RUN + 1))
   mkdir -p "$(dirname "$outfile")" 2>/dev/null || true
   rj_log "[CMD] $name :: $* (output: $outfile)"
-  if "$@" >"$outfile" 2>&1; then
+  if "$@" >"$outfile" 2>>"$LOG"; then
     rj_ok "$name"
     rj_summary_event "pass" "$name" "saved=$outfile"
   else
@@ -282,7 +282,7 @@ rj_run_cmd_expect_fail() {
   TESTS_RUN=$((TESTS_RUN + 1))
   mkdir -p "$(dirname "$outfile")" 2>/dev/null || true
   rj_log "[CMD] $name (expect failure) :: $* (output: $outfile)"
-  if "$@" >"$outfile" 2>&1; then
+  if "$@" >"$outfile" 2>>"$LOG"; then
     rj_fail "$name succeeded but expected failure"
     rj_summary_event "fail" "$name" "unexpected success"
   else
@@ -529,4 +529,11 @@ rj_ui_run_scenario() {
         ;;
     esac
   done <"$scenario"
+}
+
+rj_exit_by_fail_count() {
+  if [[ "${TESTS_FAIL:-0}" -gt 0 ]]; then
+    exit 1
+  fi
+  exit 0
 }

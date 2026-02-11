@@ -356,3 +356,4 @@ fi
 rj_write_report
 
 rj_log "Wireless tests completed. Output: $OUT"
+rj_exit_by_fail_count
