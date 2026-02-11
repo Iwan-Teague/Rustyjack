@@ -278,10 +278,17 @@ impl ArpSpoofer {
 
     fn get_interface_index(interface: &str) -> Result<u32> {
         let mgr = InterfaceManager::new()?;
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { mgr.get_index(interface).await })
-        })
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(async { mgr.get_index(interface).await })
+        } else {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                NetlinkError::Arp(ArpError::MacAddressError {
+                    interface: interface.to_string(),
+                    reason: format!("Failed to create runtime: {}", e),
+                })
+            })?;
+            rt.block_on(async { mgr.get_index(interface).await })
+        }
     }
 }
 

@@ -9,6 +9,7 @@ use netlink_packet_route::address::AddressAttribute;
 use netlink_packet_route::link::{LinkAttribute, LinkFlag};
 use rtnetlink::{new_connection, Handle};
 use std::net::IpAddr;
+use tokio::runtime::Handle as TokioHandle;
 use tracing::debug;
 
 /// Manager for network interface operations (bring up/down, addresses, MAC queries).
@@ -34,7 +35,23 @@ impl InterfaceManager {
             )
         })?;
 
-        tokio::spawn(connection);
+        if let Ok(rt_handle) = TokioHandle::try_current() {
+            rt_handle.spawn(connection);
+        } else {
+            std::thread::Builder::new()
+                .name("rj-netlink-if".to_string())
+                .spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        rt.block_on(connection);
+                    }
+                })
+                .map_err(|e| {
+                    NetlinkError::runtime(
+                        "spawning fallback runtime for interface management",
+                        e.to_string(),
+                    )
+                })?;
+        }
 
         Ok(Self { handle })
     }

@@ -8,6 +8,7 @@ use futures::stream::TryStreamExt;
 use netlink_packet_route::route::RouteAttribute;
 use rtnetlink::{new_connection, Handle};
 use std::net::IpAddr;
+use tokio::runtime::Handle as TokioHandle;
 
 /// Manager for routing table operations.
 ///
@@ -31,7 +32,23 @@ impl RouteManager {
             )
         })?;
 
-        tokio::spawn(connection);
+        if let Ok(rt_handle) = TokioHandle::try_current() {
+            rt_handle.spawn(connection);
+        } else {
+            std::thread::Builder::new()
+                .name("rj-netlink-route".to_string())
+                .spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        rt.block_on(connection);
+                    }
+                })
+                .map_err(|e| {
+                    NetlinkError::runtime(
+                        "spawning fallback runtime for route management",
+                        e.to_string(),
+                    )
+                })?;
+        }
 
         Ok(Self { handle })
     }

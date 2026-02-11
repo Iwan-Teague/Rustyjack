@@ -294,10 +294,17 @@ impl ArpScanner {
 
     fn get_interface_index(&self, interface: &str) -> Result<u32> {
         let mgr = InterfaceManager::new()?;
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { mgr.get_index(interface).await })
-        })
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(async { mgr.get_index(interface).await })
+        } else {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                NetlinkError::Arp(ArpError::MacAddressError {
+                    interface: interface.to_string(),
+                    reason: format!("Failed to create runtime: {}", e),
+                })
+            })?;
+            rt.block_on(async { mgr.get_index(interface).await })
+        }
     }
 
     fn get_interface_mac(&self, interface: &str) -> Result<[u8; 6]> {
@@ -316,10 +323,17 @@ impl ArpScanner {
 
     fn get_interface_ip(&self, interface: &str) -> Result<Ipv4Addr> {
         let mgr = InterfaceManager::new()?;
-
-        let addrs = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { mgr.get_addresses(interface).await })
-        })?;
+        let addrs = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(async { mgr.get_addresses(interface).await })
+        } else {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                NetlinkError::Arp(ArpError::MacAddressError {
+                    interface: interface.to_string(),
+                    reason: format!("Failed to create runtime: {}", e),
+                })
+            })?;
+            rt.block_on(async { mgr.get_addresses(interface).await })
+        }?;
 
         // Find first IPv4 address
         for addr_info in addrs {

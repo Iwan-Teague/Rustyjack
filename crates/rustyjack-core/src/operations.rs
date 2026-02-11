@@ -3004,13 +3004,30 @@ fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult
     tracing::info!("Collecting WiFi status information");
 
     let interface_name = args.interface.clone();
-    let info = if let Some(name) = interface_name.clone() {
+    let (iface_name, iface_address, iface_prefix) = if let Some(name) = interface_name.clone() {
         tracing::info!("Getting status for specified interface: {name}");
         match detect_interface(Some(name.clone())) {
-            Ok(i) => i,
+            Ok(i) => (i.name, Some(i.address), Some(i.prefix)),
             Err(e) => {
-                tracing::error!("Failed to detect interface {name}: {e}");
-                bail!("Failed to get interface info for {name}: {e}");
+                let err_text = e.to_string();
+                if err_text.contains("no IPv4 address found") {
+                    let exists = list_interface_summaries()?
+                        .into_iter()
+                        .any(|summary| summary.name == name);
+                    if exists {
+                        tracing::warn!(
+                            "Interface {} has no IPv4 address; returning disconnected status",
+                            name
+                        );
+                        (name, None, None)
+                    } else {
+                        tracing::error!("Failed to detect interface {name}: {e}");
+                        bail!("Failed to get interface info for {name}: {e}");
+                    }
+                } else {
+                    tracing::error!("Failed to detect interface {name}: {e}");
+                    bail!("Failed to get interface info for {name}: {e}");
+                }
             }
         }
     } else {
@@ -3018,7 +3035,7 @@ fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult
         match detect_interface(None) {
             Ok(i) => {
                 tracing::info!("Detected default interface: {}", i.name);
-                i
+                (i.name, Some(i.address), Some(i.prefix))
             }
             Err(e) => {
                 tracing::error!("Failed to detect default interface: {e}");
@@ -3027,14 +3044,14 @@ fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult
         }
     };
 
-    let stats = read_interface_stats(&info.name).ok();
+    let stats = read_interface_stats(&iface_name).ok();
     let gateway = if let Some(name) = interface_name.clone() {
         interface_gateway(&name)
             .ok()
             .flatten()
             .or_else(|| default_gateway_ip().ok())
     } else {
-        interface_gateway(&info.name)
+        interface_gateway(&iface_name)
             .ok()
             .flatten()
             .or_else(|| default_gateway_ip().ok())
@@ -3044,27 +3061,42 @@ fn handle_wifi_status(root: &Path, args: WifiStatusArgs) -> Result<HandlerResult
         .ok()
         .flatten();
 
-    let link = read_wifi_link_info(&info.name);
+    let link = read_wifi_link_info(&iface_name);
 
     // Determine if this is the active interface
     let default_route = read_default_route().ok().flatten();
     let is_active = default_route
         .as_ref()
         .and_then(|r| r.interface.as_ref())
-        .map(|iface| iface == &info.name)
+        .map(|iface| iface == &iface_name)
         .unwrap_or(false);
 
     tracing::info!(
         "Interface {} status: active={}, connected={}",
-        info.name,
+        iface_name,
         is_active,
         link.connected
     );
 
+    let cidr = match (iface_address, iface_prefix) {
+        (Some(address), Some(prefix)) => {
+            let prefix = prefix.min(32);
+            let mask = if prefix == 0 {
+                0
+            } else {
+                let shift = 32 - prefix as u32;
+                u32::MAX.checked_shl(shift).unwrap_or(0)
+            };
+            let network = u32::from(address) & mask;
+            Some(format!("{}/{}", Ipv4Addr::from(network), prefix))
+        }
+        _ => None,
+    };
+
     let data = json!({
-        "interface": info.name,
-        "address": info.address,
-        "cidr": info.network_cidr(),
+        "interface": iface_name,
+        "address": iface_address,
+        "cidr": cidr,
         "stats": stats,
         "gateway": gateway,
         "preferred": preferred,

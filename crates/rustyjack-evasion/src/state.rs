@@ -299,7 +299,7 @@ impl StateManager {
                 EvasionError::System(format!("Failed to initialize netlink: {}", e))
             })?;
 
-            tokio::runtime::Handle::current().block_on(async {
+            let restore_fut = async {
                 // Bring down
                 let _ = mgr.set_link_down(interface).await;
 
@@ -313,7 +313,15 @@ impl StateManager {
                 let _ = mgr.set_link_up(interface).await;
 
                 result
-            })
+            };
+
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.block_on(restore_fut)
+            } else {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| EvasionError::System(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(restore_fut)
+            }
         }
     }
 
