@@ -389,8 +389,8 @@ purge_network_manager() {
   info "Removing NetworkManager..."
   sudo systemctl stop NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
   sudo systemctl disable NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
-  sudo apt-get -y purge network-manager >/dev/null 2>&1 || true
-  sudo apt-get -y autoremove --purge >/dev/null 2>&1 || true
+  sudo apt-get -y purge network-manager || true
+  sudo apt-get -y autoremove --purge || true
   if dpkg -s network-manager >/dev/null 2>&1; then
     fail "ERROR: network-manager still installed after purge"
   fi
@@ -788,7 +788,7 @@ FIRMWARE_PACKAGES=(
 )
 
 step "Updating APT and installing dependencies..."
-if ! sudo apt-get update -qq; then
+if ! sudo apt-get update; then
   show_apt_logs
   fail "APT update failed. Ensure no other package manager is running and rerun."
 fi

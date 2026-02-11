@@ -17,6 +17,12 @@ DANGEROUS=0
 RUN_UI=1
 OUTROOT="${RJ_OUTROOT:-/var/tmp/rustyjack-tests}"
 RUN_ID="${RJ_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+WIFI_IFACE=""
+WIFI_IFACES=""
+WIFI_ALL_IFACES=0
+ETH_IFACE=""
+ETH_IFACES=""
+ETH_ALL_IFACES=0
 
 chmod +x "$ROOT_DIR"/rj_test_*.sh "$ROOT_DIR"/rustyjack_comprehensive_test.sh 2>/dev/null || true
 
@@ -38,6 +44,12 @@ Options:
   --theme       Run UI theme/palette stabilization tests
   --dangerous   Enable dangerous tests (passed to suites)
   --no-ui       Disable UI automation
+  --wifi-interface IFACE   Run wireless suite on a single Wi-Fi interface
+  --wifi-interfaces LIST   Comma-separated Wi-Fi interfaces for wireless suite
+  --wifi-all-interfaces    Auto-detect all Wi-Fi interfaces for wireless suite
+  --eth-interface IFACE    Run ethernet suite on a single ethernet interface
+  --eth-interfaces LIST    Comma-separated ethernet interfaces for ethernet suite
+  --eth-all-interfaces     Auto-detect all ethernet interfaces for ethernet suite
   --outroot DIR Output root (default: /var/tmp/rustyjack-tests)
   -h, --help    Show help
 
@@ -89,6 +101,12 @@ else
       --theme) RUN_THEME=1; shift ;;
       --dangerous) DANGEROUS=1; shift ;;
       --no-ui) RUN_UI=0; shift ;;
+      --wifi-interface) WIFI_IFACE="$2"; WIFI_ALL_IFACES=0; shift 2 ;;
+      --wifi-interfaces) WIFI_IFACES="$2"; WIFI_ALL_IFACES=0; shift 2 ;;
+      --wifi-all-interfaces) WIFI_ALL_IFACES=1; shift ;;
+      --eth-interface) ETH_IFACE="$2"; ETH_ALL_IFACES=0; shift 2 ;;
+      --eth-interfaces) ETH_IFACES="$2"; ETH_ALL_IFACES=0; shift 2 ;;
+      --eth-all-interfaces) ETH_ALL_IFACES=1; shift ;;
       --outroot) OUTROOT="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;
@@ -105,6 +123,24 @@ if [[ $RUN_UI -eq 0 ]]; then
 fi
 if [[ $DANGEROUS -eq 1 ]]; then
   COMMON_ARGS+=(--dangerous)
+fi
+
+WIRELESS_ARGS=()
+if [[ $WIFI_ALL_IFACES -eq 1 ]]; then
+  WIRELESS_ARGS+=(--all-interfaces)
+elif [[ -n "$WIFI_IFACES" ]]; then
+  WIRELESS_ARGS+=(--interfaces "$WIFI_IFACES")
+elif [[ -n "$WIFI_IFACE" ]]; then
+  WIRELESS_ARGS+=(--interface "$WIFI_IFACE")
+fi
+
+ETHERNET_ARGS=()
+if [[ $ETH_ALL_IFACES -eq 1 ]]; then
+  ETHERNET_ARGS+=(--all-interfaces)
+elif [[ -n "$ETH_IFACES" ]]; then
+  ETHERNET_ARGS+=(--interfaces "$ETH_IFACES")
+elif [[ -n "$ETH_IFACE" ]]; then
+  ETHERNET_ARGS+=(--interface "$ETH_IFACE")
 fi
 
 if [[ $RUN_WIRELESS -eq 0 && $RUN_ETHERNET -eq 0 && $RUN_ENCRYPTION -eq 0 && \
@@ -146,12 +182,14 @@ echo "Rustyjack test run starting"
 echo "Run ID: $RUN_ID"
 echo "Results root: $OUTROOT/$RUN_ID"
 echo "Common args: ${COMMON_ARGS[*]:-(none)}"
+echo "Wireless args: ${WIRELESS_ARGS[*]:-(auto)}"
+echo "Ethernet args: ${ETHERNET_ARGS[*]:-(auto)}"
 
 if [[ $RUN_WIRELESS -eq 1 ]]; then
-  run_suite "Wireless" "$ROOT_DIR/rj_test_wireless.sh" "${COMMON_ARGS[@]}"
+  run_suite "Wireless" "$ROOT_DIR/rj_test_wireless.sh" "${COMMON_ARGS[@]}" "${WIRELESS_ARGS[@]}"
 fi
 if [[ $RUN_ETHERNET -eq 1 ]]; then
-  run_suite "Ethernet" "$ROOT_DIR/rj_test_ethernet.sh" "${COMMON_ARGS[@]}"
+  run_suite "Ethernet" "$ROOT_DIR/rj_test_ethernet.sh" "${COMMON_ARGS[@]}" "${ETHERNET_ARGS[@]}"
 fi
 if [[ $RUN_ENCRYPTION -eq 1 ]]; then
   run_suite "Encryption" "$ROOT_DIR/rj_test_encryption.sh" "${COMMON_ARGS[@]}"

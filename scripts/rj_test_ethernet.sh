@@ -15,8 +15,11 @@ RUN_COMPAT=1
 
 UI_SCENARIO="$ROOT_DIR/ui_scenarios/ethernet.ui"
 ETH_IFACE="${RJ_ETH_INTERFACE:-}"
+ETH_IFACES_RAW="${RJ_ETH_INTERFACES:-}"
+RUN_ALL_IFACES=0
 ETH_TARGET="${RJ_ETH_TARGET:-}"
 ETH_PORTS="${RJ_ETH_PORTS:-}"
+ETH_IFACES=()
 
 usage() {
   cat <<'USAGE'
@@ -26,7 +29,9 @@ Options:
   --no-ui             Skip UI automation
   --ui                Enable UI automation (default)
   --ui-scenario PATH  Scenario file (default: scripts/ui_scenarios/ethernet.ui)
-  --interface IFACE   Ethernet interface override
+  --interface IFACE   Run tests only on a single ethernet interface
+  --interfaces LIST   Comma-separated ethernet interfaces (e.g. eth0,eth1)
+  --all-interfaces    Auto-detect and test all ethernet interfaces (default when no interface is set)
   --target CIDR|IP    Target network or host
   --ports PORTS       Port list for scan (comma-separated)
   --dangerous         Enable MITM/site-cred pipeline (requires RJ_ETH_SITE)
@@ -45,7 +50,9 @@ while [[ $# -gt 0 ]]; do
     --no-ui) RUN_UI=0; shift ;;
     --ui) RUN_UI=1; shift ;;
     --ui-scenario) UI_SCENARIO="$2"; shift 2 ;;
-    --interface) ETH_IFACE="$2"; shift 2 ;;
+    --interface) ETH_IFACE="$2"; RUN_ALL_IFACES=0; shift 2 ;;
+    --interfaces) ETH_IFACES_RAW="$2"; RUN_ALL_IFACES=0; shift 2 ;;
+    --all-interfaces) RUN_ALL_IFACES=1; shift ;;
     --target) ETH_TARGET="$2"; shift 2 ;;
     --ports) ETH_PORTS="$2"; shift 2 ;;
     --dangerous) DANGEROUS=1; shift ;;
@@ -60,12 +67,65 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+split_iface_list() {
+  local raw="$1"
+  printf '%s\n' "$raw" | awk -F'[[:space:],]+' '{for (i = 1; i <= NF; i++) if ($i != "") print $i}'
+}
+
+detect_ethernet_interfaces() {
+  local iface
+  local type
+
+  if [[ ! -d /sys/class/net ]]; then
+    return 0
+  fi
+
+  while IFS= read -r iface; do
+    [[ -n "$iface" ]] || continue
+    [[ "$iface" == "lo" ]] && continue
+    [[ -e "/sys/class/net/$iface/device" ]] || continue
+    [[ -e "/sys/class/net/$iface/type" ]] || continue
+    type="$(cat "/sys/class/net/$iface/type" 2>/dev/null || true)"
+    [[ "$type" == "1" ]] || continue
+    [[ -d "/sys/class/net/$iface/wireless" ]] && continue
+    printf '%s\n' "$iface"
+  done < <(ls -1 /sys/class/net 2>/dev/null || true)
+}
+
+resolve_ethernet_interfaces() {
+  local detected=()
+
+  if [[ $RUN_ALL_IFACES -eq 1 ]]; then
+    mapfile -t detected < <(detect_ethernet_interfaces)
+  elif [[ -n "$ETH_IFACES_RAW" ]]; then
+    mapfile -t detected < <(split_iface_list "$ETH_IFACES_RAW")
+  elif [[ -n "$ETH_IFACE" ]]; then
+    detected=("$ETH_IFACE")
+  else
+    mapfile -t detected < <(detect_ethernet_interfaces)
+  fi
+
+  if [[ ${#detected[@]} -eq 0 ]]; then
+    ETH_IFACES=()
+    return 0
+  fi
+
+  mapfile -t ETH_IFACES < <(printf '%s\n' "${detected[@]}" | awk 'NF && !seen[$0]++')
+}
+
 rj_init "ethernet"
 rj_require_root
 
 if ! rj_require_cmd rustyjack; then
   rj_write_report
   exit 0
+fi
+
+resolve_ethernet_interfaces
+if [[ ${#ETH_IFACES[@]} -gt 0 ]]; then
+  rj_log "[INFO] Ethernet interfaces under test: ${ETH_IFACES[*]}"
+else
+  rj_log "[WARN] No ethernet interfaces detected"
 fi
 
 FAIL_CONTEXT_CAPTURED=0
@@ -112,54 +172,75 @@ else
   rj_skip "Unit tests disabled"
 fi
 
-cmd_discover=(rustyjack ethernet discover --output json)
-cmd_inventory=(rustyjack ethernet inventory --output json)
-cmd_portscan=(rustyjack ethernet port-scan --output json)
+run_ethernet_interface_tests() {
+  local iface="$1"
+  local iface_slug
+  local cmd_discover
+  local cmd_inventory
+  local cmd_portscan
+  local cmd_site
+  local eth_site
 
-if [[ -n "$ETH_IFACE" ]]; then
-  cmd_discover+=(--interface "$ETH_IFACE")
-  cmd_inventory+=(--interface "$ETH_IFACE")
-  cmd_portscan+=(--interface "$ETH_IFACE")
-fi
-if [[ -n "$ETH_TARGET" ]]; then
-  cmd_discover+=(--target "$ETH_TARGET")
-  cmd_inventory+=(--target "$ETH_TARGET")
-  cmd_portscan+=(--target "$ETH_TARGET")
-fi
-if [[ -n "$ETH_PORTS" ]]; then
-  cmd_portscan+=(--ports "$ETH_PORTS")
-fi
+  iface_slug="$(rj_slug "$iface")"
+  rj_log "[INFO] Running ethernet interface tests for $iface"
 
-if [[ $RUN_INTEGRATION -eq 1 ]]; then
-  if [[ $RUN_ISOLATION -eq 1 ]]; then
-    rj_snapshot_network "eth_pre"
+  cmd_discover=(rustyjack ethernet discover --interface "$iface" --output json)
+  cmd_inventory=(rustyjack ethernet inventory --interface "$iface" --output json)
+  cmd_portscan=(rustyjack ethernet port-scan --interface "$iface" --output json)
+
+  if [[ -n "$ETH_TARGET" ]]; then
+    cmd_discover+=(--target "$ETH_TARGET")
+    cmd_inventory+=(--target "$ETH_TARGET")
+    cmd_portscan+=(--target "$ETH_TARGET")
+  fi
+  if [[ -n "$ETH_PORTS" ]]; then
+    cmd_portscan+=(--ports "$ETH_PORTS")
   fi
 
-  rj_run_cmd_capture "eth_discover" "$OUT/artifacts/eth_discover.json" "${cmd_discover[@]}"
-  rj_run_cmd_capture "eth_portscan" "$OUT/artifacts/eth_portscan.json" "${cmd_portscan[@]}"
-  rj_run_cmd_capture "eth_inventory" "$OUT/artifacts/eth_inventory.json" "${cmd_inventory[@]}"
-
-  if [[ $RUN_ISOLATION -eq 1 ]]; then
-    rj_snapshot_network "eth_post"
-    rj_compare_snapshot "eth_pre" "eth_post" "ethernet_readonly"
-  fi
-else
-  rj_skip "Integration tests disabled"
-fi
-
-if [[ $DANGEROUS -eq 1 ]]; then
-  ETH_SITE="${RJ_ETH_SITE:-}"
-  if [[ -z "$ETH_SITE" ]]; then
-    rj_skip "Dangerous Ethernet tests require RJ_ETH_SITE (DNSSpoof site template)"
-  else
-    cmd_site=(rustyjack ethernet site-cred-capture --site "$ETH_SITE" --output json)
-    if [[ -n "$ETH_IFACE" ]]; then
-      cmd_site+=(--interface "$ETH_IFACE")
+  if [[ $RUN_INTEGRATION -eq 1 ]]; then
+    if [[ $RUN_ISOLATION -eq 1 ]]; then
+      rj_snapshot_network "eth_${iface_slug}_pre"
     fi
+
+    rj_run_cmd_capture "eth_discover_${iface_slug}" "$OUT/artifacts/eth_discover_${iface_slug}.json" "${cmd_discover[@]}"
+    rj_run_cmd_capture "eth_portscan_${iface_slug}" "$OUT/artifacts/eth_portscan_${iface_slug}.json" "${cmd_portscan[@]}"
+    rj_run_cmd_capture "eth_inventory_${iface_slug}" "$OUT/artifacts/eth_inventory_${iface_slug}.json" "${cmd_inventory[@]}"
+
+    if [[ $RUN_ISOLATION -eq 1 ]]; then
+      rj_snapshot_network "eth_${iface_slug}_post"
+      rj_compare_snapshot "eth_${iface_slug}_pre" "eth_${iface_slug}_post" "ethernet_${iface_slug}_readonly"
+    fi
+  else
+    rj_skip "Integration tests disabled (interface $iface)"
+  fi
+
+  if [[ $DANGEROUS -eq 1 ]]; then
+    eth_site="${RJ_ETH_SITE:-}"
+    if [[ -z "$eth_site" ]]; then
+      rj_skip "Dangerous Ethernet tests require RJ_ETH_SITE (DNSSpoof site template)"
+      return 0
+    fi
+
+    cmd_site=(rustyjack ethernet site-cred-capture --site "$eth_site" --interface "$iface" --output json)
     if [[ -n "$ETH_TARGET" ]]; then
       cmd_site+=(--target "$ETH_TARGET")
     fi
-    rj_run_cmd_capture "eth_site_cred" "$OUT/artifacts/eth_site_cred.json" "${cmd_site[@]}"
+    rj_run_cmd_capture "eth_site_cred_${iface_slug}" "$OUT/artifacts/eth_site_cred_${iface_slug}.json" "${cmd_site[@]}"
+  fi
+}
+
+if [[ ${#ETH_IFACES[@]} -eq 0 ]]; then
+  rj_skip "No ethernet interfaces detected; skipping interface-dependent ethernet tests"
+else
+  for iface in "${ETH_IFACES[@]}"; do
+    run_ethernet_interface_tests "$iface"
+  done
+fi
+
+if [[ $DANGEROUS -eq 1 && ${#ETH_IFACES[@]} -eq 0 ]]; then
+  ETH_SITE="${RJ_ETH_SITE:-}"
+  if [[ -z "$ETH_SITE" ]]; then
+    rj_skip "Dangerous Ethernet tests require RJ_ETH_SITE (DNSSpoof site template)"
   fi
 fi
 

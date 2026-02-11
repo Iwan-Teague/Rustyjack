@@ -15,9 +15,15 @@ RUN_ISOLATION=1
 RUN_COMPAT=1
 
 UI_SCENARIO="$ROOT_DIR/ui_scenarios/wireless.ui"
-WIFI_IFACE="${RJ_WIFI_INTERFACE:-wlan0}"
+WIFI_IFACE="${RJ_WIFI_INTERFACE:-}"
+WIFI_IFACES_RAW="${RJ_WIFI_INTERFACES:-}"
+RUN_ALL_IFACES=0
 PROFILE_SSID="${RJ_WIFI_TEST_SSID:-RJ_TEST_PROFILE}"
 PROFILE_PASS="${RJ_WIFI_TEST_PASS:-testpass123}"
+TARGET_BSSID="${RJ_WIFI_TARGET_BSSID:-}"
+TARGET_CHANNEL="${RJ_WIFI_TARGET_CHANNEL:-}"
+MON_IFACE="${RJ_WIFI_MONITOR_IFACE:-}"
+WIFI_IFACES=()
 
 usage() {
   cat <<'USAGE'
@@ -27,7 +33,9 @@ Options:
   --no-ui             Skip UI automation
   --ui                Enable UI automation (default)
   --ui-scenario PATH  Scenario file (default: scripts/ui_scenarios/wireless.ui)
-  --interface IFACE   Wi-Fi interface (default: wlan0)
+  --interface IFACE   Run tests only on a single Wi-Fi interface
+  --interfaces LIST   Comma-separated Wi-Fi interfaces (e.g. wlan0,wlan1)
+  --all-interfaces    Auto-detect and test all Wi-Fi interfaces (default when no interface is set)
   --recon             Run recon tests (requires connection)
   --dangerous         Enable offensive tests (requires targets)
   --no-unit           Skip unit tests
@@ -45,7 +53,9 @@ while [[ $# -gt 0 ]]; do
     --no-ui) RUN_UI=0; shift ;;
     --ui) RUN_UI=1; shift ;;
     --ui-scenario) UI_SCENARIO="$2"; shift 2 ;;
-    --interface) WIFI_IFACE="$2"; shift 2 ;;
+    --interface) WIFI_IFACE="$2"; RUN_ALL_IFACES=0; shift 2 ;;
+    --interfaces) WIFI_IFACES_RAW="$2"; RUN_ALL_IFACES=0; shift 2 ;;
+    --all-interfaces) RUN_ALL_IFACES=1; shift ;;
     --recon) RUN_RECON=1; shift ;;
     --dangerous) DANGEROUS=1; shift ;;
     --no-unit) RUN_UNIT=0; shift ;;
@@ -59,6 +69,51 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+split_iface_list() {
+  local raw="$1"
+  printf '%s\n' "$raw" | awk -F'[[:space:],]+' '{for (i = 1; i <= NF; i++) if ($i != "") print $i}'
+}
+
+detect_wireless_interfaces() {
+  local iface
+  local found=0
+
+  if [[ -d /sys/class/net ]]; then
+    while IFS= read -r iface; do
+      [[ -n "$iface" ]] || continue
+      if [[ -d "/sys/class/net/$iface/wireless" ]]; then
+        printf '%s\n' "$iface"
+        found=1
+      fi
+    done < <(ls -1 /sys/class/net 2>/dev/null || true)
+  fi
+
+  if [[ "$found" -eq 0 ]] && command -v iw >/dev/null 2>&1; then
+    iw dev 2>/dev/null | awk '/Interface/ {print $2}'
+  fi
+}
+
+resolve_wireless_interfaces() {
+  local detected=()
+
+  if [[ $RUN_ALL_IFACES -eq 1 ]]; then
+    mapfile -t detected < <(detect_wireless_interfaces)
+  elif [[ -n "$WIFI_IFACES_RAW" ]]; then
+    mapfile -t detected < <(split_iface_list "$WIFI_IFACES_RAW")
+  elif [[ -n "$WIFI_IFACE" ]]; then
+    detected=("$WIFI_IFACE")
+  else
+    mapfile -t detected < <(detect_wireless_interfaces)
+  fi
+
+  if [[ ${#detected[@]} -eq 0 ]]; then
+    WIFI_IFACES=()
+    return 0
+  fi
+
+  mapfile -t WIFI_IFACES < <(printf '%s\n' "${detected[@]}" | awk 'NF && !seen[$0]++')
+}
+
 rj_init "wireless"
 rj_require_root
 
@@ -67,8 +122,16 @@ if ! rj_require_cmd rustyjack; then
   exit 0
 fi
 
+resolve_wireless_interfaces
+if [[ ${#WIFI_IFACES[@]} -gt 0 ]]; then
+  rj_log "[INFO] Wireless interfaces under test: ${WIFI_IFACES[*]}"
+else
+  rj_log "[WARN] No wireless interfaces detected"
+fi
+
 FAIL_CONTEXT_CAPTURED=0
 capture_failure_context() {
+  local iface iface_slug
   if [[ "$FAIL_CONTEXT_CAPTURED" -eq 1 ]]; then
     return 0
   fi
@@ -88,7 +151,18 @@ capture_failure_context() {
   fi
   rj_capture_journal "rustyjackd.service" "$OUT/journal/rustyjackd_fail.log"
   rj_capture_journal "rustyjack-ui.service" "$OUT/journal/rustyjack-ui_fail.log"
-  rj_capture_journal "rustyjack-wpa_supplicant@${WIFI_IFACE}.service" "$OUT/journal/rustyjack-wpa_supplicant_fail.log"
+  if [[ ${#WIFI_IFACES[@]} -eq 0 ]]; then
+    if [[ -n "$WIFI_IFACE" ]]; then
+      rj_capture_journal "rustyjack-wpa_supplicant@${WIFI_IFACE}.service" \
+        "$OUT/journal/rustyjack-wpa_supplicant_fail.log"
+    fi
+  else
+    for iface in "${WIFI_IFACES[@]}"; do
+      iface_slug="$(rj_slug "$iface")"
+      rj_capture_journal "rustyjack-wpa_supplicant@${iface}.service" \
+        "$OUT/journal/rustyjack-wpa_supplicant_${iface_slug}_fail.log"
+    done
+  fi
 }
 export RJ_FAILURE_HOOK=capture_failure_context
 
@@ -133,62 +207,79 @@ rj_run_cmd_capture "status_network" "$OUT/artifacts/status_network.json" \
 rj_run_cmd_capture "hardware_detect" "$OUT/artifacts/hardware_detect.json" \
   rustyjack hardware detect --output json
 
-if [[ $RUN_INTEGRATION -eq 1 ]]; then
-  if [[ $RUN_ISOLATION -eq 1 ]]; then
-    rj_snapshot_network "wifi_pre"
-  fi
+run_wireless_interface_tests() {
+  local iface="$1"
+  local iface_slug
+  local profile_ssid
+  local deauth_iface
 
-  rj_run_cmd_capture "wifi_list" "$OUT/artifacts/wifi_list.json" \
-    rustyjack wifi list --output json
-  rj_run_cmd_capture "wifi_best" "$OUT/artifacts/wifi_best.json" \
-    rustyjack wifi best --prefer-wifi --output json
-  rj_run_cmd_capture "wifi_status" "$OUT/artifacts/wifi_status.json" \
-    rustyjack wifi status --interface "$WIFI_IFACE" --output json
-  rj_run_cmd_capture "wifi_scan" "$OUT/artifacts/wifi_scan.json" \
-    rustyjack wifi scan --interface "$WIFI_IFACE" --output json
-  rj_run_cmd_capture "wifi_route_status" "$OUT/artifacts/wifi_route_status.json" \
-    rustyjack wifi route status --output json
-  rj_run_cmd_capture "wifi_profile_list" "$OUT/artifacts/wifi_profile_list.json" \
-    rustyjack wifi profile list --output json
+  iface_slug="$(rj_slug "$iface")"
+  profile_ssid="${PROFILE_SSID}_${iface_slug}"
+  rj_log "[INFO] Running wireless interface tests for $iface"
 
-  if [[ $RUN_ISOLATION -eq 1 ]]; then
-    rj_snapshot_network "wifi_post"
-    rj_compare_snapshot "wifi_pre" "wifi_post" "wifi_readonly"
-  fi
+  if [[ $RUN_INTEGRATION -eq 1 ]]; then
+    if [[ $RUN_ISOLATION -eq 1 ]]; then
+      rj_snapshot_network "wifi_${iface_slug}_pre"
+    fi
 
-  rj_run_cmd_capture "wifi_profile_save" "$OUT/artifacts/wifi_profile_save.json" \
-    rustyjack wifi profile save --ssid "$PROFILE_SSID" --password "$PROFILE_PASS" --interface auto --priority 5 --output json
-  rj_run_cmd_capture "wifi_profile_show" "$OUT/artifacts/wifi_profile_show.json" \
-    rustyjack wifi profile show --ssid "$PROFILE_SSID" --output json
-  rj_run_cmd_capture "wifi_profile_delete" "$OUT/artifacts/wifi_profile_delete.json" \
-    rustyjack wifi profile delete --ssid "$PROFILE_SSID" --output json
+    rj_run_cmd_capture "wifi_list_${iface_slug}" "$OUT/artifacts/wifi_list_${iface_slug}.json" \
+      rustyjack wifi list --output json
+    rj_run_cmd_capture "wifi_best_${iface_slug}" "$OUT/artifacts/wifi_best_${iface_slug}.json" \
+      rustyjack wifi best --prefer-wifi --output json
+    rj_run_cmd_capture "wifi_status_${iface_slug}" "$OUT/artifacts/wifi_status_${iface_slug}.json" \
+      rustyjack wifi status --interface "$iface" --output json
+    rj_run_cmd_capture "wifi_scan_${iface_slug}" "$OUT/artifacts/wifi_scan_${iface_slug}.json" \
+      rustyjack wifi scan --interface "$iface" --output json
+    rj_run_cmd_capture "wifi_route_status_${iface_slug}" "$OUT/artifacts/wifi_route_status_${iface_slug}.json" \
+      rustyjack wifi route status --output json
+    rj_run_cmd_capture "wifi_profile_list_${iface_slug}" "$OUT/artifacts/wifi_profile_list_${iface_slug}.json" \
+      rustyjack wifi profile list --output json
 
-  rj_run_cmd_capture "wifi_status_after_profile" "$OUT/artifacts/wifi_status_after_profile.json" \
-    rustyjack wifi status --interface "$WIFI_IFACE" --output json
-else
-  rj_skip "Integration tests disabled"
-fi
+    if [[ $RUN_ISOLATION -eq 1 ]]; then
+      rj_snapshot_network "wifi_${iface_slug}_post"
+      rj_compare_snapshot "wifi_${iface_slug}_pre" "wifi_${iface_slug}_post" "wifi_${iface_slug}_readonly"
+    fi
 
-if [[ $RUN_RECON -eq 1 ]]; then
-  rj_run_cmd_capture "wifi_recon_gateway" "$OUT/artifacts/wifi_recon_gateway.json" \
-    rustyjack wifi recon gateway --interface "$WIFI_IFACE" --output json
-  rj_run_cmd_capture "wifi_recon_arp" "$OUT/artifacts/wifi_recon_arp.json" \
-    rustyjack wifi recon arp-scan --interface "$WIFI_IFACE" --output json
-  rj_run_cmd_capture "wifi_recon_service" "$OUT/artifacts/wifi_recon_service.json" \
-    rustyjack wifi recon service-scan --interface "$WIFI_IFACE" --output json
-fi
+    rj_run_cmd_capture "wifi_profile_save_${iface_slug}" "$OUT/artifacts/wifi_profile_save_${iface_slug}.json" \
+      rustyjack wifi profile save --ssid "$profile_ssid" --password "$PROFILE_PASS" --interface "$iface" --priority 5 --output json
+    rj_run_cmd_capture "wifi_profile_show_${iface_slug}" "$OUT/artifacts/wifi_profile_show_${iface_slug}.json" \
+      rustyjack wifi profile show --ssid "$profile_ssid" --output json
+    rj_run_cmd_capture "wifi_profile_delete_${iface_slug}" "$OUT/artifacts/wifi_profile_delete_${iface_slug}.json" \
+      rustyjack wifi profile delete --ssid "$profile_ssid" --output json
 
-if [[ $DANGEROUS -eq 1 ]]; then
-  TARGET_BSSID="${RJ_WIFI_TARGET_BSSID:-}"
-  TARGET_CHANNEL="${RJ_WIFI_TARGET_CHANNEL:-}"
-  MON_IFACE="${RJ_WIFI_MONITOR_IFACE:-}"
-  if [[ -z "$TARGET_BSSID" || -z "$TARGET_CHANNEL" || -z "$MON_IFACE" ]]; then
-    rj_skip "Dangerous Wi-Fi tests require RJ_WIFI_TARGET_BSSID, RJ_WIFI_TARGET_CHANNEL, RJ_WIFI_MONITOR_IFACE"
+    rj_run_cmd_capture "wifi_status_after_profile_${iface_slug}" "$OUT/artifacts/wifi_status_after_profile_${iface_slug}.json" \
+      rustyjack wifi status --interface "$iface" --output json
   else
-    rj_run_cmd_capture "wifi_deauth" "$OUT/artifacts/wifi_deauth.json" \
-      rustyjack wifi deauth --bssid "$TARGET_BSSID" --channel "$TARGET_CHANNEL" \
-      --interface "$MON_IFACE" --duration 20 --output json
+    rj_skip "Integration tests disabled (interface $iface)"
   fi
+
+  if [[ $RUN_RECON -eq 1 ]]; then
+    rj_run_cmd_capture "wifi_recon_gateway_${iface_slug}" "$OUT/artifacts/wifi_recon_gateway_${iface_slug}.json" \
+      rustyjack wifi recon gateway --interface "$iface" --output json
+    rj_run_cmd_capture "wifi_recon_arp_${iface_slug}" "$OUT/artifacts/wifi_recon_arp_${iface_slug}.json" \
+      rustyjack wifi recon arp-scan --interface "$iface" --output json
+    rj_run_cmd_capture "wifi_recon_service_${iface_slug}" "$OUT/artifacts/wifi_recon_service_${iface_slug}.json" \
+      rustyjack wifi recon service-scan --interface "$iface" --output json
+  fi
+
+  if [[ $DANGEROUS -eq 1 ]]; then
+    deauth_iface="${MON_IFACE:-$iface}"
+    if [[ -z "$TARGET_BSSID" || -z "$TARGET_CHANNEL" ]]; then
+      rj_skip "Dangerous Wi-Fi tests require RJ_WIFI_TARGET_BSSID and RJ_WIFI_TARGET_CHANNEL"
+    else
+      rj_run_cmd_capture "wifi_deauth_${iface_slug}" "$OUT/artifacts/wifi_deauth_${iface_slug}.json" \
+        rustyjack wifi deauth --bssid "$TARGET_BSSID" --channel "$TARGET_CHANNEL" \
+        --interface "$deauth_iface" --duration 20 --output json
+    fi
+  fi
+}
+
+if [[ ${#WIFI_IFACES[@]} -eq 0 ]]; then
+  rj_skip "No wireless interfaces detected; skipping interface-dependent wireless tests"
+else
+  for iface in "${WIFI_IFACES[@]}"; do
+    run_wireless_interface_tests "$iface"
+  done
 fi
 
 if [[ $RUN_NEGATIVE -eq 1 ]]; then
@@ -250,7 +341,18 @@ if [[ $RUN_UI -eq 1 ]]; then
 fi
 
 rj_capture_journal "rustyjackd.service" "$OUT/journal/rustyjackd.log"
-rj_capture_journal "rustyjack-wpa_supplicant@${WIFI_IFACE}.service" "$OUT/journal/rustyjack-wpa_supplicant.log"
+if [[ ${#WIFI_IFACES[@]} -eq 0 ]]; then
+  if [[ -n "$WIFI_IFACE" ]]; then
+    rj_capture_journal "rustyjack-wpa_supplicant@${WIFI_IFACE}.service" \
+      "$OUT/journal/rustyjack-wpa_supplicant.log"
+  fi
+else
+  for iface in "${WIFI_IFACES[@]}"; do
+    iface_slug="$(rj_slug "$iface")"
+    rj_capture_journal "rustyjack-wpa_supplicant@${iface}.service" \
+      "$OUT/journal/rustyjack-wpa_supplicant_${iface_slug}.log"
+  done
+fi
 rj_write_report
 
 rj_log "Wireless tests completed. Output: $OUT"
