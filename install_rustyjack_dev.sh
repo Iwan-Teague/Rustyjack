@@ -292,7 +292,7 @@ echo ""
 if grep -q $'\r' "$0"; then
   step "Converting CRLF to LF in $0"
 if ! cmd dos2unix; then
-  if ! sudo apt-get update -qq || ! sudo apt-get install -y dos2unix; then
+  if ! sudo apt-get update || ! sudo apt-get install -y dos2unix; then
     show_apt_logs
     fail "Failed to install dos2unix"
   fi
@@ -338,7 +338,7 @@ FIRMWARE_PACKAGES=(
 )
 
 step "Updating APT and installing dependencies..."
-if ! sudo apt-get update -qq; then
+if ! sudo apt-get update; then
   show_apt_logs
   fail "APT update failed. Ensure no other package manager is running (e.g., packagekit) and rerun."
 fi
@@ -420,8 +420,8 @@ purge_network_manager() {
   info "Removing NetworkManager..."
   sudo systemctl stop NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
   sudo systemctl disable NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
-  sudo apt-get -y purge network-manager >/dev/null 2>&1 || true
-  sudo apt-get -y autoremove --purge >/dev/null 2>&1 || true
+  sudo apt-get -y purge network-manager || true
+  sudo apt-get -y autoremove --purge || true
   if dpkg -s network-manager >/dev/null 2>&1; then
     fail "ERROR: network-manager still installed after purge"
   fi
@@ -538,7 +538,8 @@ fi
 
 if ! command -v cargo >/dev/null 2>&1; then
   info "cargo missing - installing rustup toolchain"
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  info "Downloading rustup installer from https://sh.rustup.rs"
+  curl --proto '=https' --tlsv1.2 --fail --location https://sh.rustup.rs | sh -s -- -y
   source "$HOME/.cargo/env"
 else
   source "$HOME/.cargo/env" 2>/dev/null || true
