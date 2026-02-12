@@ -1,4 +1,4 @@
-use rustyjack_ipc::{DaemonError, ErrorCode, JobKind, ScanModeIpc};
+use rustyjack_ipc::{DaemonError, ErrorCode, JobKind, ScanModeIpc, UiTestRunRequestIpc};
 
 const MAX_INTERFACE_NAME_LEN: usize = 64;
 const MAX_SSID_LEN: usize = 32;
@@ -11,6 +11,9 @@ const MAX_TIMEOUT_MS: u64 = 3_600_000;
 const MAX_SLEEP_SECONDS: u64 = 86400;
 const MAX_SCAN_TARGET_LEN: usize = 256;
 const MAX_SCAN_PORTS: usize = 128;
+const MAX_TEST_ARG_COUNT: usize = 128;
+const MAX_TEST_ARG_LEN: usize = 128;
+const MAX_TEST_PATH_LEN: usize = 512;
 
 pub fn validate_interface_name(interface: &str) -> Result<(), DaemonError> {
     if interface.is_empty() {
@@ -196,6 +199,75 @@ pub fn validate_sleep_seconds(seconds: u64) -> Result<(), DaemonError> {
             "sleep duration too large (max 24 hours)",
             false,
         ));
+    }
+    Ok(())
+}
+
+fn validate_test_path_component(value: &str, field: &str) -> Result<(), DaemonError> {
+    if value.is_empty() {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            format!("{field} cannot be empty"),
+            false,
+        ));
+    }
+    if value.len() > MAX_TEST_PATH_LEN {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            format!("{field} too long"),
+            false,
+        ));
+    }
+    if value.contains('\0') || value.chars().any(|c| c.is_control()) {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            format!("{field} contains invalid characters"),
+            false,
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_ui_test_run_request(req: &UiTestRunRequestIpc) -> Result<(), DaemonError> {
+    if let Some(scripts_dir) = req.scripts_dir.as_deref() {
+        validate_test_path_component(scripts_dir, "scripts_dir")?;
+    }
+    if let Some(outroot) = req.outroot.as_deref() {
+        validate_test_path_component(outroot, "outroot")?;
+    }
+    if let Some(run_id) = req.run_id.as_deref() {
+        validate_test_path_component(run_id, "run_id")?;
+    }
+
+    if req.args.len() > MAX_TEST_ARG_COUNT {
+        return Err(DaemonError::new(
+            ErrorCode::BadRequest,
+            "too many test arguments",
+            false,
+        ));
+    }
+    for arg in &req.args {
+        if arg.is_empty() {
+            return Err(DaemonError::new(
+                ErrorCode::BadRequest,
+                "test argument cannot be empty",
+                false,
+            ));
+        }
+        if arg.len() > MAX_TEST_ARG_LEN {
+            return Err(DaemonError::new(
+                ErrorCode::BadRequest,
+                "test argument too long",
+                false,
+            ));
+        }
+        if arg.contains('\0') || arg.chars().any(|c| c.is_control()) {
+            return Err(DaemonError::new(
+                ErrorCode::BadRequest,
+                "test argument contains invalid characters",
+                false,
+            ));
+        }
     }
     Ok(())
 }
@@ -437,6 +509,7 @@ pub fn validate_job_kind(kind: &JobKind) -> Result<(), DaemonError> {
             validate_interface_name(interface)?;
             Ok(())
         }
+        JobKind::UiTestRun { req } => validate_ui_test_run_request(req),
         JobKind::CoreCommand { .. } => Ok(()),
     }
 }

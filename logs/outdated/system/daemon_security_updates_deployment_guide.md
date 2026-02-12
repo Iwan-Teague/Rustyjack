@@ -293,3 +293,12 @@ For issues or questions:
 2. Check UI logs: `sudo journalctl -u rustyjack-ui.service`
 3. Review stage documentation in `docs/STAGE_*_COMPLETION.md`
 4. Review `docs/IMPLEMENTATION_SUMMARY.md`
+
+
+---
+
+Footnote (2026-02-12): Outdated for current deployment. This guide relies on  and a  verification flow, while the daemon now uses scoped  controls and updated service/runtime configuration in current sources.
+
+---
+
+Footnote (2026-02-12): Outdated for current deployment. This guide relies on RUSTYJACKD_DANGEROUS_OPS and a rustyjack-client verification flow, while the daemon now uses scoped RUSTYJACKD_OPS_* controls and updated service/runtime configuration in current sources.

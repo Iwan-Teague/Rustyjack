@@ -34,6 +34,7 @@ pub enum JobKind {
     MountStart { req: MountStartRequestIpc },
     UnmountStart { req: UnmountStartRequestIpc },
     InterfaceSelect { interface: String },
+    UiTestRun { req: UiTestRunRequestIpc },
     CoreCommand { command: Commands },
 }
 
@@ -173,4 +174,26 @@ pub struct InterfaceSelectRollbackResult {
     pub restored_previous: bool,
     pub previous_interface: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UiTestRunRequestIpc {
+    /// Optional scripts directory override. If omitted, daemon-side defaults are used.
+    pub scripts_dir: Option<String>,
+    /// Additional arguments passed to `rj_run_tests.sh`.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Optional output root override. Defaults to `<RUSTYJACK_ROOT>/tests`.
+    pub outroot: Option<String>,
+    /// Optional run identifier override. Defaults to current UTC timestamp.
+    pub run_id: Option<String>,
+    /// Force UI automation path unless explicitly disabled in args.
+    #[serde(default = "UiTestRunRequestIpc::default_force_ui")]
+    pub force_ui: bool,
+}
+
+impl UiTestRunRequestIpc {
+    fn default_force_ui() -> bool {
+        true
+    }
 }

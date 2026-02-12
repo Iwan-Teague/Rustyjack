@@ -6,6 +6,7 @@ mod noop;
 mod portal_start;
 mod scan;
 mod sleep;
+mod ui_test_run;
 mod unmount_start;
 mod update;
 mod wifi_connect;
@@ -55,6 +56,9 @@ where
         }
         JobKind::InterfaceSelect { interface } => {
             interface_select::run(interface.clone(), Arc::clone(state), cancel, &mut progress).await
+        }
+        JobKind::UiTestRun { req } => {
+            ui_test_run::run(req.clone(), Arc::clone(state), cancel, &mut progress).await
         }
         JobKind::CoreCommand { command } => {
             core_command::run(command.clone(), Arc::clone(state), cancel, &mut progress).await

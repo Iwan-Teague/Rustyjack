@@ -13,6 +13,7 @@ mod report;
 mod settings;
 mod state;
 mod system;
+mod tests;
 mod usb;
 mod wifi;
 

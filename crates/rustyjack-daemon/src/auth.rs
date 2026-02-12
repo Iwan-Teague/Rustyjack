@@ -297,6 +297,7 @@ pub fn required_tier_for_jobkind(kind: &JobKind) -> AuthorizationTier {
         JobKind::MountStart { .. } => AuthorizationTier::Operator,
         JobKind::UnmountStart { .. } => AuthorizationTier::Operator,
         JobKind::InterfaceSelect { .. } => AuthorizationTier::Operator,
+        JobKind::UiTestRun { .. } => AuthorizationTier::Operator,
         JobKind::ScanRun { .. } => AuthorizationTier::Admin,
         JobKind::SystemUpdate { .. } => AuthorizationTier::Operator,
         JobKind::CoreCommand { .. } => AuthorizationTier::Admin,
@@ -413,10 +414,117 @@ pub fn required_ops_for_jobkind(kind: &JobKind) -> RequiredOps {
         JobKind::PortalStart { .. } => RequiredOps::Portal,
         JobKind::MountStart { .. } | JobKind::UnmountStart { .. } => RequiredOps::Storage,
         JobKind::SystemUpdate { .. } => RequiredOps::Update,
+        JobKind::UiTestRun { .. } => RequiredOps::System,
         JobKind::ScanRun { .. } => RequiredOps::Offensive,
         JobKind::CoreCommand { .. } => RequiredOps::Dev,
         JobKind::InterfaceSelect { .. } => RequiredOps::Eth,
         JobKind::Noop | JobKind::Sleep { .. } => RequiredOps::None,
+    }
+}
+
+/// Returns true when a request is observational and should not mutate system state.
+pub fn is_read_only_request(endpoint: Endpoint, _body: &RequestBody) -> bool {
+    matches!(
+        endpoint,
+        Endpoint::Health
+            | Endpoint::Version
+            | Endpoint::Status
+            | Endpoint::OpsConfigGet
+            | Endpoint::StatusCommand
+            | Endpoint::SystemStatusGet
+            | Endpoint::SystemLogsGet
+            | Endpoint::DiskUsageGet
+            | Endpoint::BlockDevicesList
+            | Endpoint::ActiveInterfaceGet
+            | Endpoint::InterfaceStatusGet
+            | Endpoint::InterfacesListGet
+            | Endpoint::WifiCapabilitiesGet
+            | Endpoint::HotspotWarningsGet
+            | Endpoint::HotspotDiagnosticsGet
+            | Endpoint::HotspotClientsList
+            | Endpoint::GpioDiagnosticsGet
+            | Endpoint::WifiInterfacesList
+            | Endpoint::PortalStatus
+            | Endpoint::MountList
+            | Endpoint::LogTailGet
+            | Endpoint::LoggingConfigGet
+            | Endpoint::HardwareCommand
+            | Endpoint::JobStatus
+    )
+}
+
+fn read_ppid(pid: u32) -> io::Result<u32> {
+    let status_path = format!("/proc/{pid}/status");
+    let content = fs::read_to_string(&status_path)?;
+    let ppid_line = content
+        .lines()
+        .find(|line| line.starts_with("PPid:"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PPid line not found"))?;
+    let ppid = ppid_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "PPid parse failed"))?;
+    Ok(ppid)
+}
+
+/// Check whether `pid` is the same as, or a descendant of, `ancestor_pid`.
+pub fn is_descendant_of_process(mut pid: u32, ancestor_pid: u32) -> bool {
+    if pid == 0 || ancestor_pid == 0 {
+        return false;
+    }
+
+    let mut hops = 0usize;
+    while hops < 256 {
+        if pid == ancestor_pid {
+            return true;
+        }
+        if pid <= 1 {
+            return false;
+        }
+        match read_ppid(pid) {
+            Ok(next) if next > 0 && next != pid => pid = next,
+            _ => return false,
+        }
+        hops += 1;
+    }
+
+    false
+}
+
+/// Resolve the numeric UID for a local username from `/etc/passwd`.
+fn uid_for_user(user: &str) -> io::Result<u32> {
+    let passwd = fs::read_to_string("/etc/passwd")?;
+    for line in passwd.lines() {
+        let mut parts = line.split(':');
+        let Some(name) = parts.next() else { continue };
+        if name != user {
+            continue;
+        }
+        let _pw = parts.next();
+        let uid = parts
+            .next()
+            .and_then(|v| v.parse::<u32>().ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "uid parse failed"))?;
+        return Ok(uid);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("user '{}' not found", user),
+    ))
+}
+
+/// Check whether the peer belongs to the configured UI runtime user account.
+pub fn is_ui_peer(peer: &PeerCred, config: &DaemonConfig) -> bool {
+    match uid_for_user(&config.ui_client_user) {
+        Ok(uid) => peer.uid == uid,
+        Err(err) => {
+            debug!(
+                "failed to resolve ui user '{}' for pid {} uid {}: {}",
+                config.ui_client_user, peer.pid, peer.uid, err
+            );
+            false
+        }
     }
 }
 
@@ -718,5 +826,24 @@ mod tests {
             required_ops_for_request(Endpoint::ActiveInterfaceGet, &body),
             RequiredOps::None
         );
+    }
+
+    #[test]
+    fn test_read_only_request_health_true() {
+        assert!(is_read_only_request(Endpoint::Health, &RequestBody::Health));
+    }
+
+    #[test]
+    fn test_read_only_request_set_active_false() {
+        let body = RequestBody::SetActiveInterface(rustyjack_ipc::SetActiveInterfaceRequest {
+            interface: "wlan0".to_string(),
+        });
+        assert!(!is_read_only_request(Endpoint::SetActiveInterface, &body));
+    }
+
+    #[test]
+    fn test_descendant_self_is_true() {
+        let me = std::process::id();
+        assert!(is_descendant_of_process(me, me));
     }
 }

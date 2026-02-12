@@ -20,3 +20,7 @@ Supersedes:
 ## Known exceptions
 - Some internal crypto calls still use `expect` with hardcoded key sizes (acceptable risk).
 - Legacy modules may still have unwraps; refactor opportunistically.
+
+---
+
+Footnote (2026-02-12): Outdated against current codebase. It states production code avoids .unwrap()/.expect(), but current non-test source still contains multiple unwrap/expect call sites in active runtime paths.

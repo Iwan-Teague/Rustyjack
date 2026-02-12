@@ -198,3 +198,12 @@ Key hard requirements addressed:
 1. Run `scripts/rj_test_ui_layout.sh` and `cargo test -p rustyjack-ui` on the target Linux/Pi environment with dependency access.
 2. Verify first-boot calibration UX and cached-boot reuse on hardware.
 3. Validate diagnostics warnings on mode override/mismatch scenarios.
+
+
+---
+
+Footnote (2026-02-12): Outdated duplicate artifact. This file is a copy of the implementation report and is superseded by the canonical  in .
+
+---
+
+Footnote (2026-02-12): Outdated duplicate artifact. This file is a copy of the implementation report and is superseded by the canonical dynamic_display_resolution_implementation_report.md in logs/done.

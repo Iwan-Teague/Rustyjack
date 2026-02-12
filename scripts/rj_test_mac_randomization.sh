@@ -203,6 +203,15 @@ if command -v iw >/dev/null 2>&1; then
   iw dev >"$OUT/artifacts/iw_dev_baseline.txt" 2>&1 || true
 fi
 
+SKIP_MAC_MUTATION_TESTS=0
+if command -v rfkill >/dev/null 2>&1; then
+  rfkill list >"$OUT/artifacts/rfkill_list.txt" 2>&1 || true
+  if grep -Eiq 'Soft blocked:[[:space:]]*yes|Hard blocked:[[:space:]]*yes' "$OUT/artifacts/rfkill_list.txt"; then
+    SKIP_MAC_MUTATION_TESTS=1
+    rj_skip "RF-kill is active; skipping MAC mutation tests until Wi-Fi is unblocked"
+  fi
+fi
+
 STATUS_ADDR="$(json_get "$OUT/artifacts/wifi_status_baseline.json" "data.address" || true)"
 if [[ -n "$STATUS_ADDR" ]]; then
   if [[ "$(normalize_mac "$STATUS_ADDR")" != "$(normalize_mac "$ORIG_SYS")" ]]; then
@@ -225,9 +234,10 @@ else
   rj_skip "Unit tests disabled"
 fi
 
-# --- Integration: randomize MAC ---
-rj_run_cmd_capture "mac_randomize" "$OUT/artifacts/mac_randomize.json" \
-  rustyjack wifi mac-randomize --interface "$IFACE" --output json
+if [[ "$SKIP_MAC_MUTATION_TESTS" -eq 0 ]]; then
+  # --- Integration: randomize MAC ---
+  rj_run_cmd_capture "mac_randomize" "$OUT/artifacts/mac_randomize.json" \
+    rustyjack wifi mac-randomize --interface "$IFACE" --output json
 
 RAND_STATUS="$(json_get "$OUT/artifacts/mac_randomize.json" "status" || true)"
 RAND_NEW="$(json_get "$OUT/artifacts/mac_randomize.json" "data.new_mac" || true)"
@@ -433,6 +443,18 @@ if [[ "$RUN_NEGATIVE" -eq 1 ]]; then
   fi
 else
   rj_skip "Negative tests disabled"
+fi
+else
+  rj_skip "MAC mutation tests skipped due to RF-kill"
+  if [[ "$RUN_VENDOR" -eq 1 ]]; then
+    rj_skip "Vendor MAC test skipped due to RF-kill"
+  fi
+  if [[ "$RUN_STRESS" -eq 1 ]]; then
+    rj_skip "Stress loop skipped due to RF-kill"
+  fi
+  if [[ "$RUN_NEGATIVE" -eq 1 ]]; then
+    rj_skip "Negative MAC tests skipped due to RF-kill"
+  fi
 fi
 
 # Final restore attempt (best-effort)

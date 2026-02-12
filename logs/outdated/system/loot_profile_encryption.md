@@ -20,3 +20,7 @@ Optional encryption for loot and Wi‑Fi profiles using `rustyjack-encryption` (
 ## Notes
 - If the key is not loaded, decryption will fail; ensure key is set before reading encrypted assets.
 - Encryption status is surfaced in the UI toggles (logs disabled/enabled).
+
+---
+
+Footnote (2026-02-12): Partially outdated. The note that encryption status is surfaced via logs toggles is incorrect in current UI; encryption is managed through dedicated encryption settings/actions separate from logging controls.

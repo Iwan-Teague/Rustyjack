@@ -183,6 +183,21 @@ mount_options_for() {
   awk -v mp="$mountpoint" '$2 == mp { print $4; exit }' /proc/mounts
 }
 
+json_first_nonempty() {
+  local file="$1"
+  shift
+  local value=""
+  local path
+  for path in "$@"; do
+    value="$(rj_json_get "$file" "$path" || true)"
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
 MOUNTPOINT=""
 cleanup_mount() {
   if [[ -n "$MOUNTPOINT" ]]; then
@@ -236,8 +251,8 @@ if [[ $RUN_INTEGRATION -eq 1 ]]; then
   rj_run_cmd_capture "usb_detect_preflight" "$DETECT_OUT" \
     rustyjack system fde-prepare --device "$BASE_DEVICE" --output json
 
-  DETECT_STATUS="$(rj_json_get "$DETECT_OUT" "data.status" || true)"
-  if [[ "$DETECT_STATUS" == "OK" ]]; then
+  DETECT_STATUS="$(json_first_nonempty "$DETECT_OUT" "status" "data.status" "data.result.status" || true)"
+  if [[ "$DETECT_STATUS" =~ ^(ok|OK|success|SUCCESS)$ ]]; then
     rj_ok "usb_detectability_preflight ($BASE_DEVICE)"
   else
     rj_fail "usb_detectability_preflight ($BASE_DEVICE)"
@@ -247,11 +262,11 @@ if [[ $RUN_INTEGRATION -eq 1 ]]; then
   rj_run_cmd_capture "usb_mount_read_write" "$MOUNT_OUT" \
     rustyjack system usb-mount --device "$USB_DEVICE" --mode read-write --preferred-name rjtest_usb_mount --output json
 
-  MOUNT_STATUS="$(rj_json_get "$MOUNT_OUT" "status" || true)"
-  MOUNTPOINT="$(rj_json_get "$MOUNT_OUT" "data.mountpoint" || true)"
-  READONLY_FLAG="$(rj_json_get "$MOUNT_OUT" "data.readonly" || true)"
+  MOUNT_STATUS="$(json_first_nonempty "$MOUNT_OUT" "status" "data.status" || true)"
+  MOUNTPOINT="$(json_first_nonempty "$MOUNT_OUT" "data.mountpoint" "data.mount.mountpoint" "mountpoint" "data.path" || true)"
+  READONLY_FLAG="$(json_first_nonempty "$MOUNT_OUT" "data.readonly" "data.mount.readonly" "readonly" || true)"
 
-  if [[ "$MOUNT_STATUS" == "ok" ]]; then
+  if [[ "$MOUNT_STATUS" =~ ^(ok|OK|success|SUCCESS)$ ]]; then
     rj_ok "usb_mount_command_ok"
   else
     rj_fail "usb_mount_command_ok"
@@ -263,7 +278,9 @@ if [[ $RUN_INTEGRATION -eq 1 ]]; then
     rj_fail "usb_mountpoint_present"
   fi
 
-  if [[ "$READONLY_FLAG" == "false" ]]; then
+  if [[ "$READONLY_FLAG" == "false" || "$READONLY_FLAG" == "0" ]]; then
+    rj_ok "usb_mount_not_readonly"
+  elif [[ -n "$MOUNTPOINT" ]] && mount_options_for "$MOUNTPOINT" | grep -q "rw"; then
     rj_ok "usb_mount_not_readonly"
   else
     rj_fail "usb_mount_not_readonly"

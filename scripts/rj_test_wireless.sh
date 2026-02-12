@@ -129,6 +129,16 @@ else
   rj_log "[WARN] No wireless interfaces detected"
 fi
 
+iface_has_ipv4() {
+  local iface="$1"
+  ip -4 -o addr show dev "$iface" scope global 2>/dev/null | grep -q .
+}
+
+response_reports_ok() {
+  local file="$1"
+  grep -Eiq '"status"[[:space:]]*:[[:space:]]*"ok"' "$file" 2>/dev/null
+}
+
 FAIL_CONTEXT_CAPTURED=0
 capture_failure_context() {
   local iface iface_slug
@@ -254,12 +264,16 @@ run_wireless_interface_tests() {
   fi
 
   if [[ $RUN_RECON -eq 1 ]]; then
-    rj_run_cmd_capture "wifi_recon_gateway_${iface_slug}" "$OUT/artifacts/wifi_recon_gateway_${iface_slug}.json" \
-      rustyjack wifi recon gateway --interface "$iface" --output json
-    rj_run_cmd_capture "wifi_recon_arp_${iface_slug}" "$OUT/artifacts/wifi_recon_arp_${iface_slug}.json" \
-      rustyjack wifi recon arp-scan --interface "$iface" --output json
-    rj_run_cmd_capture "wifi_recon_service_${iface_slug}" "$OUT/artifacts/wifi_recon_service_${iface_slug}.json" \
-      rustyjack wifi recon service-scan --interface "$iface" --output json
+    if iface_has_ipv4 "$iface"; then
+      rj_run_cmd_capture "wifi_recon_gateway_${iface_slug}" "$OUT/artifacts/wifi_recon_gateway_${iface_slug}.json" \
+        rustyjack wifi recon gateway --interface "$iface" --output json
+      rj_run_cmd_capture "wifi_recon_arp_${iface_slug}" "$OUT/artifacts/wifi_recon_arp_${iface_slug}.json" \
+        rustyjack wifi recon arp-scan --interface "$iface" --output json
+      rj_run_cmd_capture "wifi_recon_service_${iface_slug}" "$OUT/artifacts/wifi_recon_service_${iface_slug}.json" \
+        rustyjack wifi recon service-scan --interface "$iface" --output json
+    else
+      rj_skip "Skipping wireless recon on $iface (no IPv4 subnet assigned)"
+    fi
   fi
 
   if [[ $DANGEROUS -eq 1 ]]; then
@@ -287,8 +301,7 @@ if [[ $RUN_NEGATIVE -eq 1 ]]; then
   rj_run_cmd_capture_allow_fail "wifi_status_bad_iface" "$OUT/artifacts/wifi_status_bad_iface.json" \
     rustyjack wifi status --interface "$BAD_IFACE" --output json
   if command -v python3 >/dev/null 2>&1; then
-    STATUS_BAD="$(rj_json_get "$OUT/artifacts/wifi_status_bad_iface.json" "status" || true)"
-    if [[ "$STATUS_BAD" == "ok" || -z "$STATUS_BAD" ]]; then
+    if response_reports_ok "$OUT/artifacts/wifi_status_bad_iface.json"; then
       rj_fail "Expected wifi status failure for bad interface"
     else
       rj_ok "Bad interface rejected in wifi status"
@@ -300,8 +313,7 @@ if [[ $RUN_NEGATIVE -eq 1 ]]; then
   rj_run_cmd_capture_allow_fail "wifi_scan_bad_iface" "$OUT/artifacts/wifi_scan_bad_iface.json" \
     rustyjack wifi scan --interface "$BAD_IFACE" --output json
   if command -v python3 >/dev/null 2>&1; then
-    STATUS_SCAN_BAD="$(rj_json_get "$OUT/artifacts/wifi_scan_bad_iface.json" "status" || true)"
-    if [[ "$STATUS_SCAN_BAD" == "ok" || -z "$STATUS_SCAN_BAD" ]]; then
+    if response_reports_ok "$OUT/artifacts/wifi_scan_bad_iface.json"; then
       rj_fail "Expected wifi scan failure for bad interface"
     else
       rj_ok "Bad interface rejected in wifi scan"
@@ -313,8 +325,7 @@ if [[ $RUN_NEGATIVE -eq 1 ]]; then
   rj_run_cmd_capture_allow_fail "wifi_profile_show_missing" "$OUT/artifacts/wifi_profile_show_missing.json" \
     rustyjack wifi profile show --ssid "RJ_MISSING_PROFILE" --output json
   if command -v python3 >/dev/null 2>&1; then
-    STATUS_PROFILE_BAD="$(rj_json_get "$OUT/artifacts/wifi_profile_show_missing.json" "status" || true)"
-    if [[ "$STATUS_PROFILE_BAD" == "ok" || -z "$STATUS_PROFILE_BAD" ]]; then
+    if response_reports_ok "$OUT/artifacts/wifi_profile_show_missing.json"; then
       rj_fail "Expected wifi profile show failure for missing profile"
     else
       rj_ok "Missing profile correctly rejected"

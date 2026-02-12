@@ -1,11 +1,19 @@
 [package]
 name = "rustyjack-daemon"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 
 [[bin]]
 name = "rustyjackd"
 path = "src/main.rs"
+
+[[bin]]
+name = "rustyjack-hotplugd"
+path = "src/bin/rustyjack-hotplugd.rs"
+
+[[bin]]
+name = "rustyjack-shellops"
+path = "src/bin/rustyjack-shellops.rs"
 
 [features]
 default = ["appliance"]
@@ -23,9 +31,10 @@ process_ops = []
 
 [dependencies]
 anyhow = "1.0"
+chrono = { workspace = true }
 libc = "0.2"
 serde_json = "1.0"
-tokio = { version = "1.0", features = ["rt", "macros", "net", "io-util", "time", "sync", "signal"] }
+tokio = { version = "1.0", features = ["rt", "macros", "net", "io-util", "time", "sync", "signal", "process"] }
 tokio-util = "0.7"
 tracing = "0.1"
 futures = "0.3"
@@ -39,6 +48,9 @@ path = "../rustyjack-core"
 
 [dependencies.rustyjack-netlink]
 path = "../rustyjack-netlink"
+
+[dependencies.rustyjack-client]
+path = "../rustyjack-client"
 
 [dependencies.rustyjack-updater]
 path = "../rustyjack-updater"

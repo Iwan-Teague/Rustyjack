@@ -278,3 +278,7 @@ For ‘palette as a struct’ patterns, Rust GUI frameworks like Iced model them
 - embedded-graphics docs: MonoTextStyleBuilder: https://docs.rs/embedded-graphics/latest/embedded_graphics/mono_font/struct.MonoTextStyleBuilder.html
 - Iced docs: theme / Palette pattern: https://docs.iced.rs/iced/theme/index.html
 - Serde docs: default values for fields: https://serde.rs/attr-default.html
+
+---
+
+Footnote (2026-02-12): Outdated after theme stabilization changes. It describes non-persistent color edits and unused theme fields as current issues, but these were subsequently addressed in the current UI implementation.

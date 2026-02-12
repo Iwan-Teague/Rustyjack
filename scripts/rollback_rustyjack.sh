@@ -223,7 +223,7 @@ apply_fallback_model() {
     "rustyjack.service" \
     "rustyjack-wpa_supplicant@wlan0.service" \
     "rustyjack-wpa_supplicant@.service"
-  add_to_set SET_BINARIES "rustyjack" "rustyjack-ui" "rustyjackd" "rustyjack-portal"
+  add_to_set SET_BINARIES "rustyjack" "rustyjack-ui" "rustyjackd" "rustyjack-portal" "rustyjack-hotplugd"
   add_to_set SET_GROUPS "rustyjack" "rustyjack-ui" "rustyjack-portal"
   add_to_set SET_USERS "rustyjack-ui" "rustyjack-portal"
   add_to_set SET_CONFIG_LINES \
@@ -473,6 +473,7 @@ backup_pre_rollback_state() {
   backup_path "/usr/local/bin/rustyjack-ui"
   backup_path "/usr/local/bin/rustyjackd"
   backup_path "/usr/local/bin/rustyjack-portal"
+  backup_path "/usr/local/bin/rustyjack-hotplugd"
 
   if [ -d "/etc/systemd/system" ]; then
     while IFS= read -r -d '' unit_file; do
@@ -545,7 +546,7 @@ rollback_binaries_and_runtime() {
     esac
   done
 
-  run_cmd rm -f /usr/local/bin/rustyjack /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjackd /usr/local/bin/rustyjack-portal
+  run_cmd rm -f /usr/local/bin/rustyjack /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjackd /usr/local/bin/rustyjack-portal /usr/local/bin/rustyjack-hotplugd
 
   local root
   for root in "${RUNTIME_ROOTS[@]}"; do
@@ -809,7 +810,7 @@ final_report() {
   done
 
   local bin
-  for bin in "rustyjack" "rustyjack-ui" "rustyjackd" "rustyjack-portal"; do
+  for bin in "rustyjack" "rustyjack-ui" "rustyjackd" "rustyjack-portal" "rustyjack-hotplugd"; do
     if [ -e "/usr/local/bin/$bin" ]; then
       warn "  Binary still present: /usr/local/bin/$bin"
     else

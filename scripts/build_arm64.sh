@@ -147,7 +147,7 @@ selected_build_epoch() {
         fi
     fi
 
-    local bins=(rustyjack-ui rustyjackd rustyjack-portal rustyjack)
+    local bins=(rustyjack-ui rustyjackd rustyjack-portal rustyjack rustyjack-hotplugd rustyjack-shellops)
     local min_epoch=0
     for bin in "${bins[@]}"; do
         local path="$HOST_TARGET_DIR/$TARGET/$BUILD_MODE/$bin"
@@ -197,6 +197,8 @@ else
     PACKAGES=(
         "rustyjack-ui|cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-ui|crates/rustyjack-ui"
         "rustyjackd|cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon|crates/rustyjack-daemon"
+        "rustyjack-hotplugd|cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon --bin rustyjack-hotplugd|crates/rustyjack-daemon"
+        "rustyjack-shellops|cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon --bin rustyjack-shellops|crates/rustyjack-daemon"
         "rustyjack-portal|cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-portal|crates/rustyjack-portal"
         "rustyjack|cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-core --bin rustyjack --features rustyjack-core/cli|crates/rustyjack-core"
     )
@@ -366,7 +368,7 @@ fi
 if [ "$DEFAULT_BUILD" -eq 1 ]; then
     # Check if binaries exist; if not and we skipped the build, rebuild them now
     missing_binaries=0
-    for bin in rustyjack-ui rustyjackd rustyjack-portal rustyjack; do
+    for bin in rustyjack-ui rustyjackd rustyjack-portal rustyjack rustyjack-hotplugd rustyjack-shellops; do
         src="$HOST_TARGET_DIR/$TARGET/$BUILD_MODE/$bin"
         if [ ! -f "$src" ]; then
             missing_binaries=1
@@ -379,7 +381,7 @@ if [ "$DEFAULT_BUILD" -eq 1 ]; then
         echo "Building all packages as fallback..." >&2
 
         compute_build_info
-        BUILD_CMD="set -euo pipefail; export PATH=/usr/local/cargo/bin:\$PATH; export CARGO_TARGET_DIR=$TARGET_DIR; $BUILD_INFO_ENV cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-ui; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-portal; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"
+        BUILD_CMD="set -euo pipefail; export PATH=/usr/local/cargo/bin:\$PATH; export CARGO_TARGET_DIR=$TARGET_DIR; $BUILD_INFO_ENV cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-ui; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon --bin rustyjack-hotplugd; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-daemon --bin rustyjack-shellops; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-portal; cargo build $BUILD_PROFILE_FLAG --target $TARGET -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"
 
         # Pass cargo target cache volume to docker run script
         export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
@@ -415,7 +417,7 @@ EOF
     fi
     DEST_DIR="$REPO_ROOT/prebuilt/arm64/$PREBUILT_VARIANT"
     mkdir -p "$DEST_DIR"
-    for bin in rustyjack-ui rustyjackd rustyjack-portal rustyjack; do
+    for bin in rustyjack-ui rustyjackd rustyjack-portal rustyjack rustyjack-hotplugd rustyjack-shellops; do
         src="$HOST_TARGET_DIR/$TARGET/$BUILD_MODE/$bin"
         if [ ! -f "$src" ]; then
             echo "Missing binary: $src" >&2

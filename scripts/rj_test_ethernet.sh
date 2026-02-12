@@ -128,6 +128,11 @@ else
   rj_log "[WARN] No ethernet interfaces detected"
 fi
 
+response_reports_ok() {
+  local file="$1"
+  grep -Eiq '"status"[[:space:]]*:[[:space:]]*"ok"' "$file" 2>/dev/null
+}
+
 FAIL_CONTEXT_CAPTURED=0
 capture_failure_context() {
   if [[ "$FAIL_CONTEXT_CAPTURED" -eq 1 ]]; then
@@ -249,8 +254,7 @@ if [[ $RUN_NEGATIVE -eq 1 ]]; then
   rj_run_cmd_capture_allow_fail "eth_discover_bad_iface" "$OUT/artifacts/eth_discover_bad_iface.json" \
     rustyjack ethernet discover --interface "$BAD_IFACE" --output json
   if command -v python3 >/dev/null 2>&1; then
-    STATUS_BAD="$(rj_json_get "$OUT/artifacts/eth_discover_bad_iface.json" "status" || true)"
-    if [[ "$STATUS_BAD" == "ok" || -z "$STATUS_BAD" ]]; then
+    if response_reports_ok "$OUT/artifacts/eth_discover_bad_iface.json"; then
       rj_fail "Expected ethernet discover failure for bad interface"
     else
       rj_ok "Bad interface rejected in ethernet discover"
@@ -262,8 +266,7 @@ if [[ $RUN_NEGATIVE -eq 1 ]]; then
   rj_run_cmd_capture_allow_fail "eth_portscan_bad_target" "$OUT/artifacts/eth_portscan_bad_target.json" \
     rustyjack ethernet port-scan --target "999.999.999.999" --output json
   if command -v python3 >/dev/null 2>&1; then
-    STATUS_BAD_TARGET="$(rj_json_get "$OUT/artifacts/eth_portscan_bad_target.json" "status" || true)"
-    if [[ "$STATUS_BAD_TARGET" == "ok" || -z "$STATUS_BAD_TARGET" ]]; then
+    if response_reports_ok "$OUT/artifacts/eth_portscan_bad_target.json"; then
       rj_fail "Expected ethernet port-scan failure for invalid target"
     else
       rj_ok "Invalid target rejected in port-scan"

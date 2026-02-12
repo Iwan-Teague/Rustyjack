@@ -370,3 +370,12 @@ Update these files to reflect dynamic resolution support while preserving 8-butt
 - Settings > Display can re-run calibration and persist verified boundaries.
 - 8-button control model is unchanged and validated at startup.
 - Installer/service/docs/test suite all reflect dynamic resolution behavior.
+
+
+---
+
+Footnote (2026-02-12): Outdated duplicate of the dynamic display blueprint. Content reflects pre-implementation state and is superseded by implemented runtime display behavior and the canonical implementation report.
+
+---
+
+Footnote (2026-02-12): Outdated duplicate of the dynamic display blueprint. Content reflects pre-implementation state and is superseded by implemented runtime display behavior and the canonical implementation report.

@@ -10,7 +10,7 @@ use rustyjack_commands::Commands;
 use rustyjack_ipc::{
     BlockDeviceInfo, HotspotClient, HotspotDiagnosticsResponse, HotspotWarningsResponse,
     InterfaceStatusResponse, InterfacesListResponse, JobId, JobInfo, JobKind, JobState, OpsConfig,
-    StatusResponse, UpdateRequestIpc, WifiCapabilitiesResponse,
+    StatusResponse, UiTestRunRequestIpc, UpdateRequestIpc, WifiCapabilitiesResponse,
 };
 use serde_json::Value;
 use tokio::runtime::{Handle, Runtime};
@@ -308,6 +308,14 @@ impl CoreBridge {
                     req: UpdateRequestIpc { url },
                 })
                 .await?;
+            Ok(job.job_id)
+        })
+    }
+
+    pub fn start_ui_test_run(&self, req: UiTestRunRequestIpc) -> Result<JobId> {
+        self.block_on(async move {
+            let mut client = self.create_client().await?;
+            let job = client.job_start(JobKind::UiTestRun { req }).await?;
             Ok(job.job_id)
         })
     }

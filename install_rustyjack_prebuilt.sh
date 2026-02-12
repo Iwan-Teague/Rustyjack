@@ -9,6 +9,10 @@
 #   USB_MOUNT_POINT=/mnt/usb      # where to mount removable media
 #   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/rj_shellops.sh
+source "$SCRIPT_DIR/scripts/rj_shellops.sh"
 WARN_COUNT=0
 SKIP_HASH_CHECKS=0
 USB_COPY_TO_PREBUILT=0
@@ -260,7 +264,7 @@ bootstrap_resolvers() {
     warn "Replacing symlinked $resolv with static resolver file for install"
     sudo rm -f "$resolv"
   fi
-  echo -e "$content" | sudo tee "$resolv" >/dev/null
+  echo -e "$content" | rj_sudo_tee "$resolv" >/dev/null
   sudo chmod 644 "$resolv"
   sudo chown root:root "$resolv"
 }
@@ -530,7 +534,7 @@ find_prebuilt_dir_on_mounts() {
   else
     suffix="$arch"
   fi
-  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
+  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME" "$HOTPLUG_NAME" "$SHELLOPS_NAME")
 
   for base in "${USB_MOUNT_POINT:-/mnt/usb}" /media /mnt /run/media; do
     [ -d "$base" ] || continue
@@ -661,7 +665,7 @@ copy_prebuilt_from_usb() {
   info ""
   info "Verifying binaries before copy..."
 
-  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
+  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME" "$HOTPLUG_NAME" "$SHELLOPS_NAME")
   local all_found=1
   declare -A src_hashes
 
@@ -757,7 +761,7 @@ prompt_install_options
 CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
 if [ ! -f "$CFG" ]; then
   sudo mkdir -p "$(dirname "$CFG")"
-  echo "# Rustyjack config (created by installer)" | sudo tee "$CFG" >/dev/null
+  echo "# Rustyjack config (created by installer)" | rj_sudo_tee "$CFG" >/dev/null
 fi
 info "Using config file: $CFG"
 add_dtparam() {
@@ -765,7 +769,7 @@ add_dtparam() {
   if grep -qE "^#?\s*${param%=*}=on" "$CFG"; then
     sudo sed -Ei "s|^#?\s*${param%=*}=.*|${param%=*}=on|" "$CFG"
   else
-    echo "$param" | sudo tee -a "$CFG" >/dev/null
+    echo "$param" | rj_sudo_tee -a "$CFG" >/dev/null
   fi
 }
 
@@ -862,18 +866,18 @@ add_dtparam dtparam=wifi=on
 
 MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev vfat exfat ext4)
 for m in "${MODULES[@]}"; do
-  grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
+  grep -qxF "$m" /etc/modules || echo "$m" | rj_sudo_tee -a /etc/modules >/dev/null
   sudo modprobe "$m" || true
 done
 
 verify_usb_filesystem_support
 
 # ensure overlay spi0-2cs
-grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
+grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | rj_sudo_tee -a "$CFG" >/dev/null
 
 # Ensure buttons use internal pull-ups
 if ! grep -q "^gpio=6,19,5,26,13,21,20,16=pu" "$CFG" ; then
-  echo 'gpio=6,19,5,26,13,21,20,16=pu' | sudo tee -a "$CFG" >/dev/null
+  echo 'gpio=6,19,5,26,13,21,20,16=pu' | rj_sudo_tee -a "$CFG" >/dev/null
   info "Pinned button GPIOs to pull-ups in $CFG"
 fi
 
@@ -905,6 +909,8 @@ BINARY_NAME="rustyjack-ui"
 CLI_NAME="rustyjack"
 DAEMON_NAME="rustyjackd"
 PORTAL_NAME="rustyjack-portal"
+HOTPLUG_NAME="rustyjack-hotplugd"
+SHELLOPS_NAME="rustyjack-shellops"
 resolve_prebuilt_root() {
   local dir="$1"
   case "$dir" in
@@ -918,11 +924,13 @@ set_prebuilt_paths() {
   PREBUILT_CLI="$PREBUILT_ROOT/$CLI_NAME"
   PREBUILT_DAEMON="$PREBUILT_ROOT/$DAEMON_NAME"
   PREBUILT_PORTAL="$PREBUILT_ROOT/$PORTAL_NAME"
+  PREBUILT_HOTPLUG="$PREBUILT_ROOT/$HOTPLUG_NAME"
+  PREBUILT_SHELLOPS="$PREBUILT_ROOT/$SHELLOPS_NAME"
 }
 
 prebuilt_has_all_bins() {
   local root="$1"
-  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME")
+  local bins=("$BINARY_NAME" "$CLI_NAME" "$DAEMON_NAME" "$PORTAL_NAME" "$HOTPLUG_NAME" "$SHELLOPS_NAME")
   for bin in "${bins[@]}"; do
     if [ ! -f "$root/$bin" ]; then
       return 1
@@ -1270,6 +1278,12 @@ fi
 if [ ! -f "$PREBUILT_PORTAL" ]; then
   fail "Prebuilt portal not found: $PREBUILT_PORTAL\nPlace your ${PREBUILT_ARCH} portal binary at $PREBUILT_PORTAL or set PREBUILT_DIR accordingly."
 fi
+if [ ! -f "$PREBUILT_HOTPLUG" ]; then
+  fail "Prebuilt hotplug helper not found: $PREBUILT_HOTPLUG\nPlace your ${PREBUILT_ARCH} hotplug binary at $PREBUILT_HOTPLUG or set PREBUILT_DIR accordingly."
+fi
+if [ ! -f "$PREBUILT_SHELLOPS" ]; then
+  fail "Prebuilt shell ops helper not found: $PREBUILT_SHELLOPS\nPlace your ${PREBUILT_ARCH} shell ops binary at $PREBUILT_SHELLOPS or set PREBUILT_DIR accordingly."
+fi
 
 # Ensure the prebuilt binaries are executable and appear to match the target arch
 if [ ! -x "$PREBUILT_BIN" ]; then
@@ -1287,6 +1301,14 @@ fi
 if [ ! -x "$PREBUILT_PORTAL" ]; then
   info "Making prebuilt portal executable: $PREBUILT_PORTAL"
   chmod +x "$PREBUILT_PORTAL" || warn "Failed to chmod +x $PREBUILT_PORTAL"
+fi
+if [ ! -x "$PREBUILT_HOTPLUG" ]; then
+  info "Making prebuilt hotplug helper executable: $PREBUILT_HOTPLUG"
+  chmod +x "$PREBUILT_HOTPLUG" || warn "Failed to chmod +x $PREBUILT_HOTPLUG"
+fi
+if [ ! -x "$PREBUILT_SHELLOPS" ]; then
+  info "Making prebuilt shell ops helper executable: $PREBUILT_SHELLOPS"
+  chmod +x "$PREBUILT_SHELLOPS" || warn "Failed to chmod +x $PREBUILT_SHELLOPS"
 fi
 check_binary_arch() {
   local path="$1"
@@ -1316,6 +1338,8 @@ check_binary_arch "$PREBUILT_BIN" "$PREBUILT_ARCH"
 check_binary_arch "$PREBUILT_CLI" "$PREBUILT_ARCH"
 check_binary_arch "$PREBUILT_DAEMON" "$PREBUILT_ARCH"
 check_binary_arch "$PREBUILT_PORTAL" "$PREBUILT_ARCH"
+check_binary_arch "$PREBUILT_HOTPLUG" "$PREBUILT_ARCH"
+check_binary_arch "$PREBUILT_SHELLOPS" "$PREBUILT_ARCH"
 
 step "Stopping existing service (if any)..."
 sudo systemctl stop rustyjack-ui.service 2>/dev/null || true
@@ -1324,11 +1348,11 @@ sudo systemctl stop rustyjackd.service 2>/dev/null || true
 sudo systemctl stop rustyjackd.socket 2>/dev/null || true
 
 step "Removing old binaries (if present)..."
-sudo rm -f /usr/local/bin/$BINARY_NAME /usr/local/bin/$CLI_NAME /usr/local/bin/$DAEMON_NAME /usr/local/bin/$PORTAL_NAME
+sudo rm -f /usr/local/bin/$BINARY_NAME /usr/local/bin/$CLI_NAME /usr/local/bin/$DAEMON_NAME /usr/local/bin/$PORTAL_NAME /usr/local/bin/$HOTPLUG_NAME /usr/local/bin/$SHELLOPS_NAME
 
 step "Installing prebuilt binaries to /usr/local/bin/"
 info "Source binaries:"
-for bin_var in PREBUILT_BIN PREBUILT_CLI PREBUILT_DAEMON PREBUILT_PORTAL; do
+for bin_var in PREBUILT_BIN PREBUILT_CLI PREBUILT_DAEMON PREBUILT_PORTAL PREBUILT_HOTPLUG PREBUILT_SHELLOPS; do
   bin_path="${!bin_var}"
   print_binary_info "$(basename "$bin_path")" "$bin_path"
 done
@@ -1338,9 +1362,11 @@ sudo install -Dm755 "$PREBUILT_BIN" /usr/local/bin/$BINARY_NAME || fail "Failed 
 sudo install -Dm755 "$PREBUILT_CLI" /usr/local/bin/$CLI_NAME || fail "Failed to install CLI binary"
 sudo install -Dm755 "$PREBUILT_DAEMON" /usr/local/bin/$DAEMON_NAME || fail "Failed to install daemon binary"
 sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Failed to install portal binary"
+sudo install -Dm755 "$PREBUILT_HOTPLUG" /usr/local/bin/$HOTPLUG_NAME || fail "Failed to install hotplug helper binary"
+sudo install -Dm755 "$PREBUILT_SHELLOPS" /usr/local/bin/$SHELLOPS_NAME || fail "Failed to install shell ops helper binary"
 
 info "Installed binaries to /usr/local/bin:"
-for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
+for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME $HOTPLUG_NAME $SHELLOPS_NAME; do
   if [ -f "/usr/local/bin/$bin_name" ]; then
     print_binary_info "OK $bin_name" "/usr/local/bin/$bin_name"
   else
@@ -1351,7 +1377,7 @@ info ""
 
 if [ "$SKIP_HASH_CHECKS" != "1" ]; then
   info "Verifying installed binary hashes..."
-  for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME; do
+  for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME $HOTPLUG_NAME $SHELLOPS_NAME; do
     src_path="$PREBUILT_ROOT/$bin_name"
     dest_path="/usr/local/bin/$bin_name"
     if [ -f "$src_path" ] && [ -f "$dest_path" ]; then
@@ -1445,7 +1471,7 @@ fi
 
 # Sample profile
 if [ ! -f "$RUNTIME_ROOT/wifi/profiles/sample.json" ]; then
-  sudo tee "$RUNTIME_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
+  rj_sudo_tee "$RUNTIME_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
 {
   "ssid": "YourWiFiNetwork",
   "password": "your_password_here",
@@ -1462,7 +1488,7 @@ PROFILE
 fi
 
 if [ ! -f "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" ]; then
-  sudo tee "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" >/dev/null <<'PROFILE'
+  rj_sudo_tee "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" >/dev/null <<'PROFILE'
 {
   "ssid": "rustyjack",
   "password": "123456789",
@@ -1479,7 +1505,7 @@ PROFILE
 fi
 
 if [ ! -f "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" ]; then
-  sudo tee "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" >/dev/null <<'PROFILE'
+  rj_sudo_tee "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" >/dev/null <<'PROFILE'
 {
   "ssid": "SKYHN7XM",
   "password": "6HekvGQvxuVV",
@@ -1546,7 +1572,7 @@ sudo rm -f /run/rustyjack/rustyjackd.sock 2>/dev/null || true
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
 
-sudo tee "$DAEMON_SOCKET" >/dev/null <<UNIT
+rj_sudo_tee "$DAEMON_SOCKET" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack daemon socket
 
@@ -1561,7 +1587,7 @@ RemoveOnStop=true
 WantedBy=sockets.target
 UNIT
 
-sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack privileged daemon
 Requires=rustyjackd.socket
@@ -1594,7 +1620,7 @@ Environment=RUSTYJACKD_OPS_POWER=true
 Environment=RUSTYJACKD_OPS_UPDATE=true
 Environment=RUSTYJACKD_OPS_SYSTEM=true
 Environment=RUSTYJACKD_OPS_DEV=false
-Environment=RUSTYJACKD_OPS_OFFENSIVE=false
+Environment=RUSTYJACKD_OPS_OFFENSIVE=true
 Environment=RUSTYJACKD_OPS_LOOT=false
 Environment=RUSTYJACKD_OPS_PROCESS=false
 Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
@@ -1619,7 +1645,7 @@ WPA_SERVICE=/etc/systemd/system/rustyjack-wpa_supplicant@.service
 WPA_CONF=/etc/rustyjack/wpa_supplicant.conf
 step "Installing wpa_supplicant service $WPA_SERVICE..."
 
-sudo tee "$WPA_SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$WPA_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack wpa_supplicant (D-Bus) for %i
 After=network.target dbus.service
@@ -1673,7 +1699,7 @@ UNIT
 
 step "Installing wpa_supplicant config $WPA_CONF..."
 sudo mkdir -p /etc/rustyjack
-sudo tee "$WPA_CONF" >/dev/null <<CONF
+rj_sudo_tee "$WPA_CONF" >/dev/null <<CONF
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
 update_config=0
 ap_scan=1
@@ -1686,7 +1712,7 @@ SERVICE=/etc/systemd/system/rustyjack-ui.service
 SERVICE_FILE=$SERVICE
 step "Installing systemd service $SERVICE..."
 
-sudo tee "$SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack UI Service (prebuilt)
 After=local-fs.target network.target
@@ -1722,7 +1748,7 @@ PORTAL_SERVICE=/etc/systemd/system/rustyjack-portal.service
 PORTAL_SERVICE_FILE=$PORTAL_SERVICE
 step "Installing portal service $PORTAL_SERVICE..."
 
-sudo tee "$PORTAL_SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$PORTAL_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack Portal Service (Unprivileged)
 After=rustyjackd.service
@@ -1908,6 +1934,16 @@ if [ -x /usr/local/bin/$PORTAL_NAME ]; then
   info "[OK] Prebuilt portal binary installed: $PORTAL_NAME"
 else
   warn "Portal binary $PORTAL_NAME not executable or missing (optional)."
+fi
+if [ -x /usr/local/bin/$HOTPLUG_NAME ]; then
+  info "[OK] Prebuilt hotplug helper binary installed: $HOTPLUG_NAME"
+else
+  fail "[X] Hotplug helper binary missing or not executable at /usr/local/bin/$HOTPLUG_NAME"
+fi
+if [ -x /usr/local/bin/$SHELLOPS_NAME ]; then
+  info "[OK] Prebuilt shell ops helper binary installed: $SHELLOPS_NAME"
+else
+  fail "[X] Shell ops helper binary missing or not executable at /usr/local/bin/$SHELLOPS_NAME"
 fi
 
 # Health-check: service files

@@ -19,3 +19,7 @@ Supersedes:
 ## Usage tips
 - Wireless captures stored under `loot/Wireless/<target>/`; Ethernet loot under `loot/Ethernet/`.
 - File browsing is read-only; errors surface in-place.
+
+---
+
+Footnote (2026-02-12): Partially outdated control mapping. It states Key2 returns to main menu in the viewer, but current scrollable_text_viewer treats Cancel/Key2 as no-op and exits on Back/Left only.

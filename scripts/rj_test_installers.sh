@@ -20,6 +20,9 @@ Options:
   --no-syntax         Skip bash -n syntax checks
   --no-patterns       Skip installer content checks
   --no-isolation      Skip isolation snapshot checks
+  --dangerous         Ignored (compat with rj_run_tests)
+  --no-ui             Ignored (compat with rj_run_tests)
+  --ui                Ignored (compat with rj_run_tests)
   --outroot DIR       Output root (default: /var/tmp/rustyjack-tests)
   -h, --help          Show help
 USAGE
@@ -31,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --no-syntax) RUN_SYNTAX=0; shift ;;
     --no-patterns) RUN_PATTERNS=0; shift ;;
     --no-isolation) RUN_ISOLATION=0; shift ;;
+    --dangerous|--no-ui|--ui) shift ;;
     --outroot) RJ_OUTROOT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;

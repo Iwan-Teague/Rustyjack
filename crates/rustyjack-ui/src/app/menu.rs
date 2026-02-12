@@ -133,6 +133,14 @@ pub(crate) fn action_route(action: &MenuAction) -> ActionRoute {
             ActionRoute::Local("start_full_disk_encryption_flow")
         }
         MenuAction::FullDiskEncryptionMigrate => ActionRoute::Local("start_fde_migration"),
+        MenuAction::RunUiTestsAll => ActionRoute::Local("run_ui_tests_all"),
+        MenuAction::RunUiTestsWireless => ActionRoute::Local("run_ui_tests_wireless"),
+        MenuAction::RunUiTestsEthernet => ActionRoute::Local("run_ui_tests_ethernet"),
+        MenuAction::RunUiTestsInterfaceSelect => {
+            ActionRoute::Local("run_ui_tests_interface_select")
+        }
+        MenuAction::ConfigureAndRunUiTests => ActionRoute::Local("configure_and_run_ui_tests"),
+        MenuAction::ShowLatestUiTestReport => ActionRoute::Local("show_latest_ui_test_report"),
         MenuAction::ShowInfo => ActionRoute::Info,
     }
 }
@@ -1214,6 +1222,12 @@ impl App {
             MenuAction::EncryptionGenerateKey => self.generate_encryption_key_on_usb()?,
             MenuAction::FullDiskEncryptionSetup => self.start_full_disk_encryption_flow()?,
             MenuAction::FullDiskEncryptionMigrate => self.start_fde_migration()?,
+            MenuAction::RunUiTestsAll => self.run_ui_tests_all()?,
+            MenuAction::RunUiTestsWireless => self.run_ui_tests_wireless()?,
+            MenuAction::RunUiTestsEthernet => self.run_ui_tests_ethernet()?,
+            MenuAction::RunUiTestsInterfaceSelect => self.run_ui_tests_interface_select()?,
+            MenuAction::ConfigureAndRunUiTests => self.configure_and_run_ui_tests()?,
+            MenuAction::ShowLatestUiTestReport => self.show_latest_ui_test_report()?,
             MenuAction::SetOperationMode(mode) => self.select_operation_mode(mode)?,
             MenuAction::ShowInfo => {} // No-op for informational entries
         }
@@ -1310,7 +1324,6 @@ impl App {
         self.display.draw_dialog(&content, &overlay)?;
         Ok(())
     }
-
 }
 
 #[cfg(test)]

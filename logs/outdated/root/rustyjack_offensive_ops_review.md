@@ -549,3 +549,7 @@ systemd-analyze security rustyjack-ui.service # Target: ≤4.0
 ---
 
 *End of report.*
+
+---
+
+Footnote (2026-02-12): Outdated as a current-state reference. This report is tied to a Feb 4, 2026 snapshot and includes completion/plan assertions that no longer fully match the live service and configuration posture.

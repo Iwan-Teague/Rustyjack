@@ -370,3 +370,12 @@ Update these files to reflect dynamic resolution support while preserving 8-butt
 - Settings > Display can re-run calibration and persist verified boundaries.
 - 8-button control model is unchanged and validated at startup.
 - Installer/service/docs/test suite all reflect dynamic resolution behavior.
+
+
+---
+
+Footnote (2026-02-12): Outdated planning baseline. The document's "Current State" section describes pre-implementation hardcoded UI geometry, but the dynamic display capability/metrics/calibration flow is already implemented in current .
+
+---
+
+Footnote (2026-02-12): Outdated planning baseline. The document's "Current State" section describes pre-implementation hardcoded UI geometry, but the dynamic display capability/metrics/calibration flow is already implemented in current rustyjack-ui.

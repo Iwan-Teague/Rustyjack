@@ -181,7 +181,7 @@ function Get-SelectedBuildEpoch {
         }
     }
 
-    $bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
+    $bins = @("rustyjack-ui", "rustyjackd", "rustyjack-hotplugd", "rustyjack-shellops", "rustyjack-portal", "rustyjack")
     $minEpoch = 0
     foreach ($bin in $bins) {
         $path = Join-Path $HostTargetDir "$Target\$BuildMode\$bin"
@@ -220,6 +220,8 @@ if ($args.Count -gt 0) {
     $Packages = @(
         @{name="rustyjack-ui"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-ui"; dir="crates/rustyjack-ui"},
         @{name="rustyjackd"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-daemon"; dir="crates/rustyjack-daemon"},
+        @{name="rustyjack-hotplugd"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-daemon --bin rustyjack-hotplugd"; dir="crates/rustyjack-daemon"},
+        @{name="rustyjack-shellops"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-daemon --bin rustyjack-shellops"; dir="crates/rustyjack-daemon"},
         @{name="rustyjack-portal"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-portal"; dir="crates/rustyjack-portal"},
         @{name="rustyjack"; cmd="cargo build $BuildProfileFlag --target $Target -p rustyjack-core --bin rustyjack --features rustyjack-core/cli"; dir="crates/rustyjack-core"}
     )
@@ -377,7 +379,7 @@ if ($args.Count -gt 0) {
 }
 
 if ($DefaultBuild) {
-    $Bins = @("rustyjack-ui", "rustyjackd", "rustyjack-portal", "rustyjack")
+    $Bins = @("rustyjack-ui", "rustyjackd", "rustyjack-hotplugd", "rustyjack-shellops", "rustyjack-portal", "rustyjack")
     $MissingBinaries = @()
     foreach ($bin in $Bins) {
         $Src = Join-Path $HostTargetDir "$Target\$BuildMode\$bin"

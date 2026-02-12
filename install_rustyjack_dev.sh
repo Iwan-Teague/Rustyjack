@@ -8,6 +8,10 @@
 # for production (release builds are faster at runtime)
 # ------------------------------------------------------------
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/rj_shellops.sh
+source "$SCRIPT_DIR/scripts/rj_shellops.sh"
 WARN_COUNT=0
 SPI_REBOOT_REQUIRED=0
 
@@ -262,7 +266,7 @@ bootstrap_resolvers() {
     warn "Replacing symlinked $resolv with static resolver file for install"
     sudo rm -f "$resolv"
   fi
-  echo -e "$content" | sudo tee "$resolv" >/dev/null
+  echo -e "$content" | rj_sudo_tee "$resolv" >/dev/null
   sudo chmod 644 "$resolv"
   sudo chown root:root "$resolv"
 }
@@ -307,7 +311,7 @@ bootstrap_resolvers
 CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
 if [ ! -f "$CFG" ]; then
   sudo mkdir -p "$(dirname "$CFG")"
-  echo "# Rustyjack config (created by installer)" | sudo tee "$CFG" >/dev/null
+  echo "# Rustyjack config (created by installer)" | rj_sudo_tee "$CFG" >/dev/null
 fi
 info "Using config file: $CFG"
 add_dtparam() {
@@ -315,7 +319,7 @@ add_dtparam() {
   if grep -qE "^#?\s*${param%=*}=on" "$CFG"; then
     sudo sed -Ei "s|^#?\s*${param%=*}=.*|${param%=*}=on|" "$CFG"
   else
-    echo "$param" | sudo tee -a "$CFG" >/dev/null
+    echo "$param" | rj_sudo_tee -a "$CFG" >/dev/null
   fi
 }
 
@@ -478,18 +482,18 @@ add_dtparam dtparam=wifi=on
 
 MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev vfat exfat ext4)
 for m in "${MODULES[@]}"; do
-  grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
+  grep -qxF "$m" /etc/modules || echo "$m" | rj_sudo_tee -a /etc/modules >/dev/null
   sudo modprobe "$m" || true
 done
 
 verify_usb_filesystem_support
 
 # ensure overlay spi0-2cs
-grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
+grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | rj_sudo_tee -a "$CFG" >/dev/null
 
 # Ensure buttons use internal pull-ups
 if ! grep -q "^gpio=6,19,5,26,13,21,20,16=pu" "$CFG" ; then
-  echo 'gpio=6,19,5,26,13,21,20,16=pu' | sudo tee -a "$CFG" >/dev/null
+  echo 'gpio=6,19,5,26,13,21,20,16=pu' | rj_sudo_tee -a "$CFG" >/dev/null
   info "Pinned button GPIOs to pull-ups in $CFG"
 fi
 
@@ -517,7 +521,7 @@ if [ "$CURRENT_SWAP" -lt "$MIN_SWAP" ]; then
   sudo swapon "$SWAP_FILE"
   
   if ! grep -q "$SWAP_FILE" /etc/fstab 2>/dev/null; then
-    echo "$SWAP_FILE none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+    echo "$SWAP_FILE none swap sw 0 0" | rj_sudo_tee -a /etc/fstab >/dev/null
   fi
   
   NEW_SWAP=$(free -m | awk '/^Swap:/ {print $2}')
@@ -563,7 +567,7 @@ sudo systemctl stop rustyjackd.socket 2>/dev/null || true
 
 # Remove old binaries
 info "Removing old binaries..."
-sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack /usr/local/bin/rustyjackd
+sudo rm -f /usr/local/bin/rustyjack-ui /usr/local/bin/rustyjack /usr/local/bin/rustyjackd /usr/local/bin/rustyjack-portal /usr/local/bin/rustyjack-hotplugd /usr/local/bin/rustyjack-shellops
 
 # Ask user about clean build
 echo ""
@@ -607,10 +611,16 @@ fi
 
 # Build rustyjackd daemon
 info "Building rustyjackd daemon (debug)..."
-(cd "$PROJECT_ROOT" && cargo build -p rustyjack-daemon) || fail "Failed to build rustyjackd"
+(cd "$PROJECT_ROOT" && cargo build -p rustyjack-daemon --bin rustyjackd --bin rustyjack-hotplugd --bin rustyjack-shellops) || fail "Failed to build rustyjackd"
 
 if [ ! -f "$PROJECT_ROOT/target/debug/rustyjackd" ]; then
   fail "rustyjackd binary not found after build!"
+fi
+if [ ! -f "$PROJECT_ROOT/target/debug/rustyjack-hotplugd" ]; then
+  fail "rustyjack-hotplugd binary not found after build!"
+fi
+if [ ! -f "$PROJECT_ROOT/target/debug/rustyjack-shellops" ]; then
+  fail "rustyjack-shellops binary not found after build!"
 fi
 
 # Build rustyjack-portal binary (debug)
@@ -626,15 +636,19 @@ sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-ui" /usr/local/bin/rus
 sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack" /usr/local/bin/rustyjack
 sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjackd" /usr/local/bin/rustyjackd
 sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-portal" /usr/local/bin/rustyjack-portal
+sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-hotplugd" /usr/local/bin/rustyjack-hotplugd
+sudo install -Dm755 "$PROJECT_ROOT/target/debug/rustyjack-shellops" /usr/local/bin/rustyjack-shellops
 
 # Verify installation
-if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack ] && [ -x /usr/local/bin/rustyjackd ] && [ -x /usr/local/bin/rustyjack-portal ]; then
+if [ -x /usr/local/bin/rustyjack-ui ] && [ -x /usr/local/bin/rustyjack ] && [ -x /usr/local/bin/rustyjackd ] && [ -x /usr/local/bin/rustyjack-portal ] && [ -x /usr/local/bin/rustyjack-hotplugd ] && [ -x /usr/local/bin/rustyjack-shellops ]; then
   info "Installed DEBUG binaries to /usr/local/bin/"
   info "Binary info:"
   ls -la /usr/local/bin/rustyjack-ui
   ls -la /usr/local/bin/rustyjack
   ls -la /usr/local/bin/rustyjackd
   ls -la /usr/local/bin/rustyjack-portal
+  ls -la /usr/local/bin/rustyjack-hotplugd
+  ls -la /usr/local/bin/rustyjack-shellops
 else
   fail "Failed to install binaries to /usr/local/bin/"
 fi
@@ -682,7 +696,7 @@ sudo mkdir -p "$RUNTIME_ROOT/pipelines"
 info "Network interface management delegated to rustyjack-netlink crate"
 
 if [ ! -f "$RUNTIME_ROOT/wifi/profiles/sample.json" ]; then
-  sudo tee "$RUNTIME_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
+  rj_sudo_tee "$RUNTIME_ROOT/wifi/profiles/sample.json" >/dev/null <<'PROFILE'
 {
   "ssid": "YourWiFiNetwork",
   "password": "your_password_here",
@@ -699,7 +713,7 @@ PROFILE
 fi
 
 if [ ! -f "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" ]; then
-  sudo tee "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" >/dev/null <<'PROFILE'
+  rj_sudo_tee "$RUNTIME_ROOT/wifi/profiles/rustyjack.json" >/dev/null <<'PROFILE'
 {
   "ssid": "rustyjack",
   "password": "123456789",
@@ -716,7 +730,7 @@ PROFILE
 fi
 
 if [ ! -f "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" ]; then
-  sudo tee "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" >/dev/null <<'PROFILE'
+  rj_sudo_tee "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" >/dev/null <<'PROFILE'
 {
   "ssid": "SKYHN7XM",
   "password": "6HekvGQvxuVV",
@@ -785,7 +799,7 @@ step "Installing rustyjackd socket/service..."
 sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
 sudo systemctl mask rustyjackd.socket 2>/dev/null || true
 
-sudo tee "$DAEMON_SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack privileged daemon
 After=local-fs.target network.target
@@ -816,7 +830,7 @@ Environment=RUSTYJACKD_OPS_POWER=true
 Environment=RUSTYJACKD_OPS_UPDATE=true
 Environment=RUSTYJACKD_OPS_SYSTEM=true
 Environment=RUSTYJACKD_OPS_DEV=false
-Environment=RUSTYJACKD_OPS_OFFENSIVE=false
+Environment=RUSTYJACKD_OPS_OFFENSIVE=true
 Environment=RUSTYJACKD_OPS_LOOT=false
 Environment=RUSTYJACKD_OPS_PROCESS=false
 Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
@@ -840,7 +854,7 @@ WPA_SERVICE=/etc/systemd/system/rustyjack-wpa_supplicant@.service
 WPA_CONF=/etc/rustyjack/wpa_supplicant.conf
 step "Installing wpa_supplicant service $WPA_SERVICE..."
 
-sudo tee "$WPA_SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$WPA_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack wpa_supplicant (D-Bus) for %i
 After=network.target dbus.service
@@ -894,7 +908,7 @@ UNIT
 
 step "Installing wpa_supplicant config $WPA_CONF..."
 sudo mkdir -p /etc/rustyjack
-sudo tee "$WPA_CONF" >/dev/null <<CONF
+rj_sudo_tee "$WPA_CONF" >/dev/null <<CONF
 ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev
 update_config=0
 ap_scan=1
@@ -906,7 +920,7 @@ sudo systemctl unmask rustyjack-wpa_supplicant@.service 2>/dev/null || true
 SERVICE=/etc/systemd/system/rustyjack-ui.service
 step "Installing systemd service $SERVICE..."
 
-sudo tee "$SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack UI Service (DEBUG BUILD)
 After=local-fs.target network.target
@@ -943,7 +957,7 @@ UNIT
 PORTAL_SERVICE=/etc/systemd/system/rustyjack-portal.service
 step "Installing portal service $PORTAL_SERVICE..."
 
-sudo tee "$PORTAL_SERVICE" >/dev/null <<UNIT
+rj_sudo_tee "$PORTAL_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack Portal Service (Unprivileged)
 After=rustyjackd.service
@@ -1097,6 +1111,17 @@ if [ -x /usr/local/bin/rustyjackd ]; then
   info "[OK] DEBUG daemon binary installed: rustyjackd"
 else
   fail "[X] rustyjackd binary missing"
+fi
+
+if [ -x /usr/local/bin/rustyjack-hotplugd ]; then
+  info "[OK] DEBUG hotplug helper installed: rustyjack-hotplugd"
+else
+  fail "[X] rustyjack-hotplugd binary missing"
+fi
+if [ -x /usr/local/bin/rustyjack-shellops ]; then
+  info "[OK] DEBUG shell ops helper installed: rustyjack-shellops"
+else
+  fail "[X] rustyjack-shellops binary missing"
 fi
 
 # Verify library crates were compiled

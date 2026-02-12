@@ -22,6 +22,7 @@ Usage: rj_test_loot.sh [options]
 Options:
   --no-ui             Skip UI automation
   --ui                Enable UI automation (default)
+  --dangerous         Ignored (compat with rj_run_tests)
   --ui-scenario PATH  Scenario file (default: scripts/ui_scenarios/loot.ui)
   --root DIR          Rustyjack root (default: /var/lib/rustyjack)
   --no-unit           Skip unit tests
@@ -38,6 +39,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-ui) RUN_UI=0; shift ;;
     --ui) RUN_UI=1; shift ;;
+    --dangerous) shift ;;
     --ui-scenario) UI_SCENARIO="$2"; shift 2 ;;
     --root) RJ_ROOT="$2"; shift 2 ;;
     --no-unit) RUN_UNIT=0; shift ;;

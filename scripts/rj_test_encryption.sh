@@ -23,6 +23,7 @@ Usage: rj_test_encryption.sh [options]
 Options:
   --no-ui             Skip UI automation
   --ui                Enable UI automation (default)
+  --dangerous         Ignored (compat with rj_run_tests)
   --ui-scenario PATH  Scenario file (default: scripts/ui_scenarios/encryption.ui)
   --root DIR          Rustyjack root (default: /var/lib/rustyjack)
   --key PATH          Test key path (default: /var/lib/rustyjack/keys/test.key)
@@ -40,6 +41,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-ui) RUN_UI=0; shift ;;
     --ui) RUN_UI=1; shift ;;
+    --dangerous) shift ;;
     --ui-scenario) UI_SCENARIO="$2"; shift 2 ;;
     --root) RJ_ROOT="$2"; shift 2 ;;
     --key) KEY_PATH="$2"; shift 2 ;;

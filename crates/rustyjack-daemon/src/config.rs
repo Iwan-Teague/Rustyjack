@@ -18,6 +18,9 @@ pub const DEFAULT_ROOT_PATH: &str = "/opt/rustyjack";
 pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
 pub const DEFAULT_MAX_REQUESTS_PER_SECOND: u32 = 20;
 pub const DEFAULT_UPDATE_PUBKEY_PATH: &str = "/etc/rustyjack/update_pubkey.ed25519";
+pub const DEFAULT_UI_ONLY_OPERATIONS: bool = true;
+pub const DEFAULT_UI_ONLY_TEST_JOBS: bool = true;
+pub const DEFAULT_UI_CLIENT_USER: &str = "rustyjack-ui";
 pub const OPS_OVERRIDE_FILENAME: &str = "ops_override.json";
 
 #[derive(Debug, Clone)]
@@ -35,6 +38,9 @@ pub struct DaemonConfig {
     pub root_path: PathBuf,
     pub max_connections: usize,
     pub max_requests_per_second: u32,
+    pub ui_only_operations: bool,
+    pub ui_only_test_jobs: bool,
+    pub ui_client_user: String,
     pub ops: OpsConfig,
     pub update_pubkey: Option<[u8; 32]>,
     pub update_pubkey_path: PathBuf,
@@ -81,6 +87,11 @@ impl DaemonConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(DEFAULT_MAX_REQUESTS_PER_SECOND);
+        let ui_only_operations =
+            env_bool("RUSTYJACKD_UI_ONLY_OPERATIONS", DEFAULT_UI_ONLY_OPERATIONS);
+        let ui_only_test_jobs = env_bool("RUSTYJACKD_UI_ONLY_TEST_JOBS", DEFAULT_UI_ONLY_TEST_JOBS);
+        let ui_client_user = env::var("RUSTYJACKD_UI_CLIENT_USER")
+            .unwrap_or_else(|_| DEFAULT_UI_CLIENT_USER.to_string());
 
         let profile = env::var("RUSTYJACKD_OPS_PROFILE").unwrap_or_else(|_| "appliance".into());
         let mut ops = match profile.as_str() {
@@ -169,6 +180,9 @@ impl DaemonConfig {
             root_path,
             max_connections,
             max_requests_per_second,
+            ui_only_operations,
+            ui_only_test_jobs,
+            ui_client_user,
             ops,
             update_pubkey,
             update_pubkey_path,

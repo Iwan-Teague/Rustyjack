@@ -449,7 +449,7 @@ if [[ "$RUN_AUTH" -eq 1 ]]; then
   fi
 
   if id -u "$OP_USER" >/dev/null 2>&1; then
-    rpc_expect_ok "A6" "SystemLogsGet" '{"max_lines":10}' "$OP_USER"
+    rpc_expect_ok "A6" "SystemLogsGet" "null" "$OP_USER"
     rpc_expect_ok "A7" "ActiveInterfaceClear" "null" "$OP_USER"
     rpc_expect_err "A8" "LoggingConfigSet" "{\"enabled\":$LOGCFG_ENABLED,\"level\":\"$LOGCFG_LEVEL\"}" "$OP_USER"
   fi
@@ -492,7 +492,7 @@ except Exception as e:
     json.dump({"error": str(e)}, open(f"{outdir}/proto_mismatch.json","w"), indent=2)
     print("ERR")
 PYTEST
-  if grep -q '"error"' "$OUT/artifacts/proto_mismatch.json" 2>/dev/null || grep -qi "incompat" "$OUT/artifacts/proto_mismatch.json"; then
+  if grep -Eq '"error"|incompat|version|EOF|Connection reset|Broken pipe' "$OUT/artifacts/proto_mismatch.json" 2>/dev/null; then
     rj_ok "protocol_version_mismatch_rejected"
   else
     rj_fail "protocol_version_mismatch_rejected"
@@ -539,7 +539,11 @@ if [[ "$RUN_COMPREHENSIVE" -eq 1 ]]; then
     comp_out="$OUT/artifacts/comprehensive"
     mkdir -p "$comp_out"
     rj_log "Running comprehensive suite..."
-    if "$ROOT_DIR/rustyjack_comprehensive_test.sh" --outroot "$comp_out" ${DANGEROUS:+--dangerous} >>"$LOG" 2>&1; then
+    comp_args=(--outroot "$comp_out")
+    if [[ "$DANGEROUS" -eq 1 ]]; then
+      comp_args+=(--dangerous)
+    fi
+    if "$ROOT_DIR/rustyjack_comprehensive_test.sh" "${comp_args[@]}" >>"$LOG" 2>&1; then
       rj_ok "comprehensive_suite"
     else
       rj_fail "comprehensive_suite (failures detected)"

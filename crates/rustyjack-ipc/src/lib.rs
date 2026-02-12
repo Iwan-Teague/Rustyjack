@@ -14,8 +14,8 @@ pub use job::{
     HotspotStartRequestIpc, InterfaceSelectDhcpResult, InterfaceSelectJobResult,
     InterfaceSelectRollbackResult, InterfaceSelectStatusResult, JobEvent, JobId, JobInfo, JobKind,
     JobSpec, JobStarted, JobState, MountStartRequestIpc, PortalStartRequestIpc, Progress,
-    ScanModeIpc, ScanRequestIpc, UnmountStartRequestIpc, UpdateRequestIpc, WifiConnectRequestIpc,
-    WifiScanRequestIpc,
+    ScanModeIpc, ScanRequestIpc, UiTestRunRequestIpc, UnmountStartRequestIpc, UpdateRequestIpc,
+    WifiConnectRequestIpc, WifiScanRequestIpc,
 };
 pub use rustyjack_commands::{
     BridgeCommand, Commands, DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand,

@@ -131,6 +131,18 @@ pub enum MenuAction {
     PurgeLogs,
     /// Hotspot management
     Hotspot,
+    /// Test runner main action
+    RunUiTestsAll,
+    /// Run only wireless suite
+    RunUiTestsWireless,
+    /// Run only ethernet suite
+    RunUiTestsEthernet,
+    /// Run interface selection suite
+    RunUiTestsInterfaceSelect,
+    /// Open advanced test configuration wizard
+    ConfigureAndRunUiTests,
+    /// Show latest UI test report metadata
+    ShowLatestUiTestReport,
     /// Placeholder for informational entries (no action)
     ShowInfo,
 }
@@ -229,6 +241,7 @@ impl MenuTree {
         nodes.insert("atx", MenuNode::Static(tx_power_menu));
         nodes.insert("aeth", MenuNode::Static(ethernet_menu));
         nodes.insert("aethp", MenuNode::Static(ethernet_pipeline_menu));
+        nodes.insert("at", MenuNode::Static(tests_menu));
         nodes.insert("enc", MenuNode::Static(encryption_menu));
         nodes.insert("encadv", MenuNode::Static(encryption_advanced_menu));
         nodes.insert("encusb", MenuNode::Static(encryption_usb_menu));
@@ -323,7 +336,22 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Obfuscation", MenuAction::Submenu("ao")),
         MenuEntry::new("Encryption", MenuAction::Submenu("enc")),
         MenuEntry::new("Loot", MenuAction::Submenu("ah")),
+        MenuEntry::new("Tests", MenuAction::Submenu("at")),
         MenuEntry::new("Settings", MenuAction::Submenu("as")),
+    ]
+}
+
+fn tests_menu() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new("Run All (UI)", MenuAction::RunUiTestsAll),
+        MenuEntry::new("Wireless Suite", MenuAction::RunUiTestsWireless),
+        MenuEntry::new("Ethernet Suite", MenuAction::RunUiTestsEthernet),
+        MenuEntry::new(
+            "Interface Select Suite",
+            MenuAction::RunUiTestsInterfaceSelect,
+        ),
+        MenuEntry::new("Configure + Run", MenuAction::ConfigureAndRunUiTests),
+        MenuEntry::new("Latest Report", MenuAction::ShowLatestUiTestReport),
     ]
 }
 
@@ -663,6 +691,7 @@ pub fn menu_title(id: &str) -> &'static str {
         "awco" => "Connected Offence",
         "aeth" => "Ethernet Recon",
         "aethp" => "Ethernet Pipelines",
+        "at" => "Tests",
         "as" => "Settings",
         "asl" => "Logs",
         "asd" => "Discord",

@@ -307,6 +307,7 @@ fn required_locks(kind: &JobKind) -> Vec<LockKind> {
         JobKind::MountStart { .. } => vec![LockKind::Mount],
         JobKind::UnmountStart { .. } => vec![LockKind::Mount],
         JobKind::InterfaceSelect { .. } => Vec::new(),
+        JobKind::UiTestRun { .. } => Vec::new(),
         JobKind::CoreCommand { .. } => vec![LockKind::Wifi],
     }
 }
@@ -324,6 +325,7 @@ fn job_kind_name(kind: &JobKind) -> &'static str {
         JobKind::MountStart { .. } => "mount_start",
         JobKind::UnmountStart { .. } => "unmount_start",
         JobKind::InterfaceSelect { .. } => "interface_select",
+        JobKind::UiTestRun { .. } => "ui_test_run",
         JobKind::CoreCommand { .. } => "core_command",
     }
 }

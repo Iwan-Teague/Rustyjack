@@ -11,12 +11,12 @@ use tracing::{debug, instrument, warn};
 
 use rustyjack_ipc::{
     endpoint_for_body, AuthzSummary, ClientHello, DaemonError, ErrorCode, FeatureFlag, HelloAck,
-    RequestEnvelope, ResponseBody, ResponseEnvelope, PROTOCOL_VERSION,
+    RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, PROTOCOL_VERSION,
 };
 
 use crate::auth::{
-    authorization_for_peer, ops_allows, peer_credentials, required_ops_for_request,
-    required_tier_for_request, tier_allows,
+    authorization_for_peer, is_descendant_of_process, is_read_only_request, is_ui_peer, ops_allows,
+    peer_credentials, required_ops_for_request, required_tier_for_request, tier_allows,
 };
 use crate::config::DaemonConfig;
 use crate::dispatch::handle_request;
@@ -363,6 +363,62 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
             continue;
         }
         drop(ops);
+
+        // Enforce UI-only operation requests on dedicated deployments.
+        // Read-only telemetry/status requests remain available to non-UI peers.
+        if state.config.ui_only_operations
+            && !is_read_only_request(request.endpoint, &request.body)
+            && !is_ui_peer(&peer, &state.config)
+            && !is_descendant_of_process(peer.pid, std::process::id())
+        {
+            let _ = send_error_timed(
+                &mut stream,
+                PROTOCOL_VERSION,
+                request.request_id,
+                DaemonError::new(
+                    ErrorCode::Forbidden,
+                    "operations are restricted to the UI runtime",
+                    false,
+                )
+                .with_detail(format!(
+                    "client pid {} uid {} is not UI user '{}' and not daemon-spawned",
+                    peer.pid, peer.uid, state.config.ui_client_user
+                )),
+                state.config.max_frame,
+                state.config.write_timeout,
+            )
+            .await;
+            continue;
+        }
+
+        // Optional UI-only gate for test-runner jobs.
+        if state.config.ui_only_test_jobs
+            && matches!(
+                &request.body,
+                RequestBody::JobStart(req)
+                    if matches!(&req.job.kind, rustyjack_ipc::JobKind::UiTestRun { .. })
+            )
+            && !is_ui_peer(&peer, &state.config)
+        {
+            let _ = send_error_timed(
+                &mut stream,
+                PROTOCOL_VERSION,
+                request.request_id,
+                DaemonError::new(
+                    ErrorCode::Forbidden,
+                    "ui-only test runner access denied",
+                    false,
+                )
+                .with_detail(format!(
+                    "client uid {} is not configured UI user '{}'",
+                    peer.uid, state.config.ui_client_user
+                )),
+                state.config.max_frame,
+                state.config.write_timeout,
+            )
+            .await;
+            continue;
+        }
 
         let response = handle_request(&state, request, peer).await;
         let payload = match serde_json::to_vec(&response) {

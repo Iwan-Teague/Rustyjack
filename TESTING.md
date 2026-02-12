@@ -10,6 +10,39 @@
 2. Reboot Pi.
 3. Confirm daemon + UI start cleanly.
 
+## Automated Suite
+- Run the dedicated suite:
+  - `sudo ./scripts/rj_test_interface_selection.sh`
+- Run via orchestrator:
+  - `sudo ./scripts/rj_run_tests.sh --iface-select`
+- Safety behavior:
+  - When running over SSH, the suite skips switching away from the SSH uplink by default.
+  - Override only if you have local console access: `--allow-remote-switch`.
+
+## Dev Discord Webhook (Test Orchestrator)
+- Discord preflight suite:
+  - `sudo ./scripts/rj_test_discord.sh`
+  - `sudo ./scripts/rj_test_all.sh` (wrapper for `rj_run_tests.sh --all`)
+- Orchestrator behavior (`scripts/rj_run_tests.sh`):
+  - When Discord notifications are enabled and at least one suite is selected, `rj_test_discord.sh` runs first.
+  - Each suite result is posted to Discord with a timestamp.
+  - A final consolidated summary is posted at the end.
+- Webhook source priority:
+  - `RJ_DISCORD_WEBHOOK_URL` (explicit override)
+  - `/var/lib/rustyjack/discord_webhook.txt` (UI-managed default)
+- Runtime overrides:
+  - `RJ_DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." sudo ./scripts/rj_run_tests.sh --all`
+  - `sudo ./scripts/rj_run_tests.sh --all --discord-webhook "https://discord.com/api/webhooks/..."`
+  - `sudo ./scripts/rj_run_tests.sh --all --runtime-root /var/lib/rustyjack`
+- Useful flags:
+  - `--discord-disable` to suppress webhook for a run.
+  - `--discord-username "RustiJack Pi"` to override sender name.
+  - `--discord-mention "<@1234567890>"` to ping yourself.
+  - `--discord-no-attach` to send message-only (no attached summary markdown).
+- Generated artifacts each run:
+  - `<outroot>/<run_id>/run_summary.md`
+  - `<outroot>/<run_id>/run_summary.json`
+
 ## Manual Verification Checklist
 
 ### 1. Truthful interface list

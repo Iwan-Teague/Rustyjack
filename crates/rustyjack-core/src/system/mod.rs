@@ -2246,107 +2246,139 @@ fn apply_interface_isolation_with_ops_strict_impl(
         );
     }
 
+    let mut allowed_infos = Vec::new();
+    let mut blocked_infos = Vec::new();
     for iface_info in interfaces {
-        let is_allowed = allowed_set.contains(&iface_info.name);
+        if allowed_set.contains(&iface_info.name) {
+            allowed_infos.push(iface_info);
+        } else {
+            blocked_infos.push(iface_info);
+        }
+    }
+
+    // Phase 1: make sure all allowed interfaces can be prepared/admin-UP before
+    // we touch any non-allowed interfaces. This prevents cutting off the current
+    // uplink when switching to a target interface that cannot come up.
+    for iface_info in allowed_infos {
         debug!(
             target: "net",
             iface = %iface_info.name,
-            allowed = is_allowed,
+            allowed = true,
             wireless = iface_info.is_wireless,
             "interface_isolation_strict_eval"
         );
 
-        if is_allowed {
-            if let Err(e) = ops.release_dhcp(&iface_info.name) {
-                warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
-            }
-            if let Err(e) = ops.flush_addresses(&iface_info.name) {
-                warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
-            }
-            if let Err(e) = routes.delete_default_route(&iface_info.name) {
-                debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
-            }
-
-            if iface_info.is_wireless {
-                if let Err(e) = ops.set_rfkill_block(&iface_info.name, false) {
-                    errors.push(crate::system::ops::ErrorEntry {
-                        interface: iface_info.name.clone(),
-                        message: format!("rfkill unblock failed: {}", e),
-                    });
-                }
-                if let Ok(blocked) = ops.is_rfkill_blocked(&iface_info.name) {
-                    if blocked {
-                        errors.push(crate::system::ops::ErrorEntry {
-                            interface: iface_info.name.clone(),
-                            message: "rfkill still blocked after unblock".to_string(),
-                        });
-                    }
-                }
-            }
-
-            if let Err(e) = ops.bring_up(&iface_info.name) {
-                errors.push(crate::system::ops::ErrorEntry {
-                    interface: iface_info.name.clone(),
-                    message: format!("bring up failed: {}", e),
-                });
-            }
-
-            if let Err(e) =
-                wait_for_admin_state(&*ops, &iface_info.name, true, Duration::from_secs(10))
-            {
-                errors.push(crate::system::ops::ErrorEntry {
-                    interface: iface_info.name.clone(),
-                    message: format!("wait for up failed: {}", e),
-                });
-            }
-
-            allowed_vec.push(iface_info.name);
-        } else {
-            if let Err(e) = ops.release_dhcp(&iface_info.name) {
-                warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
-            }
-            if let Err(e) = ops.flush_addresses(&iface_info.name) {
-                warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
-            }
-            if let Err(e) = routes.delete_default_route(&iface_info.name) {
-                debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
-            }
-
-            if let Err(e) = ops.bring_down(&iface_info.name) {
-                errors.push(crate::system::ops::ErrorEntry {
-                    interface: iface_info.name.clone(),
-                    message: format!("bring down failed: {}", e),
-                });
-            }
-
-            if let Err(e) =
-                wait_for_admin_state(&*ops, &iface_info.name, false, Duration::from_secs(5))
-            {
-                errors.push(crate::system::ops::ErrorEntry {
-                    interface: iface_info.name.clone(),
-                    message: format!("wait for down failed: {}", e),
-                });
-            }
-
-            if iface_info.is_wireless {
-                if let Err(e) = ops.set_rfkill_block(&iface_info.name, true) {
-                    errors.push(crate::system::ops::ErrorEntry {
-                        interface: iface_info.name.clone(),
-                        message: format!("rfkill block failed: {}", e),
-                    });
-                }
-                if let Ok(blocked) = ops.is_rfkill_blocked(&iface_info.name) {
-                    if !blocked {
-                        errors.push(crate::system::ops::ErrorEntry {
-                            interface: iface_info.name.clone(),
-                            message: "rfkill not blocked after block".to_string(),
-                        });
-                    }
-                }
-            }
-
-            blocked_vec.push(iface_info.name);
+        if let Err(e) = ops.release_dhcp(&iface_info.name) {
+            warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
         }
+        if let Err(e) = ops.flush_addresses(&iface_info.name) {
+            warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
+        }
+        if let Err(e) = routes.delete_default_route(&iface_info.name) {
+            debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
+        }
+
+        if iface_info.is_wireless {
+            if let Err(e) = ops.set_rfkill_block(&iface_info.name, false) {
+                errors.push(crate::system::ops::ErrorEntry {
+                    interface: iface_info.name.clone(),
+                    message: format!("rfkill unblock failed: {}", e),
+                });
+            }
+            if let Ok(blocked) = ops.is_rfkill_blocked(&iface_info.name) {
+                if blocked {
+                    errors.push(crate::system::ops::ErrorEntry {
+                        interface: iface_info.name.clone(),
+                        message: "rfkill still blocked after unblock".to_string(),
+                    });
+                }
+            }
+        }
+
+        if let Err(e) = ops.bring_up(&iface_info.name) {
+            errors.push(crate::system::ops::ErrorEntry {
+                interface: iface_info.name.clone(),
+                message: format!("bring up failed: {}", e),
+            });
+        }
+
+        if let Err(e) = wait_for_admin_state(&*ops, &iface_info.name, true, Duration::from_secs(10))
+        {
+            errors.push(crate::system::ops::ErrorEntry {
+                interface: iface_info.name.clone(),
+                message: format!("wait for up failed: {}", e),
+            });
+        }
+
+        allowed_vec.push(iface_info.name);
+    }
+
+    if !errors.is_empty() {
+        warn!(
+            target: "net",
+            errors = errors.len(),
+            "interface_isolation_strict_abort_before_blocking"
+        );
+        return Ok(crate::system::ops::IsolationOutcome {
+            allowed: allowed_vec,
+            blocked: blocked_vec,
+            errors,
+        });
+    }
+
+    // Phase 2: only after the allowed set is up, isolate all non-allowed interfaces.
+    for iface_info in blocked_infos {
+        debug!(
+            target: "net",
+            iface = %iface_info.name,
+            allowed = false,
+            wireless = iface_info.is_wireless,
+            "interface_isolation_strict_eval"
+        );
+
+        if let Err(e) = ops.release_dhcp(&iface_info.name) {
+            warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
+        }
+        if let Err(e) = ops.flush_addresses(&iface_info.name) {
+            warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
+        }
+        if let Err(e) = routes.delete_default_route(&iface_info.name) {
+            debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
+        }
+
+        if let Err(e) = ops.bring_down(&iface_info.name) {
+            errors.push(crate::system::ops::ErrorEntry {
+                interface: iface_info.name.clone(),
+                message: format!("bring down failed: {}", e),
+            });
+        }
+
+        if let Err(e) = wait_for_admin_state(&*ops, &iface_info.name, false, Duration::from_secs(5))
+        {
+            errors.push(crate::system::ops::ErrorEntry {
+                interface: iface_info.name.clone(),
+                message: format!("wait for down failed: {}", e),
+            });
+        }
+
+        if iface_info.is_wireless {
+            if let Err(e) = ops.set_rfkill_block(&iface_info.name, true) {
+                errors.push(crate::system::ops::ErrorEntry {
+                    interface: iface_info.name.clone(),
+                    message: format!("rfkill block failed: {}", e),
+                });
+            }
+            if let Ok(blocked) = ops.is_rfkill_blocked(&iface_info.name) {
+                if !blocked {
+                    errors.push(crate::system::ops::ErrorEntry {
+                        interface: iface_info.name.clone(),
+                        message: "rfkill not blocked after block".to_string(),
+                    });
+                }
+            }
+        }
+
+        blocked_vec.push(iface_info.name);
     }
 
     if let Err(e) = verify_only_allow_list_admin_up(&*ops, &allowed_set) {

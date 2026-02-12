@@ -183,3 +183,7 @@ This requires Docker Desktop's WSL 2 integration to be enabled in settings.
 - Original bash scripts: `build_arm64.sh`, `build_arm32.sh`
 - Docker configuration: `docker/arm64/Dockerfile`, `docker/arm32/Dockerfile`
 - Main project README: `../README.md`
+
+---
+
+Footnote (2026-02-12): Outdated output description. The document says Windows ARM scripts output only rustyjack-ui, but current build_arm32.ps1/build_arm64.ps1 build multiple binaries (rustyjack-ui, rustyjackd, rustyjack-portal, rustyjack).

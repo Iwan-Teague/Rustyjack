@@ -5770,6 +5770,17 @@ fn review_artifact_path(root: &Path) -> PathBuf {
 }
 
 fn offensive_review_approved(root: &Path) -> bool {
+    // Allow ops when explicitly enabled via env (service/env default now enables offensive ops).
+    let env_true = |key: &str| {
+        std::env::var(key)
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
+            .unwrap_or(false)
+    };
+
+    if env_true("RUSTYJACKD_OPS_OFFENSIVE") || env_true("RUSTYJACK_ALLOW_OFFENSIVE") {
+        return true;
+    }
+
     review_artifact_path(root).exists()
 }
 
