@@ -53,13 +53,22 @@ pub fn version_string() -> String {
 #[no_mangle]
 pub static RUSTYJACK_BUILD_INFO: &str = concat!(
     "rustyjack_build_info:",
-    "version=", env!("CARGO_PKG_VERSION"),
-    ";build_epoch=", env!("RUSTYJACK_BUILD_EPOCH"),
-    ";build_iso=", env!("RUSTYJACK_BUILD_ISO"),
-    ";git_hash=", env!("RUSTYJACK_GIT_HASH"),
-    ";git_dirty=", env!("RUSTYJACK_GIT_DIRTY"),
-    ";build_profile=", env!("RUSTYJACK_BUILD_PROFILE"),
-    ";build_variant=", env!("RUSTYJACK_BUILD_VARIANT"),
-    ";build_target=", env!("RUSTYJACK_BUILD_TARGET"),
-    ";build_arch=", env!("RUSTYJACK_BUILD_ARCH")
+    "version=",
+    env!("CARGO_PKG_VERSION"),
+    ";build_epoch=",
+    env!("RUSTYJACK_BUILD_EPOCH"),
+    ";build_iso=",
+    env!("RUSTYJACK_BUILD_ISO"),
+    ";git_hash=",
+    env!("RUSTYJACK_GIT_HASH"),
+    ";git_dirty=",
+    env!("RUSTYJACK_GIT_DIRTY"),
+    ";build_profile=",
+    env!("RUSTYJACK_BUILD_PROFILE"),
+    ";build_variant=",
+    env!("RUSTYJACK_BUILD_VARIANT"),
+    ";build_target=",
+    env!("RUSTYJACK_BUILD_TARGET"),
+    ";build_arch=",
+    env!("RUSTYJACK_BUILD_ARCH")
 );

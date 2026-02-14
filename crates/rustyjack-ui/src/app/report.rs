@@ -1429,5 +1429,4 @@ impl App {
             Ok(Some(sites[choice].clone()))
         }
     }
-
 }

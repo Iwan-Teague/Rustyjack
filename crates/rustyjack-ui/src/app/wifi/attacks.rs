@@ -255,7 +255,10 @@ impl App {
             Err(err) => {
                 self.show_message(
                     "Wi-Fi error",
-                    [format!("Connection failed"), shorten_for_display(&err.to_string(), 90)],
+                    [
+                        format!("Connection failed"),
+                        shorten_for_display(&err.to_string(), 90),
+                    ],
                 )?;
             }
         }
@@ -372,5 +375,4 @@ impl App {
             }
         }
     }
-
 }

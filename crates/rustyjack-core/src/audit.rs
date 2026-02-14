@@ -117,7 +117,12 @@ impl AuditEvent {
             let _ = std::fs::set_permissions(&audit_file, std::fs::Permissions::from_mode(0o640));
         }
 
-        let json = serde_json::to_string(self)?;
+        // Redact sensitive fields in context before serializing
+        let mut event_for_log = self.clone();
+        if let Some(ref mut ctx) = event_for_log.context {
+            redact_audit_context(ctx);
+        }
+        let json = serde_json::to_string(&event_for_log)?;
         writeln!(file, "{}", json)?;
 
         // Also log to tracing for visibility
@@ -157,6 +162,27 @@ impl AuditEvent {
         }
 
         Ok(())
+    }
+}
+
+/// Redact sensitive fields in audit context JSON values.
+fn redact_audit_context(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                if crate::redact::is_sensitive_field(key) {
+                    *val = serde_json::Value::String("[REDACTED]".to_string());
+                } else {
+                    redact_audit_context(val);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                redact_audit_context(val);
+            }
+        }
+        _ => {}
     }
 }
 

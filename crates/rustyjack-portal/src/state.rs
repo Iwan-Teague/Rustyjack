@@ -1,7 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::config::PortalConfig;
 use crate::logging::PortalLogger;
@@ -46,6 +46,16 @@ pub fn start_portal(cfg: PortalConfig) -> Result<()> {
     validate_config(&cfg)?;
 
     let index_path = cfg.site_dir.join("index.html");
+    let index_meta = std::fs::metadata(&index_path)
+        .with_context(|| format!("stat portal HTML at {}", index_path.display()))?;
+    const MAX_TEMPLATE_BYTES: u64 = 256 * 1024;
+    if index_meta.len() > MAX_TEMPLATE_BYTES {
+        bail!(
+            "portal index.html exceeds size limit ({} bytes, max {})",
+            index_meta.len(),
+            MAX_TEMPLATE_BYTES
+        );
+    }
     let index_html = std::fs::read_to_string(&index_path)
         .with_context(|| format!("reading portal HTML from {}", index_path.display()))?;
 

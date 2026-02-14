@@ -173,8 +173,13 @@ pub fn discover_hosts(network: Ipv4Net, timeout: Duration) -> Result<LanDiscover
                 }
                 // Safety: recv_from initialized the first `n` bytes.
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
+                // Parse IHL from IPv4 header (lower nibble of first byte)
+                let ihl = (bytes[0] & 0x0F) as usize * 4;
+                if ihl < 20 || n < ihl + 8 {
+                    continue;
+                }
                 let ttl = bytes.get(8).copied();
-                let icmp = &bytes[20..];
+                let icmp = &bytes[ihl..];
                 // Only accept echo replies that match our identifier.
                 if icmp[0] != 0 || icmp[1] != 0 {
                     continue;

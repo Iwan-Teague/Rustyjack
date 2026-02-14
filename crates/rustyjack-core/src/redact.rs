@@ -140,4 +140,63 @@ mod tests {
         assert_eq!(value["nested"]["api_key"], "[REDACTED]");
         assert_eq!(value["nested"]["interface"], "wlan0");
     }
+
+    #[test]
+    fn sensitive_field_variants() {
+        // All known sensitive prefixes/suffixes must be caught
+        for name in &[
+            "password",
+            "PASSWD",
+            "wpa_pass",
+            "user_pwd",
+            "pre_shared_key",
+            "psk",
+            "api_secret",
+            "bearer_token",
+            "credential_store",
+            "auth_header",
+            "ssh_key",
+        ] {
+            assert!(is_sensitive_field(name), "{} should be sensitive", name);
+        }
+    }
+
+    #[test]
+    fn non_sensitive_fields_not_redacted() {
+        for name in &[
+            "ssid",
+            "bssid",
+            "interface",
+            "channel",
+            "frequency",
+            "hostname",
+        ] {
+            assert!(
+                !is_sensitive_field(name),
+                "{} should NOT be sensitive",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn redact_json_nested_arrays() {
+        let mut value = serde_json::json!({
+            "results": [
+                { "password": "pw1", "ssid": "net1" },
+                { "psk": "pw2", "channel": 6 }
+            ]
+        });
+        redact_json(&mut value);
+        assert_eq!(value["results"][0]["password"], "[REDACTED]");
+        assert_eq!(value["results"][0]["ssid"], "net1");
+        assert_eq!(value["results"][1]["psk"], "[REDACTED]");
+        assert_eq!(value["results"][1]["channel"], 6);
+    }
+
+    #[test]
+    fn redact_if_sensitive_passthrough() {
+        assert_eq!(redact_if_sensitive("password", "secret"), "[REDACTED]");
+        assert_eq!(redact_if_sensitive("ssid", "MyNet"), "MyNet");
+    }
 }

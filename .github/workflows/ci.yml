@@ -32,6 +32,15 @@ jobs:
           rustc ci/no_emoji_in_source.rs -o /tmp/no_emoji_in_source
           /tmp/no_emoji_in_source
 
+      - name: cargo fmt check
+        run: cargo fmt --all -- --check
+
+      - name: cargo check workspace
+        run: cargo check --workspace
+
+      - name: cargo test workspace
+        run: cargo test --workspace
+
       - name: Guard against lab features in release builds
         run: |
           set +e

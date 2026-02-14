@@ -318,8 +318,9 @@ impl StateManager {
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.block_on(restore_fut)
             } else {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| EvasionError::System(format!("Failed to create runtime: {}", e)))?;
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    EvasionError::System(format!("Failed to create runtime: {}", e))
+                })?;
                 rt.block_on(restore_fut)
             }
         }

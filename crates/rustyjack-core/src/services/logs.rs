@@ -108,6 +108,9 @@ pub fn collect_log_bundle(root: &Path) -> Result<String, ServiceError> {
         out.push_str("\n\n--- TRUNCATED: exceeded MAX_LOG_BUNDLE_BYTES ---\n");
     }
 
+    // Redact sensitive patterns before returning the bundle
+    out = redact_log_bundle(out);
+
     Ok(out)
 }
 
@@ -727,4 +730,52 @@ fn append_device_file_info(buf: &mut String, device_path: &str) {
             buf.push_str(&format!("{}: ERROR - {}\n", device_path, err));
         }
     }
+}
+
+/// Redact sensitive patterns (passwords, keys, PSKs) from log bundle text.
+/// Uses line-level matching to avoid breaking log structure.
+fn redact_log_bundle(input: String) -> String {
+    const SENSITIVE_KEYS: &[&str] = &[
+        "password",
+        "passwd",
+        "pass=",
+        "psk=",
+        "key=",
+        "secret=",
+        "token=",
+        "credential",
+    ];
+    let mut output = String::with_capacity(input.len());
+    for line in input.lines() {
+        let lower = line.to_lowercase();
+        let mut redacted = false;
+        for key in SENSITIVE_KEYS {
+            if lower.contains(key) {
+                if let Some(pos) = lower.find(key) {
+                    let prefix_end = pos + key.len();
+                    let rest = &line[prefix_end..];
+                    if let Some(eq_pos) = rest.find(|c: char| c == '=' || c == ':' || c == '"') {
+                        let value_start = prefix_end + eq_pos + 1;
+                        output.push_str(&line[..value_start]);
+                        output.push_str("[REDACTED]");
+                        let remainder = &line[value_start..];
+                        if let Some(end) = remainder.find(|c: char| {
+                            c == '"' || c == '\'' || c == ' ' || c == ',' || c == '}'
+                        }) {
+                            output.push_str(&remainder[end..]);
+                        }
+                    } else {
+                        output.push_str(line);
+                    }
+                    redacted = true;
+                    break;
+                }
+            }
+        }
+        if !redacted {
+            output.push_str(line);
+        }
+        output.push('\n');
+    }
+    output
 }

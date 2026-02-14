@@ -185,6 +185,13 @@ fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<()> {
         if entry_type.is_symlink() || entry_type.is_hard_link() {
             bail!("archive contains unsupported link: {}", path.display());
         }
+        // Only allow regular files and directories; reject device nodes, FIFOs, etc.
+        if !entry_type.is_file() && !entry_type.is_dir() {
+            bail!(
+                "archive contains unsupported entry type: {}",
+                path.display()
+            );
+        }
         let dest_path = dest_dir.join(&path);
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent).context("create archive parent")?;
@@ -300,6 +307,15 @@ fn resolve_install_path(install_to: &str, install_dir: &Path) -> Result<PathBuf>
     let path = Path::new(trimmed);
     if path.is_absolute() {
         validate_abs_path(path)?;
+        // Restrict absolute paths to known install roots
+        const ALLOWED_ROOTS: &[&str] = &["/usr/local/bin", "/usr/local/lib"];
+        let allowed = ALLOWED_ROOTS.iter().any(|root| path.starts_with(root));
+        if !allowed {
+            bail!(
+                "install_to absolute path not in allowed roots: {}",
+                path.display()
+            );
+        }
         Ok(path.to_path_buf())
     } else {
         validate_rel_path(path)?;
@@ -309,7 +325,12 @@ fn resolve_install_path(install_to: &str, install_dir: &Path) -> Result<PathBuf>
 
 fn parse_mode(mode: &str) -> Result<u32> {
     let trimmed = mode.trim().trim_start_matches("0o");
-    u32::from_str_radix(trimmed, 8).context("parse file mode")
+    let value = u32::from_str_radix(trimmed, 8).context("parse file mode")?;
+    // Reject SUID (0o4000), SGID (0o2000), and sticky (0o1000) bits
+    if value & 0o7000 != 0 {
+        bail!("file mode contains SUID/SGID/sticky bits: 0o{:o}", value);
+    }
+    Ok(value)
 }
 
 fn sha256_file(path: &Path) -> Result<[u8; 32]> {

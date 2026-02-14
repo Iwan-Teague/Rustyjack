@@ -130,7 +130,9 @@ async fn main() -> Result<()> {
             sleep(Duration::from_secs(2)).await;
 
             if let Err(err) = hotplug_notify().await {
-                logger.log(format!("ERROR: Failed to send HotplugNotify to daemon: {err}"));
+                logger.log(format!(
+                    "ERROR: Failed to send HotplugNotify to daemon: {err}"
+                ));
                 return Err(err);
             }
             logger.log("SUCCESS: Sent HotplugNotify to daemon");

@@ -3,7 +3,8 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::{Context, Result};
 use axum::{
     extract::{ConnectInfo, Form, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
+    middleware::Next,
     response::{Html, Redirect},
     routing::get,
     Router,
@@ -52,6 +53,7 @@ pub fn build_router(cfg: &PortalConfig, state: PortalState) -> Router {
         .route("/", get(get_index).post(post_capture))
         .fallback_service(ServeDir::new(&cfg.site_dir).append_index_html_on_directories(true))
         .with_state(state)
+        .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(middleware)
 }
 
@@ -120,6 +122,30 @@ async fn log_visit(state: &PortalState, headers: &HeaderMap, uri: &Uri, addr: So
     if let Err(err) = state.logger.log_visit_line(&line).await {
         tracing::warn!("portal visit log write failed: {err}");
     }
+}
+
+async fn security_headers_middleware(
+    req: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    let headers = resp.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'",
+        ),
+    );
+    resp
 }
 
 fn user_agent(headers: &HeaderMap) -> String {

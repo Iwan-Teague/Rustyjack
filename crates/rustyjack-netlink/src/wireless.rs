@@ -249,12 +249,12 @@ pub struct PhyCapabilities {
 /// Drivers known to NOT support TX in monitor mode (injection)
 /// These are typically "FullMAC" drivers where the firmware handles most 802.11 processing
 pub const INJECTION_DENY_DRIVERS: &[&str] = &[
-    "brcmfmac",   // Broadcom FullMAC (Pi onboard, many USB dongles)
-    "mwifiex",    // Marvell FullMAC
-    "iwlwifi",    // Intel - most models lack injection support
-    "iwlmvm",     // Intel newer driver
-    "mt7921e",    // MediaTek FullMAC
-    "mt7921u",    // MediaTek FullMAC USB
+    "brcmfmac", // Broadcom FullMAC (Pi onboard, many USB dongles)
+    "mwifiex",  // Marvell FullMAC
+    "iwlwifi",  // Intel - most models lack injection support
+    "iwlmvm",   // Intel newer driver
+    "mt7921e",  // MediaTek FullMAC
+    "mt7921u",  // MediaTek FullMAC USB
 ];
 
 /// Drivers known to support TX in monitor mode (injection)
@@ -1796,10 +1796,7 @@ impl WirelessManager {
                     .map(|s| s.to_string())
             }
             Err(e) => {
-                debug!(
-                    "Could not read driver symlink for {}: {}",
-                    interface, e
-                );
+                debug!("Could not read driver symlink for {}: {}", interface, e);
                 None
             }
         }
@@ -1808,9 +1805,7 @@ impl WirelessManager {
     /// Determine TX-in-monitor capability based on driver name
     ///
     /// Returns (capability verdict, human-readable reason)
-    fn determine_tx_in_monitor(
-        driver_name: &Option<String>,
-    ) -> (TxInMonitorCapability, String) {
+    fn determine_tx_in_monitor(driver_name: &Option<String>) -> (TxInMonitorCapability, String) {
         match driver_name {
             Some(driver) => {
                 // Check deny list first (FullMAC drivers known to not support injection)

@@ -280,10 +280,8 @@ pub fn query_interface_capabilities(iface: &str) -> Result<InterfaceCapabilities
             caps.tx_in_monitor_reason = phy_caps.tx_in_monitor_reason;
 
             // Derive legacy supports_injection from tx_in_monitor for backward compat
-            caps.supports_injection = matches!(
-                caps.tx_in_monitor,
-                TxInMonitorCapability::Supported
-            );
+            caps.supports_injection =
+                matches!(caps.tx_in_monitor, TxInMonitorCapability::Supported);
 
             // Copy driver name from phy_caps
             if caps.driver.is_none() {

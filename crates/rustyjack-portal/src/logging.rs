@@ -127,11 +127,17 @@ fn timestamp_now() -> String {
 }
 
 fn open_append(path: impl AsRef<Path>) -> Result<std::fs::File> {
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-        .context("opening log file")
+        .open(path.as_ref())
+        .context("opening log file")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path.as_ref(), std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(file)
 }
 
 #[cfg(test)]

@@ -497,7 +497,9 @@ fn cmd_socat(args: Vec<String>) -> i32 {
     }
 
     if addresses.len() != 2 {
-        eprintln!("socat: expected exactly 2 addresses (supports only '-' and UNIX-CONNECT:<path>)");
+        eprintln!(
+            "socat: expected exactly 2 addresses (supports only '-' and UNIX-CONNECT:<path>)"
+        );
         return 2;
     }
 
@@ -703,7 +705,11 @@ fn select_field(fields: &[String], selector: &FieldSelector) -> Option<String> {
     }
 }
 
-fn print_selected_fields(lines: Vec<String>, fs: Option<&str>, selector: &FieldSelector) -> Vec<String> {
+fn print_selected_fields(
+    lines: Vec<String>,
+    fs: Option<&str>,
+    selector: &FieldSelector,
+) -> Vec<String> {
     let mut out = Vec::new();
     for line in lines {
         let fields = split_fields(&line, fs);
@@ -939,7 +945,8 @@ fn cmd_awk(args: Vec<String>) -> i32 {
         for line in lines {
             let fields = split_fields(&line, fs);
             if fields.len() >= 3 {
-                let value = format!("{}:{}:{}", fields[0], fields[1], fields[2]).to_ascii_uppercase();
+                let value =
+                    format!("{}:{}:{}", fields[0], fields[1], fields[2]).to_ascii_uppercase();
                 out.push(value);
             }
         }
