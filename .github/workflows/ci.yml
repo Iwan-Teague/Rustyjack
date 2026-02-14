@@ -27,6 +27,11 @@ jobs:
           rustc ci/no_blocking_in_async.rs -o /tmp/no_blocking_in_async
           /tmp/no_blocking_in_async
 
+      - name: Check no emoji in source
+        run: |
+          rustc ci/no_emoji_in_source.rs -o /tmp/no_emoji_in_source
+          /tmp/no_emoji_in_source
+
       - name: Guard against lab features in release builds
         run: |
           set +e

@@ -958,6 +958,39 @@ async fn read_iface_ipv4(interface: &str) -> Result<Ipv4Addr> {
     }
 }
 
+/// Maximum banner length stored in loot (bytes).
+const MAX_BANNER_LEN: usize = 512;
+
+/// Strip ANSI escapes and control characters from an untrusted banner string.
+fn sanitize_banner(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(MAX_BANNER_LEN));
+    let mut i = 0;
+    let bytes = raw.as_bytes();
+    while i < bytes.len() && out.len() < MAX_BANNER_LEN {
+        // Skip ANSI escape sequences (ESC [ ... final byte)
+        if bytes[i] == 0x1B {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'[' {
+                i += 1;
+                while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        let ch = bytes[i];
+        if ch == b'\t' || (ch >= 0x20 && ch < 0x7F) || ch >= 0x80 {
+            out.push(ch as char);
+        }
+        // Drop other control chars (CR, LF, NUL, etc.)
+        i += 1;
+    }
+    out
+}
+
 fn grab_banner(mut stream: TcpStream, port: u16) -> Option<PortBanner> {
     let mut probe = String::new();
     let mut banner = String::new();
@@ -973,11 +1006,12 @@ fn grab_banner(mut stream: TcpStream, port: u16) -> Option<PortBanner> {
     let mut buf = [0u8; 512];
     if let Ok(n) = stream.read(&mut buf) {
         if n > 0 {
-            banner = String::from_utf8_lossy(&buf[..n])
+            let raw_line = String::from_utf8_lossy(&buf[..n])
                 .lines()
                 .next()
-                .unwrap_or("")
+                .unwrap_or_default()
                 .to_string();
+            banner = sanitize_banner(&raw_line);
         }
     }
 
@@ -1567,4 +1601,38 @@ pub fn build_device_inventory_cancellable(
     }
 
     Ok(devices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_banner_strips_ansi() {
+        let raw = "\x1B[31mRED\x1B[0m OK";
+        assert_eq!(sanitize_banner(raw), "RED OK");
+    }
+
+    #[test]
+    fn sanitize_banner_strips_control_chars() {
+        let raw = "Server\r\nHeader: val";
+        assert_eq!(sanitize_banner(raw), "ServerHeader: val");
+    }
+
+    #[test]
+    fn sanitize_banner_caps_length() {
+        let raw = "A".repeat(1024);
+        let result = sanitize_banner(&raw);
+        assert!(result.len() <= MAX_BANNER_LEN);
+    }
+
+    #[test]
+    fn sanitize_banner_preserves_tabs() {
+        assert_eq!(sanitize_banner("key\tvalue"), "key\tvalue");
+    }
+
+    #[test]
+    fn sanitize_banner_empty() {
+        assert_eq!(sanitize_banner(""), "");
+    }
 }

@@ -1220,7 +1220,7 @@ pub fn start_dns_spoof(interface: &str, listen_ip: Ipv4Addr, portal_ip: Ipv4Addr
         default_rule: DnsRule::WildcardSpoof(portal_ip),
         custom_rules: HashMap::new(),
         upstream_dns: None,
-        log_queries: true,
+        log_queries: false,
     };
 
     let mut server = DnsServer::new(config)

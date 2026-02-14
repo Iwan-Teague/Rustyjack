@@ -227,7 +227,7 @@ impl WpaCracker {
             }
 
             if self.try_password(&password) {
-                tracing::info!("Password found: {}", password);
+                tracing::info!("Password found (length={})", password.len());
                 return Ok(CrackResult::Found(password));
             }
 
@@ -549,7 +549,7 @@ pub fn quick_crack(handshake: &HandshakeExport, ssid: &str) -> Option<String> {
 
     match cracker.crack_passwords(&all_passwords) {
         Ok(CrackResult::Found(password)) => {
-            tracing::info!("Quick crack SUCCESS! Password: {}", password);
+            tracing::info!("Quick crack SUCCESS (length={})", password.len());
             Some(password)
         }
         Ok(CrackResult::Exhausted { attempts }) => {
