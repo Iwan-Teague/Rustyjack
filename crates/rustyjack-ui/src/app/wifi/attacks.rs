@@ -2,10 +2,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::buttons::Button;
+use crate::input::Button;
+use crate::types::WifiNetworkEntry;
 use crate::util::shorten_for_display;
 
-use super::super::state::{App, ButtonAction};
+use super::super::state::App;
 
 const WIFI_PASSWORD_MAX_LEN: usize = 30;
 // Leading space lets Up/Down wrap across a blank quickly; keep the set short for LCD scrolling.
@@ -184,7 +185,7 @@ impl App {
         Ok(())
     }
 
-    fn set_wifi_target(&mut self, network: &rustyjack_ipc::WifiNetworkEntry, ssid: &str) {
+    fn set_wifi_target(&mut self, network: &WifiNetworkEntry, ssid: &str) {
         self.config.settings.target_network = ssid.to_string();
         self.config.settings.target_bssid = network.bssid.clone().unwrap_or_default();
         self.config.settings.target_channel = network.channel.unwrap_or(0) as u8;
