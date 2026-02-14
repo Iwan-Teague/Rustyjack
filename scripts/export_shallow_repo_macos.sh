@@ -19,7 +19,22 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 repo_name="$(basename "$repo_root")"
 timestamp="$(date +%Y%m%d-%H%M%S)"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/rustyjack_shallow_${timestamp}_XXXXXX")"
+make_work_dir() {
+  local base
+  for base in "${TMPDIR:-}" "/tmp" "$repo_root"; do
+    if [ -n "${base}" ] && [ -d "${base}" ] && [ -w "${base}" ]; then
+      if mktemp -d "${base%/}/rustyjack_shallow_${timestamp}_XXXXXX" 2>/dev/null; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+work_dir="$(make_work_dir)" || {
+  echo "Failed to create temp work directory (checked TMPDIR, /tmp, repo root)."
+  exit 1
+}
 clone_dir="${work_dir}/${repo_name}"
 zip_path="${repo_root}/${repo_name}_shallow_${timestamp}.zip"
 
