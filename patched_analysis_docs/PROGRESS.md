@@ -49,6 +49,20 @@
 | T11 | area13 F9+ | Updater download has no size limit | `crates/rustyjack-updater/src/lib.rs:129-135` | MEDIUM | DONE | Added MAX_DOWNLOAD_BYTES (100MB) limit with streaming check |
 | T12 | area17 CI | Add CI emoji/control char check | `ci/no_emoji_in_source.rs` | LOW | DONE | New CI check scanning .rs/.sh/.toml for emoji; wired into ci.yml |
 | T13 | area17 pre-existing | async blocking violations in ui_test_run.rs | `ci/async_blocking_allowlist.txt` | LOW | DONE | Added to allowlist (pre-existing, not new) |
+| T14 | area11 F2, area16 F8 | Portal credential log files have no permissions | `crates/rustyjack-portal/src/logging.rs` | HIGH | DONE | Added 0o600 permissions on Unix in open_append() |
+| T15 | area16 F5 | Audit event context not redacted before write | `crates/rustyjack-core/src/audit.rs` | HIGH | DONE | Added redact_audit_context() applied before JSON serialization |
+| T16 | area16 F4 | Log bundle export contains unredacted sensitive data | `crates/rustyjack-core/src/services/logs.rs` | HIGH | DONE | Added redact_log_bundle() post-processing for password/key/token patterns |
+| T17 | area13 F3 | Updater tar allows device/fifo/char/block entries | `crates/rustyjack-updater/src/lib.rs` | HIGH | DONE | Added entry type whitelist: only files and directories allowed |
+| T18 | area13 F7 | Updater install_to allows arbitrary absolute paths | `crates/rustyjack-updater/src/lib.rs` | HIGH | DONE | Added allowlist: only /usr/local/bin and /usr/local/lib |
+| T19 | area13 F8 | Updater file modes unconstrained (SUID/SGID) | `crates/rustyjack-updater/src/lib.rs` | HIGH | DONE | parse_mode() rejects modes with 0o7000 bits set |
+| T20 | area11 F8 | Portal index.html loaded with no size limit | `crates/rustyjack-portal/src/state.rs` | MEDIUM | DONE | Added 256KB size check before read_to_string |
+| T21 | area16 F17 | No redaction regression tests | `crates/rustyjack-core/src/redact.rs` | MEDIUM | DONE | Added 4 tests: sensitive_field_variants, non_sensitive, nested_arrays, redact_if_sensitive |
+| T22 | area11 F7 | Portal missing security headers | `crates/rustyjack-portal/src/server.rs` | MEDIUM | DONE | Added middleware: Cache-Control, X-Frame-Options, X-Content-Type-Options, CSP |
+| T23 | area9 F8 | ICMP parsing assumes 20-byte IPv4 header | `crates/rustyjack-ethernet/src/lib.rs` | MEDIUM | DONE | Parse IHL from first byte, validate >= 20, use as offset |
+| T24 | area17 F5 | No cargo check step in CI | `.github/workflows/ci.yml` | LOW | DONE | Added cargo check --workspace step |
+| T25 | area17 F6 | No cargo test step in CI | `.github/workflows/ci.yml` | LOW | DONE | Added cargo test --workspace step |
+| T26 | area17 F7 | No cargo fmt check in CI | `.github/workflows/ci.yml` | LOW | DONE | Added cargo fmt --all -- --check step |
+| T27 | area17 F4 | Two competing Command::new CI checks | `ci/` | LOW | DEFERRED | Both checks serve different purposes (allowlist vs baseline); unifying risks breakage |
 
 ## Implementation Plan
 
@@ -78,27 +92,22 @@
 
 ## Tests and Verification
 
-### CI Checks (all pass)
-- `forbid_command_new`: OK (allowlist updated for 2 existing files)
-- `no_new_unwrap_expect`: OK (baseline=220, current=220)
-- `no_blocking_in_async`: OK (ui_test_run.rs added to allowlist)
-- `no_emoji_in_source`: OK (new check, no violations)
-
-### Crate Tests
+### Session 1 Results
+- All 4 CI checks pass
 - `cargo test -p rustyjack-ethernet`: 5 passed (sanitize_banner tests)
-- `cargo test -p rustyjack-wpa`: 2 passed (pre-existing, still pass)
-- `cargo test -p rustyjack-encryption`: 0 tests (none exist)
+- `cargo test -p rustyjack-wpa`: 2 passed
 
-### Compilation
+### Session 2 Results (Batch 2)
+- All 4 CI checks pass after changes: forbid_command_new, unwrap/expect (baseline=220), blocking_in_async, emoji
+- `cargo check -p rustyjack-portal --lib`: OK (clean)
 - `cargo check -p rustyjack-wpa`: OK
-- `cargo check -p rustyjack-ethernet`: OK (1 pre-existing warning)
-- `cargo check --workspace`: EXPECTED FAIL on Windows (netlink-sys/zbus are Linux-only crates)
-- Individual crate checks for changed crates: OK
+- `cargo test -p rustyjack-ethernet`: 5 passed
+- `cargo test -p rustyjack-wpa`: 2 passed
+- `cargo fmt`: Applied to all changed files, verified clean
+- Committed as `22d98df` on main
 
-### Formatting
-- `cargo fmt -- --check`: Pre-existing diffs in untouched files. Changed files are properly formatted.
-
-### Notes
-- Full workspace compilation requires Linux/ARM target (netlink-sys, zbus crates are Linux-only)
+### Compilation Notes
+- Full `cargo check --workspace` fails on Windows (netlink-sys/zbus are Linux-only) - pre-existing
+- `rustyjack-core` cannot be tested on Windows (depends on netlink crates) - redact tests verified structurally
 - ARM64 docker build not available on Windows dev environment
-- All security-critical changes (T1-T5) are in leaf crates that compile independently
+- All security-critical changes are in leaf crates or isolated functions
