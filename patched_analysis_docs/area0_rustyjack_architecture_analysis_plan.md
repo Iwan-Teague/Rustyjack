@@ -33,7 +33,7 @@ For each area below, the analysis should answer:
 
 ### 1.2 High-level architecture
 - **Unprivileged UI** (`rustyjack-ui`) talks to a **privileged daemon** (`rustyjackd`) over a Unix domain socket. (`CLAUDE.md`, `README.md`)
-- Many functions are “pure Rust replacements” for common system tools: netlink/rtnetlink, nftables control, rfkill, DHCP/DNS, etc. (`CLAUDE.md`, `README.md`, code in `rustyjack-netlink/`)
+- Many functions are “pure Rust replacements” for common system tools: netlink/rtnetlink, nftables control, rfkill, DHCP/DNS, etc. (`CLAUDE.md`, `README.md`, code in `crates/rustyjack-netlink/`)
 
 ### 1.3 Workspace crates / major directories (where to look)
 Workspace crates listed in root docs and `Cargo.toml`:
@@ -153,7 +153,7 @@ The rest of this document expands each area into a detailed analysis plan.
 ### 4.6 Fix template examples
 - **Problem:** installer claims `/etc/resolv.conf` but doesn’t re-assert it after package updates  
   **Why:** apt/postinst scripts can rewrite the symlink; DNS control becomes nondeterministic  
-  **Where:** `install_*.sh`, `rustyjack-core/src/system/dns.rs` (and any boot-time fixups)  
+  **Where:** `install_*.sh`, `crates/rustyjack-core/src/system/dns.rs` (and any boot-time fixups)  
   **Fix:** add a boot-time verification/repair step in daemon startup (before network ops)  
   **Fixed version:** daemon checks resolv.conf is the symlink target and repairs atomically, logs a single high-signal event.
 
@@ -193,7 +193,7 @@ The rest of this document expands each area into a detailed analysis plan.
 ### 5.6 Fix template examples
 - **Problem:** large IPC payload can allocate unbounded memory  
   **Why:** DoS; Pi Zero has tiny RAM and swap is painful  
-  **Where:** `rustyjack-daemon/src/server.rs` (read loop), IPC decode paths  
+  **Where:** `crates/rustyjack-daemon/src/server.rs` (read loop), IPC decode paths  
   **Fix:** enforce max frame length; reject early; log a rate-limited security event  
   **Fixed version:** server reads length prefix, caps at e.g. 64KiB, and returns a structured error without crashing.
 
@@ -242,7 +242,7 @@ The rest of this document expands each area into a detailed analysis plan.
 ### 6.6 Fix template examples
 - **Problem:** transient window where old and new uplink are both admin‑UP  
   **Why:** violates the isolation invariant; causes traffic leaks + ambiguous routing  
-  **Where:** isolation/selection commit logic (`rustyjack-core/src/system/isolation.rs`)  
+  **Where:** isolation/selection commit logic (`crates/rustyjack-core/src/system/isolation.rs`)  
   **Fix:** enforce strict order + verification: bring target up only after others down; add global lock and post-check  
   **Fixed version:** two-phase commit: (1) block all non-target, (2) set target up, (3) verify, else rollback.
 
@@ -260,7 +260,7 @@ The rest of this document expands each area into a detailed analysis plan.
 
 ### 7.2 Evidence locations
 - Crate: `crates/rustyjack-netlink/src/*` (notably `interface.rs`, `route.rs`, `dhcp.rs`, `dns_server.rs`, `rfkill.rs`, `nf_tables.rs`, `iptables.rs`)
-- Invariant consumers: `rustyjack-core/src/system/*`, daemon watcher, wireless/hotspot.
+- Invariant consumers: `crates/rustyjack-core/src/system/*`, daemon watcher, wireless/hotspot.
 
 ### 7.3 Constraints
 - No NetworkManager dependency.
@@ -280,7 +280,7 @@ The rest of this document expands each area into a detailed analysis plan.
 ### 7.6 Fix template examples
 - **Problem:** rfkill soft-block is attempted but failure is silently ignored  
   **Why:** dormant radio may still transmit; violates isolation intent  
-  **Where:** `rustyjack-netlink/src/rfkill.rs`, and callers in isolation engine  
+  **Where:** `crates/rustyjack-netlink/src/rfkill.rs`, and callers in isolation engine  
   **Fix:** surface failure as warning with remediation hints; add “degraded mode” indicator in UI  
   **Fixed version:** activation report includes `rfkill_status`, UI shows a persistent warning until resolved.
 
@@ -305,7 +305,7 @@ Trusted operation notes:
 Implementation:
 - `crates/rustyjack-wireless/src/*` (frames parsing, capture, injection, recon, rfkill helpers, nl80211 glue)
 - WPA logic: `crates/rustyjack-wpa/`
-- Orchestration: command handlers in `rustyjack-core/`
+- Orchestration: command handlers in `crates/rustyjack-core/`
 
 ### 8.3 Constraints
 - Built-in Pi radio can be limited; many features require a USB adapter (root docs).
@@ -330,7 +330,7 @@ Implementation:
 ### 8.6 Fix template examples
 - **Problem:** capture loop uses raw socket reads without strict length validation  
   **Why:** malformed frames can crash the process or corrupt loot  
-  **Where:** `rustyjack-wireless/src/capture.rs`, `frames.rs`  
+  **Where:** `crates/rustyjack-wireless/src/capture.rs`, `frames.rs`  
   **Fix:** treat every packet as untrusted; validate minimum lengths before parsing; fuzz test  
   **Fixed version:** parsing functions return structured errors; capture loop drops malformed frames and increments counters.
 
@@ -348,7 +348,7 @@ Trusted notes:
 
 Implementation:
 - `crates/rustyjack-ethernet/src/lib.rs` (synchronous raw socket logic)
-- Supporting primitives: `rustyjack-netlink/src/arp*.rs`, `dns_server.rs`, `nf_tables.rs`
+- Supporting primitives: `crates/rustyjack-netlink/src/arp*.rs`, `dns_server.rs`, `nf_tables.rs`
 - Orchestration: `rustyjack-core` pipelines + daemon job wrappers
 
 ### 9.3 Constraints
@@ -381,7 +381,7 @@ Implementation:
 Trusted note: `logs/done/evasion_identity_controls.md`  
 Implementation:
 - `crates/rustyjack-evasion/src/*`
-- `rustyjack-netlink/src/wireless.rs` (TX power / interface ops)
+- `crates/rustyjack-netlink/src/wireless.rs` (TX power / interface ops)
 - Orchestration: `rustyjack-core` ties controls into pipelines/UI
 
 ### 10.3 Constraints
@@ -411,7 +411,7 @@ Implementation:
 ### 11.2 Evidence locations
 - Portal crate: `crates/rustyjack-portal/`
 - Templates/assets: `DNSSpoof/`
-- Net plumbing: nftables DNAT rules (`rustyjack-netlink/src/iptables.rs` / `nf_tables.rs`)
+- Net plumbing: nftables DNAT rules (`crates/rustyjack-netlink/src/iptables.rs` / `nf_tables.rs`)
 
 ### 11.3 Constraints
 - Portal must run unprivileged; networking redirection handled by privileged daemon.
@@ -446,7 +446,7 @@ Implementation:
 
 ### 12.3 Constraints
 - Loot paths must be deterministic and safe; avoid path traversal.
-- Sensitive data must be redacted from logs (`rustyjack-core/src/redact.rs` per root docs).
+- Sensitive data must be redacted from logs (`crates/rustyjack-core/src/redact.rs` per root docs).
 - Encryption must zeroize secrets; key handling must be explicit.
 
 ### 12.4 How to analyze
@@ -499,7 +499,7 @@ Implementation:
 - Full Disk Encryption helpers.
 
 ### 14.2 Evidence locations
-- Root docs mention anti-forensics modules in `rustyjack-core/src/anti_forensics.rs`
+- Root docs mention anti-forensics modules in `crates/rustyjack-core/src/external_tools/anti_forensics.rs`
 - FDE scripts: `scripts/fde_*`
 - UI confirmation requirements: `AGENTS.md`
 - Warning notes: `AGENTS.md` (FDE is destructive/irreversible)
@@ -566,7 +566,7 @@ Implementation:
 
 ### 16.2 Evidence locations
 - Logging crate: `crates/rustyjack-logging/`
-- Redaction: `rustyjack-core/src/redact.rs` (per root docs)
+- Redaction: `crates/rustyjack-core/src/redact.rs` (per root docs)
 - Root env toggles: `RUSTYJACK_LOGS_DISABLED=1` etc (root docs)
 
 ### 16.3 Constraints

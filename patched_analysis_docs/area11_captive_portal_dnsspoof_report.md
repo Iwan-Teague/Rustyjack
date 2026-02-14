@@ -84,6 +84,7 @@
 
 ### Main template safety issues
 - **Path traversal risk**: `PathBuf::join(&site)` is used without validation/canonicalization.
+- **Repo-verified call sites**: the unvalidated `site` join appears in core operations that build both `site_dir` and capture paths (e.g., `crates/rustyjack-core/src/operations.rs`), and is later used to serve template trees (`ServeDir`) and to select capture output destinations.
 - **Symlink escape risk**: a template directory can contain symlinks that point outside the intended web root; serving static files could leak arbitrary files if symlinks aren’t screened.
 - **Template size / resource risk**: `index.html` is read into memory without a maximum size check.
 - **Asset integrity**: nothing prevents accidental or malicious mutation of templates; at minimum, a “known templates allowlist” or hash inventory could help detect tampering on appliance installs.

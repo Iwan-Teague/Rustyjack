@@ -51,6 +51,19 @@ rsync -a \
   --exclude='build-*' \
   --exclude='prebuilt' \
   --exclude='bin' \
+  --exclude='*.o' \
+  --exclude='*.obj' \
+  --exclude='*.a' \
+  --exclude='*.so' \
+  --exclude='*.so.*' \
+  --exclude='*.dylib' \
+  --exclude='*.dll' \
+  --exclude='*.exe' \
+  --exclude='*.rlib' \
+  --exclude='*.rmeta' \
+  --exclude='*.d' \
+  --exclude='*.pdb' \
+  --exclude='.DS_Store' \
   --exclude='*.zip' \
   "$repo_root/" "$clone_dir/"
 

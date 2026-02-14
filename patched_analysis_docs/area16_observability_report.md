@@ -73,11 +73,11 @@ This system contains modules that handle extremely sensitive material (captured 
 - Correlation IDs, request IDs, job IDs.
 
 ### 2.2 Where redaction is applied today
-- **`rustyjack-core/src/redact.rs`**
+- **`crates/rustyjack-core/src/redact.rs`**
   - `redact!(value)` wrapper prints `[REDACTED]`.
   - `redact_json(&mut Value)` redacts fields whose *names* look sensitive.
 - **Observed call sites using redaction**
-  - `rustyjack-core/src/external_tools/physical_access.rs` uses `redact!(pass)` in structured logs.
+  - `crates/rustyjack-core/src/external_tools/physical_access.rs` uses `redact!(pass)` in structured logs.
 - **Notably absent**
   - No evidence of systematic redaction being applied at log sinks (format layer) or at UI export time (`collect_log_bundle`).
 
@@ -87,15 +87,15 @@ This system contains modules that handle extremely sensitive material (captured 
 
 ### 3.1 High-risk leak paths (confirmed)
 1) **WPA cracking module logs password candidates and discovered passwords**  
-   - `rustyjack-wpa/src/crack.rs` logs:
+   - `crates/rustyjack-wpa/src/crack.rs` logs:
      - `current: {password}` progress (candidate secrets),
      - `Quick crack SUCCESS! Password: {password}` (confirmed secret exfil into logs).
 
 2) **UI log export includes raw tails (no redaction pass)**  
-   - `rustyjack-core/src/services/logs.rs` concatenates tails from `root/logs/*.log` and `root/logs/audit/audit.log` into an exportable string.
+   - `crates/rustyjack-core/src/services/logs.rs` concatenates tails from `root/logs/*.log` and `root/logs/audit/audit.log` into an exportable string.
 
 3) **Audit context is arbitrary JSON and is not redacted**  
-   - `rustyjack-core/src/audit.rs` serializes the `AuditEvent` including `context` exactly as provided.
+   - `crates/rustyjack-core/src/audit.rs` serializes the `AuditEvent` including `context` exactly as provided.
 
 ### 3.2 Structured logging vs string concat
 - There is a mix. Where `tracing::info!(field = %value, ...)` is used, it is **much easier** to guarantee redaction (wrap values, or enforce `skip()` in `#[instrument]`).
@@ -302,7 +302,7 @@ Each finding is structured as: **Problem → Why → Where → Fix → Fixed ver
 ### 16) Log directory permission model depends on external provisioning
 - **Problem:** Some docs assume ownership/group for `root/logs` and UI access.
 - **Why:** Mis-provisioned perms can cause log write failures or excessive access.
-- **Where:** `AGENTS.md` notes ownership expectations; `rustyjack-logging/src/init.rs` sets modes.
+- **Where:** `AGENTS.md` notes ownership expectations; `crates/rustyjack-logging/src/init.rs` sets modes.
 - **Fix:** Enforce:
   - setgid directory (2770),
   - consistent group ownership,
@@ -323,7 +323,7 @@ Each finding is structured as: **Problem → Why → Where → Fix → Fixed ver
 - **Problem:** Some modules log `{err}`; future errors might carry embedded secret material.
 - **Why:** Error types sometimes include input values; this is a classic “oops” leak.
 - **Where:** various `tracing::error!(..., "{err}")` call sites.
-- **Fix:** Define a “safe error display” wrapper for errors in sensitive paths, or ensure errors do not include raw inputs.
+- **Fix:** Define a “safe error display” wrapper for errors in sensitive paths, or ensure errors do not include raw inputs. Also treat any untrusted string that can reach logs (hostnames, banners, SSIDs, user-provided labels) as *log data*: escape CR/LF and strip/escape ANSI control sequences to prevent log/terminal manipulation.
 - **Fixed version looks like:** `tracing::error!(error=%SafeErr(err), "...")`.
 
 ---

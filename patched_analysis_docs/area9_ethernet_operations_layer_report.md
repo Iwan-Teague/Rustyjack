@@ -4,7 +4,7 @@
 
 **Scope (per request):** Ethernet scanning/recon implementation, raw socket usage, async-vs-blocking boundaries, timeouts, rate limiting, banner parsing, output sanitization, and teardown correctness.
 
-**Constraint model used:** Only **root docs** and **`logs/done`** are treated as constraints; everything else (including this review) is advisory. fileciteturn1file2L5-L14
+**Constraint model used:** Only **root docs** and **`logs/done`** are treated as constraints; everything else (including this review) is advisory.
 
 ---
 
@@ -39,10 +39,10 @@ The daemon achieves this by running core operations in `spawn_blocking(...)`:
 - `crates/rustyjack-daemon/src/jobs/kinds/scan.rs` (line ~46): wraps scan work in `tokio::task::spawn_blocking(...)`
 - `crates/rustyjack-daemon/src/jobs/kinds/core_command.rs` (line ~34): wraps generic core commands in `spawn_blocking(...)`
 
-This pattern is correct for a current-thread runtime: `spawn_blocking` uses separate OS threads for blocking I/O even when the async runtime is single-threaded. citeturn2view1
+This pattern is correct for a current-thread runtime: `spawn_blocking` uses separate OS threads for blocking I/O even when the async runtime is single-threaded.
 
 ### Cancellation semantics (important nuance)
-`spawn_blocking` tasks **cannot be force-aborted once running**; Tokio explicitly notes that aborting a `spawn_blocking` task usually won’t stop it, and runtime shutdown may wait for them unless a shutdown timeout is used. citeturn2view1
+`spawn_blocking` tasks **cannot be force-aborted once running**; Tokio explicitly notes that aborting a `spawn_blocking` task usually won’t stop it, and runtime shutdown may wait for them unless a shutdown timeout is used.
 
 So cancellation must be **cooperative** (e.g., your `AtomicBool` checks inside loops) and must be checked frequently enough to bound “time-to-stop”.
 
@@ -54,13 +54,13 @@ So cancellation must be **cooperative** (e.g., your `AtomicBool` checks inside l
 
 ### Raw socket / packet socket risk profile
 - ICMP discovery uses **IPv4 raw sockets**; ARP discovery uses **packet sockets (AF_PACKET)**.
-- Packet sockets require elevated privilege (`CAP_NET_RAW`) and receive/send raw frames; they’re powerful and therefore safety-sensitive. citeturn6view1
-- Linux raw sockets and packet sockets can be bound to a specific device (e.g., `SO_BINDTODEVICE`) to prevent cross-interface leakage. citeturn6view0turn2view3
+- Packet sockets require elevated privilege (`CAP_NET_RAW`) and receive/send raw frames; they’re powerful and therefore safety-sensitive.
+- Linux raw sockets and packet sockets can be bound to a specific device (e.g., `SO_BINDTODEVICE`) to prevent cross-interface leakage.
 
 ### `unsafe` inventory (what it is and what could go wrong)
 In `crates/rustyjack-ethernet/src/lib.rs`, there are four `unsafe` sites:
 
-1) `std::slice::from_raw_parts(...)` over a `MaybeUninit<[u8; 1500]>` receive buffer  
+1) `std::slice::from_raw_parts(...)` over a `MaybeUninit<[u8; 1500]>` receive buffer
    - Safety depends on using the returned length `n` and not reading beyond it. The code does that, but **header assumptions** can still cause misparsing.
 2) Linux ARP plumbing uses libc calls:
    - `if_nametoindex`, `socket(AF_PACKET, SOCK_RAW, ...)`, `bind`, and raw `send`/`recv`
@@ -69,15 +69,15 @@ In `crates/rustyjack-ethernet/src/lib.rs`, there are four `unsafe` sites:
 ### Parsing untrusted banners and “device strings”
 This layer actively ingests strings originating from the network:
 
-- TCP banners (`grab_banner`)  
-- mDNS records, NetBIOS name tables, WS-Discovery XML-ish blobs  
+- TCP banners (`grab_banner`)
+- mDNS records, NetBIOS name tables, WS-Discovery XML-ish blobs
 - These are **untrusted** inputs. Two specific risks matter here:
 
-**(a) Log forging / log injection:**  
-If untrusted data contains newlines, tabs, or crafted prefixes, it can create fake log entries or hide real ones. OWASP explicitly calls this out as Log Injection. citeturn4search1turn4search9
+**(a) Log forging / log injection:**
+If untrusted data contains newlines, tabs, or crafted prefixes, it can create fake log entries or hide real ones. OWASP explicitly calls this out as Log Injection.
 
-**(b) Terminal escape injection (ANSI control codes):**  
-Untrusted strings containing escape sequences can manipulate terminal output when viewed (clear screen, hide content, clickable links, etc.). This is not hypothetical; even Rust logging tooling has had real advisories about ANSI escape injection when logging untrusted input. citeturn4search0turn4search2turn2view2
+**(b) Terminal escape injection (ANSI control codes):**
+Untrusted strings containing escape sequences can manipulate terminal output when viewed (clear screen, hide content, clickable links, etc.). This is not hypothetical; even Rust logging tooling has had real advisories about ANSI escape injection when logging untrusted input.
 
 **Repository-specific observation:** `handle_eth_port_scan(...)` writes banners straight into loot files without neutralization, making it easy to poison stored output for later viewing.
 
@@ -85,7 +85,7 @@ Untrusted strings containing escape sequences can manipulate terminal output whe
 
 ## 3) Resource budgeting for Raspberry Pi Zero 2 W
 
-Pi Zero 2 W has a **1GHz quad-core Cortex‑A53** and **512MB SDRAM**. citeturn2view0  
+Pi Zero 2 W has a **1GHz quad-core Cortex‑A53** and **512MB SDRAM**.
 That’s enough for light recon, but not enough for “spray-and-pray concurrency”.
 
 ### Current behavior vs budget
@@ -98,9 +98,9 @@ That’s enough for light recon, but not enough for “spray-and-pray concurrenc
 ### Recommended budgets (safe defaults)
 These are guardrails aimed at **bounded cost** and **predictable stop time**:
 
-- **CIDR size cap:** refuse (or require explicit “I know what I’m doing” gate) above ~1024 hosts (e.g., larger than /22).  
-- **ICMP pacing:** token bucket or fixed delay (e.g., 100–200 pps).  
-- **ARP pps cap:** clamp to a sane max (e.g., 200–500 pps) to avoid `sleep(0)` behavior.  
+- **CIDR size cap:** refuse (or require explicit “I know what I’m doing” gate) above ~1024 hosts (e.g., larger than /22).
+- **ICMP pacing:** token bucket or fixed delay (e.g., 100–200 pps).
+- **ARP pps cap:** clamp to a sane max (e.g., 200–500 pps) to avoid `sleep(0)` behavior.
 - **Port scan concurrency (if ever added):** 32–64 in-flight connects max; per-host semaphore.
 - **String size caps:** banners/records already cap reads, but also cap **stored** and **rendered** sizes (e.g., 256–1024 chars) after sanitization.
 
@@ -118,7 +118,7 @@ Two layers matter:
 2) **Mechanism layer:** bind sockets to an interface (or at least bind source IP) so routing can’t “escape” if policy fails.
 
 Mechanisms you can use safely:
-- **Bind-to-device:** `SO_BINDTODEVICE` for raw sockets and UDP sockets (Linux). citeturn6view0turn2view3
+- **Bind-to-device:** `SO_BINDTODEVICE` for raw sockets and UDP sockets (Linux).
 - **Bind source IP:** for TCP connect scanning, use `quick_port_scan_with_source(...)` (already exists) and make fallback behavior explicit.
 
 ---
@@ -170,7 +170,7 @@ Format: **Problem → Why → Where → Fix → Fixed version looks like**
 
 ### F5 — Loot file writing stores raw banners (control chars / log forging)
 - **Problem:** Loot output includes `b.banner` verbatim, which may include `\n`, `\r`, tabs, and escape sequences.
-- **Why:** Stored output can poison viewers; classic Log Injection / CWE-117 risk. citeturn4search1turn2view2
+- **Why:** Stored output can poison viewers; classic Log Injection / CWE-117 risk.
 - **Where:** `crates/rustyjack-core/src/operations.rs` in `handle_eth_port_scan` loot write loop (~L580–610).
 - **Fix:** Sanitize before writing: strip/escape control chars, enforce max length.
 - **Fixed version looks like:**
@@ -181,7 +181,7 @@ Format: **Problem → Why → Where → Fix → Fixed version looks like**
 
 ### F6 — No sanitization before JSON/IPC emission
 - **Problem:** Banners and service fields are returned inside JSON structures without neutralization.
-- **Why:** Downstream renderers may display them to terminal/logs; escape injection is a known class. citeturn4search0turn4search2
+- **Why:** Downstream renderers may display them to terminal/logs; escape injection is a known class.
 - **Where:** `handle_eth_port_scan` response construction; inventory response too.
 - **Fix:** Sanitize at **two** points:
   1) right after parsing network input (normalize), and
@@ -252,7 +252,7 @@ Format: **Problem → Why → Where → Fix → Fixed version looks like**
 - **Problem:** `query_multicast_dns` binds `0.0.0.0:0` and sends multicast; no interface selection.
 - **Why:** Multi-homed systems can emit multicast on unintended NICs.
 - **Where:** `crates/rustyjack-ethernet/src/lib.rs` `fn query_multicast_dns` (~L1124+).
-- **Fix:** Set outgoing interface (Linux `IP_MULTICAST_IF`) or use `SO_BINDTODEVICE`. citeturn6view0turn2view3
+- **Fix:** Set outgoing interface (Linux `IP_MULTICAST_IF`) or use `SO_BINDTODEVICE`.
 - **Fixed version looks like:** platform-gated setsockopt on the underlying fd.
 
 ### F15 — NetBIOS and WS-Discovery probes also lack interface pinning
@@ -281,7 +281,7 @@ Format: **Problem → Why → Where → Fix → Fixed version looks like**
 
 ### F18 — Cooperative cancellation exists, but stop latency depends on sleep/read timeouts
 - **Problem:** Cancellation checks exist, but loops include sleeps and socket timeouts.
-- **Why:** Worst-case stop latency can approach timeout values, and `spawn_blocking` cannot be hard-aborted. citeturn2view1
+- **Why:** Worst-case stop latency can approach timeout values, and `spawn_blocking` cannot be hard-aborted.
 - **Where:** ICMP receive loops sleep 5ms; ARP socket read timeout uses `timeout`.
 - **Fix:** Use short polling intervals (e.g., 20–50ms max), and overall deadline logic.
 - **Fixed version looks like:** `read_timeout = 50ms; loop until deadline`.
@@ -351,10 +351,10 @@ On the Pi:
 
 ## Risk summary (what to fix first)
 
-1) **Output neutralization (banners + service strings)** to prevent log/terminal injection and log forging. citeturn4search1turn4search0turn2view2  
-2) **Isolation enforcement everywhere** (policy + socket binding). citeturn6view0turn2view3  
-3) **Bounded work** (CIDR caps, pacing, overall deadlines) for Pi predictability. citeturn2view0  
-4) **Cancellation latency** tuned for `spawn_blocking` semantics. citeturn2view1  
+1) **Output neutralization (banners + service strings)** to prevent log/terminal injection and log forging.
+2) **Isolation enforcement everywhere** (policy + socket binding).
+3) **Bounded work** (CIDR caps, pacing, overall deadlines) for Pi predictability.
+4) **Cancellation latency** tuned for `spawn_blocking` semantics.
 
 ---
 
@@ -366,3 +366,17 @@ On the Pi:
 - `crates/rustyjack-daemon/src/jobs/kinds/scan.rs`
 - `crates/rustyjack-daemon/src/jobs/kinds/core_command.rs`
 - Root docs + `logs/done/*` relevant to Ethernet recon + interface isolation
+
+## References (external)
+
+- Linux kernel radiotap header documentation (extended present bitmaps, alignment): https://docs.kernel.org/networking/radiotap-headers.html
+- Radiotap project (extended presence masks, alignment): https://www.radiotap.org/
+- rfkill man page (hard vs soft block behavior): https://www.man7.org/linux/man-pages/man8/rfkill.8.html
+- Tokio `spawn_blocking` docs (abort/cancellation semantics): https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html
+- Rust Fuzz Book (`cargo-fuzz`/libFuzzer workflow): https://rust-fuzz.github.io/book/cargo-fuzz.html
+- OWASP Log Injection overview: https://owasp.org/www-community/attacks/Log_Injection
+- RustSec advisory re: ANSI escape sequence injection via logs (tracing-subscriber): https://rustsec.org/advisories/RUSTSEC-2025-0055
+- Linux `packet(7)` man page (AF_PACKET, privilege): https://www.man7.org/linux/man-pages/man7/packet.7.html
+- Linux `socket(7)` man page (socket options like SO_BINDTODEVICE): https://www.man7.org/linux/man-pages/man7/socket.7.html
+- NIST SP 800-88 Rev.2 (2025) Guidelines for Media Sanitization: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-88r2.pdf
+

@@ -22,23 +22,23 @@ Everything else (including older logs, TODOs, comments) is treated as *informati
 **Tier A — Secrets (must never be exported or logged in plaintext)**
 - **Encryption key material** (32-byte AES key)  
   - In-memory: process-wide key in `rustyjack-encryption`  
-  - At-rest: `rustyjack.key` on USB (hex) (`rustyjack-ui/src/app/encryption.rs:89–118`)
+  - At-rest: `rustyjack.key` on USB (hex) (`crates/rustyjack-ui/src/app/encryption.rs:89–118`)
 - **Wi‑Fi PSKs / credentials** in Wi‑Fi profiles  
-  - Stored under `root/wifi/profiles/*` and optionally encrypted (`rustyjack-core/src/system/mod.rs:3753–3815`)
+  - Stored under `root/wifi/profiles/*` and optionally encrypted (`crates/rustyjack-core/src/system/mod.rs:3753–3815`)
 - **Discord webhook URL** (`root/discord_webhook.txt`)  
-  - Can be encrypted to `discord_webhook.txt.enc` (`rustyjack-ui/src/app/encryption.rs:940–977`)
+  - Can be encrypted to `discord_webhook.txt.enc` (`crates/rustyjack-ui/src/app/encryption.rs:940–977`)
 
 **Tier B — Highly sensitive telemetry (encrypt at rest; export only in encrypted form)**
 - **Captured traffic artifacts** (e.g., PCAPs), which can include credentials/tokens/content
-  - Example: MITM PCAP paths under `loot/Ethernet/...` (`rustyjack-core/src/system/mod.rs:820–960`)
+  - Example: MITM PCAP paths under `loot/Ethernet/...` (`crates/rustyjack-core/src/system/mod.rs:820–960`)
 - **Any credential capture logs** (even if later summarized)
-  - Report generator intentionally avoids printing actual creds, but still reads them into memory (`rustyjack-ui/src/app/report.rs:1240–1385`)
+  - Report generator intentionally avoids printing actual creds, but still reads them into memory (`crates/rustyjack-ui/src/app/report.rs:1240–1385`)
 
 **Tier C — Sensitive identifiers / metadata (redact in logs; encrypt at rest if feasible)**
 - **SSID/BSSID**, IPs, MACs, hostnames, device banners
-  - Ethernet inventory JSON includes IP/hostname/banners/etc (`rustyjack-core/src/operations.rs:690–752`)
+  - Ethernet inventory JSON includes IP/hostname/banners/etc (`crates/rustyjack-core/src/operations.rs:690–752`)
 - **Scan logs / reports** that include network labels and paths
-  - Scan log loot path builder (`rustyjack-core/src/system/mod.rs:520–553`)
+  - Scan log loot path builder (`crates/rustyjack-core/src/system/mod.rs:520–553`)
 
 ### Handling requirements implied by trusted docs
 
@@ -56,22 +56,22 @@ Everything else (including older logs, TODOs, comments) is treated as *informati
 ## 2) Path safety audit
 
 ### What exists today (good)
-- **Traversal prevention for loot paths:** `resolve_loot_path()` canonicalizes and checks `starts_with(root)` (`rustyjack-core/src/operations.rs:5705–5728`).  
+- **Traversal prevention for loot paths:** `resolve_loot_path()` canonicalizes and checks `starts_with(root)` (`crates/rustyjack-core/src/operations.rs:5705–5728`).  
   This is the strongest “no escape” guard in the codebase for loot paths.
-- **SSID/BSSID sanitization (directory component):** `wireless_target_directory()` replaces non `[A-Za-z0-9_-]` with `_` (`rustyjack-core/src/operations.rs:5730–5769`).
-- **Mount name sanitization:** `sanitize_mount_name()` for mount points (USB) (`rustyjack-core/src/mount.rs:847–872`).
+- **SSID/BSSID sanitization (directory component):** `wireless_target_directory()` replaces non `[A-Za-z0-9_-]` with `_` (`crates/rustyjack-core/src/operations.rs:5730–5769`).
+- **Mount name sanitization:** `sanitize_mount_name()` for mount points (USB) (`crates/rustyjack-core/src/mount.rs:847–872`).
 
 ### Gaps (issues)
 1) **No length limits on directory/file components**
 - `wireless_target_directory()` and `sanitize_label()` can produce arbitrarily long components (risk: `ENAMETOOLONG`, UI crashes, zip/export failures).
-- `sanitize_label()` is used in loot/Scan filenames (`rustyjack-core/src/system/mod.rs:520–553`) and in Ethernet logging and elsewhere.
+- `sanitize_label()` is used in loot/Scan filenames (`crates/rustyjack-core/src/system/mod.rs:520–553`) and in Ethernet logging and elsewhere.
 
 2) **Sanitization collisions**
 - Different SSIDs can map to the same sanitized directory (e.g., `a/b` and `a_b`).  
   This can silently merge loot across targets.
 
 3) **Report generation uses `join(network)` without explicit sanitization**
-- `reports_root.join(network)` (`rustyjack-ui/src/app/report.rs:513–520`) assumes `network` is safe.  
+- `reports_root.join(network)` (`crates/rustyjack-ui/src/app/report.rs:513–520`) assumes `network` is safe.  
   Today it is likely sourced from directory names, but a malicious directory name created inside loot could produce traversal or confusing behavior unless the value is constrained.
 
 ### Recommended “safe path component” rule set
@@ -87,10 +87,10 @@ Everything else (including older logs, TODOs, comments) is treated as *informati
 ## 3) Crypto audit (AES-GCM, key lifecycle, zeroization, correctness)
 
 ### What exists today (good / matches trusted design notes)
-- **Algorithm:** AES-256-GCM via `aes_gcm::Aes256Gcm` (`rustyjack-encryption/src/lib.rs:1–13`).
-- **Nonce:** 12 bytes from `OsRng`, prepended to ciphertext (`rustyjack-encryption/src/lib.rs:64–100`).
-- **Decrypt:** reads nonce prefix and verifies tag via `decrypt()` (`rustyjack-encryption/src/lib.rs:102–133`).
-- **Key replacement and clearing:** previous key is zeroized before replacement; key is zeroized on clear (`rustyjack-encryption/src/lib.rs:31–48`).
+- **Algorithm:** AES-256-GCM via `aes_gcm::Aes256Gcm` (`crates/rustyjack-encryption/src/lib.rs:1–13`).
+- **Nonce:** 12 bytes from `OsRng`, prepended to ciphertext (`crates/rustyjack-encryption/src/lib.rs:64–100`).
+- **Decrypt:** reads nonce prefix and verifies tag via `decrypt()` (`crates/rustyjack-encryption/src/lib.rs:102–133`).
+- **Key replacement and clearing:** previous key is zeroized before replacement; key is zeroized on clear (`crates/rustyjack-encryption/src/lib.rs:31–48`).
 
 ### Primary crypto risks
 1) **Nonce uniqueness relies on randomness only**
@@ -100,11 +100,11 @@ Everything else (including older logs, TODOs, comments) is treated as *informati
   - adopt a deterministic unique nonce scheme (monotonic counter stored durably, or per-file random 96-bit with a key-per-file scheme).
 
 2) **Key copies exist and are not zeroized**
-- `current_key()` returns a copy of the key bytes (`rustyjack-encryption/src/lib.rs:50–58`), and `encrypt_bytes()`/`decrypt_bytes()` use it (`rustyjack-encryption/src/lib.rs:64–83`, `114–129`).  
+- `current_key()` returns a copy of the key bytes (`crates/rustyjack-encryption/src/lib.rs:50–58`), and `encrypt_bytes()`/`decrypt_bytes()` use it (`crates/rustyjack-encryption/src/lib.rs:64–83`, `114–129`).  
   Those stack copies are not wiped.
 
 3) **Keyfile parsing uses heap strings and does not zeroize intermediate buffers**
-- `parse_key_file()` reads bytes into a `Vec<u8>` and then a `String` (`rustyjack-ui/src/app/encryption.rs:149–176`), leaving key material in memory beyond scope.
+- `parse_key_file()` reads bytes into a `Vec<u8>` and then a `String` (`crates/rustyjack-ui/src/app/encryption.rs:149–176`), leaving key material in memory beyond scope.
 
 4) **In-place encryption/decryption for loot and profiles is not transactional**
 - A crash between `write(dest)` and `remove(source)` can leave:
@@ -127,14 +127,14 @@ Everything else (including older logs, TODOs, comments) is treated as *informati
 ## 4) Export safety (USB mount + copy + robustness)
 
 ### What exists today (good)
-- The **core mount module** enforces safe mount options: `MS_NOSUID | MS_NODEV | MS_NOEXEC` and includes `sync` for vfat (`rustyjack-core/src/mount.rs:651–744`).
+- The **core mount module** enforces safe mount options: `MS_NOSUID | MS_NODEV | MS_NOEXEC` and includes `sync` for vfat (`crates/rustyjack-core/src/mount.rs:651–744`).
 - The **log export** path does durability work:
   - `sync_all()` on the file,
   - `syncfs()` on the mount,
-  - unmount (`rustyjack-core/src/operations.rs:3657–3704`).
+  - unmount (`crates/rustyjack-core/src/operations.rs:3657–3704`).
 
 ### Gaps (issues)
-- **Loot export (UI `transfer_to_usb`) uses `fs::copy` with no durability guarantees** and does not `fsync` the destination or sync the filesystem (`rustyjack-ui/src/app/usb.rs:110–182`).
+- **Loot export (UI `transfer_to_usb`) uses `fs::copy` with no durability guarantees** and does not `fsync` the destination or sync the filesystem (`crates/rustyjack-ui/src/app/usb.rs:110–182`).
 - No **free-space preflight** for loot export (can fill USB, leaving partial sets).
 - No **transaction marker** (e.g., `.incomplete` sentinel) to differentiate partial exports after failure/power loss.
 - No explicit policy gate that prevents exporting plaintext loot when encryption is expected.
@@ -295,6 +295,17 @@ Each finding is formatted as:
 - **Fixed version looks like:** Logs retain operational value without credential/token leakage.
 
 ---
+
+
+### Addendum — Untrusted device banners can poison loot outputs (repo‑verified)
+- **Problem:** Port-scan “banner” strings are written verbatim into loot text and JSON outputs.
+- **Why:** Banners are attacker-controlled. Unescaped newlines and control characters can forge log/loot entries, confuse parsers/UI rendering, and (if viewed in a terminal) potentially trigger terminal escape-sequence mischief.
+- **Where:** `crates/rustyjack-core/src/operations.rs` (portscan loot formatting that writes `b.banner` directly).
+- **Fix:** Treat banners/hostnames as untrusted display data:
+  - escape `\r`/`\n` and other control bytes before writing,
+  - optionally strip/encode ANSI escape sequences,
+  - consider length caps per banner to avoid “one host writes megabytes”.
+- **Fixed version looks like:** `escape_log_value(b.banner)` (or equivalent) applied consistently for both `.txt` and `.json` loot outputs.
 
 ## 6) Test plan (focused on correctness + robustness)
 

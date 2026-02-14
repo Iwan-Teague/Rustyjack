@@ -17,7 +17,7 @@
 - **Installer drift + outright breakage:** `install_rustyjack.sh` currently references an **undefined `$SERVICE`** under `set -u` (line ~970), meaning the “source build” installer will abort mid-run and leave the machine half-configured.
 - **Policy vs implementation mismatch:** trusted docs require “pure Rust / avoid third‑party system binaries”, yet multiple paths still rely on `wpa_supplicant` (service `rustyjack-wpa_supplicant@.service`) and the *prebuilt* installer still installs `dnsmasq`/`isc-dhcp-client`/`hostapd`.
 - **DNS ownership is fragile:** the design relies on `/etc/resolv.conf` being a symlink to `/var/lib/rustyjack/resolv.conf`; the installers enforce this (and even `chattr +i`) but the daemon’s startup validation largely checks **contents**, not the **symlink/immutability invariants**. A package update or manual change can silently break networking.
-- **Udev hotplug path is heavy:** `99-rustyjack-wifi.rules` runs a shell script via `RUN+=…`. Per upstream udev guidance, long-running work should be pulled in via `SYSTEMD_WANTS` (udev man page). The current approach risks event-handling stalls and inconsistent behavior across kernels/distros.
+- **Udev hotplug path is heavy:** `scripts/99-rustyjack-wifi.rules` runs `/usr/local/bin/rustyjack-hotplugd …` via `RUN+=…`. Per upstream udev guidance, long-running work should be pulled in via `SYSTEMD_WANTS` (udev man page). The current approach risks event-handling stalls and inconsistent behavior across kernels/distros.
 - **Security hardening has foot-guns:** a few directives look like they’re meant to restrict devices and syscalls, but are either inconsistent (different installers generate different daemon units) or likely ineffective/mis-scoped.
 
 ---
@@ -38,8 +38,8 @@
 - `services/rustyjack-wpa_supplicant@.service` — per-interface `wpa_supplicant` runner.
 
 ### Integration & helper scripts
-- `scripts/99-rustyjack-wifi.rules` — udev rule: on USB Wi‑Fi hotplug, run `scripts/wifi_hotplug.sh`.
-- `scripts/wifi_hotplug.sh` — invoked from udev; logs hotplug event; optionally runs `wifi_driver_installer.sh`; starts UI service.
+- `scripts/99-rustyjack-wifi.rules` — udev rule: on USB Wi‑Fi hotplug, run `/usr/local/bin/rustyjack-hotplugd add|remove %k` via `RUN+=`.
+- `scripts/wifi_hotplug.sh` — **compatibility shim** for legacy rule paths; it execs `/usr/local/bin/rustyjack-hotplugd` (current logic). It can still be used if a custom/older udev rule points to it. It may also runs `wifi_driver_installer.sh`; starts UI service.
 - `scripts/wifi_driver_installer.sh` — installs Realtek drivers; heavy (dkms/kernel headers/etc.); not obviously bounded by timeouts or “safe to run under udev”.
 - `scripts/rj_shellops.sh` — “shell ops” wrappers used by installers; defines helper functions (e.g., `rj_sudo_tee`).
 - `scripts/fde_*.sh` — full-disk-encryption helpers; platform-y and dependency-heavy (cryptsetup tooling); not boot-integrated here but affects system integration.
@@ -102,8 +102,8 @@ Because the script uses `set -euo pipefail`, referencing **`$SERVICE`** without 
 
 ### C) Hotplug Wi‑Fi path (udev)
 1. Kernel detects new USB Wi‑Fi → udev rule `scripts/99-rustyjack-wifi.rules` fires.
-2. udev executes `scripts/wifi_hotplug.sh` via `RUN+=…`.
-3. `wifi_hotplug.sh` may run `wifi_driver_installer.sh` (heavy dependency work) and then starts `rustyjack-ui.service`.
+2. udev executes `/usr/local/bin/rustyjack-hotplugd add|remove %k` via `RUN+=…`.
+3. `rustyjack-hotplugd` may (indirectly) trigger `wifi_driver_installer.sh` (heavy dependency work) and/or start `rustyjack-ui.service` depending on configuration (the legacy `scripts/wifi_hotplug.sh` shim also has this capability).
 
 ### D) Socket binding details (daemon fallback)
 If socket activation isn’t used, `crates/rustyjack-daemon/src/systemd.rs::bind_socket()` will:
@@ -147,7 +147,7 @@ Modern embedded/appliance stacks generally converge on a few patterns:
 
 - **Installer drift: prebuilt vs source-build create materially different daemon integration** → boot behavior, security posture, and failure modes differ depending on which installer you ran; this makes bugs “Heisenbugs” and breaks reproducibility → **Where it is:** `install_rustyjack_prebuilt.sh` writes socket activation + `StateDirectory=`; `install_rustyjack.sh` masks the socket and writes a different daemon unit → **How to fix:** choose a single canonical unit definition (prefer checked-in units + minimal templating) and make all installers install the same ones → **What the fixed version looks like:** installers copy `services/rustyjackd.service` + `rustyjackd.socket` verbatim (or generate from one template).
 
-- **DNS ownership invariant not fully validated at boot** → `/etc/resolv.conf` can silently stop being the required symlink (or lose immutability), breaking name resolution in ways that look like “random Wi‑Fi flakiness” → **Where it is:** installers enforce symlink + `chattr +i`; runtime verification uses `rustyjack-core/src/system/dns.rs::verify_dns()` via `system/isolation.rs` but focuses on contents → **How to fix:** add a startup check that verifies (a) `/etc/resolv.conf` is a symlink to the configured Rustyjack resolv file, (b) the target exists and is writable by the daemon, and (c) the link is repaired if safe → **What the fixed version looks like:** `verify_dns_ownership()` called from `reconcile_on_startup()` that asserts `read_link("/etc/resolv.conf")==root/resolv.conf`.
+- **DNS ownership invariant not fully validated at boot** → `/etc/resolv.conf` can silently stop being the required symlink (or lose immutability), breaking name resolution in ways that look like “random Wi‑Fi flakiness” → **Where it is:** installers enforce symlink + `chattr +i`; runtime verification uses `crates/rustyjack-core/src/system/dns.rs::verify_dns()` via `system/isolation.rs` but focuses on contents → **How to fix:** add a startup check that verifies (a) `/etc/resolv.conf` is a symlink to the configured Rustyjack resolv file, (b) the target exists and is writable by the daemon, and (c) the link is repaired if safe → **What the fixed version looks like:** `verify_dns_ownership()` called from `reconcile_on_startup()` that asserts `read_link("/etc/resolv.conf")==root/resolv.conf`.
 
 - **`chattr +i /etc/resolv.conf` is a sharp edge** → immutability can break package operations, troubleshooting, and recovery; it also creates “surprise” semantics for operators and scripts → **Where it is:** `install_rustyjack.sh` and prebuilt installer `claim_resolv_conf()` use `chattr +i` → **How to fix:** replace immutability with periodic repair + monitoring (or explicit apt hook), and document the ownership model; if immutability is kept, add “undo” paths and warnings → **What the fixed version looks like:** no `chattr`; instead, a boot-time repair + a health check in `scripts/rustyjack_comprehensive_test.sh`.
 
@@ -163,7 +163,7 @@ Modern embedded/appliance stacks generally converge on a few patterns:
 
 - **Directory ownership/mode invariants are spread across scripts and units** → hard to audit; easy for one install path to forget a directory; subtle permission bugs appear as “socket can’t connect” → **Where it is:** `install_rustyjack.sh` manual `mkdir/chown`; prebuilt uses `StateDirectory=`; daemon fallback bind creates `/run/rustyjack` with default perms → **How to fix:** move directory creation into systemd (`StateDirectory=`/`RuntimeDirectory=`) and/or `tmpfiles.d` consistently, and have Rust verify preconditions at startup → **What the fixed version looks like:** all services use `RuntimeDirectory=rustyjack` with `RuntimeDirectoryMode=0770` and group ownership.
 
-- **Udev `RUN+=` hotplug path is brittle** → udev kills long-running processes after event handling; heavy work under udev can cause nondeterminism and missed events → **Where it is:** `scripts/99-rustyjack-wifi.rules` (`RUN+=.../wifi_hotplug.sh`) → **How to fix:** change rule to set `ENV{SYSTEMD_WANTS}+=rustyjack-wifi-hotplug@%k.service` and run work in a normal systemd service with timeouts and logging → **What the fixed version looks like:** a udev rule that only sets properties; a `rustyjack-wifi-hotplug@.service` does the heavy lifting.
+- **Udev `RUN+=` hotplug path is brittle** → udev kills long-running processes after event handling; heavy work under udev can cause nondeterminism and missed events → **Where it is:** `scripts/99-rustyjack-wifi.rules` (`RUN+=.../rustyjack-hotplugd ...`) → **How to fix:** change rule to set `ENV{SYSTEMD_WANTS}+=rustyjack-wifi-hotplug@%k.service` (template unit to be added) and run work in a normal systemd service with timeouts and logging → **What the fixed version looks like:** a udev rule that only sets properties; a `rustyjack-wifi-hotplug@.service` does the heavy lifting.
 
 - **wifi_hotplug.sh can trigger driver installation from a hotplug event** → DKMS/kernel headers installs are slow and failure-prone; doing this “in reaction to hardware arrival” can hang UI and increase boot instability → **Where it is:** `scripts/wifi_hotplug.sh` calling `wifi_driver_installer.sh` → **How to fix:** separate “detect adapter” from “install driver”; gate driver installs behind explicit operator action or a background job queue with retries/rollback → **What the fixed version looks like:** hotplug service only records the device + notifies UI; a separate job runner performs driver installs.
 
@@ -351,23 +351,23 @@ Modern embedded/appliance stacks generally converge on a few patterns:
   34 | - Channel coverage: 2.4 GHz only; Rustyjack features that assume 5 GHz (e.g., channel setting beyond 14 or dual-band AP) need an external dual-band adapter.
   35 | 
   36 | Project structure (14 workspace crates):
-  37 | - `rustyjack-core/` — Operations orchestration (68 command handlers), anti-forensics, physical access, USB mount operations, loot management, pipelines.
-  38 |   - `src/anti_forensics.rs` — Secure file deletion (DoD 5220.22-M), RAM wipe, log purging, evidence management.
-  39 |   - `src/physical_access.rs` — WiFi credential extraction from routers via wired connection, router fingerprinting.
+  37 | - `crates/rustyjack-core/` — Operations orchestration (68 command handlers), anti-forensics, physical access, USB mount operations, loot management, pipelines.
+  38 |   - `src/external_tools/anti_forensics.rs` — Secure file deletion (DoD 5220.22-M), RAM wipe, log purging, evidence management.
+  39 |   - `src/external_tools/physical_access.rs` — WiFi credential extraction from routers via wired connection, router fingerprinting.
   40 |   - `src/mount.rs` — USB mounting with read-only/read-write mode selection and mount policy enforcement.
   41 |   - `src/redact.rs` — Sensitive data redaction for logs (passwords, keys, credentials).
-  42 | - `rustyjack-daemon/` — Privileged root daemon with IPC dispatch and job lifecycle management.
-  43 | - `rustyjack-ui/` — Embedded display UI for the Waveshare HAT.
-  44 | - `rustyjack-client/` — Tokio-based Unix socket client for daemon communication.
-  45 | - `rustyjack-ipc/` — IPC protocol types and endpoints.
-  46 | - `rustyjack-commands/` — CLI/IPC command enums and argument structures.
-  47 | - `rustyjack-netlink/` — Pure Rust networking: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables (replaces iptables, nmcli, dhclient).
-  48 | - `rustyjack-wireless/` — 802.11 attacks (9,688 lines, 18 modules): nl80211, monitor/injection, deauth, PMKID, Karma, Evil Twin, hotspot with native DHCP/DNS.
-  49 | - `rustyjack-ethernet/` — Rust-only Ethernet recon (ICMP/ARP sweep + TCP port scan, banner grabbing, device inventory).
-  50 | - `rustyjack-portal/` — Captive portal HTTP server (Axum + Tower middleware).
-  51 | - `rustyjack-evasion/` — MAC randomization with vendor-aware policy engine, hostname randomization, TX power control.
-  52 | - `rustyjack-encryption/` — AES-GCM encryption for loot, zeroization of sensitive data.
-  53 | - `rustyjack-wpa/` — WPA/WPA2 handshake processing (PBKDF2, HMAC-SHA1 for PMK/PTK).
+  42 | - `crates/rustyjack-daemon/` — Privileged root daemon with IPC dispatch and job lifecycle management.
+  43 | - `crates/rustyjack-ui/` — Embedded display UI for the Waveshare HAT.
+  44 | - `crates/rustyjack-client/` — Tokio-based Unix socket client for daemon communication.
+  45 | - `crates/rustyjack-ipc/` — IPC protocol types and endpoints.
+  46 | - `crates/rustyjack-commands/` — CLI/IPC command enums and argument structures.
+  47 | - `crates/rustyjack-netlink/` — Pure Rust networking: interfaces, routes, DHCP, DNS, ARP, rfkill, nf_tables (replaces iptables, nmcli, dhclient).
+  48 | - `crates/rustyjack-wireless/` — 802.11 attacks (9,688 lines, 18 modules): nl80211, monitor/injection, deauth, PMKID, Karma, Evil Twin, hotspot with native DHCP/DNS.
+  49 | - `crates/rustyjack-ethernet/` — Rust-only Ethernet recon (ICMP/ARP sweep + TCP port scan, banner grabbing, device inventory).
+  50 | - `crates/rustyjack-portal/` — Captive portal HTTP server (Axum + Tower middleware).
+  51 | - `crates/rustyjack-evasion/` — MAC randomization with vendor-aware policy engine, hostname randomization, TX power control.
+  52 | - `crates/rustyjack-encryption/` — AES-GCM encryption for loot, zeroization of sensitive data.
+  53 | - `crates/rustyjack-wpa/` — WPA/WPA2 handshake processing (PBKDF2, HMAC-SHA1 for PMK/PTK).
   54 | - `DNSSpoof/` — Captive portal HTML/JS templates (not a Rust crate).
   55 | - `scripts/` — WiFi driver installer (`wifi_driver_installer.sh`), FDE scripts (`fde_prepare_usb.sh`, `fde_migrate_root.sh`), USB hotplug helper.
   56 | - `install_rustyjack.sh`, `install_rustyjack_dev.sh`, `install_rustyjack_prebuilt.sh` — Production, debug, and prebuilt installers.

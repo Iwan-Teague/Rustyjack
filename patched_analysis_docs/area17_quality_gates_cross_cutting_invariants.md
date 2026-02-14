@@ -22,6 +22,8 @@ These are the cross-cutting rules that shape every “quality gate” decision:
 
 4. **Pi constraints (RAM/CPU/SD wear)**: stay inside tight budgets; avoid unnecessary processes, blocking in async contexts, and excessive disk churn.
 
+5. **No emojis / control characters in code & logs**: follow the repo’s style constraints (as documented in `AGENTS.md`); avoid emojis and unescaped control characters in scripts and log output.
+
 ## 1) Inventory of existing quality gates
 
 ### 1.1 GitHub Actions CI (current)
@@ -111,7 +113,7 @@ These are the main ways a regression can slip through despite existing gates:
 
    - `ci/forbid_command_new.rs` has an empty allowlist (so any exception becomes “edit the checker” pressure).
 
-   - `ci/no_blocking_in_async.rs` allowlists entire directories (`rustyjack-ui/`, `external_tools/`, `/tests/`), making it easy to “move code to bypass the gate.”
+   - `ci/no_blocking_in_async.rs` allowlists entire directories (`crates/rustyjack-ui/`, `external_tools/`, `/tests/`), making it easy to “move code to bypass the gate.”
 
 3. **Baseline-based gates can be bypassed by moving the baseline** (`unwrap_expect_baseline.txt`). Baselines are useful debt trackers, but they need review discipline.
 
@@ -122,6 +124,8 @@ These are the main ways a regression can slip through despite existing gates:
 6. **Interface isolation depends on call-site discipline**. A new operation that forgets to call `enforce_single_interface(...)` can violate the invariant without tripping CI.
 
 7. **Pi resource budgets are declared (systemd) but not continuously measured**. Without a budget regression test, memory/CPU creep is stealthy.
+
+8. **Style constraints are not enforced by CI**. Example: `AGENTS.md` says to avoid emojis; the repo currently contains an emoji in `scripts/wifi_driver_installer.sh`. A tiny grep gate can prevent accidental spread.
 
 ## 3) Cross-cutting invariant map (compliance map)
 

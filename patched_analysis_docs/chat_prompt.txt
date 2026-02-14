@@ -1,0 +1,111 @@
+You are Claude Opus 4.6 running as an autonomous coding agent in a terminal with full repo access.
+
+MISSION
+Implement ALL required code/config/test changes described across every markdown file in:
+  ./patched_analysis_docs/
+Do this in one continuous session. Do NOT ask me for another prompt per document. Do the entire batch in this one run.
+
+ABSOLUTE CONSTRAINTS (MUST FOLLOW)
+1) Treat ./CLAUDE.md and ./AGENTS.md as binding constraints. Read them first and obey them.
+   - Do not add NEW third-party system binaries to the project (existing “hypocrisy” is acknowledged; do not add more).
+   - Prefer pure Rust solutions and existing project patterns.
+   - Follow existing CI guardrails (no new Command::new callsites, no new unwrap/expect callsites, no blocking in async, etc).
+   - No emojis in code/scripts/log strings; remove if present and prevent regressions (per AGENTS intent).
+2) Avoid overengineering: only implement what the analysis docs require or what is clearly necessary to make those requirements correct, safe, and testable.
+3) Do not delete files or rewrite history. No force push. No destructive operations outside the repo.
+4) Keep diffs small and targeted. Preserve style, structure, and public interfaces unless the docs call for change.
+5) Prefer adding tests over adding complexity.
+
+WORKING MEMORY / PROGRESS FILE (REQUIRED)
+Create (or overwrite) this file and use it as your persistent working state:
+  ./patched_analysis_docs/PROGRESS.md
+
+PROGRESS.md format requirements:
+- Title, timestamp, and “Session objective”.
+- “Constraints snapshot” (bullet summary of key rules from CLAUDE.md + AGENTS.md).
+- “Docs ingested” list (every .md file in patched_analysis_docs).
+- “Task ledger” table with columns:
+    ID | Source doc | Finding/requirement | Target files | Risk | Status (TODO/DOING/DONE) | Evidence (links to code/lines or command outputs)
+- “Decisions” section (only when needed; keep brief).
+- “Tests and verification” section: every command run + result summary.
+Update PROGRESS.md frequently as you work (after each meaningful milestone), and ensure it ends in a clean “DONE” state or a clearly explained “BLOCKED” state.
+
+WORKFLOW (DO NOT SKIP)
+PHASE 0 — BOOTSTRAP
+- Confirm you are at repo root (contains Cargo.toml, CLAUDE.md, AGENTS.md).
+- Ensure ./patched_analysis_docs exists. If it doesn’t, create it and explain in PROGRESS.md how you sourced the docs (but do not invent content).
+
+PHASE 1 — EXPLORE (NO EDITS YET)
+1) Read: CLAUDE.md, AGENTS.md.
+2) Enumerate and read EVERY markdown file under ./patched_analysis_docs.
+3) Extract all actionable requirements/fixes from the docs into PROGRESS.md “Task ledger”.
+   - De-duplicate repeats; preserve traceability: every task must cite its source doc filename.
+   - Assign risk: High (security/data loss), Medium, Low.
+4) Identify the corresponding implementation locations in the repo (files, modules, scripts, services). Record those target paths in the ledger.
+
+PHASE 2 — PLAN (STILL NO EDITS)
+Write an implementation plan in PROGRESS.md:
+- Order tasks by risk then dependency.
+- For each task: describe minimal-change approach, expected code touchpoints, and how you will verify it.
+- Explicitly call out any tasks that may collide with constraints (e.g., “needs external binary”); in that case, propose a Rust-native or existing-dependency alternative.
+
+PHASE 3 — IMPLEMENT (EDIT CODE)
+Implement the tasks one by one, updating PROGRESS.md as you go.
+
+You MUST ensure you cover (at minimum) the cross-cutting security and robustness topics that these docs emphasize:
+A) Sensitive data in logs:
+   - Remove or redact any plaintext credential logging (e.g., WPA cracking results). 
+   - Add safe logging helpers if needed (minimal utility; no heavy abstractions).
+B) Untrusted strings in logs/loot:
+   - Sanitize/escape control characters (CR/LF, ANSI escapes) and cap lengths for attacker-controlled strings (e.g., banners, SSIDs, portal inputs) before writing to loot files or logs.
+C) Filesystem safety:
+   - Validate any user-influenced path components (like “site” identifiers) to prevent traversal and ensure joined paths stay within their intended base directory.
+D) Network/updater resilience:
+   - Ensure HTTP operations have explicit timeouts and sane size limits; avoid indefinite stalls.
+E) Repo constraint compliance:
+   - Fix any Command::new violations in code or properly gate them behind non-release features if the docs allow; ensure CI checks pass.
+   - Remove emojis/control chars in scripts and ensure it won’t regress (prefer a CI check implemented in the same style as existing ci/*.rs checks).
+
+Implementation rules:
+- Prefer Rust stdlib; avoid new crates unless strictly necessary and justified in PROGRESS.md.
+- Keep install scripts and systemd units consistent with doc intent, but do not expand dependency footprint.
+- If you need to add a new CI check, implement it as a small Rust program under ./ci and wire it into .github/workflows/ci.yml similarly to existing checks.
+- Run formatting where appropriate (cargo fmt) and keep warnings under control.
+
+PHASE 4 — VERIFY (THOROUGH TESTING REQUIRED)
+Run verification in this order, recording outputs (summaries) in PROGRESS.md:
+
+1) Repo-local checks (mirror existing CI patterns):
+   - rustc ci/forbid_command_new.rs -o /tmp/forbid_command_new && /tmp/forbid_command_new
+   - rustc ci/no_new_unwrap_expect.rs -o /tmp/no_new_unwrap_expect && /tmp/no_new_unwrap_expect
+   - rustc ci/no_blocking_in_async.rs -o /tmp/no_blocking_in_async && /tmp/no_blocking_in_async
+   - cargo check --workspace
+   - cargo test --workspace (if any tests exist; if long, still run)
+   - cargo fmt --all -- --check (or apply fmt and re-check)
+   - If clippy is in use, run: cargo clippy --workspace --all-targets (avoid adding new lints unless needed)
+
+2) Release guardrail check from CI workflow:
+   - Ensure the “lab feature in release builds” guardrail still behaves as intended (match the repo CI logic).
+
+3) ARM64 docker build (Raspbian 64-bit parity):
+   - Run the project’s ARM64 docker harness:
+       ./docker/arm64/run.sh bash -lc "cargo build --target aarch64-unknown-linux-gnu -p rustyjack-ui -p rustyjack-core -p rustyjack-daemon"
+   - If it fails, fix and re-run until it succeeds.
+
+4) Final regression scans:
+   - Search for any remaining plaintext secret logging patterns you touched (password, key, psk, token).
+   - Search for new instances of Command::new, unwrap(), expect(), and blocking calls in async paths (use rg/grep).
+   - Search for emojis or high-bit glyphs added to code/scripts/log templates; remove them.
+
+DELIVERABLES (END OF SESSION)
+When complete, do ALL of the following:
+1) Ensure PROGRESS.md “Task ledger” shows every task as DONE or clearly BLOCKED with reasons and next steps.
+2) Print a final summary in terminal output:
+   - Total tasks completed
+   - Files changed (group by area)
+   - Tests run and whether they passed
+   - Any remaining risks
+3) Leave the working tree clean or with clearly stated uncommitted changes.
+   - Prefer making small logical commits as you go (optional but recommended); do not squash unless requested.
+
+Now begin: start with PHASE 0 and proceed through PHASE 4 without stopping.

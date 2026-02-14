@@ -1,8 +1,8 @@
 # Area 14 — Anti-forensics + destructive operations (read-only audit)
 
-**Snapshot analyzed:** `watchdog_shallow_20260213-173640.zip` (unpacked under `/mnt/data/repo/watchdog`)  
-**Date:** 2026-02-14 (Europe/Dublin)  
-**Scope requested:** secure-delete / purge modules, log purge behavior, “system purge” workflows, FDE scripts/helpers, confirmation UX requirements, and safety rails. fileciteturn1file0L65-L68 fileciteturn1file10L1-L8
+**Snapshot analyzed:** `watchdog_shallow_20260213-173640.zip` (unpacked under `/mnt/data/repo/watchdog`)
+**Date:** 2026-02-14 (Europe/Dublin)
+**Scope requested:** secure-delete / purge modules, log purge behavior, “system purge” workflows, FDE scripts/helpers, confirmation UX requirements, and safety rails.
 
 **Hard constraints I followed**
 - I did **not** modify repository files.
@@ -15,11 +15,11 @@
 ### UX gating / safety expectations (root docs)
 - UI actions must require **explicit user confirmation**; dialogs **must not auto-dismiss** and errors must not be hidden without acknowledgment. (AGENTS.md L75–L84)
 - FDE operations are **destructive** and **irreversible**, and the user must understand the risk. (README.md L362–L369)
-- The architecture plan for Area 14 explicitly calls out the need to be **truthful** about what secure deletion can and cannot guarantee on flash/SSD, and to use **strong confirmations** for destructive operations. fileciteturn1file8L32-L46
+- The architecture plan for Area 14 explicitly calls out the need to be **truthful** about what secure deletion can and cannot guarantee on flash/SSD, and to use **strong confirmations** for destructive operations.
 
 ### Technical truthfulness requirement (Architecture Doc 2 → Area 14)
-- Must clearly distinguish “best effort” vs “guaranteed” on flash media and storage stacks. fileciteturn1file8L32-L46
-- Must include safety rails and confirmation UX. fileciteturn1file8L32-L46
+- Must clearly distinguish “best effort” vs “guaranteed” on flash media and storage stacks.
+- Must include safety rails and confirmation UX.
 
 ---
 
@@ -27,23 +27,23 @@
 
 ### What exists today (confirmed in UI/core)
 **Log purge (UI-local deletion)**
-- UI flow: one confirmation dialog → deletes “log-like” files under the loot tree only.  
+- UI flow: one confirmation dialog → deletes “log-like” files under the loot tree only.
   Code: `crates/rustyjack-ui/src/app/system.rs` → `purge_logs()` + `is_log_file()`.
 
 **Complete purge (UI + daemon command)**
-- UI flow: two-step confirmation (checkbox + “final confirm”) with strong warning copy.  
+- UI flow: two-step confirmation (checkbox + “final confirm”) with strong warning copy.
   Code: `system.rs` → `complete_purge()`.
-- Daemon behavior: **preflight-only** (“authorization required”), no destructive action occurs in this snapshot.  
+- Daemon behavior: **preflight-only** (“authorization required”), no destructive action occurs in this snapshot.
   Code: `crates/rustyjack-core/src/operations.rs` → `handle_system_purge()` → `preflight_only_response()`.
 
 **Secure shutdown (UI best-effort RAM wipe + poweroff)**
-- UI flow: warning dialog → best-effort RAM overwrite attempt → poweroff request.  
+- UI flow: warning dialog → best-effort RAM overwrite attempt → poweroff request.
   Code: `system.rs` → `secure_shutdown()` + `best_effort_ram_wipe()`; daemon `SystemCommand::Poweroff`.
 
 **FDE prepare / migrate (UI + daemon command)**
-- UI explicitly labels these as **dry-run/preflight only**; it states execution “requires review”.  
+- UI explicitly labels these as **dry-run/preflight only**; it states execution “requires review”.
   Code: `crates/rustyjack-ui/src/app/encryption.rs`.
-- Core handlers are **preflight-only** in this snapshot.  
+- Core handlers are **preflight-only** in this snapshot.
   Code: `operations.rs` → `handle_system_fde_prepare()`, `handle_system_fde_migrate()`.
 
 ### Gaps vs. trusted requirements
@@ -65,9 +65,9 @@ For any destructive action that affects data availability:
 
 ### The uncomfortable truth about “secure delete” on SD/SSD
 Rustyjack targets Raspberry Pi-class systems, typically with SD cards or other flash media. On flash:
-- Overwriting a file **does not reliably overwrite all physical locations** where its data may exist because controllers remap blocks (wear-leveling) and keep spare/over-provisioned areas. NIST explicitly warns that overwriting via native read/write interfaces may not cover all areas and may not reliably sanitize under wear-leveling. citeturn1search0turn2search4
-- Empirical work shows “hard-drive style” overwrite techniques can fail to fully sanitize SSDs/flash due to flash translation layers and remapping. citeturn2search0
-- Surveys of secure deletion emphasize that guarantees depend on the interface layer; file-level overwrites are often the least trustworthy on modern storage stacks. citeturn2search2
+- Overwriting a file **does not reliably overwrite all physical locations** where its data may exist because controllers remap blocks (wear-leveling) and keep spare/over-provisioned areas. NIST explicitly warns that overwriting via native read/write interfaces may not cover all areas and may not reliably sanitize under wear-leveling.
+- Empirical work shows “hard-drive style” overwrite techniques can fail to fully sanitize SSDs/flash due to flash translation layers and remapping.
+- Surveys of secure deletion emphasize that guarantees depend on the interface layer; file-level overwrites are often the least trustworthy on modern storage stacks.
 
 ### What “best effort” can mean (and what it cannot)
 **Best effort (honest claim):**
@@ -77,7 +77,7 @@ Rustyjack targets Raspberry Pi-class systems, typically with SD cards or other f
 - “Guaranteed unrecoverable secure deletion” for individual files solely by overwriting.
 
 ### Safer, more realistic posture (non-weaponizable)
-- Prefer **encryption-at-rest** for sensitive artifacts so that “deletion” reduces to **key destruction / rotation** (crypto-erase). This aligns with NIST’s guidance that cryptographic erase is a viable sanitization approach for appropriate media and threat models. citeturn1search3turn1search0
+- Prefer **encryption-at-rest** for sensitive artifacts so that “deletion” reduces to **key destruction / rotation** (crypto-erase). This aligns with NIST’s guidance that cryptographic erase is a viable sanitization approach for appropriate media and threat models.
 - Treat “secure delete” UI as: **privacy hygiene**, not forensics-evasion. Make this explicit in UX copy.
 
 ---
@@ -149,7 +149,7 @@ Rustyjack targets Raspberry Pi-class systems, typically with SD cards or other f
 
 ### 2) “Secure delete” language risks overpromising on flash media
 - **Problem:** Root docs claim secure delete uses a 7-pass DoD-style overwrite, implying strong guarantees.
-- **Why:** On SD/SSD, multi-pass overwrites are often not reliably sanitizing and increase wear; NIST warns native overwrite may not cover remapped areas under wear-leveling. citeturn2search4turn1search0
+- **Why:** On SD/SSD, multi-pass overwrites are often not reliably sanitizing and increase wear; NIST warns native overwrite may not cover remapped areas under wear-leveling.
 - **Where:** `AGENTS.md` (DoD 7-pass mention); implementation in `anti_forensics.rs` (`manual_secure_delete`).
 - **Fix:** Reword to “best effort overwrite + delete; not guaranteed on flash”; steer users toward encryption + key destruction.
 - **Fixed version looks like:** UI says: “This removes files from Rustyjack and attempts best-effort overwrite; on flash media it may not be recoverably erased.”
@@ -303,9 +303,23 @@ Rustyjack targets Raspberry Pi-class systems, typically with SD cards or other f
 ---
 
 ## References (external)
-- NIST SP 800-88 Rev.1, *Guidelines for Media Sanitization*. citeturn1search0turn1search3  
-- NIST ITL Bulletin (Feb 2015) on sanitization limits with wear-leveling. citeturn2search4  
-- Wei et al., USENIX FAST’11: *Reliably Erasing Data From Flash-Based Solid State Drives*. citeturn2search0  
-- Reardon et al., IEEE S&P 2013: *SoK: Secure Data Deletion*. citeturn2search2
+- NIST SP 800-88 Rev.1, *Guidelines for Media Sanitization*.
+- NIST ITL Bulletin (Feb 2015) on sanitization limits with wear-leveling.
+- Wei et al., USENIX FAST’11: *Reliably Erasing Data From Flash-Based Solid State Drives*.
+- Reardon et al., IEEE S&P 2013: *SoK: Secure Data Deletion*.
 
 ---
+
+## References (external)
+
+- Linux kernel radiotap header documentation (extended present bitmaps, alignment): https://docs.kernel.org/networking/radiotap-headers.html
+- Radiotap project (extended presence masks, alignment): https://www.radiotap.org/
+- rfkill man page (hard vs soft block behavior): https://www.man7.org/linux/man-pages/man8/rfkill.8.html
+- Tokio `spawn_blocking` docs (abort/cancellation semantics): https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html
+- Rust Fuzz Book (`cargo-fuzz`/libFuzzer workflow): https://rust-fuzz.github.io/book/cargo-fuzz.html
+- OWASP Log Injection overview: https://owasp.org/www-community/attacks/Log_Injection
+- RustSec advisory re: ANSI escape sequence injection via logs (tracing-subscriber): https://rustsec.org/advisories/RUSTSEC-2025-0055
+- Linux `packet(7)` man page (AF_PACKET, privilege): https://www.man7.org/linux/man-pages/man7/packet.7.html
+- Linux `socket(7)` man page (socket options like SO_BINDTODEVICE): https://www.man7.org/linux/man-pages/man7/socket.7.html
+- NIST SP 800-88 Rev.2 (2025) Guidelines for Media Sanitization: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-88r2.pdf
+

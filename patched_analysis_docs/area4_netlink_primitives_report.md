@@ -183,7 +183,7 @@ Gaps / pitfalls:
 
 ### Blocking in async contexts
 - The core managers’ operations are async and rely on `rtnetlink`’s async I/O.
-- However, *outside this crate*, `rustyjack-core/src/netlink_helpers.rs` provides sync wrappers that call `tokio::runtime::Handle::block_on` when a runtime is present. This is a known footgun: calling `block_on` from a runtime thread can stall progress and/or panic depending on context. (See Findings.)
+- However, *outside this crate*, `crates/rustyjack-core/src/netlink_helpers.rs` provides sync wrappers that call `tokio::runtime::Handle::block_on` when a runtime is present. This is a known footgun: calling `block_on` from a runtime thread can stall progress and/or panic depending on context. (See Findings.)
 
 ---
 
@@ -395,7 +395,7 @@ pub enum NetlinkError {
 ```
 
 ### 14) Potential async footgun in core wrappers (`block_on` on current Handle)
-**Problem →** `rustyjack-core/src/netlink_helpers.rs` uses `Handle::try_current().map(|h| h.block_on(async { ... }))`.  
+**Problem →** `crates/rustyjack-core/src/netlink_helpers.rs` uses `Handle::try_current().map(|h| h.block_on(async { ... }))`.  
 **Why →** Blocking a runtime worker thread can stall other tasks; depending on runtime/config, it can panic or deadlock. This matters because link/route ops are called during UI + daemon flows.  
 **Where →** `crates/rustyjack-core/src/netlink_helpers.rs:23+`  
 **Fix →** Prefer async call paths, or route all sync entrypoints through a dedicated shared runtime thread.  
