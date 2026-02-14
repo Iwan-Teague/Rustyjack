@@ -17,8 +17,11 @@ Write-Host "Checking Docker image status..." -ForegroundColor Cyan
 $DockerfileChanged = $false
 $ImageExists = $false
 
-# Check if image exists
+# Check if image exists (temporarily allow errors so stderr from docker doesn't terminate)
+$prevPref = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 docker image inspect $ImageName >$null 2>&1
+$ErrorActionPreference = $prevPref
 if ($LASTEXITCODE -eq 0) {
     $ImageExists = $true
 

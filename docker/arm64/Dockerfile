@@ -1,4 +1,4 @@
-FROM --platform=linux/arm64 rust:1.85-bullseye
+FROM --platform=linux/arm64 rust:1.85-bookworm
 
 # Install system deps needed for builds
 RUN apt-get update && \
