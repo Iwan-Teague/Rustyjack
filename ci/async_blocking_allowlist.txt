@@ -24,3 +24,6 @@ crates/rustyjack-portal/src/bin/main.rs
 # =============================================================================
 
 # (All issues fixed - section kept for future use)
+
+# Test runner job - uses blocking fs for setup before spawning test process
+crates/rustyjack-daemon/src/jobs/kinds/ui_test_run.rs

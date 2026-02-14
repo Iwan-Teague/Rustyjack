@@ -6,7 +6,11 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+
+/// Maximum download size for update archives (100 MB).
+const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct UpdatePolicy {
@@ -119,7 +123,11 @@ async fn download_archive(url: &str, dest: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .context("build http client")?;
     let response = client.get(url).send().await?.error_for_status()?;
 
     let mut file = tokio::fs::File::create(dest)
@@ -127,8 +135,16 @@ async fn download_archive(url: &str, dest: &Path) -> Result<()> {
         .context("create archive file")?;
 
     let mut stream = response.bytes_stream();
+    let mut downloaded: u64 = 0;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("download chunk")?;
+        downloaded += chunk.len() as u64;
+        if downloaded > MAX_DOWNLOAD_BYTES {
+            bail!(
+                "update archive exceeds size limit ({} bytes)",
+                MAX_DOWNLOAD_BYTES
+            );
+        }
         file.write_all(&chunk)
             .await
             .context("write archive chunk")?;
@@ -195,6 +211,15 @@ fn verify_manifest_and_files(stage_dir: &Path, public_key: [u8; 32]) -> Result<M
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes).context("parse manifest")?;
     if manifest.version.trim().is_empty() {
         bail!("manifest version is empty");
+    }
+    // Validate version as a safe path component (no traversal, no separators).
+    for ch in manifest.version.chars() {
+        if !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_') {
+            bail!("manifest version contains invalid character: {:?}", ch);
+        }
+    }
+    if manifest.version.contains("..") {
+        bail!("manifest version contains traversal sequence");
     }
     if manifest.files.is_empty() {
         bail!("manifest files is empty");

@@ -2102,6 +2102,8 @@ fn handle_eth_site_cred_capture(
         timeout_ms,
     } = args;
 
+    validate_site_name(&site)?;
+
     if !offensive_review_approved(root) {
         let mut errors = Vec::new();
         let warnings = Vec::new();
@@ -2361,6 +2363,9 @@ fn handle_dnsspoof_start(root: &Path, args: DnsSpoofStartArgs) -> Result<Handler
         interface,
         loot_dir,
     } = args;
+
+    validate_site_name(&site)?;
+
     if !offensive_review_approved(root) {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
@@ -5592,6 +5597,26 @@ fn wireless_tag(ssid: Option<&str>, bssid: Option<&str>, interface: &str) -> Str
     sanitize_label(interface)
 }
 
+/// Validate a site name to prevent path traversal.
+/// Only alphanumeric, hyphen, underscore, and dot (no leading dot) are allowed.
+fn validate_site_name(site: &str) -> Result<()> {
+    if site.is_empty() {
+        bail!("site name is empty");
+    }
+    if site.starts_with('.') || site.contains("..") {
+        bail!("site name contains traversal component");
+    }
+    if site.contains('/') || site.contains('\\') || site.contains('\0') {
+        bail!("site name contains path separator");
+    }
+    for ch in site.chars() {
+        if !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.') {
+            bail!("site name contains invalid character: {:?}", ch);
+        }
+    }
+    Ok(())
+}
+
 fn loot_directory(root: &Path, kind: LootKind) -> PathBuf {
     match kind {
         LootKind::Scan => root.join("loot").join("Scan"),
@@ -5708,8 +5733,11 @@ fn write_session_log(session: &LootSession, hint: &str, lines: &[String]) -> Opt
 /// Falls back to BSSID, then "Unknown" if nothing provided.
 fn wireless_target_directory(root: &Path, ssid: Option<String>, bssid: Option<String>) -> PathBuf {
     let make_safe = |s: &str| {
-        let mut out = String::with_capacity(s.len());
+        let mut out = String::with_capacity(s.len().min(64));
         for ch in s.chars() {
+            if out.len() >= 64 {
+                break;
+            }
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
                 out.push(ch);
             } else {

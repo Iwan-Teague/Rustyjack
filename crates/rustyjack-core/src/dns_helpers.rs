@@ -10,7 +10,7 @@ pub fn start_hotspot_dns(interface: &str, gateway_ip: Ipv4Addr) -> Result<DnsSer
         default_rule: DnsRule::WildcardSpoof(gateway_ip),
         custom_rules: HashMap::new(),
         upstream_dns: Some(Ipv4Addr::new(8, 8, 8, 8)),
-        log_queries: true,
+        log_queries: false,
     };
 
     let mut server = DnsServer::new(config)
@@ -35,7 +35,7 @@ pub fn start_captive_portal_dns(
         default_rule: DnsRule::WildcardSpoof(portal_ip),
         custom_rules: HashMap::new(),
         upstream_dns: None,
-        log_queries: true,
+        log_queries: false,
     };
 
     let mut server = DnsServer::new(config).map_err(|e| {
@@ -68,7 +68,7 @@ pub fn start_evil_twin_dns(
         default_rule: DnsRule::WildcardSpoof(spoof_ip),
         custom_rules: custom_domains,
         upstream_dns: Some(Ipv4Addr::new(8, 8, 8, 8)),
-        log_queries: true,
+        log_queries: false,
     };
 
     let mut server = DnsServer::new(config).map_err(|e| {

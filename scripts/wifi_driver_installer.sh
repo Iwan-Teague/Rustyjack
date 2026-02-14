@@ -590,7 +590,7 @@ EOF
         local webhook=$(cat "$RUSTYJACK_ROOT/discord_webhook.txt" | head -1)
         if [ -n "$webhook" ] && [ "$webhook" != "YOUR_DISCORD_WEBHOOK_URL_HERE" ]; then
             curl -s -H "Content-Type: application/json" \
-                -d "{\"content\": \"🔌 WiFi Driver: $status - $details\"}" \
+                -d "{\"content\": \"WiFi Driver: $status - $details\"}" \
                 "$webhook" 2>/dev/null || true
         fi
     fi

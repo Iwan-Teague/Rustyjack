@@ -11,7 +11,10 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let repo = env::current_dir().map_err(|e| format!("cwd: {e}"))?;
-    let allow: [PathBuf; 0] = [];
+    let allow: [PathBuf; 2] = [
+        repo.join("crates/rustyjack-daemon/src/jobs/kinds/ui_test_run.rs"),
+        repo.join("crates/rustyjack-daemon/src/bin/rustyjack-shellops.rs"),
+    ];
 
     let mut violations = Vec::new();
     visit_rs(&repo, &allow, &mut violations)?;
