@@ -617,24 +617,55 @@ invoke_usb_export() {
             sync
             sleep 1
             
-            # Get the mount point from df (column 6 is the mount point)
+            # Get the mount point - more robust approach for both Linux and macOS
             local mount_point
-            mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
+            # Use df -P for POSIX format (consistent columns across platforms)
+            mount_point=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
             
             if [ -z "$mount_point" ]; then
-                # Fallback: try to find the mount point by walking up the directory tree
+                # Fallback: use last column (works when df output has odd formatting)
                 mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | tail -1 | awk '{print $NF}')
             fi
             
             if [ -n "$mount_point" ]; then
-                # Try umount with the mount point
-                if umount "$mount_point" 2>/dev/null; then
-                    echo "USB drive ejected successfully. Safe to remove."
-                elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
-                    echo "USB drive ejected successfully (required sudo). Safe to remove."
-                else
-                    echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
-                fi
+                # Detect OS for appropriate eject command
+                local os_type
+                os_type=$(uname -s)
+                
+                case "$os_type" in
+                    Darwin)
+                        # macOS: use diskutil for proper ejection
+                        local device
+                        device=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
+                        if [ -n "$device" ]; then
+                            if diskutil eject "$device" 2>/dev/null; then
+                                echo "USB drive ejected successfully. Safe to remove."
+                            else
+                                echo "Failed to eject USB drive. Please eject manually with: diskutil eject $device"
+                            fi
+                        else
+                            echo "Could not determine USB device. Please eject manually."
+                        fi
+                        ;;
+                    Linux)
+                        # Linux: use umount
+                        if umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully. Safe to remove."
+                        elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully (required sudo). Safe to remove."
+                        else
+                            echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
+                        fi
+                        ;;
+                    *)
+                        # Unknown OS: try umount anyway
+                        if umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully. Safe to remove."
+                        else
+                            echo "Failed to eject USB drive. Please eject manually with: umount $mount_point"
+                        fi
+                        ;;
+                esac
             else
                 echo "Could not determine USB mount point. Please eject manually."
             fi
