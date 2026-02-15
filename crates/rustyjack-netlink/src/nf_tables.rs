@@ -197,7 +197,7 @@ impl NetfilterSocket {
             libc::bind(
                 fd,
                 &addr as *const libc::sockaddr_nl as *const libc::sockaddr,
-                mem::size_of::<libc::sockaddr_nl>() as u32,
+                mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
             )
         };
         if bind_result < 0 {

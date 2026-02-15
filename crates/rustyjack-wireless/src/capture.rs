@@ -65,7 +65,7 @@ impl PacketCapture {
             libc::bind(
                 fd,
                 &addr as *const sockaddr_ll as *const libc::sockaddr,
-                mem::size_of::<sockaddr_ll>() as u32,
+                mem::size_of::<sockaddr_ll>() as libc::socklen_t,
             )
         };
 
@@ -89,7 +89,7 @@ impl PacketCapture {
                 libc::SOL_SOCKET,
                 libc::SO_RCVTIMEO,
                 &timeout as *const _ as *const c_void,
-                mem::size_of::<libc::timeval>() as u32,
+                mem::size_of::<libc::timeval>() as libc::socklen_t,
             );
         }
 

@@ -261,7 +261,7 @@ impl ArpSpoofer {
                 frame.len(),
                 0,
                 &sll as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<sockaddr_ll>() as u32,
+                std::mem::size_of::<sockaddr_ll>() as libc::socklen_t,
             )
         };
 

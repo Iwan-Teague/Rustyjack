@@ -158,7 +158,7 @@ impl ArpScanner {
             libc::bind(
                 sock_fd,
                 &sll as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<sockaddr_ll>() as u32,
+                std::mem::size_of::<sockaddr_ll>() as libc::socklen_t,
             )
         };
 
@@ -184,7 +184,7 @@ impl ArpScanner {
                 libc::SOL_SOCKET,
                 libc::SO_RCVTIMEO,
                 &timeout as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::timeval>() as u32,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
             )
         };
 
@@ -229,7 +229,7 @@ impl ArpScanner {
                 frame.len(),
                 0,
                 &sll as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<sockaddr_ll>() as u32,
+                std::mem::size_of::<sockaddr_ll>() as libc::socklen_t,
             )
         };
 
