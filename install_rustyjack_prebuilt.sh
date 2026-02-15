@@ -393,6 +393,19 @@ purge_network_manager() {
   info "Removing NetworkManager..."
   sudo systemctl stop NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
   sudo systemctl disable NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+  # Wait for any lingering apt/dpkg processes from earlier install steps
+  local waited=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    if [ "$waited" -eq 0 ]; then
+      info "Waiting for dpkg lock to be released..."
+    fi
+    sleep 2
+    waited=$((waited + 2))
+    if [ "$waited" -ge 120 ]; then
+      warn "Timed out waiting for dpkg lock after 120s"
+      break
+    fi
+  done
   sudo apt-get -y purge network-manager || true
   sudo apt-get -y autoremove --purge || true
   if dpkg -s network-manager >/dev/null 2>&1; then

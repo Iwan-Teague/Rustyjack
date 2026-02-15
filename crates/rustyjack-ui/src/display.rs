@@ -1117,13 +1117,10 @@ impl Display {
         if right <= left || bottom <= top {
             anyhow::bail!("invalid calibration bounds: non-positive area");
         }
-        if left < 0 || top < 0 {
-            anyhow::bail!("invalid calibration bounds: negative edge");
-        }
-        let max_w = self.diagnostics.detected_width_px.max(1) as i32;
-        let max_h = self.diagnostics.detected_height_px.max(1) as i32;
-        if right >= max_w || bottom >= max_h {
-            anyhow::bail!("invalid calibration bounds: exceeds detected mode");
+        let width = right - left + 1;
+        let height = bottom - top + 1;
+        if width < 32 || height < 32 {
+            anyhow::bail!("invalid calibration bounds: area too small (min 32x32)");
         }
         Ok(())
     }
