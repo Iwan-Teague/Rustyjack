@@ -30,10 +30,18 @@
 - Webhook source priority:
   - `RJ_DISCORD_WEBHOOK_URL` (explicit override)
   - `/var/lib/rustyjack/discord_webhook.txt` (UI-managed default)
+  - `scripts/defaults/discord_webhook.txt` (dev repo default; staged into runtime on run start)
+- Legacy webhook domains are normalized:
+  - `https://discordapp.com/api/webhooks/...` -> `https://discord.com/api/webhooks/...`
+- Runtime staging behavior (`scripts/rj_run_tests.sh`):
+  - If env or repo default contains a valid webhook URL, runner writes `/var/lib/rustyjack/discord_webhook.txt` with `0600` before Discord preflight.
+  - Preflight send failure does not automatically disable follow-up notifications when an endpoint is still configured.
 - Runtime overrides:
   - `RJ_DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." sudo ./scripts/rj_run_tests.sh --all`
   - `sudo ./scripts/rj_run_tests.sh --all --discord-webhook "https://discord.com/api/webhooks/..."`
   - `sudo ./scripts/rj_run_tests.sh --all --runtime-root /var/lib/rustyjack`
+- Discord preflight-only run:
+  - `sudo ./scripts/rj_run_tests.sh --discord-test`
 - Useful flags:
   - `--discord-disable` to suppress webhook for a run.
   - `--discord-username "RustiJack Pi"` to override sender name.
@@ -42,6 +50,10 @@
 - Generated artifacts each run:
   - `<outroot>/<run_id>/run_summary.md`
   - `<outroot>/<run_id>/run_summary.json`
+  - `<outroot>/<run_id>/discord_webhook/` (preflight report + send/status JSON artifacts)
+- Posting artifacts:
+  - Suite-level artifacts are always written under `<outroot>/<run_id>/<suite>/`.
+  - Consolidated summary posting happens at run end; preflight artifacts can be posted manually from the run directory if needed.
 
 ## Manual Verification Checklist
 

@@ -45,6 +45,8 @@ DISCORD_TEST_EXTRA_ARGS=()
 DISCORD_WEBHOOK_ENABLED="${RJ_DISCORD_WEBHOOK_ENABLED:-1}"
 DISCORD_RUNTIME_ROOT="${RJ_RUNTIME_ROOT:-/var/lib/rustyjack}"
 DISCORD_WEBHOOK_PATH_DEFAULT="${DISCORD_RUNTIME_ROOT%/}/discord_webhook.txt"
+DISCORD_DEFAULTS_DIR="$ROOT_DIR/defaults"
+DISCORD_REPO_DEFAULT_WEBHOOK_FILE="${DISCORD_DEFAULTS_DIR%/}/discord_webhook.txt"
 DISCORD_WEBHOOK_URL_DEFAULT=""
 DISCORD_WEBHOOK_URL="${RJ_DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK_URL_DEFAULT}"
 DISCORD_WEBHOOK_USERNAME="${RJ_DISCORD_WEBHOOK_USERNAME:-RustyJack}"
@@ -164,24 +166,81 @@ trim_whitespace() {
   printf '%s' "$value"
 }
 
+normalize_discord_webhook_url() {
+  local raw="$1"
+  raw="$(trim_whitespace "$raw")"
+  raw="${raw/https:\/\/discordapp.com\/api\/webhooks\//https:\/\/discord.com\/api\/webhooks\/}"
+  printf '%s' "$raw"
+}
+
+discord_webhook_url_is_valid() {
+  local candidate="$1"
+  [[ "$candidate" == https://discord.com/api/webhooks/* ]]
+}
+
+stage_discord_webhook_file() {
+  local url="$1"
+  local webhook_file="${RJ_DISCORD_WEBHOOK_FILE:-$DISCORD_WEBHOOK_PATH_DEFAULT}"
+  local webhook_dir
+  local tmp_file
+
+  if [[ -z "$url" ]] || ! discord_webhook_url_is_valid "$url"; then
+    return 1
+  fi
+
+  webhook_dir="$(dirname "$webhook_file")"
+  if ! mkdir -p "$webhook_dir" 2>/dev/null; then
+    return 1
+  fi
+  chmod 700 "$webhook_dir" 2>/dev/null || true
+
+  tmp_file="${webhook_file}.tmp.$$"
+  if ! printf '%s\n' "$url" >"$tmp_file"; then
+    rm -f "$tmp_file" 2>/dev/null || true
+    return 1
+  fi
+  if ! chmod 600 "$tmp_file" 2>/dev/null; then
+    rm -f "$tmp_file" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv -f "$tmp_file" "$webhook_file"; then
+    rm -f "$tmp_file" 2>/dev/null || true
+    return 1
+  fi
+  chmod 600 "$webhook_file" 2>/dev/null || true
+  return 0
+}
+
 discover_discord_webhook_url() {
   if [[ "$DISCORD_WEBHOOK_ENABLED" != "1" ]]; then
     return 0
   fi
-  if [[ -n "${DISCORD_WEBHOOK_URL:-}" ]]; then
+
+  DISCORD_WEBHOOK_URL="$(normalize_discord_webhook_url "${DISCORD_WEBHOOK_URL:-}")"
+  if [[ -n "${DISCORD_WEBHOOK_URL:-}" ]] && discord_webhook_url_is_valid "$DISCORD_WEBHOOK_URL"; then
+    stage_discord_webhook_file "$DISCORD_WEBHOOK_URL" || true
     return 0
   fi
 
   local webhook_file="${RJ_DISCORD_WEBHOOK_FILE:-$DISCORD_WEBHOOK_PATH_DEFAULT}"
-  if [[ ! -f "$webhook_file" ]]; then
-    return 0
+  local candidate=""
+  if [[ -f "$webhook_file" ]]; then
+    candidate="$(sed -n '1p' "$webhook_file" 2>/dev/null | tr -d '\r' || true)"
+    candidate="$(normalize_discord_webhook_url "$candidate")"
+    if discord_webhook_url_is_valid "$candidate"; then
+      DISCORD_WEBHOOK_URL="$candidate"
+      stage_discord_webhook_file "$DISCORD_WEBHOOK_URL" || true
+      return 0
+    fi
   fi
 
-  local candidate
-  candidate="$(sed -n '1p' "$webhook_file" 2>/dev/null | tr -d '\r' || true)"
-  candidate="$(trim_whitespace "$candidate")"
-  if [[ "$candidate" == https://discord.com/api/webhooks/* ]]; then
-    DISCORD_WEBHOOK_URL="$candidate"
+  if [[ -f "$DISCORD_REPO_DEFAULT_WEBHOOK_FILE" ]]; then
+    candidate="$(sed -n '1p' "$DISCORD_REPO_DEFAULT_WEBHOOK_FILE" 2>/dev/null | tr -d '\r' || true)"
+    candidate="$(normalize_discord_webhook_url "$candidate")"
+    if discord_webhook_url_is_valid "$candidate"; then
+      DISCORD_WEBHOOK_URL="$candidate"
+      stage_discord_webhook_file "$DISCORD_WEBHOOK_URL" || true
+    fi
   fi
 }
 
@@ -954,8 +1013,13 @@ if [[ $RUN_DISCORD -eq 1 ]]; then
     ${DISCORD_TEST_EXTRA_ARGS[@]+"${DISCORD_TEST_EXTRA_ARGS[@]}"}
 
   if [[ "$LAST_SUITE_STATUS" != "PASS" ]]; then
-    echo "[WARN] Discord preflight failed; disabling follow-up Discord notifications for this run."
-    DISCORD_WEBHOOK_ENABLED=0
+    webhook_file="${RJ_DISCORD_WEBHOOK_FILE:-$DISCORD_WEBHOOK_PATH_DEFAULT}"
+    if [[ -z "${DISCORD_WEBHOOK_URL:-}" && ! -s "$webhook_file" ]]; then
+      echo "[WARN] Discord preflight failed and no endpoint is configured; disabling follow-up Discord notifications for this run."
+      DISCORD_WEBHOOK_ENABLED=0
+    else
+      echo "[WARN] Discord preflight failed, but an endpoint appears configured; keeping follow-up Discord notifications enabled."
+    fi
   else
     send_discord_text_message \
       "Timestamp: $(date -Is)

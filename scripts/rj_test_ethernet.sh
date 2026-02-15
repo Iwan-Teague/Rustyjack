@@ -187,6 +187,12 @@ run_ethernet_interface_tests() {
   local eth_site
 
   iface_slug="$(rj_slug "$iface")"
+
+  if [[ ! -e "/sys/class/net/$iface" ]]; then
+    rj_skip "Ethernet interface $iface is not present; skipping interface-dependent tests"
+    return 0
+  fi
+
   rj_log "[INFO] Running ethernet interface tests for $iface"
 
   cmd_discover=(rustyjack ethernet discover --interface "$iface" --output json)
@@ -235,7 +241,13 @@ run_ethernet_interface_tests() {
 }
 
 if [[ ${#ETH_IFACES[@]} -eq 0 ]]; then
-  rj_skip "No ethernet interfaces detected; skipping interface-dependent ethernet tests"
+  if [[ -n "${ETH_IFACE:-}" ]]; then
+    rj_skip "Requested ethernet interface ${ETH_IFACE} is not present; skipping ethernet suite"
+  elif [[ ! -e /sys/class/net/eth0 ]]; then
+    rj_skip "eth0 not present; skipping ethernet interface tests"
+  else
+    rj_skip "No ethernet interfaces detected; skipping interface-dependent ethernet tests"
+  fi
 else
   for iface in "${ETH_IFACES[@]}"; do
     run_ethernet_interface_tests "$iface"

@@ -208,33 +208,48 @@ PY
 }
 
 rj_tail_dedup() {
+  # Tail a file and collapse repeated consecutive lines without awk.
+  # Some constrained environments reject multiline awk programs.
   local file="$1"
   local lines="${2:-${RJ_LOG_TAIL_LINES:-120}}"
-  if [[ ! -f "$file" ]]; then
-    return 0
-  fi
-  tail -n "$lines" "$file" 2>/dev/null | awk '
-    NR==1 { prev=$0; count=1; next }
-    $0==prev { count++; next }
-    {
-      if (count > 1) {
-        printf "%s [repeated %dx]\n", prev, count
-      } else {
-        print prev
-      }
-      prev=$0
+  local prev=""
+  local count=0
+  local first=1
+  local line
+
+  [[ -f "$file" ]] || return 0
+
+  tail -n "$lines" "$file" 2>/dev/null | {
+    while IFS= read -r line; do
+      if [[ $first -eq 1 ]]; then
+        prev="$line"
+        count=1
+        first=0
+        continue
+      fi
+
+      if [[ "$line" == "$prev" ]]; then
+        count=$((count + 1))
+        continue
+      fi
+
+      if [[ $count -gt 1 ]]; then
+        printf '%s [repeated %dx]\n' "$prev" "$count"
+      else
+        printf '%s\n' "$prev"
+      fi
+      prev="$line"
       count=1
-    }
-    END {
-      if (NR>=1) {
-        if (count > 1) {
-          printf "%s [repeated %dx]\n", prev, count
-        } else {
-          print prev
-        }
-      }
-    }
-  '
+    done
+
+    if [[ $first -eq 0 ]]; then
+      if [[ $count -gt 1 ]]; then
+        printf '%s [repeated %dx]\n' "$prev" "$count"
+      else
+        printf '%s\n' "$prev"
+      fi
+    fi
+  }
 }
 
 rj_run_cmd() {

@@ -233,7 +233,7 @@ if [[ -z "$USB_DEVICE" ]]; then
 fi
 
 if [[ ! -b "$USB_DEVICE" ]]; then
-  rj_fail "USB device is not a block device: $USB_DEVICE"
+  rj_skip "USB device not present as block device: $USB_DEVICE"
   rj_write_report
   exit 0
 fi

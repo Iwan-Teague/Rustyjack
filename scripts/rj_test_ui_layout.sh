@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --outroot) RJ_OUTROOT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    --no-ui|--dangerous) shift ;;
+    --ui|--no-ui|--dangerous) shift ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;
   esac
 done

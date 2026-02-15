@@ -9,6 +9,7 @@ RUN_UI=1
 RUN_CONNECTIVITY=1
 RUNTIME_ROOT="${RUSTYJACK_ROOT:-/var/lib/rustyjack}"
 WEBHOOK_FILE=""
+DISCORD_LAST_ERROR_SUMMARY=""
 
 usage() {
   cat <<'USAGE'
@@ -75,6 +76,7 @@ if [[ ! -f "$WEBHOOK_FILE" ]]; then
   rj_fail "webhook_file_missing ($WEBHOOK_FILE)"
 else
   WEBHOOK_LINE="$(sed -n '1p' "$WEBHOOK_FILE" 2>/dev/null | tr -d '\r' || true)"
+  WEBHOOK_LINE="${WEBHOOK_LINE/https:\/\/discordapp.com\/api\/webhooks\//https:\/\/discord.com\/api\/webhooks\/}"
   if [[ "$WEBHOOK_LINE" == https://discord.com/api/webhooks/* ]]; then
     rj_ok "webhook_file_format_valid"
   else
@@ -89,7 +91,12 @@ DISCORD_CONFIGURED="$(rj_json_get "$OUT/artifacts/discord_status.json" "data.con
 if [[ "$DISCORD_STATUS" == "ok" && "$DISCORD_CONFIGURED" == "true" ]]; then
   rj_ok "discord_status_configured"
 else
+  DISCORD_LAST_ERROR_SUMMARY="$(tr -d '\n\r' <"$OUT/artifacts/discord_status.json" 2>/dev/null || true)"
+  DISCORD_LAST_ERROR_SUMMARY="${DISCORD_LAST_ERROR_SUMMARY:0:240}"
   rj_fail "discord_status_configured"
+  if [[ -n "$DISCORD_LAST_ERROR_SUMMARY" ]]; then
+    rj_log "[WARN] discord_status detail: $DISCORD_LAST_ERROR_SUMMARY"
+  fi
 fi
 
 if [[ $RUN_CONNECTIVITY -eq 1 ]]; then
@@ -106,7 +113,23 @@ if [[ $RUN_CONNECTIVITY -eq 1 ]]; then
   if [[ "$SEND_STATUS" == "ok" && "$SEND_OK" == "true" ]]; then
     rj_ok "discord_send_succeeded"
   else
-    rj_fail "discord_send_succeeded"
+    HTTP_STATUS="$(rj_json_get "$OUT/artifacts/discord_send_test_message.json" "data.http_status" || true)"
+    [[ -z "$HTTP_STATUS" ]] && HTTP_STATUS="$(rj_json_get "$OUT/artifacts/discord_send_test_message.json" "data.status_code" || true)"
+    [[ -z "$HTTP_STATUS" ]] && HTTP_STATUS="$(rj_json_get "$OUT/artifacts/discord_send_test_message.json" "status_code" || true)"
+    SEND_MESSAGE="$(rj_json_get "$OUT/artifacts/discord_send_test_message.json" "message" || true)"
+    [[ -z "$SEND_MESSAGE" ]] && SEND_MESSAGE="$(rj_json_get "$OUT/artifacts/discord_send_test_message.json" "error" || true)"
+    [[ -z "$SEND_MESSAGE" ]] && SEND_MESSAGE="$(rj_json_get "$OUT/artifacts/discord_send_test_message.json" "details.0" || true)"
+    if [[ -z "$SEND_MESSAGE" ]]; then
+      SEND_MESSAGE="$(tr -d '\n\r' <"$OUT/artifacts/discord_send_test_message.json" 2>/dev/null || true)"
+    fi
+    SEND_MESSAGE="${SEND_MESSAGE:0:240}"
+
+    if [[ -n "$HTTP_STATUS" || -n "$SEND_MESSAGE" ]]; then
+      rj_fail "discord_send_succeeded (http=${HTTP_STATUS:-unknown}, error=${SEND_MESSAGE:-unknown})"
+      rj_log "[WARN] Discord send failure detail: http=${HTTP_STATUS:-unknown}, error=${SEND_MESSAGE:-unknown}"
+    else
+      rj_fail "discord_send_succeeded"
+    fi
   fi
 else
   rj_skip "Connectivity send disabled"
