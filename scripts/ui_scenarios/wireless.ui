@@ -1,3 +1,7 @@
+# Normalize: return to main menu before starting
+left 5
+sleep 0.3
+
 # Wireless menu sweep (non-destructive)
 # Main menu -> Wireless
 sleep 1
