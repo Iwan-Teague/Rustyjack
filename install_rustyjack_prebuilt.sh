@@ -699,21 +699,31 @@ copy_prebuilt_from_usb() {
   info "Creating destination directory: $dest_dir"
   sudo mkdir -p "$dest_dir"
 
-  info "Copying binaries to $dest_dir"
+  info "Copying binaries from USB to $dest_dir"
   info ""
 
   local copied=0
   local total="${#bins[@]}"
   local current=0
-  progress_bar 0 "$total"
 
   for bin in "${bins[@]}"; do
+    current=$((current + 1))
     if [ -f "$src_dir/$bin" ]; then
-      sudo install -Dm755 "$src_dir/$bin" "$dest_dir/$bin"
+      local fsize
+      fsize=$(stat -c%s "$src_dir/$bin" 2>/dev/null || stat -f%z "$src_dir/$bin" 2>/dev/null || echo "0")
+      local fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
+      
+      info "  [$current/$total] $bin ($fsize_mb MB)"
+      
+      if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
+        sudo sh -c "pv -p -s $fsize '$src_dir/$bin' > '$dest_dir/$bin'" || true
+        sudo chmod 755 "$dest_dir/$bin"
+      else
+        sudo install -Dm755 "$src_dir/$bin" "$dest_dir/$bin"
+      fi
+      info "    [##################################################] 100% ($fsize_mb MB)"
       copied=1
     fi
-    current=$((current + 1))
-    progress_bar "$current" "$total"
   done
   printf "\n"
 
@@ -1358,12 +1368,37 @@ for bin_var in PREBUILT_BIN PREBUILT_CLI PREBUILT_DAEMON PREBUILT_PORTAL PREBUIL
 done
 info ""
 
-sudo install -Dm755 "$PREBUILT_BIN" /usr/local/bin/$BINARY_NAME || fail "Failed to install binary"
-sudo install -Dm755 "$PREBUILT_CLI" /usr/local/bin/$CLI_NAME || fail "Failed to install CLI binary"
-sudo install -Dm755 "$PREBUILT_DAEMON" /usr/local/bin/$DAEMON_NAME || fail "Failed to install daemon binary"
-sudo install -Dm755 "$PREBUILT_PORTAL" /usr/local/bin/$PORTAL_NAME || fail "Failed to install portal binary"
-sudo install -Dm755 "$PREBUILT_HOTPLUG" /usr/local/bin/$HOTPLUG_NAME || fail "Failed to install hotplug helper binary"
-sudo install -Dm755 "$PREBUILT_SHELLOPS" /usr/local/bin/$SHELLOPS_NAME || fail "Failed to install shell ops helper binary"
+INSTALL_PAIRS=(
+  "$PREBUILT_BIN:/usr/local/bin/$BINARY_NAME"
+  "$PREBUILT_CLI:/usr/local/bin/$CLI_NAME"
+  "$PREBUILT_DAEMON:/usr/local/bin/$DAEMON_NAME"
+  "$PREBUILT_PORTAL:/usr/local/bin/$PORTAL_NAME"
+  "$PREBUILT_HOTPLUG:/usr/local/bin/$HOTPLUG_NAME"
+  "$PREBUILT_SHELLOPS:/usr/local/bin/$SHELLOPS_NAME"
+)
+
+INSTALL_CURRENT=0
+INSTALL_TOTAL="${#INSTALL_PAIRS[@]}"
+
+for pair in "${INSTALL_PAIRS[@]}"; do
+  INSTALL_CURRENT=$((INSTALL_CURRENT + 1))
+  inst_src="${pair%%:*}"
+  inst_dest="${pair##*:}"
+  inst_fname=$(basename "$inst_src")
+  inst_fsize=$(stat -c%s "$inst_src" 2>/dev/null || stat -f%z "$inst_src" 2>/dev/null || echo "0")
+  inst_fsize_mb=$(awk "BEGIN {printf \"%.2f\", $inst_fsize/1024/1024}")
+
+  info "  [$INSTALL_CURRENT/$INSTALL_TOTAL] $inst_fname ($inst_fsize_mb MB)"
+
+  if command -v pv >/dev/null 2>&1 && [ "$inst_fsize" -gt 1048576 ]; then
+    sudo sh -c "pv -p -s $inst_fsize '$inst_src' > '$inst_dest'" || fail "Failed to install $inst_fname"
+    sudo chmod 755 "$inst_dest"
+  else
+    sudo install -Dm755 "$inst_src" "$inst_dest" || fail "Failed to install $inst_fname"
+  fi
+  info "    [##################################################] 100% ($inst_fsize_mb MB)"
+done
+info ""
 
 info "Installed binaries to /usr/local/bin:"
 for bin_name in $BINARY_NAME $CLI_NAME $DAEMON_NAME $PORTAL_NAME $HOTPLUG_NAME $SHELLOPS_NAME; do

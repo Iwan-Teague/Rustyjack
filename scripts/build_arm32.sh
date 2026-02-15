@@ -22,6 +22,10 @@ BUILD_INFO_VARIANT="development"
 BUILD_INFO_PROFILE="debug"
 BUILD_INFO_ENV=""
 
+# USB export: set by prompt_usb_export_early; empty means skip
+USB_EXPORT_DEST=""
+USB_AUTO_EJECT=0
+
 # Ensure target directory exists on host (for docker volume mount)
 mkdir -p "$HOST_TARGET_DIR"
 
@@ -191,6 +195,7 @@ else
     DEFAULT_BUILD=1
     if [ -t 0 ]; then
         prompt_build_mode
+        prompt_usb_export_early "arm32" "$([ "$BUILD_MODE" = "release" ] && echo "release" || echo "development")"
     else
         echo "Non-interactive shell detected; defaulting to dev build."
     fi
@@ -431,4 +436,197 @@ EOF
         echo "WARNING: build_info.txt not found in target directory" >&2
     fi
     echo "Copied binaries to $DEST_DIR"
+
+    # --- USB export (destination selected at startup) ---
+    invoke_usb_export "$DEST_DIR"
 fi
+
+# Enumerate mounted removable/usb drives.
+# Returns newline-separated list of mount points.
+get_usb_mounts() {
+    local mounts=()
+
+    # Common mount base directories to scan
+    local bases=("/media" "/mnt" "/run/media")
+
+    for base in "${bases[@]}"; do
+        [ -d "$base" ] || continue
+        while IFS= read -r -d '' mp; do
+            [ -d "$mp" ] || continue
+            mounts+=("$mp")
+        done < <(find "$base" -mindepth 1 -maxdepth 2 -type d -print0 2>/dev/null)
+    done
+
+    # Also check /proc/mounts for vfat/exfat/ntfs on non-system paths
+    if [ -f /proc/mounts ]; then
+        while IFS=" " read -r _dev mp fstype _rest; do
+            case "$fstype" in
+                vfat|exfat|ntfs|ntfs-3g|fuseblk)
+                    # Skip already-included and system paths
+                    case "$mp" in
+                        /media/*|/mnt/*|/run/media/*) continue ;;  # already scanned
+                        /|/boot*|/sys*|/proc*|/dev*|/run*) continue ;;
+                    esac
+                    [ -d "$mp" ] && mounts+=("$mp")
+                    ;;
+            esac
+        done < /proc/mounts
+    fi
+
+    # Deduplicate and print
+    if [ "${#mounts[@]}" -gt 0 ]; then
+        printf '%s\n' "${mounts[@]}" | sort -u
+    fi
+}
+
+# Called at startup: ask the user upfront and store the chosen destination path.
+# Sets USB_EXPORT_DEST to the full target directory or "" to skip.
+prompt_usb_export_early() {
+    local arch="$1"
+    local variant="$2"
+
+    local reply=""
+    printf "Copy prebuilt binaries to a USB drive after build? [y/N]: "
+    if ! read -r reply; then
+        reply=""
+    fi
+    case "$reply" in
+        y|Y|yes|YES) ;;
+        *) echo "USB export skipped."; USB_EXPORT_DEST=""; return 0 ;;
+    esac
+
+    local usb_mounts=()
+    while IFS= read -r mp; do
+        [ -n "$mp" ] && usb_mounts+=("$mp")
+    done < <(get_usb_mounts)
+
+    if [ "${#usb_mounts[@]}" -eq 0 ]; then
+        echo "No USB drives detected. USB export will be skipped."
+        USB_EXPORT_DEST=""
+        return 0
+    fi
+
+    echo ""
+    echo "Detected USB drives:"
+    local i=1
+    for mp in "${usb_mounts[@]}"; do
+        local size_info=""
+        if command -v df >/dev/null 2>&1; then
+            size_info="$(df -h "$mp" 2>/dev/null | awk 'NR==2 {print $2 " total, " $4 " free"}' || true)"
+        fi
+        if [ -n "$size_info" ]; then
+            printf "  [%d] %s  (%s)\n" "$i" "$mp" "$size_info"
+        else
+            printf "  [%d] %s\n" "$i" "$mp"
+        fi
+        i=$((i + 1))
+    done
+    echo ""
+
+    local selection="" chosen_mp=""
+    while [ -z "$chosen_mp" ]; do
+        printf "Select a drive [1-%d]: " "${#usb_mounts[@]}"
+        if ! read -r selection; then
+            echo "USB export skipped."
+            USB_EXPORT_DEST=""
+            return 0
+        fi
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#usb_mounts[@]}" ]; then
+            chosen_mp="${usb_mounts[$((selection - 1))]}"
+        else
+            echo "Invalid selection. Please enter a number between 1 and ${#usb_mounts[@]}."
+        fi
+    done
+
+    USB_EXPORT_DEST="$chosen_mp/rustyjack/prebuilt/$arch/$variant"
+    echo "Will copy binaries to $USB_EXPORT_DEST after build."
+    
+    printf "Automatically eject USB after successful copy? [Y/n]: "
+    if ! read -r reply; then
+        reply=""
+    fi
+    case "$reply" in
+        n|N|no|NO) USB_AUTO_EJECT=0 ;;
+        *) USB_AUTO_EJECT=1 ;;
+    esac
+}
+
+# Called after a successful build: performs the actual file copy.
+invoke_usb_export() {
+    local src_dir="$1"
+
+    [ -n "$USB_EXPORT_DEST" ] || return 0
+
+    echo "Copying binaries to $USB_EXPORT_DEST ..."
+
+    if [ -d "$USB_EXPORT_DEST" ]; then
+        echo "Removing existing files in $USB_EXPORT_DEST ..."
+        rm -rf "${USB_EXPORT_DEST:?}"/*
+    fi
+
+    if ! mkdir -p "$USB_EXPORT_DEST"; then
+        echo "ERROR: Failed to create directory $USB_EXPORT_DEST" >&2
+        return 1
+    fi
+
+    local files=("$src_dir"/*)
+    local total_files=0
+    for f in "${files[@]}"; do
+        [ -f "$f" ] && total_files=$((total_files + 1))
+    done
+
+    local current_file=0
+    local failed=0
+
+    for f in "${files[@]}"; do
+        [ -f "$f" ] || continue
+        current_file=$((current_file + 1))
+        local fname
+        fname="$(basename "$f")"
+        local fsize
+        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
+        local fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
+        
+        echo "  [$current_file/$total_files] $fname ($fsize_mb MB)"
+        
+        local dest_path="$USB_EXPORT_DEST/$fname"
+        if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
+            if pv -p -s "$fsize" "$f" > "$dest_path"; then
+                true
+            else
+                echo "ERROR: Failed to copy $fname" >&2
+                failed=1
+            fi
+        else
+            if cp -f "$f" "$dest_path"; then
+                echo "    [##################################################] 100%"
+            else
+                echo "ERROR: Failed to copy $fname" >&2
+                failed=1
+            fi
+        fi
+    done
+
+    echo ""
+    if [ "$failed" -eq 0 ]; then
+        echo "USB export complete: $USB_EXPORT_DEST"
+        if [ -n "$USB_AUTO_EJECT" ] && [ "$USB_AUTO_EJECT" = "1" ]; then
+            echo "Ejecting USB drive..."
+            local mount_point
+            mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
+            if [ -n "$mount_point" ]; then
+                if umount "$mount_point" 2>/dev/null; then
+                    echo "USB drive ejected successfully. Safe to remove."
+                else
+                    echo "Failed to eject USB drive. Please eject manually."
+                fi
+            else
+                echo "Could not determine USB mount point. Please eject manually."
+            fi
+        else
+            echo "Remember to eject the USB drive before removing it."
+        fi
+    else
+        echo "USB export completed with errors." >&2
+    fi
+}
