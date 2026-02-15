@@ -11,6 +11,10 @@ RUN_IFACE_SELECT=0
 RUN_ENCRYPTION=0
 RUN_LOOT=0
 RUN_MAC=0
+RUN_EVASION=0
+RUN_ANTI_FORENSICS=0
+RUN_PHYSICAL_ACCESS=0
+RUN_HOTSPOT=0
 RUN_DAEMON=0
 RUN_DAEMON_DEEP=0
 RUN_INSTALLERS=0
@@ -65,6 +69,10 @@ Suite selection:
   --encryption    Run encryption tests
   --loot          Run loot tests
   --mac           Run MAC randomization tests
+  --evasion       Run evasion tests (MAC, hostname, TX power)
+  --anti-forensics Run anti-forensics tests (secure delete, log purge)
+  --physical-access Run physical access tests (router credentials)
+  --hotspot       Run hotspot/AP tests
   --daemon        Run daemon/IPC security tests
   --daemon-deep   Run deep daemon comprehensive diagnostics (longer)
   --discord-test  Run Discord webhook connectivity preflight (UI-only)
@@ -279,7 +287,9 @@ discord_curl_with_retry() {
 
   while [[ $attempt -lt $max_retries ]]; do
     attempt=$((attempt + 1))
+    # Add explicit timeouts: 10s connect, 120s max total (large uploads)
     http_code="$(curl -sS -o "$tmpfile" -w '%{http_code}' \
+      --connect-timeout 10 --max-time 120 \
       -X POST "$DISCORD_WEBHOOK_URL" "$@" 2>/dev/null)" || http_code="000"
 
     if [[ "$http_code" == "429" ]]; then
@@ -509,6 +519,59 @@ Report: ${report_path}" \
     0
 }
 
+# Upload individual critical files from suite to Discord (report, log, summary)
+upload_suite_critical_files() {
+  local suite_id="$1"
+  local suite_label="$2"
+  local suite_dir="$3"
+
+  if ! discord_can_send; then
+    return 0
+  fi
+
+  if [[ ! -d "$suite_dir" ]]; then
+    echo "[WARN] Suite directory missing for critical file upload: $suite_dir"
+    return 0
+  fi
+
+  local report="${suite_dir}/report.md"
+  local log="${suite_dir}/run.log"
+  local summary="${suite_dir}/summary.jsonl"
+  local payload_json
+  
+  # Upload report.md (always present)
+  if [[ -f "$report" ]]; then
+    payload_json="$(discord_build_payload_json "Suite report: ${suite_label}")"
+    if ! discord_curl_with_retry \
+      -F "payload_json=$payload_json" \
+      -F "file1=@${report};filename=${suite_id}_report.md"; then
+      echo "[WARN] Failed to upload report for ${suite_label}"
+    fi
+  fi
+
+  # Upload run.log (always present)
+  if [[ -f "$log" ]]; then
+    payload_json="$(discord_build_payload_json "Suite log: ${suite_label}")"
+    if ! discord_curl_with_retry \
+      -F "payload_json=$payload_json" \
+      -F "file1=@${log};filename=${suite_id}_run.log"; then
+      echo "[WARN] Failed to upload log for ${suite_label}"
+    fi
+  fi
+
+  # Upload summary.jsonl if present
+  if [[ -f "$summary" ]]; then
+    payload_json="$(discord_build_payload_json "Suite summary: ${suite_label}")"
+    if ! discord_curl_with_retry \
+      -F "payload_json=$payload_json" \
+      -F "file1=@${summary};filename=${suite_id}_summary.jsonl"; then
+      echo "[WARN] Failed to upload summary for ${suite_label}"
+    fi
+  fi
+
+  return 0
+}
+
 # Upload per-suite artifacts as a tar.gz bundle to Discord after each suite.
 send_discord_suite_artifacts() {
   local suite_id="$1"
@@ -532,44 +595,38 @@ send_discord_suite_artifacts() {
   local upload_filename=""
 
   # Try to create a bundle of the suite directory
+  # CRITICAL: Exclude FIFOs to prevent tar from blocking indefinitely
   if command -v tar >/dev/null 2>&1; then
-    if tar -C "$suite_dir" -czf "$bundle" \
-      --exclude='*.core' --exclude='*.tar.gz' . 2>/dev/null; then
+    # Use timeout to prevent tar from hanging on FIFOs or other problematic files
+    if timeout 30 tar -C "$suite_dir" -czf "$bundle" \
+      --exclude='*.core' --exclude='*.tar.gz' --exclude='*.fifo' \
+      --exclude='*ui_input.fifo' --exclude-fifo . 2>/dev/null; then
       local bundle_size=0
       bundle_size="$(stat -c%s "$bundle" 2>/dev/null || stat -f%z "$bundle" 2>/dev/null || echo 0)"
       if [[ "$bundle_size" -gt 0 && "$bundle_size" -le "$DISCORD_BUNDLE_MAX_BYTES" ]]; then
         upload_file="$bundle"
         upload_filename="suite_${suite_id}_${RUN_ID}.tar.gz"
       else
-        echo "[WARN] Suite bundle too large (${bundle_size} bytes); falling back to report.md only."
+        echo "[WARN] Suite bundle too large (${bundle_size} bytes); skipping bundle upload."
         rm -f "$bundle" 2>/dev/null || true
       fi
     else
-      echo "[WARN] Failed to create suite bundle; falling back to report.md only."
+      echo "[WARN] Failed to create suite bundle (timeout or error); skipping bundle upload."
     fi
   fi
 
-  # Fall back to just report.md if bundle failed or too large
-  if [[ -z "$upload_file" ]]; then
-    local report_file="${suite_dir}/report.md"
-    if [[ -f "$report_file" ]]; then
-      upload_file="$report_file"
-      upload_filename="${suite_id}_${RUN_ID}_report.md"
-    else
-      echo "[WARN] No artifacts to upload for suite ${suite_label}."
-      return 0
+  # Upload bundle if available
+  if [[ -n "$upload_file" && -f "$upload_file" ]]; then
+    local content
+    content="Suite full artifacts: ${suite_label} [${status}] (rc=${rc}, ${duration})"
+    local payload_json
+    payload_json="$(discord_build_payload_json "$content")"
+
+    if ! discord_curl_with_retry \
+      -F "payload_json=$payload_json" \
+      -F "file1=@${upload_file};filename=${upload_filename}"; then
+      echo "[WARN] Failed to upload suite bundle for ${suite_label} to Discord."
     fi
-  fi
-
-  local content
-  content="Suite artifacts: ${suite_label} [${status}] (rc=${rc}, ${duration})"
-  local payload_json
-  payload_json="$(discord_build_payload_json "$content")"
-
-  if ! discord_curl_with_retry \
-    -F "payload_json=$payload_json" \
-    -F "file1=@${upload_file};filename=${upload_filename}"; then
-    echo "[WARN] Failed to upload suite artifacts for ${suite_label} to Discord."
   fi
 
   return 0
@@ -808,16 +865,20 @@ discover_discord_webhook_url
 
 if [[ $RUN_WIRELESS -eq 1 || $RUN_ETHERNET -eq 1 || $RUN_IFACE_SELECT -eq 1 || \
       $RUN_ENCRYPTION -eq 1 || $RUN_LOOT -eq 1 || $RUN_MAC -eq 1 || \
-      $RUN_DAEMON -eq 1 || $RUN_DAEMON_DEEP -eq 1 || $RUN_INSTALLERS -eq 1 || \
-      $RUN_USB -eq 1 || $RUN_UI_LAYOUT -eq 1 || $RUN_THEME -eq 1 ]]; then
+      $RUN_EVASION -eq 1 || $RUN_ANTI_FORENSICS -eq 1 || $RUN_PHYSICAL_ACCESS -eq 1 || \
+      $RUN_HOTSPOT -eq 1 || $RUN_DAEMON -eq 1 || $RUN_DAEMON_DEEP -eq 1 || \
+      $RUN_INSTALLERS -eq 1 || $RUN_USB -eq 1 || $RUN_UI_LAYOUT -eq 1 || \
+      $RUN_THEME -eq 1 ]]; then
   if [[ "$DISCORD_WEBHOOK_ENABLED" == "1" ]]; then
     RUN_DISCORD=1
   fi
 fi
 
-if [[ $RUN_WIRELESS -eq 0 && $RUN_ETHERNET -eq 0 && $RUN_IFACE_SELECT -eq 0 && $RUN_ENCRYPTION -eq 0 && \
-      $RUN_LOOT -eq 0 && $RUN_MAC -eq 0 && $RUN_DAEMON -eq 0 && \
-      $RUN_DAEMON_DEEP -eq 0 && $RUN_INSTALLERS -eq 0 && $RUN_USB -eq 0 && $RUN_UI_LAYOUT -eq 0 && \
+if [[ $RUN_WIRELESS -eq 0 && $RUN_ETHERNET -eq 0 && $RUN_IFACE_SELECT -eq 0 && \
+      $RUN_ENCRYPTION -eq 0 && $RUN_LOOT -eq 0 && $RUN_MAC -eq 0 && \
+      $RUN_EVASION -eq 0 && $RUN_ANTI_FORENSICS -eq 0 && $RUN_PHYSICAL_ACCESS -eq 0 && \
+      $RUN_HOTSPOT -eq 0 && $RUN_DAEMON -eq 0 && $RUN_DAEMON_DEEP -eq 0 && \
+      $RUN_INSTALLERS -eq 0 && $RUN_USB -eq 0 && $RUN_UI_LAYOUT -eq 0 && \
       $RUN_THEME -eq 0 && $RUN_DISCORD -eq 0 ]]; then
   echo "No test suites selected. Use --all or choose a suite."
   exit 2
@@ -884,6 +945,7 @@ run_suite() {
   if [[ "$suite_id" != "discord_webhook" ]]; then
     send_discord_suite_update "$label" "$status" "$rc" "$(format_duration "$duration")" "$tests" "$pass" "$fail" "$skip" "$report_path"
     send_discord_suite_artifacts "$suite_id" "$label" "$status" "$rc" "$(format_duration "$duration")" "$suite_dir"
+    upload_suite_critical_files "$suite_id" "$label" "$suite_dir"
   fi
 }
 
@@ -958,6 +1020,27 @@ if [[ $RUN_MAC -eq 1 ]]; then
   run_suite "mac_randomization" "MAC Randomization" "$ROOT_DIR/rj_test_mac_randomization.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
     ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
+fi
+if [[ $RUN_EVASION -eq 1 ]]; then
+  run_suite "evasion" "Evasion" "$ROOT_DIR/rj_test_evasion.sh" \
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
+fi
+if [[ $RUN_ANTI_FORENSICS -eq 1 ]]; then
+  run_suite "anti_forensics" "Anti-Forensics" "$ROOT_DIR/rj_test_anti_forensics.sh" \
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
+fi
+if [[ $RUN_PHYSICAL_ACCESS -eq 1 ]]; then
+  run_suite "physical_access" "Physical Access" "$ROOT_DIR/rj_test_physical_access.sh" \
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
+fi
+if [[ $RUN_HOTSPOT -eq 1 ]]; then
+  run_suite "hotspot" "Hotspot" "$ROOT_DIR/rj_test_hotspot.sh" \
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
+    ${WIRELESS_ARGS[@]+"${WIRELESS_ARGS[@]}"}
 fi
 if [[ $RUN_DAEMON -eq 1 ]]; then
   run_suite "daemon" "Daemon/IPC" "$ROOT_DIR/rj_test_daemon.sh" \
@@ -1038,7 +1121,18 @@ echo "Results root: $OUTROOT/$RUN_ID"
 echo "Consolidated summary: $MASTER_REPORT_PATH"
 echo "Consolidated JSON: $MASTER_JSON_PATH"
 
+# Send completion message before uploading artifacts
+send_discord_text_message \
+  "All test suites completed.
+Run ID: ${RUN_ID}
+Host: $(hostname 2>/dev/null || echo unknown)
+Status: $([[ $SUITES_FAIL -eq 0 ]] && echo PASS || echo FAIL)
+Uploading final summary..." \
+  1
+
 send_discord_summary
+
+echo "[INFO] Test run complete. Exiting with code $([[ $SUITES_FAIL -gt 0 ]] && echo 1 || echo 0)"
 
 if [[ $SUITES_FAIL -gt 0 ]]; then
   exit 1

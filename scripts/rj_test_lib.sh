@@ -499,6 +499,15 @@ EOF
   export RJ_UI_FIFO="$fifo"
   RJ_UI_ENABLED=1
   sleep "${RJ_UI_BOOT_WAIT:-4}"
+
+  # Verify the UI service is actually running after restart
+  if command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet rustyjack-ui.service 2>/dev/null; then
+      rj_log "[WARN] UI service failed to start after enabling virtual input"
+      return 1
+    fi
+  fi
+
   return 0
 }
 
@@ -511,18 +520,36 @@ rj_ui_disable() {
       systemctl restart rustyjack-ui.service
     fi
     if [[ -n "${RJ_UI_FIFO:-}" ]]; then
-      rm -f "$RJ_UI_FIFO" || true
+      # Clean up FIFO file to prevent tar hangs
+      rm -f "$RJ_UI_FIFO" 2>/dev/null || true
     fi
   fi
+  
+  # Also clean up any stray FIFOs in common locations
+  rm -f /run/rustyjack/ui_input.fifo 2>/dev/null || true
+  rm -f "${OUT:-/tmp}/artifacts/"*.fifo 2>/dev/null || true
 }
 
 rj_ui_send() {
   local key="$1"
   local count="${2:-1}"
   local delay="${RJ_UI_DELAY:-0.25}"
+  local timeout="${RJ_UI_SEND_TIMEOUT:-5}"
   local i=0
+
+  # Bail out if the UI service is not running (FIFO write would block forever)
+  if command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet rustyjack-ui.service 2>/dev/null; then
+      rj_log "[WARN] UI service not active; skipping FIFO send for '$key'"
+      return 1
+    fi
+  fi
+
   while [[ $i -lt $count ]]; do
-    printf '%s\n' "$key" >"$RJ_UI_FIFO"
+    if ! timeout "$timeout" sh -c "printf '%s\n' '$key' > '$RJ_UI_FIFO'" 2>/dev/null; then
+      rj_log "[WARN] FIFO write timed out after ${timeout}s for key '$key'"
+      return 1
+    fi
     sleep "$delay"
     i=$((i + 1))
   done
@@ -542,6 +569,15 @@ rj_ui_run_scenario() {
     local cmd="${1:-}"
     local arg="${2:-}"
     cmd="$(printf '%s' "$cmd" | tr 'A-Z' 'a-z')"
+
+    # Abort scenario if UI service has died mid-run
+    if command -v systemctl >/dev/null 2>&1; then
+      if ! systemctl is-active --quiet rustyjack-ui.service 2>/dev/null; then
+        rj_log "[WARN] UI service died during scenario; aborting"
+        return 1
+      fi
+    fi
+
     case "$cmd" in
       sleep|wait)
         sleep "$arg"
@@ -561,6 +597,9 @@ rj_ui_run_scenario() {
 }
 
 rj_exit_by_fail_count() {
+  # Clean up FIFOs before exiting to prevent tar hangs
+  rj_ui_disable 2>/dev/null || true
+  
   if [[ "${TESTS_FAIL:-0}" -gt 0 ]]; then
     exit 1
   fi

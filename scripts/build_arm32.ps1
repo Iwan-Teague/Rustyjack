@@ -24,6 +24,10 @@ $BuildInfoVariant = "development"
 $BuildInfoProfile = "debug"
 $BuildInfoEnv = ""
 
+# USB export: set by Prompt-UsbExportEarly; empty string means skip
+$UsbExportDrive = ""
+$UsbAutoEject = $false
+
 function Test-DockerRunning {
     try {
         $null = docker ps 2>$null
@@ -272,6 +276,8 @@ if ($args.Count -gt 0) {
     $DefaultBuild = $true
     if (Test-Interactive) {
         Prompt-BuildMode
+        $UsbVariant = if ($BuildMode -eq "release") { "release" } else { "development" }
+        Prompt-UsbExportEarly -Arch "arm32" -Variant $UsbVariant
     } else {
         Write-Host "Non-interactive shell detected; defaulting to dev build." -ForegroundColor Yellow
     }
@@ -510,6 +516,187 @@ if ($DefaultBuild) {
     }
 
     Write-Host "Copied binaries to $DestDir" -ForegroundColor Green
+
+    # --- USB export (drive selected at startup) ---
+    Invoke-UsbExport -Arch "arm32" -Variant $PrebuiltVariant -SourceDir $DestDir
+}
+
+function Get-UsbVolumes {
+    $usbs = @()
+    try {
+        $removableDisks = Get-Disk -ErrorAction SilentlyContinue | Where-Object { $_.BusType -eq "USB" }
+        foreach ($disk in $removableDisks) {
+            $partitions = Get-Partition -DiskNumber $disk.DiskNumber -ErrorAction SilentlyContinue
+            foreach ($part in $partitions) {
+                $vol = Get-Volume -Partition $part -ErrorAction SilentlyContinue
+                if ($vol -and $vol.DriveLetter) {
+                    $label = if ($vol.FileSystemLabel) { $vol.FileSystemLabel } else { "No Label" }
+                    $sizeMB = [math]::Round($vol.Size / 1MB)
+                    $usbs += [PSCustomObject]@{
+                        DriveLetter = "$($vol.DriveLetter):"
+                        Label       = $label
+                        SizeMB      = $sizeMB
+                        FileSystem  = $vol.FileSystem
+                    }
+                }
+            }
+        }
+    } catch {
+        # Fall back to WMI if Get-Disk is unavailable
+        try {
+            $wmiVols = Get-WmiObject Win32_LogicalDisk -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 2 }
+            foreach ($v in $wmiVols) {
+                $label = if ($v.VolumeName) { $v.VolumeName } else { "No Label" }
+                $sizeMB = [math]::Round($v.Size / 1MB)
+                $usbs += [PSCustomObject]@{
+                    DriveLetter = $v.DeviceID
+                    Label       = $label
+                    SizeMB      = $sizeMB
+                    FileSystem  = $v.FileSystem
+                }
+            }
+        } catch {}
+    }
+    return $usbs
+}
+
+# Called at startup: ask the user upfront and store the chosen drive letter.
+# Sets $script:UsbExportDrive to the chosen drive (e.g. "E:") or "" to skip.
+function Prompt-UsbExportEarly {
+    param([string]$Arch, [string]$Variant)
+
+    $reply = Read-Host "Copy prebuilt binaries to a USB drive after build? [y/N]"
+    if ($reply -notmatch "^(y|Y|yes|YES)$") {
+        Write-Host "USB export skipped." -ForegroundColor Gray
+        $script:UsbExportDrive = ""
+        return
+    }
+
+    $usbs = Get-UsbVolumes
+    if ($usbs.Count -eq 0) {
+        Write-Host "No USB drives detected. USB export will be skipped." -ForegroundColor Yellow
+        $script:UsbExportDrive = ""
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Detected USB drives:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $usbs.Count; $i++) {
+        $u = $usbs[$i]
+        Write-Host "  [$($i + 1)] $($u.DriveLetter)  $($u.Label)  ($($u.SizeMB) MB, $($u.FileSystem))" -ForegroundColor White
+    }
+    Write-Host ""
+
+    $selection = $null
+    while ($null -eq $selection) {
+        $input = Read-Host "Select a drive [1-$($usbs.Count)]"
+        $parsed = 0
+        if ([int]::TryParse($input, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le $usbs.Count) {
+            $selection = $usbs[$parsed - 1]
+        } else {
+            Write-Host "Invalid selection. Please enter a number between 1 and $($usbs.Count)." -ForegroundColor Yellow
+        }
+    }
+
+    $script:UsbExportDrive = $selection.DriveLetter
+    Write-Host "Will copy binaries to $($script:UsbExportDrive)\rustyjack\prebuilt\$Arch\$Variant after build." -ForegroundColor Cyan
+    
+    $ejectReply = Read-Host "Automatically eject USB after successful copy? [Y/n]"
+    if ($ejectReply -match "^(n|N|no|NO)$") {
+        $script:UsbAutoEject = $false
+    } else {
+        $script:UsbAutoEject = $true
+    }
+}
+
+# Called after a successful build: performs the actual file copy.
+function Invoke-UsbExport {
+    param([string]$Arch, [string]$Variant, [string]$SourceDir)
+
+    if (-not $script:UsbExportDrive) { return }
+
+    $UsbDest = Join-Path $script:UsbExportDrive "rustyjack\prebuilt\$Arch\$Variant"
+    Write-Host "Copying binaries to $UsbDest ..." -ForegroundColor Cyan
+
+    try {
+        if (Test-Path $UsbDest) {
+            Write-Host "Removing existing files in $UsbDest ..." -ForegroundColor Gray
+            Get-ChildItem -Path $UsbDest -File | Remove-Item -Force
+        } else {
+            New-Item -ItemType Directory -Path $UsbDest -Force | Out-Null
+        }
+        
+        $files = Get-ChildItem -Path $SourceDir -File
+        $totalFiles = $files.Count
+        $currentFileNum = 0
+        
+        foreach ($file in $files) {
+            $currentFileNum++
+            $destPath = Join-Path $UsbDest $file.Name
+            $fileSize = $file.Length
+            $bufferSize = 64KB
+            
+            Write-Host "  [$currentFileNum/$totalFiles] $($file.Name) ($([math]::Round($fileSize / 1MB, 2)) MB)" -ForegroundColor White
+            
+            try {
+                $sourceStream = [System.IO.File]::OpenRead($file.FullName)
+                $destStream = [System.IO.File]::Create($destPath)
+                $buffer = New-Object byte[] $bufferSize
+                $totalBytesRead = 0
+                
+                $barLength = 50
+                while (($bytesRead = $sourceStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $destStream.Write($buffer, 0, $bytesRead)
+                    $totalBytesRead += $bytesRead
+                    
+                    $progressPercent = [math]::Round(($totalBytesRead / $fileSize) * 100)
+                    $filledLength = [math]::Round(($progressPercent / 100) * $barLength)
+                    $bar = ('#' * $filledLength) + ('-' * ($barLength - $filledLength))
+                    
+                    $mbCopied = [math]::Round($totalBytesRead / 1MB, 2)
+                    $mbTotal = [math]::Round($fileSize / 1MB, 2)
+                    Write-Host "`r    [$bar] $progressPercent% ($mbCopied/$mbTotal MB)" -NoNewline -ForegroundColor Cyan
+                }
+                
+                Write-Host ""
+                
+                $destStream.Close()
+                $sourceStream.Close()
+            } catch {
+                if ($sourceStream) { $sourceStream.Close() }
+                if ($destStream) { $destStream.Close() }
+                throw
+            }
+        }
+        
+        Write-Host ""
+        Write-Host "USB export complete: $UsbDest" -ForegroundColor Green
+        
+        if ($script:UsbAutoEject) {
+            Write-Host "Ejecting USB drive $($script:UsbExportDrive) ..." -ForegroundColor Yellow
+            try {
+                $driveObj = Get-WmiObject Win32_Volume -Filter "DriveLetter = '$($script:UsbExportDrive)'" -ErrorAction SilentlyContinue
+                if ($driveObj) {
+                    $result = $driveObj.Dismount($false, $false)
+                    if ($result.ReturnValue -eq 0) {
+                        Write-Host "USB drive ejected successfully. Safe to remove." -ForegroundColor Green
+                    } else {
+                        Write-Host "Failed to eject USB drive (error code: $($result.ReturnValue)). Please eject manually." -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "Could not find USB drive to eject. Please eject manually." -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "Failed to eject USB: $_" -ForegroundColor Yellow
+                Write-Host "Please eject the USB drive manually." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "Remember to eject the USB drive before removing it." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host ""
+        Write-Host "ERROR: Failed to copy to USB: $_" -ForegroundColor Red
+    }
 }
 
 exit 0
