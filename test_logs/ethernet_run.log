@@ -1,0 +1,49 @@
+2026-02-15T20:43:57+00:00 Suite: ethernet
+2026-02-15T20:43:57+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/ethernet
+2026-02-15T20:43:57+00:00 [INFO] Ethernet interfaces under test: eth0
+2026-02-15T20:43:57+00:00 [CMD] ip_link :: ip -br link show (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/ip_link.txt)
+2026-02-15T20:43:57+00:00 [PASS] ip_link
+2026-02-15T20:43:58+00:00 [CMD] ip_addr :: ip -br addr show (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/ip_addr.txt)
+2026-02-15T20:43:58+00:00 [PASS] ip_addr
+2026-02-15T20:43:58+00:00 [CMD] ss_tunap :: ss -tunap (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/ss_tunap.txt)
+2026-02-15T20:43:58+00:00 [PASS] ss_tunap
+2026-02-15T20:43:58+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T20:43:58+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T20:43:58+00:00 [INFO] Running ethernet interface tests for eth0
+2026-02-15T20:43:58+00:00 [CMD] eth_discover_eth0 :: rustyjack ethernet discover --interface eth0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_discover_eth0.json)
+
+thread 'main' panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/netlink-sys-0.8.7/src/tokio.rs:45:17:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-02-15T20:43:59+00:00 [FAIL] eth_discover_eth0 (rc=101)
+2026-02-15T20:43:59+00:00 Capturing ethernet failure context...
+2026-02-15T20:43:59+00:00 [TAIL] eth_discover_eth0 output (deduped)
+2026-02-15T20:43:59+00:00   [2m2026-02-15T20:43:58.794594Z[0m [32m INFO[0m [2mnet[0m[2m:[0m ethernet_detect_start [3moverride_name[0m[2m=[0mSome("eth0")
+2026-02-15T20:43:59+00:00   [2m2026-02-15T20:43:58.794958Z[0m [32m INFO[0m [2mnet[0m[2m:[0m ethernet_selected [3miface[0m[2m=[0meth0 [3mreason[0m[2m=[0moverride
+2026-02-15T20:43:59+00:00   [2m2026-02-15T20:43:58.795058Z[0m [32m INFO[0m [2mnet[0m[2m:[0m interface_detect_start [3miface[0m[2m=[0meth0
+2026-02-15T20:43:59+00:00   [2m2026-02-15T20:43:58.797630Z[0m [32m INFO[0m [2mnet[0m[2m:[0m interface_ipv4_addresses [3miface[0m[2m=[0meth0 [3mipv4[0m[2m=[0m192.168.18.6/24
+2026-02-15T20:43:59+00:00   [2m2026-02-15T20:43:58.797908Z[0m [32m INFO[0m [2mnet[0m[2m:[0m enforce_single_interface [3miface[0m[2m=[0meth0
+2026-02-15T20:43:59+00:00 [CMD] eth_portscan_eth0 :: rustyjack ethernet port-scan --interface eth0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_portscan_eth0.json)
+2026-02-15T20:44:00+00:00 [PASS] eth_portscan_eth0
+2026-02-15T20:44:00+00:00 [CMD] eth_inventory_eth0 :: rustyjack ethernet inventory --interface eth0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_inventory_eth0.json)
+2026-02-15T20:44:22+00:00 [PASS] eth_inventory_eth0
+2026-02-15T20:44:22+00:00 [FAIL] Isolation check failed: ethernet_eth0_readonly (route changed)
+2026-02-15T20:44:22+00:00 [DIFF] /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/net_ethernet_eth0_readonly_route.diff
+2026-02-15T20:44:22+00:00   --- /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/net_eth_eth0_pre_route.txt	2026-02-15 20:43:58.675698421 +0000
+2026-02-15T20:44:22+00:00   +++ /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/net_eth_eth0_post_route.txt	2026-02-15 20:44:22.711698412 +0000
+2026-02-15T20:44:22+00:00   @@ -1,2 +1 @@
+2026-02-15T20:44:22+00:00   -default via 192.168.18.1 dev eth0 proto static metric 100 
+2026-02-15T20:44:22+00:00    192.168.18.0/24 dev eth0 proto kernel scope link src 192.168.18.6 
+2026-02-15T20:44:22+00:00 [SKIP] Dangerous Ethernet tests require RJ_ETH_SITE (DNSSpoof site template)
+2026-02-15T20:44:22+00:00 [CMD] eth_discover_bad_iface (allow fail) :: rustyjack ethernet discover --interface rjbad0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_discover_bad_iface.json)
+2026-02-15T20:44:23+00:00 [CMD] eth_discover_bad_iface exited rc=1 (allowed)
+2026-02-15T20:44:23+00:00 [PASS] Bad interface rejected in ethernet discover
+2026-02-15T20:44:23+00:00 [CMD] eth_portscan_bad_target (allow fail) :: rustyjack ethernet port-scan --target 999.999.999.999 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_portscan_bad_target.json)
+2026-02-15T20:44:23+00:00 [CMD] eth_portscan_bad_target exited rc=1 (allowed)
+2026-02-15T20:44:23+00:00 [PASS] Invalid target rejected in port-scan
+2026-02-15T20:44:29+00:00 [WARN] UI service failed to start after enabling virtual input
+2026-02-15T20:44:29+00:00 [SKIP] Failed to enable UI virtual input
+2026-02-15T20:44:30+00:00 [SUMMARY] Tests=8 Passed=7 Failed=2 Skipped=4
+2026-02-15T20:44:30+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/ethernet/report.md
+2026-02-15T20:44:30+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/ethernet/run.log
+2026-02-15T20:44:30+00:00 Ethernet tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/ethernet

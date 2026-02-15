@@ -1,0 +1,32 @@
+2026-02-15T20:55:02+00:00 Suite: usb_mount
+2026-02-15T20:55:02+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/usb_mount
+2026-02-15T20:55:02+00:00 [PASS] proc_mounts_readable
+2026-02-15T20:55:02+00:00 [PASS] sys_class_block_available
+2026-02-15T20:55:02+00:00 Using USB device: /dev/sda1
+2026-02-15T20:55:02+00:00 Base USB disk: /dev/sda
+2026-02-15T20:55:02+00:00 [CMD] usb_detect_preflight :: rustyjack system fde-prepare --device /dev/sda --output json (output: /var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/usb_detect_preflight.json)
+2026-02-15T20:55:02+00:00 [PASS] usb_detect_preflight
+2026-02-15T20:55:03+00:00 [FAIL] usb_detectability_preflight (/dev/sda)
+2026-02-15T20:55:03+00:00 Capturing USB failure context...
+2026-02-15T20:55:03+00:00 [CMD] usb_mount_read_write :: rustyjack system usb-mount --device /dev/sda1 --mode read-write --preferred-name rjtest_usb_mount --output json (output: /var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/usb_mount_rw.json)
+2026-02-15T20:55:04+00:00 [FAIL] usb_mount_read_write (rc=1)
+2026-02-15T20:55:04+00:00 [TAIL] usb_mount_read_write output (deduped)
+2026-02-15T20:55:04+00:00   [2m2026-02-15T20:55:04.004675Z[0m [32m INFO[0m [2musb[0m[2m:[0m usb_device_removable_flag [3mdevice[0m[2m=[0msda [3mremovable[0m[2m=[0mtrue
+2026-02-15T20:55:04+00:00   {"data":null,"details":["unsupported or unknown filesystem"],"message":"unsupported or unknown filesystem","status":"error"}
+2026-02-15T20:55:06+00:00 [FAIL] usb_mount_command_ok
+2026-02-15T20:55:06+00:00 [FAIL] usb_mountpoint_present
+2026-02-15T20:55:06+00:00 [FAIL] usb_mount_not_readonly
+2026-02-15T20:55:06+00:00 [CMD] usb_mount_invalid_device (allow fail) :: rustyjack system usb-mount --device /dev/loop0 --mode read-only --output json (output: /var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/usb_mount_invalid_device.json)
+2026-02-15T20:55:06+00:00 [CMD] usb_mount_invalid_device exited rc=1 (allowed)
+2026-02-15T20:55:06+00:00 [PASS] usb_mount_invalid_device_rejected
+2026-02-15T20:55:06+00:00 [FAIL] Isolation check failed: usb_mount_readonly (route changed)
+2026-02-15T20:55:06+00:00 [DIFF] /var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/net_usb_mount_readonly_route.diff
+2026-02-15T20:55:06+00:00   --- /var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/net_usb_pre_route.txt	2026-02-15 20:55:02.823698168 +0000
+2026-02-15T20:55:06+00:00   +++ /var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/net_usb_post_route.txt	2026-02-15 20:55:06.571698167 +0000
+2026-02-15T20:55:06+00:00   @@ -1 +1,2 @@
+2026-02-15T20:55:06+00:00   +default via 192.168.18.1 dev eth0 proto static metric 100 
+2026-02-15T20:55:06+00:00    192.168.18.0/24 dev eth0 proto kernel scope link src 192.168.18.6 
+2026-02-15T20:55:06+00:00 [SUMMARY] Tests=3 Passed=4 Failed=6 Skipped=0
+2026-02-15T20:55:06+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/usb_mount/report.md
+2026-02-15T20:55:06+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/usb_mount/run.log
+2026-02-15T20:55:06+00:00 USB mount tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/usb_mount

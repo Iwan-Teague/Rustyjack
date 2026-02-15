@@ -1,0 +1,201 @@
+2026-02-15T20:55:16+00:00 Suite: theme
+2026-02-15T20:55:16+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/theme
+2026-02-15T20:55:16+00:00 [PASS] python3_available
+2026-02-15T20:55:16+00:00 [PASS] systemctl_available
+2026-02-15T20:55:16+00:00 [PASS] gui_conf_present (/var/lib/rustyjack/gui_conf.json)
+2026-02-15T20:55:16+00:00 [PASS] theme_mutate_helper_present (129:    pub fn mutate_theme_and_persist<F>()
+2026-02-15T20:55:16+00:00 [PASS] theme_normalize_present (276:    pub fn normalize(&mut self) -> bool {)
+2026-02-15T20:55:16+00:00 [PASS] theme_preset_present (318:pub enum ThemePreset {)
+2026-02-15T20:55:16+00:00 [PASS] theme_contrast_present (290:    pub fn contrast_warnings(&self, min_ratio: f32) -> Vec<String> {)
+2026-02-15T20:55:16+00:00 [PASS] theme_atomic_save_temp (102:        tmp.set_file_name(format!(".{filename}.tmp.{}.{}", process::id(), now_ns));)
+2026-02-15T20:55:16+00:00 [PASS] theme_atomic_save_sync (110:        file.sync_all())
+2026-02-15T20:55:16+00:00 [PASS] theme_atomic_save_rename (114:        fs::rename(&tmp, path).with_context(|| {)
+2026-02-15T20:55:17+00:00 [PASS] theme_dead_field_removed_gamepad
+2026-02-15T20:55:17+00:00 [PASS] theme_color_roles_centralized (278:    pub const ALL: [Self; 6] = [)
+2026-02-15T20:55:17+00:00 [PASS] theme_colors_menu_data_driven (645:    let mut entries: Vec<MenuEntry> = ColorTarget::ALL)
+2026-02-15T20:55:17+00:00 [PASS] theme_apply_preset_menu_entry (649:    entries.push(MenuEntry::new("Apply Preset", MenuAction::ApplyThemePreset));)
+2026-02-15T20:55:17+00:00 [PASS] theme_single_mutate_flow (99:    fn mutate_theme_config_and_refresh<F>(&mut self, mutate: F) -> ThemeUpdateStatus)
+2026-02-15T20:55:17+00:00 [PASS] theme_feedback_flow (126:    fn show_theme_update_result()
+2026-02-15T20:55:17+00:00 [PASS] theme_preset_flow (82:    pub(crate) fn apply_theme_preset(&mut self) -> Result<()> {)
+2026-02-15T20:55:17+00:00 [PASS] theme_contrast_warning_text (142:            lines.push("Contrast warning".to_string());)
+2026-02-15T20:55:17+00:00 [PASS] theme_startup_clear_uses_palette (757:        .into_styled(PrimitiveStyle::with_fill(palette.background)))
+2026-02-15T20:55:17+00:00 [PASS] theme_splash_clear_uses_palette (1280:        let style = PrimitiveStyle::with_fill(self.palette.background);)
+2026-02-15T20:55:17+00:00 [PASS] theme_splash_text_uses_palette (1019:            .text_color(self.palette.text))
+2026-02-15T20:55:17+00:00 [PASS] theme_splash_hardcoded_purple_removed
+2026-02-15T20:55:17+00:00 [PASS] theme_action_map_updated (18:| ApplyThemePreset | `App::apply_theme_preset` | Local | N/A |)
+2026-02-15T20:55:17+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T20:55:17+00:00 [SKIP] Theme unit tests skipped (cargo unavailable)
+2026-02-15T20:55:17+00:00 [PASS] theme_role_present (background present: #000000)
+2026-02-15T20:55:18+00:00 [PASS] theme_role_present (border present: #8800AA)
+2026-02-15T20:55:18+00:00 [PASS] theme_role_present (text present: #AA00FF)
+2026-02-15T20:55:18+00:00 [PASS] theme_role_present (selected_text present: #CC44FF)
+2026-02-15T20:55:18+00:00 [PASS] theme_role_present (selected_background present: #330055)
+2026-02-15T20:55:18+00:00 [PASS] theme_role_present (toolbar present: #141414)
+2026-02-15T20:55:25+00:00 [WARN] UI service failed to start after enabling virtual input
+2026-02-15T20:55:25+00:00 [SKIP] Failed to enable UI virtual input; skipping UI theme automation
+2026-02-15T20:55:25+00:00 [CMD] theme_write_invalid_config :: write_invalid_theme_config (output: /var/tmp/rustyjack-tests/20260215-204314/theme/artifacts/theme_write_invalid_config.log)
+2026-02-15T20:55:25+00:00 [PASS] theme_write_invalid_config
+2026-02-15T20:55:25+00:00 [CMD] theme_restart_repair_invalid_config :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260215-204314/theme/artifacts/theme_restart_repair_invalid_config.log)
+2026-02-15T20:55:25+00:00 [PASS] theme_restart_repair_invalid_config
+2026-02-15T20:55:30+00:00 [FAIL] theme_restart_repair_invalid_config_active (service not active)
+2026-02-15T20:55:30+00:00 Capturing theme failure context...
+2026-02-15T20:55:30+00:00 [TAIL] rustyjack-ui.service.fail.log
+2026-02-15T20:55:30+00:00   Feb 15 20:55:21 rustyjack systemd[1]: Started rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:30+00:00   Feb 15 20:55:21 rustyjack (yjack-ui)[67968]: rustyjack-ui.service: Changing to the requested working directory failed: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:21 rustyjack (yjack-ui)[67968]: rustyjack-ui.service: Failed at step CHDIR spawning /usr/local/bin/rustyjack-ui: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:21 rustyjack systemd[1]: rustyjack-ui.service: Main process exited, code=exited, status=200/CHDIR
+2026-02-15T20:55:30+00:00   Feb 15 20:55:21 rustyjack systemd[1]: rustyjack-ui.service: Failed with result 'exit-code'.
+2026-02-15T20:55:30+00:00   Feb 15 20:55:23 rustyjack systemd[1]: rustyjack-ui.service: Scheduled restart job, restart counter is at 1.
+2026-02-15T20:55:30+00:00   Feb 15 20:55:23 rustyjack systemd[1]: Started rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:30+00:00   Feb 15 20:55:23 rustyjack (yjack-ui)[68023]: rustyjack-ui.service: Changing to the requested working directory failed: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:23 rustyjack (yjack-ui)[68023]: rustyjack-ui.service: Failed at step CHDIR spawning /usr/local/bin/rustyjack-ui: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:23 rustyjack systemd[1]: rustyjack-ui.service: Main process exited, code=exited, status=200/CHDIR
+2026-02-15T20:55:30+00:00   Feb 15 20:55:23 rustyjack systemd[1]: rustyjack-ui.service: Failed with result 'exit-code'.
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: rustyjack-ui.service: Scheduled restart job, restart counter is at 2.
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: Started rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack (yjack-ui)[68112]: rustyjack-ui.service: Changing to the requested working directory failed: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack (yjack-ui)[68112]: rustyjack-ui.service: Failed at step CHDIR spawning /usr/local/bin/rustyjack-ui: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: rustyjack-ui.service: Main process exited, code=exited, status=200/CHDIR
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: rustyjack-ui.service: Failed with result 'exit-code'.
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: Stopped rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: Started rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack (yjack-ui)[68127]: rustyjack-ui.service: Changing to the requested working directory failed: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack (yjack-ui)[68127]: rustyjack-ui.service: Failed at step CHDIR spawning /usr/local/bin/rustyjack-ui: Permission denied
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: rustyjack-ui.service: Main process exited, code=exited, status=200/CHDIR
+2026-02-15T20:55:30+00:00   Feb 15 20:55:25 rustyjack systemd[1]: rustyjack-ui.service: Failed with result 'exit-code'.
+2026-02-15T20:55:30+00:00   Feb 15 20:55:28 rustyjack systemd[1]: rustyjack-ui.service: Scheduled restart job, restart counter is at 1.
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack systemd[1]: Started rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack (yjack-ui)[68186]: rustyjack-ui.service: Changing to the requested working directory failed: Permission denied
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack (yjack-ui)[68186]: rustyjack-ui.service: Failed at step CHDIR spawning /usr/local/bin/rustyjack-ui: Permission denied
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack systemd[1]: rustyjack-ui.service: Main process exited, code=exited, status=200/CHDIR
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack systemd[1]: rustyjack-ui.service: Failed with result 'exit-code'.
+2026-02-15T20:55:31+00:00   Feb 15 20:55:30 rustyjack systemd[1]: rustyjack-ui.service: Scheduled restart job, restart counter is at 2.
+2026-02-15T20:55:31+00:00   Feb 15 20:55:30 rustyjack systemd[1]: rustyjack-ui.service: Start request repeated too quickly.
+2026-02-15T20:55:31+00:00   Feb 15 20:55:30 rustyjack systemd[1]: rustyjack-ui.service: Failed with result 'exit-code'.
+2026-02-15T20:55:31+00:00   Feb 15 20:55:30 rustyjack systemd[1]: Failed to start rustyjack-ui.service - Rustyjack UI Service (prebuilt).
+2026-02-15T20:55:31+00:00 [TAIL] rustyjackd.service.fail.log
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.349211Z  INFO ThreadId(41331) net:701: dhcp_discover_raw_send iface=eth0 attempt=1
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.429204Z  INFO ThreadId(41331) net:768: dhcp_request_raw_send iface=eth0 offered_ip=192.168.18.6
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.486490Z  INFO ThreadId(11) rustyjack_netlink::interface:435: Flushed all addresses from eth0
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.504646Z  INFO ThreadId(11) rustyjack_netlink::interface:270: Added address 192.168.18.6/24 to eth0
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.507620Z  INFO ThreadId(11) rustyjack_core::system::isolation:634: [Ethernet Step 2/3] PASSED: DHCP lease acquired
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.508400Z  INFO ThreadId(11) rustyjack_core::system::isolation:635:   IP Address: 192.168.18.6/24
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.509198Z  INFO ThreadId(11) rustyjack_core::system::isolation:636:   Gateway: Some(192.168.18.1)
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.509997Z  INFO ThreadId(11) rustyjack_core::system::isolation:637:   DNS: [192.168.18.1]
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.510649Z  INFO ThreadId(11) rustyjack_core::system::isolation:640: [Ethernet Step 3/3] Configuring routes and DNS...
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.511259Z  INFO ThreadId(11) rustyjack_core::system::routing:18: Setting default route: via eth0 gw 192.168.18.1 metric 100
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.522698Z  INFO ThreadId(11) rustyjack_netlink::route:150: Added default route via 192.168.18.1 on eth0 (metric=Some(100))
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.528814Z  INFO ThreadId(11) rustyjack_core::system::routing:41: Default route successfully set and verified
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.529813Z  INFO ThreadId(11) rustyjack_core::system::isolation:645:   Default route set via 192.168.18.1
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.530550Z  INFO ThreadId(11) rustyjack_core::system::dns:18: Setting DNS servers: [192.168.18.1]
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.544804Z  WARN ThreadId(11) rustyjack_core::system::isolation:655:   Failed to set DNS: failed to rename resolv.conf
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.545728Z  INFO ThreadId(11) rustyjack_core::system::isolation:664: [Ethernet Step 3/3] PASSED: Network configured
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.546145Z  INFO ThreadId(11) rustyjack_core::system::isolation:665: === ETHERNET PIPELINE COMPLETE (connected) ===
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.546476Z  INFO ThreadId(11) rustyjack_core::system::isolation:215: Successfully activated interface: eth0
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.552299Z  INFO ThreadId(11) rustyjack_core::system::isolation:229: Enforcement complete: allowed=["eth0"], blocked=["wlan0", "wlan1"], errors=0
+2026-02-15T20:55:31+00:00   Feb 15 20:55:28 rustyjack rustyjackd[627]: 2026-02-15T20:55:28.554088Z  INFO ThreadId(30) rustyjack_core::system::isolation:129: Starting network isolation enforcement (lock acquired)
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.076412Z  INFO ThreadId(30) rustyjack_core::system::isolation:391: Auto-selected wired interface: eth0
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.077208Z  INFO ThreadId(30) rustyjack_core::system::isolation:190: Selected active interface: eth0
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.081905Z  INFO ThreadId(30) rustyjack_netlink::route:237: Deleted default route via Some(192.168.18.1) on interface Some(4)
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.084642Z  INFO ThreadId(30) release: net:181: dhcp_release_start iface=wlan0 interface="wlan0"
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.090167Z  INFO ThreadId(30) release: rustyjack_netlink::interface:435: Flushed all addresses from wlan0 interface="wlan0"
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.095748Z  INFO ThreadId(30) rustyjack_netlink::interface:191: Interface wlan0 set to DOWN
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.097982Z  INFO ThreadId(30) set_state: wifi:422: rfkill_device_state idx=1 state="blocked" idx=1 block=true
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.098990Z  INFO ThreadId(30) rustyjack_core::system::isolation:837: Interface wlan0 fully blocked (DOWN, no routes)
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.104420Z  INFO ThreadId(30) release: net:181: dhcp_release_start iface=wlan1 interface="wlan1"
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.109888Z  INFO ThreadId(30) release: rustyjack_netlink::interface:435: Flushed all addresses from wlan1 interface="wlan1"
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.115449Z  INFO ThreadId(30) rustyjack_netlink::interface:191: Interface wlan1 set to DOWN
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.117271Z  INFO ThreadId(30) set_state: wifi:422: rfkill_device_state idx=2 state="blocked" idx=2 block=true
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.118349Z  INFO ThreadId(30) rustyjack_core::system::isolation:837: Interface wlan1 fully blocked (DOWN, no routes)
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.118893Z  INFO ThreadId(30) rustyjack_core::system::isolation:407: === ACTIVATION PIPELINE START: eth0 (Passive) ===
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.119141Z  INFO ThreadId(30) rustyjack_core::system::isolation:412: [Step 1/6] Checking interface eth0 exists...
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.119437Z  INFO ThreadId(30) rustyjack_core::system::isolation:420: [Step 1/6] PASSED: Interface eth0 exists
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.119700Z  INFO ThreadId(30) rustyjack_core::system::isolation:423: Interface type: ethernet
+2026-02-15T20:55:31+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.119905Z  INFO ThreadId(30) rustyjack_core::system::isolation:457: [Step 2/6] SKIPPED: Not a wireless interface
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.120103Z  INFO ThreadId(30) rustyjack_core::system::isolation:497: [Step 3/6] SKIPPED: Not a wireless interface
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.120306Z  INFO ThreadId(30) rustyjack_core::system::isolation:503: [Step 4/6] Executing 'ip link set eth0 up'...
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.124662Z  INFO ThreadId(30) rustyjack_netlink::interface:155: Interface eth0 set to UP
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.125472Z  INFO ThreadId(30) rustyjack_core::system::isolation:522: [Step 4/6] PASSED: bring_up command executed
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.126054Z  INFO ThreadId(30) rustyjack_core::system::isolation:527: [Step 5/6] Verifying eth0 has IFF_UP flag set...
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.126727Z  INFO ThreadId(30) rustyjack_core::system::isolation:530: [Step 5/6] PASSED: eth0 is admin-UP (IFF_UP=1)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.127169Z  INFO ThreadId(30) rustyjack_core::system::isolation:565: [Step 6/6] Interface eth0 is now admin-UP
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.127550Z  INFO ThreadId(30) rustyjack_core::system::isolation:566: === ACTIVATION PIPELINE COMPLETE: eth0 ===
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.127919Z  INFO ThreadId(30) rustyjack_core::system::isolation:600: === ETHERNET DHCP PIPELINE: eth0 ===
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.128287Z  INFO ThreadId(30) rustyjack_core::system::isolation:603: [Ethernet Step 1/3] Checking carrier on eth0...
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.128833Z  INFO ThreadId(30) rustyjack_core::system::isolation:606: [Ethernet Step 1/3] PASSED: Carrier detected (cable connected)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.129368Z  INFO ThreadId(30) rustyjack_core::system::isolation:631: [Ethernet Step 2/3] Attempting DHCP on eth0...
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.153184Z  INFO ThreadId(41346) net:701: dhcp_discover_raw_send iface=eth0 attempt=1
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.213179Z  INFO ThreadId(41346) net:768: dhcp_request_raw_send iface=eth0 offered_ip=192.168.18.6
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.296008Z  INFO ThreadId(30) rustyjack_netlink::interface:435: Flushed all addresses from eth0
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.304543Z  INFO ThreadId(30) rustyjack_netlink::interface:270: Added address 192.168.18.6/24 to eth0
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.306035Z  INFO ThreadId(30) rustyjack_core::system::isolation:634: [Ethernet Step 2/3] PASSED: DHCP lease acquired
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.306468Z  INFO ThreadId(30) rustyjack_core::system::isolation:635:   IP Address: 192.168.18.6/24
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.306735Z  INFO ThreadId(30) rustyjack_core::system::isolation:636:   Gateway: Some(192.168.18.1)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.306963Z  INFO ThreadId(30) rustyjack_core::system::isolation:637:   DNS: [192.168.18.1]
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.307212Z  INFO ThreadId(30) rustyjack_core::system::isolation:640: [Ethernet Step 3/3] Configuring routes and DNS...
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.307468Z  INFO ThreadId(30) rustyjack_core::system::routing:18: Setting default route: via eth0 gw 192.168.18.1 metric 100
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.315082Z  INFO ThreadId(30) rustyjack_netlink::route:150: Added default route via 192.168.18.1 on eth0 (metric=Some(100))
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.319334Z  INFO ThreadId(30) rustyjack_core::system::routing:41: Default route successfully set and verified
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.319766Z  INFO ThreadId(30) rustyjack_core::system::isolation:645:   Default route set via 192.168.18.1
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.320047Z  INFO ThreadId(30) rustyjack_core::system::dns:18: Setting DNS servers: [192.168.18.1]
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.332378Z  WARN ThreadId(30) rustyjack_core::system::isolation:655:   Failed to set DNS: failed to rename resolv.conf
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.332866Z  INFO ThreadId(30) rustyjack_core::system::isolation:664: [Ethernet Step 3/3] PASSED: Network configured
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.333211Z  INFO ThreadId(30) rustyjack_core::system::isolation:665: === ETHERNET PIPELINE COMPLETE (connected) ===
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.333519Z  INFO ThreadId(30) rustyjack_core::system::isolation:215: Successfully activated interface: eth0
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.337719Z  INFO ThreadId(30) rustyjack_core::system::isolation:229: Enforcement complete: allowed=["eth0"], blocked=["wlan0", "wlan1"], errors=0
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.338707Z  INFO ThreadId(11) rustyjack_core::system::isolation:129: Starting network isolation enforcement (lock acquired)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.860436Z  INFO ThreadId(11) rustyjack_core::system::isolation:391: Auto-selected wired interface: eth0
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.860884Z  INFO ThreadId(11) rustyjack_core::system::isolation:190: Selected active interface: eth0
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.865637Z  INFO ThreadId(11) rustyjack_netlink::route:237: Deleted default route via Some(192.168.18.1) on interface Some(4)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.868158Z  INFO ThreadId(11) release: net:181: dhcp_release_start iface=wlan0 interface="wlan0"
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.873576Z  INFO ThreadId(11) release: rustyjack_netlink::interface:435: Flushed all addresses from wlan0 interface="wlan0"
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.878860Z  INFO ThreadId(11) rustyjack_netlink::interface:191: Interface wlan0 set to DOWN
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.880850Z  INFO ThreadId(11) set_state: wifi:422: rfkill_device_state idx=1 state="blocked" idx=1 block=true
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.881948Z  INFO ThreadId(11) rustyjack_core::system::isolation:837: Interface wlan0 fully blocked (DOWN, no routes)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.887236Z  INFO ThreadId(11) release: net:181: dhcp_release_start iface=wlan1 interface="wlan1"
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.892600Z  INFO ThreadId(11) release: rustyjack_netlink::interface:435: Flushed all addresses from wlan1 interface="wlan1"
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.897903Z  INFO ThreadId(11) rustyjack_netlink::interface:191: Interface wlan1 set to DOWN
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.899466Z  INFO ThreadId(11) set_state: wifi:422: rfkill_device_state idx=2 state="blocked" idx=2 block=true
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.900401Z  INFO ThreadId(11) rustyjack_core::system::isolation:837: Interface wlan1 fully blocked (DOWN, no routes)
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.900741Z  INFO ThreadId(11) rustyjack_core::system::isolation:407: === ACTIVATION PIPELINE START: eth0 (Passive) ===
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.901070Z  INFO ThreadId(11) rustyjack_core::system::isolation:412: [Step 1/6] Checking interface eth0 exists...
+2026-02-15T20:55:32+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.901466Z  INFO ThreadId(11) rustyjack_core::system::isolation:420: [Step 1/6] PASSED: Interface eth0 exists
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.901814Z  INFO ThreadId(11) rustyjack_core::system::isolation:423: Interface type: ethernet
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.902060Z  INFO ThreadId(11) rustyjack_core::system::isolation:457: [Step 2/6] SKIPPED: Not a wireless interface
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.902293Z  INFO ThreadId(11) rustyjack_core::system::isolation:497: [Step 3/6] SKIPPED: Not a wireless interface
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.902529Z  INFO ThreadId(11) rustyjack_core::system::isolation:503: [Step 4/6] Executing 'ip link set eth0 up'...
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.906812Z  INFO ThreadId(11) rustyjack_netlink::interface:155: Interface eth0 set to UP
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.907316Z  INFO ThreadId(11) rustyjack_core::system::isolation:522: [Step 4/6] PASSED: bring_up command executed
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.907615Z  INFO ThreadId(11) rustyjack_core::system::isolation:527: [Step 5/6] Verifying eth0 has IFF_UP flag set...
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.908112Z  INFO ThreadId(11) rustyjack_core::system::isolation:530: [Step 5/6] PASSED: eth0 is admin-UP (IFF_UP=1)
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.908453Z  INFO ThreadId(11) rustyjack_core::system::isolation:565: [Step 6/6] Interface eth0 is now admin-UP
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.908660Z  INFO ThreadId(11) rustyjack_core::system::isolation:566: === ACTIVATION PIPELINE COMPLETE: eth0 ===
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.908858Z  INFO ThreadId(11) rustyjack_core::system::isolation:600: === ETHERNET DHCP PIPELINE: eth0 ===
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.909103Z  INFO ThreadId(11) rustyjack_core::system::isolation:603: [Ethernet Step 1/3] Checking carrier on eth0...
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.909588Z  INFO ThreadId(11) rustyjack_core::system::isolation:606: [Ethernet Step 1/3] PASSED: Carrier detected (cable connected)
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.909931Z  INFO ThreadId(11) rustyjack_core::system::isolation:631: [Ethernet Step 2/3] Attempting DHCP on eth0...
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.941185Z  INFO ThreadId(41361) net:701: dhcp_discover_raw_send iface=eth0 attempt=1
+2026-02-15T20:55:33+00:00   Feb 15 20:55:29 rustyjack rustyjackd[627]: 2026-02-15T20:55:29.997170Z  INFO ThreadId(41361) net:768: dhcp_request_raw_send iface=eth0 offered_ip=192.168.18.6
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.047562Z  INFO ThreadId(11) rustyjack_netlink::interface:435: Flushed all addresses from eth0
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.055456Z  INFO ThreadId(11) rustyjack_netlink::interface:270: Added address 192.168.18.6/24 to eth0
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.056883Z  INFO ThreadId(11) rustyjack_core::system::isolation:634: [Ethernet Step 2/3] PASSED: DHCP lease acquired
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.057436Z  INFO ThreadId(11) rustyjack_core::system::isolation:635:   IP Address: 192.168.18.6/24
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.057783Z  INFO ThreadId(11) rustyjack_core::system::isolation:636:   Gateway: Some(192.168.18.1)
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.058039Z  INFO ThreadId(11) rustyjack_core::system::isolation:637:   DNS: [192.168.18.1]
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.058275Z  INFO ThreadId(11) rustyjack_core::system::isolation:640: [Ethernet Step 3/3] Configuring routes and DNS...
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.058518Z  INFO ThreadId(11) rustyjack_core::system::routing:18: Setting default route: via eth0 gw 192.168.18.1 metric 100
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.066364Z  INFO ThreadId(11) rustyjack_netlink::route:150: Added default route via 192.168.18.1 on eth0 (metric=Some(100))
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.070491Z  INFO ThreadId(11) rustyjack_core::system::routing:41: Default route successfully set and verified
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.070928Z  INFO ThreadId(11) rustyjack_core::system::isolation:645:   Default route set via 192.168.18.1
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.071199Z  INFO ThreadId(11) rustyjack_core::system::dns:18: Setting DNS servers: [192.168.18.1]
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.079442Z  WARN ThreadId(11) rustyjack_core::system::isolation:655:   Failed to set DNS: failed to rename resolv.conf
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.079893Z  INFO ThreadId(11) rustyjack_core::system::isolation:664: [Ethernet Step 3/3] PASSED: Network configured
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.080165Z  INFO ThreadId(11) rustyjack_core::system::isolation:665: === ETHERNET PIPELINE COMPLETE (connected) ===
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.080415Z  INFO ThreadId(11) rustyjack_core::system::isolation:215: Successfully activated interface: eth0
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.084564Z  INFO ThreadId(11) rustyjack_core::system::isolation:229: Enforcement complete: allowed=["eth0"], blocked=["wlan0", "wlan1"], errors=0
+2026-02-15T20:55:33+00:00   Feb 15 20:55:30 rustyjack rustyjackd[627]: 2026-02-15T20:55:30.085665Z  INFO ThreadId(30) rustyjack_core::system::isolation:129: Starting network isolation enforcement (lock acquired)
+2026-02-15T20:55:33+00:00 [PASS] Isolation check passed: theme_readonly
+2026-02-15T20:55:34+00:00 [SUMMARY] Tests=2 Passed=32 Failed=1 Skipped=3
+2026-02-15T20:55:34+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/theme/report.md
+2026-02-15T20:55:34+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/theme/run.log
+2026-02-15T20:55:34+00:00 Theme tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/theme

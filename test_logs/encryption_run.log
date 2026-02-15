@@ -1,0 +1,19 @@
+2026-02-15T20:45:11+00:00 Suite: encryption
+2026-02-15T20:45:11+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/encryption
+2026-02-15T20:45:11+00:00 [PASS] python3 available
+2026-02-15T20:45:11+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T20:45:11+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T20:45:11+00:00 Generated test key: /var/lib/rustyjack/keys/test.key
+2026-02-15T20:45:12+00:00 Updated gui_conf.json encryption_key_path
+2026-02-15T20:45:18+00:00 [WARN] UI service failed to start after enabling virtual input
+2026-02-15T20:45:18+00:00 [SKIP] Failed to enable UI virtual input
+2026-02-15T20:45:18+00:00 [PASS] Isolation check passed: encryption_readonly
+2026-02-15T20:45:18+00:00 [PASS] Loot plaintext present
+2026-02-15T20:45:18+00:00 [PASS] Wi-Fi profile plaintext present
+2026-02-15T20:45:18+00:00 [PASS] Encryption key length valid (64 hex chars)
+2026-02-15T20:45:19+00:00 [PASS] Bad key length rejected by validation
+2026-02-15T20:45:19+00:00 [PASS] Encryption disabled after scenario
+2026-02-15T20:45:19+00:00 [SUMMARY] Tests=0 Passed=7 Failed=0 Skipped=3
+2026-02-15T20:45:19+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/encryption/report.md
+2026-02-15T20:45:19+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/encryption/run.log
+2026-02-15T20:45:19+00:00 Encryption tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/encryption
