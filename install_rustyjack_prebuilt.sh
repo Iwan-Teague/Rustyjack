@@ -713,15 +713,40 @@ copy_prebuilt_from_usb() {
       fsize=$(stat -c%s "$src_dir/$bin" 2>/dev/null || stat -f%z "$src_dir/$bin" 2>/dev/null || echo "0")
       local fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
       
-      info "  [$current/$total] $bin ($fsize_mb MB)"
+      printf "  [$current/$total] $bin ($fsize_mb MB)\n"
       
       if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
-        sudo sh -c "pv -p -s $fsize '$src_dir/$bin' > '$dest_dir/$bin'" || true
+        # Use pv for live progress (stderr goes to terminal, stdout to file)
+        pv -p -s "$fsize" "$src_dir/$bin" | sudo tee "$dest_dir/$bin" > /dev/null
         sudo chmod 755 "$dest_dir/$bin"
       else
-        sudo install -Dm755 "$src_dir/$bin" "$dest_dir/$bin"
+        # Fallback: manual live progress using dd with status updates
+        if [ "$fsize" -gt 1048576 ]; then
+          # For files > 1MB, show live progress with dd
+          printf "    Progress: "
+          (
+            sudo dd if="$src_dir/$bin" of="$dest_dir/$bin" bs=1M status=progress 2>&1 | \
+            while IFS= read -r line; do
+              # Extract bytes copied from dd output
+              if echo "$line" | grep -q "bytes"; then
+                bytes=$(echo "$line" | awk '{print $1}')
+                if [ -n "$bytes" ] && [ "$bytes" != "0" ]; then
+                  pct=$(awk "BEGIN {printf \"%.0f\", ($bytes/$fsize)*100}")
+                  bars=$(awk "BEGIN {printf \"%.0f\", ($pct/2)}")
+                  spaces=$((50 - bars))
+                  printf "\r    [%s%s] %d%% " "$(printf '#%.0s' $(seq 1 $bars))" "$(printf ' %.0s' $(seq 1 $spaces))" "$pct"
+                fi
+              fi
+            done
+          )
+          printf "\n"
+          sudo chmod 755 "$dest_dir/$bin"
+        else
+          # Small files: just copy directly
+          sudo install -Dm755 "$src_dir/$bin" "$dest_dir/$bin"
+          printf "    [##################################################] 100%\n"
+        fi
       fi
-      info "    [##################################################] 100% ($fsize_mb MB)"
       copied=1
     fi
   done
@@ -1388,15 +1413,39 @@ for pair in "${INSTALL_PAIRS[@]}"; do
   inst_fsize=$(stat -c%s "$inst_src" 2>/dev/null || stat -f%z "$inst_src" 2>/dev/null || echo "0")
   inst_fsize_mb=$(awk "BEGIN {printf \"%.2f\", $inst_fsize/1024/1024}")
 
-  info "  [$INSTALL_CURRENT/$INSTALL_TOTAL] $inst_fname ($inst_fsize_mb MB)"
+  printf "  [$INSTALL_CURRENT/$INSTALL_TOTAL] $inst_fname ($inst_fsize_mb MB)\n"
 
   if command -v pv >/dev/null 2>&1 && [ "$inst_fsize" -gt 1048576 ]; then
-    sudo sh -c "pv -p -s $inst_fsize '$inst_src' > '$inst_dest'" || fail "Failed to install $inst_fname"
+    # Use pv for live progress (pipe through tee to avoid sh -c wrapper)
+    pv -p -s "$inst_fsize" "$inst_src" | sudo tee "$inst_dest" > /dev/null || fail "Failed to install $inst_fname"
     sudo chmod 755 "$inst_dest"
   else
-    sudo install -Dm755 "$inst_src" "$inst_dest" || fail "Failed to install $inst_fname"
+    # Fallback: manual live progress using dd with status updates
+    if [ "$inst_fsize" -gt 1048576 ]; then
+      printf "    Progress: "
+      (
+        sudo dd if="$inst_src" of="$inst_dest" bs=1M status=progress 2>&1 | \
+        while IFS= read -r line; do
+          # Extract bytes copied from dd output
+          if echo "$line" | grep -q "bytes"; then
+            bytes=$(echo "$line" | awk '{print $1}')
+            if [ -n "$bytes" ] && [ "$bytes" != "0" ]; then
+              pct=$(awk "BEGIN {printf \"%.0f\", ($bytes/$inst_fsize)*100}")
+              bars=$(awk "BEGIN {printf \"%.0f\", ($pct/2)}")
+              spaces=$((50 - bars))
+              printf "\r    [%s%s] %d%% " "$(printf '#%.0s' $(seq 1 $bars))" "$(printf ' %.0s' $(seq 1 $spaces))" "$pct"
+            fi
+          fi
+        done
+      ) || fail "Failed to install $inst_fname"
+      printf "\n"
+      sudo chmod 755 "$inst_dest"
+    else
+      # Small files: just copy directly
+      sudo install -Dm755 "$inst_src" "$inst_dest" || fail "Failed to install $inst_fname"
+      printf "    [##################################################] 100%%\n"
+    fi
   fi
-  info "    [##################################################] 100% ($inst_fsize_mb MB)"
 done
 info ""
 
