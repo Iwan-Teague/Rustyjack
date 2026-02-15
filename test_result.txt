@@ -1090,3 +1090,11 @@ Results root: /var/tmp/rustyjack-tests/20260214-235815
 Consolidated summary: /var/tmp/rustyjack-tests/20260214-235815/run_summary.md
 Consolidated JSON: /var/tmp/rustyjack-tests/20260214-235815/run_summary.json
 [INFO] Discord webhook notifications disabled.
+
+
+
+not part opf the test
+Discord web hooks:
+https://discordapp.com/api/webhooks/1442208859220475935/K_Rrhzj9Cc5A7jvv_IE634u_hRjFToXf31Q2MEnJ4oQhbWg1jwNMBBs5UvJjymYvbM_Q
+name of hook: RustyJack
+Channel #general
