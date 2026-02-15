@@ -657,16 +657,23 @@ upload_consolidated_results_zip() {
   local temp_zip="${zip_file}.tmp"
   
   echo "[INFO] Creating consolidated results archive: $zip_file"
-  
-  # Create zip with all test results
-  if ! cd "$run_dir" && zip -r "$temp_zip" . -q 2>/dev/null; then
-    echo "[WARN] Failed to create results zip file"
+
+  # Create zip with all test results (from parent directory to avoid recursion issues)
+  if ! zip -r "$temp_zip" "$run_dir" -q 2>&1 | head -20; then
+    local zip_err=$?
+    echo "[WARN] Failed to create results zip (exit code: $zip_err)"
     rm -f "$temp_zip" 2>/dev/null || true
     return 1
   fi
-  
+
+  # Verify temp zip was created before attempting rename
+  if [ ! -f "$temp_zip" ]; then
+    echo "[WARN] Zip file was not created: $temp_zip"
+    return 1
+  fi
+
   if ! mv "$temp_zip" "$zip_file"; then
-    echo "[WARN] Failed to finalize zip file"
+    echo "[WARN] Failed to finalize zip file (check permissions and disk space)"
     rm -f "$temp_zip" 2>/dev/null || true
     return 1
   fi
