@@ -27,30 +27,31 @@ New-Item -ItemType Directory -Path $workDir | Out-Null
 
 Remove-Item -Recurse -Force (Join-Path $cloneDir ".git")
 
-$allowedExtensions = @(".rs", ".toml", ".lock", ".md", ".txt", ".service", ".socket")
-$allowedNamePatterns = @("LICENSE*", "COPYING*", "NOTICE*")
+# Blacklist-only export model:
+# keep repository content as-is, excluding git metadata and build/binary artifacts.
+$excludeDirs = @("target", "build", "prebuilt", "bin")
+$excludeDirPrefixes = @("target-", "build-")
+$excludeFileGlobs = @(
+  "*.o", "*.obj", "*.a", "*.so", "*.so.*", "*.dylib", "*.dll", "*.exe",
+  "*.rlib", "*.rmeta", "*.d", "*.pdb", "*.zip"
+)
 
-Get-ChildItem -Path $cloneDir -Recurse -File | ForEach-Object {
-  $ext = $_.Extension.ToLowerInvariant()
-  $name = $_.Name
-  $allow = $allowedExtensions -contains $ext
-  if (-not $allow) {
-    foreach ($pattern in $allowedNamePatterns) {
-      if ($name -like $pattern) {
-        $allow = $true
-        break
-      }
-    }
-  }
-  if (-not $allow) {
-    Remove-Item -Force $_.FullName
-  }
+foreach ($name in $excludeDirs) {
+  Get-ChildItem -Path $cloneDir -Recurse -Directory -Force |
+    Where-Object { $_.Name -ieq $name } |
+    ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
 }
 
-Get-ChildItem -Path $cloneDir -Recurse -Directory |
-  Sort-Object FullName -Descending |
-  Where-Object { -not (Get-ChildItem -Path $_.FullName -Force) } |
-  Remove-Item -Force
+foreach ($prefix in $excludeDirPrefixes) {
+  Get-ChildItem -Path $cloneDir -Recurse -Directory -Force |
+    Where-Object { $_.Name -like "$prefix*" } |
+    ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
+}
+
+foreach ($glob in $excludeFileGlobs) {
+  Get-ChildItem -Path $cloneDir -Recurse -File -Filter $glob -Force |
+    ForEach-Object { Remove-Item -Force $_.FullName }
+}
 
 if (Test-Path $zipPath) {
   Remove-Item -Force $zipPath
