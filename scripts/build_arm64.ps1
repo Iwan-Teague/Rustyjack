@@ -182,13 +182,20 @@ function Invoke-UsbExport {
         if ($script:UsbAutoEject) {
             Write-Host "Ejecting USB drive $($script:UsbExportDrive) ..." -ForegroundColor Yellow
             try {
-                # Flush file system buffers first
-                Write-Volume -DriveLetter $($script:UsbExportDrive.TrimEnd(':')) -ErrorAction SilentlyContinue | Out-Null
+                # Flush file system buffers first (requires admin on some systems)
+                $driveLetter = $script:UsbExportDrive.TrimEnd(':')
+                try {
+                    Write-VolumeCache -DriveLetter $driveLetter -ErrorAction Stop | Out-Null
+                } catch {
+                    # Write-VolumeCache might fail without admin; try sync via .NET
+                    [System.IO.File]::WriteAllBytes("$($script:UsbExportDrive)\.flush", @())
+                    Remove-Item "$($script:UsbExportDrive)\.flush" -ErrorAction SilentlyContinue
+                }
                 Start-Sleep -Milliseconds 500
                 
                 # Build WMI filter with proper escaping
-                $driveLetter = $script:UsbExportDrive
-                $driveObj = Get-WmiObject Win32_Volume -Filter "DriveLetter = '$driveLetter'" -ErrorAction SilentlyContinue
+                $driveLetterWithColon = $script:UsbExportDrive
+                $driveObj = Get-WmiObject Win32_Volume -Filter "DriveLetter = '$driveLetterWithColon'" -ErrorAction SilentlyContinue
                 if ($driveObj) {
                     $result = $driveObj.Dismount($false, $false)
                     if ($result.ReturnValue -eq 0) {
