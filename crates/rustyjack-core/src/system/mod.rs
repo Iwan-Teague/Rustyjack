@@ -1042,7 +1042,7 @@ fn open_packet_socket(interface: &str) -> Result<RawFd> {
         libc::bind(
             fd,
             &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
-            mem::size_of::<libc::sockaddr_ll>() as u32,
+            mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
         )
     };
     if bind_res != 0 {
@@ -1080,7 +1080,7 @@ fn set_promiscuous(fd: RawFd, ifindex: i32) -> Result<()> {
             libc::SOL_PACKET,
             libc::PACKET_ADD_MEMBERSHIP,
             &mut mreq as *mut libc::packet_mreq as *mut libc::c_void,
-            mem::size_of::<libc::packet_mreq>() as u32,
+            mem::size_of::<libc::packet_mreq>() as libc::socklen_t,
         )
     };
     if res != 0 {

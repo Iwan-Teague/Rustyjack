@@ -608,7 +608,7 @@ fn discover_hosts_arp_blocking(
         libc::bind(
             sock.as_raw_fd(),
             &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+            std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
         )
     };
     if bind_res != 0 {
@@ -786,7 +786,7 @@ fn discover_hosts_arp_cancellable_blocking(
         libc::bind(
             sock.as_raw_fd(),
             &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+            std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
         )
     };
     if bind_res != 0 {

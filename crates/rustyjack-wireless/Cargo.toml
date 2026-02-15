@@ -1,6 +1,6 @@
 [package]
 name = "rustyjack-wireless"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["RustyJack Team"]
 description = "Native Rust wireless offensive security toolkit for Raspberry Pi"

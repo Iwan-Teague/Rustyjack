@@ -36,7 +36,7 @@ impl EapolSocket {
             libc::bind(
                 fd,
                 &sll as *const _ as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_ll>() as u32,
+                std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
             )
         };
         if bind_res != 0 {
@@ -80,7 +80,7 @@ impl EapolSocket {
                 libc::SOL_SOCKET,
                 libc::SO_RCVTIMEO,
                 &tv as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::timeval>() as u32,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
             )
         };
         if res != 0 {

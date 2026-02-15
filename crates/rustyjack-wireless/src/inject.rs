@@ -61,7 +61,7 @@ impl InjectionSocket {
             libc::bind(
                 fd,
                 &addr as *const sockaddr_ll as *const libc::sockaddr,
-                mem::size_of::<sockaddr_ll>() as u32,
+                mem::size_of::<sockaddr_ll>() as libc::socklen_t,
             )
         };
 

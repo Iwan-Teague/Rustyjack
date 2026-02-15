@@ -1461,7 +1461,7 @@ fn open_raw_socket(interface: &str) -> Result<(RawFd, i32)> {
         libc::bind(
             sock_fd,
             &sll as *const _ as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+            std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
         )
     };
     if bind_res < 0 {

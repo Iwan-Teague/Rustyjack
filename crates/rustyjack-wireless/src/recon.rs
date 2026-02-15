@@ -440,9 +440,9 @@ fn resolve_hostname(ip: Ipv4Addr) -> Option<String> {
     let res = unsafe {
         libc::getnameinfo(
             &sockaddr as *const _ as *const libc::sockaddr,
-            mem::size_of::<libc::sockaddr_in>() as u32,
-            host.as_mut_ptr() as *mut u8,
-            host.len() as u32,
+            mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            host.as_mut_ptr() as *mut libc::c_char,
+            host.len() as libc::socklen_t,
             ptr::null_mut(),
             0,
             libc::NI_NAMEREQD,
@@ -917,7 +917,7 @@ fn open_dns_capture_socket(interface: &str) -> Result<RawFd> {
         libc::bind(
             fd,
             &addr as *const libc::sockaddr_ll as *const libc::sockaddr,
-            mem::size_of::<libc::sockaddr_ll>() as u32,
+            mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
         )
     };
 
@@ -942,7 +942,7 @@ fn open_dns_capture_socket(interface: &str) -> Result<RawFd> {
             libc::SOL_SOCKET,
             libc::SO_RCVTIMEO,
             &timeout as *const _ as *const libc::c_void,
-            mem::size_of::<libc::timeval>() as u32,
+            mem::size_of::<libc::timeval>() as libc::socklen_t,
         );
     }
 
