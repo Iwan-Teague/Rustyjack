@@ -22,6 +22,7 @@ RUN_USB=0
 RUN_UI_LAYOUT=0
 RUN_THEME=0
 RUN_DISCORD=0
+RUN_ALL_TESTS=0
 DANGEROUS=0
 RUN_UI=1
 OUTROOT="${RJ_OUTROOT:-/var/tmp/rustyjack-tests}"
@@ -101,9 +102,15 @@ Interface targeting:
   --eth-all-interfaces     Auto-detect all ethernet interfaces for ethernet suite
 
 Other:
-  --runtime-root DIR  Runtime root used to discover UI webhook (default: /var/lib/rustyjack)
-  --outroot DIR       Output root (default: /var/tmp/rustyjack-tests)
-  -h, --help          Show help
+   --runtime-root DIR  Runtime root used to discover UI webhook (default: /var/lib/rustyjack)
+   --outroot DIR       Output root (default: /var/tmp/rustyjack-tests)
+   -h, --help          Show help
+
+Output and artifacts:
+   When Discord is enabled, a consolidated zip archive of all test results,
+   logs, and reports is automatically created and uploaded at test completion.
+   This includes all suite outputs, individual test results, and summary files
+   in a single download-friendly archive (rustyjack_<run_id>_results.zip).
 
 If no options are provided, a menu will be shown.
 UI automation is always enabled by policy.
@@ -632,6 +639,58 @@ send_discord_suite_artifacts() {
   return 0
 }
 
+upload_consolidated_results_zip() {
+  local run_dir="$1"
+  local run_id="$2"
+  
+  if ! discord_can_send; then
+    echo "[INFO] Discord webhook not available; skipping consolidated zip upload."
+    return 0
+  fi
+  
+  if [[ ! -d "$run_dir" ]]; then
+    echo "[WARN] Results directory not found: $run_dir"
+    return 1
+  fi
+  
+  local zip_file="${run_dir}/rustyjack_${run_id}_results.zip"
+  local temp_zip="${zip_file}.tmp"
+  
+  echo "[INFO] Creating consolidated results archive: $zip_file"
+  
+  # Create zip with all test results
+  if ! cd "$run_dir" && zip -r "$temp_zip" . -q 2>/dev/null; then
+    echo "[WARN] Failed to create results zip file"
+    rm -f "$temp_zip" 2>/dev/null || true
+    return 1
+  fi
+  
+  if ! mv "$temp_zip" "$zip_file"; then
+    echo "[WARN] Failed to finalize zip file"
+    rm -f "$temp_zip" 2>/dev/null || true
+    return 1
+  fi
+  
+  local zip_size
+  zip_size="$(du -h "$zip_file" 2>/dev/null | cut -f1 || echo "unknown")"
+  
+  echo "[INFO] Results archive created: $zip_file (${zip_size})"
+  
+  # Upload zip to Discord
+  local payload_json
+  payload_json="$(discord_build_payload_json "RustyJack test run consolidated results (Run ID: ${run_id})")"
+  
+  if ! discord_curl_with_retry \
+    -F "payload_json=$payload_json" \
+    -F "file1=@${zip_file};filename=rustyjack_${run_id}_results.zip"; then
+    echo "[WARN] Failed to upload consolidated results zip to Discord"
+    return 1
+  fi
+  
+  echo "[INFO] Consolidated results zip uploaded to Discord"
+  return 0
+}
+
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-N}"
@@ -745,37 +804,45 @@ if [[ $# -eq 0 ]]; then
   echo "  4) Encryption"
   echo "  5) Loot"
   echo "  6) MAC Randomization"
-  echo "  7) Daemon/IPC"
-  echo "  8) Daemon Deep Diagnostics"
-  echo "  9) Installers"
-  echo " 10) USB Mount"
-  echo " 11) UI Layout/Display"
-  echo " 12) Theme/Palette"
-  echo " 13) Discord Webhook Preflight"
+  echo "  7) Evasion"
+  echo "  8) Anti-Forensics"
+  echo "  9) Physical Access"
+  echo " 10) Hotspot/AP"
+  echo " 11) Daemon/IPC"
+  echo " 12) Daemon Deep Diagnostics"
+  echo " 13) Installers"
+  echo " 14) USB Mount"
+  echo " 15) UI Layout/Display"
+  echo " 16) Theme/Palette"
+  echo " 17) Discord Webhook Preflight"
   echo "  0) All"
   read -r choice
   case "$choice" in
-    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_IFACE_SELECT=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1 ;;
+    0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_IFACE_SELECT=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_EVASION=1; RUN_ANTI_FORENSICS=1; RUN_PHYSICAL_ACCESS=1; RUN_HOTSPOT=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1 ;;
     1) RUN_WIRELESS=1 ;;
     2) RUN_ETHERNET=1 ;;
     3) RUN_IFACE_SELECT=1 ;;
     4) RUN_ENCRYPTION=1 ;;
     5) RUN_LOOT=1 ;;
     6) RUN_MAC=1 ;;
-    7) RUN_DAEMON=1 ;;
-    8) RUN_DAEMON_DEEP=1 ;;
-    9) RUN_INSTALLERS=1 ;;
-    10) RUN_USB=1 ;;
-    11) RUN_UI_LAYOUT=1 ;;
-    12) RUN_THEME=1 ;;
-    13) RUN_DISCORD=1 ;;
+    7) RUN_EVASION=1 ;;
+    8) RUN_ANTI_FORENSICS=1 ;;
+    9) RUN_PHYSICAL_ACCESS=1 ;;
+    10) RUN_HOTSPOT=1 ;;
+    11) RUN_DAEMON=1 ;;
+    12) RUN_DAEMON_DEEP=1 ;;
+    13) RUN_INSTALLERS=1 ;;
+    14) RUN_USB=1 ;;
+    15) RUN_UI_LAYOUT=1 ;;
+    16) RUN_THEME=1 ;;
+    17) RUN_DISCORD=1 ;;
     *) echo "Unknown choice" >&2; exit 2 ;;
   esac
   interactive_collect_flags
 else
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_IFACE_SELECT=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1; shift ;;
+      --all) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_IFACE_SELECT=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_EVASION=1; RUN_ANTI_FORENSICS=1; RUN_PHYSICAL_ACCESS=1; RUN_HOTSPOT=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1; shift ;;
       --wireless) RUN_WIRELESS=1; shift ;;
       --ethernet) RUN_ETHERNET=1; shift ;;
       --iface-select) RUN_IFACE_SELECT=1; shift ;;
@@ -783,6 +850,10 @@ else
       --encryption) RUN_ENCRYPTION=1; shift ;;
       --loot) RUN_LOOT=1; shift ;;
       --mac) RUN_MAC=1; shift ;;
+      --evasion) RUN_EVASION=1; shift ;;
+      --anti-forensics) RUN_ANTI_FORENSICS=1; shift ;;
+      --physical-access) RUN_PHYSICAL_ACCESS=1; shift ;;
+      --hotspot) RUN_HOTSPOT=1; shift ;;
       --daemon) RUN_DAEMON=1; shift ;;
       --daemon-deep) RUN_DAEMON_DEEP=1; shift ;;
       --installers) RUN_INSTALLERS=1; shift ;;
@@ -1127,8 +1198,21 @@ send_discord_text_message \
 Run ID: ${RUN_ID}
 Host: $(hostname 2>/dev/null || echo unknown)
 Status: $([[ $SUITES_FAIL -eq 0 ]] && echo PASS || echo FAIL)
-Uploading final summary..." \
+Creating consolidated results archive..." \
   1
+
+# Create and upload consolidated zip of all test results
+run_dir="$OUTROOT/$RUN_ID"
+if [[ -d "$run_dir" ]]; then
+  if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
+    echo "[INFO] Consolidated results archive uploaded to Discord successfully"
+    send_discord_text_message \
+      "Consolidated results archive uploaded.
+Run ID: ${RUN_ID}
+Archive: rustyjack_${RUN_ID}_results.zip" \
+      0
+  fi
+fi
 
 send_discord_summary
 
