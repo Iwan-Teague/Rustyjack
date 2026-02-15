@@ -1,0 +1,1092 @@
+root@rustyjack:~/Rustyjack/scripts# ./rj_run_tests.sh
+Select tests:
+  1) Wireless
+  2) Ethernet
+ 12) Interface Selection
+ 13) Discord Webhook Preflight
+  3) Encryption
+  4) Loot
+  5) MAC Randomization
+  6) Daemon/IPC
+ 11) Daemon Deep Diagnostics
+  7) Installers
+  8) USB Mount
+  9) UI Layout/Display
+ 10) Theme/Palette
+  0) All
+0
+Enable dangerous tests where supported? [y/N]: y
+UI automation is enforced for all suites.
+Run deep daemon diagnostics suite? [y/N]: y
+Wireless interface mode:
+  1) Auto-detect (default)
+  2) Single interface
+  3) Comma-separated list
+  4) All interfaces
+Choose [1-4]: 1
+Ethernet interface mode:
+  1) Auto-detect (default)
+  2) Single interface
+  3) Comma-separated list
+  4) All interfaces
+Choose [1-4]: 1
+Output root directory [/var/tmp/rustyjack-tests]:
+Configure advanced per-suite options? [y/N]: y
+
+Advanced: Wireless
+Skip wireless unit tests? [y/N]: n
+Skip wireless integration tests? [y/N]: n
+Skip wireless negative tests? [y/N]: n
+Skip wireless isolation checks? [y/N]: n
+Skip wireless compatibility checks? [y/N]: n
+Enable wireless recon tests? [y/N]: y
+
+Advanced: Ethernet
+Skip ethernet unit tests? [y/N]: n
+Skip ethernet integration tests? [y/N]: n
+Skip ethernet negative tests? [y/N]: n
+Skip ethernet isolation checks? [y/N]: n
+Skip ethernet compatibility checks? [y/N]: n
+Ethernet target CIDR/IP (blank to skip):
+Ethernet ports list (e.g. 22,80,443; blank to skip):
+
+Advanced: Interface Selection
+Skip interface selection negative tests? [y/N]: n
+Skip interface selection compatibility checks? [y/N]: n
+Skip interface selection isolation snapshots? [y/N]: n
+Allow remote interface switching (may drop SSH)? [y/N]: n
+Recovery interface override (blank for auto):
+
+Advanced: Encryption
+Skip encryption unit tests? [y/N]: n
+Skip encryption integration tests? [y/N]: n
+Skip encryption negative tests? [y/N]: n
+Skip encryption isolation checks? [y/N]: n
+Skip encryption compatibility checks? [y/N]: n
+
+Advanced: Loot
+Skip loot unit tests? [y/N]: n
+Skip loot integration tests? [y/N]: n
+Skip loot negative tests? [y/N]: n
+Skip loot isolation checks? [y/N]: n
+Skip loot compatibility checks? [y/N]: n
+
+Advanced: MAC Randomization
+Skip MAC unit tests? [y/N]: n
+Skip MAC stress loop? [y/N]: n
+Skip MAC negative tests? [y/N]: n
+Skip MAC vendor test? [y/N]: n
+MAC interface override (blank to keep default):
+MAC vendor name (blank to keep default):
+MAC stress loop count (blank to keep default):
+
+Advanced: Daemon/IPC
+Skip daemon auth tests? [y/N]: n
+Skip daemon protocol tests? [y/N]: n
+Skip daemon unit tests? [y/N]: n
+Skip daemon compatibility checks? [y/N]: n
+Skip daemon isolation checks? [y/N]: n
+Skip daemon comprehensive sub-suite? [y/N]: n
+Daemon socket path (blank for default):
+Daemon service unit (blank for default):
+
+Advanced: Daemon Deep Diagnostics
+Daemon deep socket path (blank for default):
+Daemon deep service unit (blank for default):
+Daemon deep parallel clients (blank for default):
+Daemon deep stress iterations (blank for default):
+Enable verbose deep daemon output? [y/N]: y
+
+Advanced: Installers
+Skip shellcheck checks? [y/N]: n
+Skip syntax checks? [y/N]: n
+Skip pattern checks? [y/N]: n
+Skip installer isolation checks? [y/N]: n
+
+Advanced: USB
+Skip USB compatibility checks? [y/N]: n
+Skip USB integration checks? [y/N]: n
+Skip USB negative checks? [y/N]: n
+Skip USB isolation checks? [y/N]: n
+USB device path override (blank for auto-detect):
+
+Advanced: Theme
+Skip theme unit tests? [y/N]: n
+Skip theme integration checks? [y/N]: n
+Skip theme source checks? [y/N]: n
+Skip theme compatibility checks? [y/N]: n
+Skip theme isolation checks? [y/N]: n
+Rustyjack test run starting
+Run ID: 20260214-235815
+Results root: /var/tmp/rustyjack-tests/20260214-235815
+UI args: --ui
+Dangerous args: --dangerous
+Wireless args: (auto)
+Ethernet args: (auto)
+Interface-select args: (auto)
+Discord webhook: enabled
+Discord runtime root: /var/lib/rustyjack
+Discord endpoint: not configured (set RJ_DISCORD_WEBHOOK_URL or configure UI webhook)
+================================================================
+[SUITE] Discord Webhook
+[START] 2026-02-15T00:00:26+00:00 :: /root/Rustyjack/scripts/rj_test_discord.sh
+2026-02-15T00:00:26+00:00 Suite: discord_webhook
+2026-02-15T00:00:26+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook
+2026-02-15T00:00:26+00:00 [INFO] Runtime root: /var/lib/rustyjack
+2026-02-15T00:00:26+00:00 [INFO] Webhook file: /var/lib/rustyjack/discord_webhook.txt
+2026-02-15T00:00:26+00:00 [CMD] ui_service_active :: systemctl is-active rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/artifacts/ui_service_active.txt)
+2026-02-15T00:00:27+00:00 [PASS] ui_service_active
+2026-02-15T00:00:27+00:00 [PASS] ui_service_running
+2026-02-15T00:00:27+00:00 [FAIL] webhook_file_missing (/var/lib/rustyjack/discord_webhook.txt)
+2026-02-15T00:00:27+00:00 [CMD] discord_status :: rustyjack notify discord status --output json (output: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/artifacts/discord_status.json)
+2026-02-15T00:00:27+00:00 [PASS] discord_status
+2026-02-15T00:00:28+00:00 [FAIL] discord_status_configured
+2026-02-15T00:00:28+00:00 [CMD] discord_send_test_message :: rustyjack notify discord send --title Rustyjack Discord Webhook Preflight --message Timestamp: 2026-02-15T00:00:28+00:00; Host: rustyjack; Run: 20260214-235815; Suite: discord_webhook --output json (output: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/artifacts/discord_send_test_message.json)
+2026-02-15T00:00:28+00:00 [PASS] discord_send_test_message
+2026-02-15T00:00:29+00:00 [FAIL] discord_send_succeeded
+2026-02-15T00:00:29+00:00 [SUMMARY] Tests=3 Passed=4 Failed=3 Skipped=0
+2026-02-15T00:00:29+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/report.md
+2026-02-15T00:00:29+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/run.log
+2026-02-15T00:00:29+00:00 Discord webhook tests completed. Output: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook
+[DONE]  2026-02-15T00:00:29+00:00 :: Discord Webhook (fail rc=1)
+[WARN] Discord preflight failed; disabling follow-up Discord notifications for this run.
+================================================================
+[SUITE] Wireless
+[START] 2026-02-15T00:00:29+00:00 :: /root/Rustyjack/scripts/rj_test_wireless.sh
+2026-02-15T00:00:29+00:00 Suite: wireless
+2026-02-15T00:00:29+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/wireless
+2026-02-15T00:00:29+00:00 [INFO] Wireless interfaces under test: wlan0 wlan1
+2026-02-15T00:00:29+00:00 [CMD] ip_link :: ip -br link show (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/ip_link.txt)
+2026-02-15T00:00:29+00:00 [PASS] ip_link
+2026-02-15T00:00:29+00:00 [CMD] ip_addr :: ip -br addr show (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/ip_addr.txt)
+2026-02-15T00:00:29+00:00 [PASS] ip_addr
+2026-02-15T00:00:30+00:00 [CMD] iw_dev :: iw dev (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/iw_dev.txt)
+2026-02-15T00:00:30+00:00 [PASS] iw_dev
+2026-02-15T00:00:30+00:00 [CMD] iw_list :: iw list (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/iw_list.txt)
+2026-02-15T00:00:30+00:00 [PASS] iw_list
+2026-02-15T00:00:30+00:00 [CMD] rfkill_list :: rfkill list (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/rfkill_list.txt)
+2026-02-15T00:00:30+00:00 [PASS] rfkill_list
+2026-02-15T00:00:30+00:00 [CMD] wpa_cli_version :: wpa_cli -v (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/wpa_cli_version.txt)
+2026-02-15T00:00:30+00:00 [PASS] wpa_cli_version
+2026-02-15T00:00:31+00:00 [WARN] Missing required tool: cargo (Rust toolchain (unit tests))
+2026-02-15T00:00:31+00:00 [SKIP] Skipping tests that require cargo
+2026-02-15T00:00:31+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T00:00:31+00:00 [CMD] status_network :: rustyjack status network --output json (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/status_network.json)
+2026-02-15T00:00:31+00:00 [PASS] status_network
+2026-02-15T00:00:31+00:00 [CMD] hardware_detect :: rustyjack hardware detect --output json (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/hardware_detect.json)
+2026-02-15T00:00:32+00:00 [PASS] hardware_detect
+2026-02-15T00:00:32+00:00 [INFO] Running wireless interface tests for wlan0
+2026-02-15T00:00:32+00:00 [CMD] wifi_list_wlan0 :: rustyjack wifi list --output json (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/wifi_list_wlan0.json)
+2026-02-15T00:00:32+00:00 [PASS] wifi_list_wlan0
+2026-02-15T00:00:32+00:00 [CMD] wifi_best_wlan0 :: rustyjack wifi best --prefer-wifi --output json (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/wifi_best_wlan0.json)
+2026-02-15T00:00:32+00:00 [PASS] wifi_best_wlan0
+2026-02-15T00:00:33+00:00 [CMD] wifi_status_wlan0 :: rustyjack wifi status --interface wlan0 --output json (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/wifi_status_wlan0.json)
+2026-02-15T00:00:33+00:00 [PASS] wifi_status_wlan0
+2026-02-15T00:00:33+00:00 [CMD] wifi_scan_wlan0 :: rustyjack wifi scan --interface wlan0 --output json (output: /var/tmp/rustyjack-tests/20260214-235815/wireless/artifacts/wifi_scan_wlan0.json)
+2026-02-15T00:00:34+00:00 [FAIL] wifi_scan_wlan0 (rc=101)
+2026-02-15T00:00:34+00:00 Capturing wireless failure context...
+2026-02-15T00:00:34+00:00 [TAIL] wifi_scan_wlan0 output (deduped)
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:00:34+00:00 :: Wireless (fail rc=2)
+================================================================
+[SUITE] Ethernet
+[START] 2026-02-15T00:00:34+00:00 :: /root/Rustyjack/scripts/rj_test_ethernet.sh
+2026-02-15T00:00:34+00:00 Suite: ethernet
+2026-02-15T00:00:34+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/ethernet
+2026-02-15T00:00:34+00:00 [INFO] Ethernet interfaces under test: eth0
+2026-02-15T00:00:34+00:00 [CMD] ip_link :: ip -br link show (output: /var/tmp/rustyjack-tests/20260214-235815/ethernet/artifacts/ip_link.txt)
+2026-02-15T00:00:34+00:00 [PASS] ip_link
+2026-02-15T00:00:34+00:00 [CMD] ip_addr :: ip -br addr show (output: /var/tmp/rustyjack-tests/20260214-235815/ethernet/artifacts/ip_addr.txt)
+2026-02-15T00:00:34+00:00 [PASS] ip_addr
+2026-02-15T00:00:35+00:00 [CMD] ss_tunap :: ss -tunap (output: /var/tmp/rustyjack-tests/20260214-235815/ethernet/artifacts/ss_tunap.txt)
+2026-02-15T00:00:35+00:00 [PASS] ss_tunap
+2026-02-15T00:00:35+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T00:00:35+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T00:00:35+00:00 [INFO] Running ethernet interface tests for eth0
+2026-02-15T00:00:35+00:00 [CMD] eth_discover_eth0 :: rustyjack ethernet discover --interface eth0 --output json (output: /var/tmp/rustyjack-tests/20260214-235815/ethernet/artifacts/eth_discover_eth0.json)
+2026-02-15T00:00:36+00:00 [FAIL] eth_discover_eth0 (rc=101)
+2026-02-15T00:00:36+00:00 Capturing ethernet failure context...
+2026-02-15T00:00:36+00:00 [TAIL] eth_discover_eth0 output (deduped)
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:00:36+00:00 :: Ethernet (fail rc=2)
+================================================================
+[SUITE] Interface Selection
+[START] 2026-02-15T00:00:36+00:00 :: /root/Rustyjack/scripts/rj_test_interface_selection.sh
+2026-02-15T00:00:36+00:00 Suite: interface_selection
+2026-02-15T00:00:36+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/interface_selection
+2026-02-15T00:00:36+00:00 [INFO] Wireless interfaces under test: wlan0 wlan1
+2026-02-15T00:00:36+00:00 [INFO] Ethernet interfaces under test: eth0
+2026-02-15T00:00:36+00:00 [CMD] hardware_detect :: rustyjack hardware detect --output json (output: /var/tmp/rustyjack-tests/20260214-235815/interface_selection/artifacts/hardware_detect.json)
+2026-02-15T00:00:36+00:00 [PASS] hardware_detect
+2026-02-15T00:00:37+00:00 [CMD] status_network :: rustyjack status network --output json (output: /var/tmp/rustyjack-tests/20260214-235815/interface_selection/artifacts/status_network.json)
+2026-02-15T00:00:37+00:00 [PASS] status_network
+2026-02-15T00:00:37+00:00 [CMD] iw_dev :: iw dev (output: /var/tmp/rustyjack-tests/20260214-235815/interface_selection/artifacts/iw_dev.txt)
+2026-02-15T00:00:37+00:00 [PASS] iw_dev
+2026-02-15T00:00:37+00:00 [CMD] rfkill_list :: rfkill list (output: /var/tmp/rustyjack-tests/20260214-235815/interface_selection/artifacts/rfkill_list.txt)
+2026-02-15T00:00:37+00:00 [PASS] rfkill_list
+2026-02-15T00:00:37+00:00 [RPC] active_before :: ActiveInterfaceGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T00:00:38+00:00 [PASS] active_before
+2026-02-15T00:00:38+00:00 [INFO] Active interface before tests: <none>
+2026-02-15T00:00:38+00:00 [INFO] Default route interface before tests: eth0
+2026-02-15T00:00:38+00:00 [INFO] SSH route interface: <none>
+2026-02-15T00:00:38+00:00 [INFO] Recovery interface: eth0
+2026-02-15T00:00:38+00:00 [RPC] iface_status_pre_eth0 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T00:00:39+00:00 [PASS] iface_status_pre_eth0
+2026-02-15T00:00:39+00:00 [RPC] set_active_eth0 :: SetActiveInterface (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T00:00:39+00:00 [FAIL] set_active_eth0 (rc=0)
+2026-02-15T00:00:39+00:00 Capturing interface-selection failure context...
+2026-02-15T00:00:39+00:00 [TAIL] set_active_eth0 response
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:00:40+00:00 :: Interface Selection (fail rc=2)
+================================================================
+[SUITE] Encryption
+[START] 2026-02-15T00:00:40+00:00 :: /root/Rustyjack/scripts/rj_test_encryption.sh
+2026-02-15T00:00:40+00:00 Suite: encryption
+2026-02-15T00:00:40+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/encryption
+2026-02-15T00:00:40+00:00 [PASS] python3 available
+2026-02-15T00:00:40+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T00:00:40+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T00:00:40+00:00 Generated test key: /var/lib/rustyjack/keys/test.key
+2026-02-15T00:00:40+00:00 Updated gui_conf.json encryption_key_path
+2026-02-15T00:01:04+00:00 [FAIL] Isolation check failed: encryption_readonly (route changed)
+2026-02-15T00:01:04+00:00 Capturing encryption failure context...
+2026-02-15T00:01:04+00:00 [DIFF] /var/tmp/rustyjack-tests/20260214-235815/encryption/artifacts/net_encryption_readonly_route.diff
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:01:06+00:00 :: Encryption (fail rc=2)
+================================================================
+[SUITE] Loot
+[START] 2026-02-15T00:01:06+00:00 :: /root/Rustyjack/scripts/rj_test_loot.sh
+2026-02-15T00:01:07+00:00 Suite: loot
+2026-02-15T00:01:07+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/loot
+2026-02-15T00:01:07+00:00 [PASS] Compatibility checks passed (loot)
+2026-02-15T00:01:07+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T00:01:07+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T00:01:07+00:00 [CMD] loot_list_wireless :: rustyjack loot list --kind wireless --output json (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_wireless.json)
+2026-02-15T00:01:07+00:00 [PASS] loot_list_wireless
+2026-02-15T00:01:07+00:00 [CMD] loot_list_ethernet :: rustyjack loot list --kind ethernet --output json (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_ethernet.json)
+2026-02-15T00:01:07+00:00 [PASS] loot_list_ethernet
+2026-02-15T00:01:07+00:00 [CMD] loot_list_scan :: rustyjack loot list --kind scan --output json (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_scan.json)
+2026-02-15T00:01:07+00:00 [PASS] loot_list_scan
+2026-02-15T00:01:08+00:00 [CMD] loot_list_dnsspoof :: rustyjack loot list --kind dnsspoof --output json (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_dnsspoof.json)
+2026-02-15T00:01:08+00:00 [PASS] loot_list_dnsspoof
+2026-02-15T00:01:08+00:00 [CMD] loot_read_wireless :: rustyjack loot read --path /var/lib/rustyjack/loot/Wireless/TestNet/test_loot.txt --output text (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_read_wireless.txt)
+2026-02-15T00:01:08+00:00 [PASS] loot_read_wireless
+2026-02-15T00:01:08+00:00 [CMD] loot_read_ethernet :: rustyjack loot read --path /var/lib/rustyjack/loot/Ethernet/192.168.0.10/test_loot.txt --output text (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_read_ethernet.txt)
+2026-02-15T00:01:08+00:00 [PASS] loot_read_ethernet
+2026-02-15T00:01:09+00:00 [CMD] loot_read_report :: rustyjack loot read --path /var/lib/rustyjack/loot/reports/TestNet/report_test.txt --output text (output: /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/loot_read_report.txt)
+2026-02-15T00:01:09+00:00 [PASS] loot_read_report
+2026-02-15T00:01:09+00:00 [FAIL] Isolation check failed: loot_readonly (route changed)
+2026-02-15T00:01:09+00:00 Capturing loot failure context...
+2026-02-15T00:01:09+00:00 [DIFF] /var/tmp/rustyjack-tests/20260214-235815/loot/artifacts/net_loot_readonly_route.diff
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:01:09+00:00 :: Loot (fail rc=2)
+================================================================
+[SUITE] MAC Randomization
+[START] 2026-02-15T00:01:09+00:00 :: /root/Rustyjack/scripts/rj_test_mac_randomization.sh
+2026-02-15T00:01:09+00:00 Suite: mac_randomization
+2026-02-15T00:01:09+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/mac_randomization
+2026-02-15T00:01:09+00:00 [CMD] wifi_status_baseline :: rustyjack wifi status --interface wlan0 --output json (output: /var/tmp/rustyjack-tests/20260214-235815/mac_randomization/artifacts/wifi_status_baseline.json)
+2026-02-15T00:01:09+00:00 [PASS] wifi_status_baseline
+2026-02-15T00:01:10+00:00 [SKIP] RF-kill is active; skipping MAC mutation tests until Wi-Fi is unblocked
+2026-02-15T00:01:10+00:00 [SKIP] python3 not available; skipping JSON validation
+2026-02-15T00:01:10+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T00:01:10+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T00:01:10+00:00 [SKIP] MAC mutation tests skipped due to RF-kill
+2026-02-15T00:01:10+00:00 [SKIP] Vendor MAC test skipped due to RF-kill
+2026-02-15T00:01:10+00:00 [SKIP] Stress loop skipped due to RF-kill
+2026-02-15T00:01:10+00:00 [SKIP] Negative MAC tests skipped due to RF-kill
+2026-02-15T00:01:10+00:00 [SUMMARY] Tests=1 Passed=1 Failed=0 Skipped=8
+2026-02-15T00:01:10+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260214-235815/mac_randomization/report.md
+2026-02-15T00:01:10+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260214-235815/mac_randomization/run.log
+2026-02-15T00:01:10+00:00 MAC randomization tests completed. Output: /var/tmp/rustyjack-tests/20260214-235815/mac_randomization
+[DONE]  2026-02-15T00:01:10+00:00 :: MAC Randomization (pass)
+================================================================
+[SUITE] Daemon/IPC
+[START] 2026-02-15T00:01:10+00:00 :: /root/Rustyjack/scripts/rj_test_daemon.sh
+2026-02-15T00:01:11+00:00 Suite: daemon
+2026-02-15T00:01:11+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/daemon
+2026-02-15T00:01:11+00:00 [PASS] python3 available
+2026-02-15T00:01:11+00:00 [PASS] systemctl available
+2026-02-15T00:01:11+00:00 [PASS] ss available
+2026-02-15T00:01:11+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T00:01:11+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T00:01:11+00:00 [PASS] daemon_service_active (rustyjackd.service)
+2026-02-15T00:01:11+00:00 [PASS] daemon_socket_present (/run/rustyjack/rustyjackd.sock)
+2026-02-15T00:01:11+00:00 Socket perms: mode=660 owner=root group=rustyjack
+2026-02-15T00:01:11+00:00 [PASS] daemon_socket_perms_secure (others=0)
+2026-02-15T00:01:11+00:00 [RPC] BASE LoggingConfigGet (user=root)
+2026-02-15T00:01:12+00:00 Baseline logging config: enabled=true level=info
+2026-02-15T00:01:12+00:00 [SKIP] Admin group missing: rustyjack-admin (root will be used for admin checks)
+2026-02-15T00:01:12+00:00 [RPC] A1 Health (user=rjtest_ro)
+2026-02-15T00:01:13+00:00 [PASS] ro_user_connect_denied (socket perms enforce group access)
+2026-02-15T00:01:13+00:00 [SKIP] Read-only RPC tests skipped (socket perms deny RO user)
+2026-02-15T00:01:13+00:00 [RPC] A6 SystemLogsGet (user=rjtest_op)
+2026-02-15T00:01:14+00:00 [PASS] rpc_ok_A6
+2026-02-15T00:01:14+00:00 [RPC] A7 ActiveInterfaceClear (user=rjtest_op)
+2026-02-15T00:01:14+00:00 [FAIL] rpc_ok_A7 (expected Ok, got Err) err=operations are restricted to the UI runtime
+2026-02-15T00:01:14+00:00 Capturing failure context...
+2026-02-15T00:01:15+00:00 [RPC] A8 LoggingConfigSet (user=rjtest_op)
+2026-02-15T00:01:15+00:00 [PASS] rpc_err_A8
+2026-02-15T00:01:15+00:00 [RPC] A9 SystemSync (user=root)
+2026-02-15T00:01:16+00:00 [FAIL] rpc_ok_A9 (expected Ok, got Err) err=operations are restricted to the UI runtime
+OK
+2026-02-15T00:01:16+00:00 [FAIL] protocol_version_mismatch_rejected
+OK
+2026-02-15T00:01:17+00:00 [PASS] oversized_frame_sent (review daemon logs for rejection)
+2026-02-15T00:01:17+00:00 [RPC] P3 Health (user=root)
+2026-02-15T00:01:17+00:00 [PASS] rpc_ok_P3
+2026-02-15T00:01:17+00:00 [FAIL] Isolation check failed: daemon_rpc_readonly (route changed)
+2026-02-15T00:01:17+00:00 [DIFF] /var/tmp/rustyjack-tests/20260214-235815/daemon/artifacts/net_daemon_rpc_readonly_route.diff
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:01:18+00:00 :: Daemon/IPC (fail rc=2)
+================================================================
+[SUITE] Daemon Deep Diagnostics
+[START] 2026-02-15T00:01:18+00:00 :: /root/Rustyjack/scripts/rustyjack_comprehensive_test.sh
+2026-02-15T00:01:18+00:00 ==========================================
+2026-02-15T00:01:18+00:00 RustyJack Comprehensive Diagnostic Suite
+2026-02-15T00:01:18+00:00 ==========================================
+2026-02-15T00:01:18+00:00 Run ID: 20260215-000118
+2026-02-15T00:01:18+00:00 Socket: /run/rustyjack/rustyjackd.sock
+2026-02-15T00:01:18+00:00 Service: rustyjackd.service
+2026-02-15T00:01:18+00:00 Dangerous Mode: 0
+2026-02-15T00:01:18+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118
+2026-02-15T00:01:18+00:00 ==========================================
+2026-02-15T00:01:18+00:00
+2026-02-15T00:01:18+00:00 ========================================
+2026-02-15T00:01:18+00:00 SUITE A: Installation & Service Sanity
+2026-02-15T00:01:18+00:00 ========================================
+2026-02-15T00:01:18+00:00 [CMD] A1_service_enabled :: systemctl is-enabled --quiet rustyjackd.service
+2026-02-15T00:01:18+00:00 [PASS] A1_service_enabled
+2026-02-15T00:01:18+00:00 [CMD] A2_service_active :: systemctl is-active --quiet rustyjackd.service
+2026-02-15T00:01:18+00:00 [PASS] A2_service_active
+2026-02-15T00:01:19+00:00 [PASS] A3_service_show
+2026-02-15T00:01:19+00:00 [CMD] A5_runtime_dirs :: bash -c ls -ld /run/rustyjack /var/lib/rustyjack 2>&1 | tee -a '/var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118/diag.log'
+drwxrwx---  2 root rustyjack   60 Feb 15 00:01 /run/rustyjack
+drwxrwx--- 13 root rustyjack 4096 Feb 15 00:01 /var/lib/rustyjack
+2026-02-15T00:01:19+00:00 [PASS] A5_runtime_dirs
+2026-02-15T00:01:19+00:00 [PASS] A6_socket_exists (type=socket, perms=660)
+2026-02-15T00:01:19+00:00 [PASS] A7_socket_perms_secure (others=0)
+2026-02-15T00:01:20+00:00 [WARN] A8_journal: did not find 'ready' indicator in recent journal
+2026-02-15T00:01:20+00:00 [PASS] A9_main_pid (pid=621)
+2026-02-15T00:01:20+00:00
+2026-02-15T00:01:20+00:00 ========================================
+2026-02-15T00:01:20+00:00 SUITE B: Systemd Hardening Posture
+2026-02-15T00:01:20+00:00 ========================================
+2026-02-15T00:01:20+00:00 [PASS] B1_analyze_security
+2026-02-15T00:01:20+00:00   Security exposure: unknown
+2026-02-15T00:01:20+00:00 [PASS] B2_hardening_props
+2026-02-15T00:01:21+00:00   NoNewPrivileges: yes
+2026-02-15T00:01:21+00:00   ProtectSystem: strict
+2026-02-15T00:01:21+00:00   MemoryDenyWriteExecute: yes
+2026-02-15T00:01:21+00:00 [PASS] B3_proc_status (pid=621)
+2026-02-15T00:01:21+00:00   CapEff: 000001ffffffffff
+2026-02-15T00:01:21+00:00
+2026-02-15T00:01:21+00:00 ========================================
+2026-02-15T00:01:21+00:00 SUITE C: Authorization Matrix & Tiers
+2026-02-15T00:01:21+00:00 ========================================
+2026-02-15T00:01:21+00:00 Creating ephemeral test users for authorization tests...
+2026-02-15T00:01:21+00:00 [WARN] group 'rustyjack-admin' missing - admin role tests will be skipped
+2026-02-15T00:01:21+00:00   - Created user: rjdiag_ro
+2026-02-15T00:01:21+00:00   - Created user: rjdiag_op
+2026-02-15T00:01:21+00:00   - Created user: rjdiag_admin
+2026-02-15T00:01:21+00:00 Test users configured:
+2026-02-15T00:01:21+00:00   - rjdiag_ro: ReadOnly (no groups)
+2026-02-15T00:01:21+00:00   - rjdiag_op: Operator (rustyjack)
+2026-02-15T00:01:21+00:00   - rjdiag_admin: Admin fallback (rustyjack only)
+2026-02-15T00:01:21+00:00 Testing tier assignment...
+2026-02-15T00:01:21+00:00 [RPC] C1 Health (user=rjdiag_ro)
+2026-02-15T00:01:22+00:00 [FAIL] RPC C1 Health (python rc=2)
+2026-02-15T00:01:22+00:00   Response: {"ok": false, "timing_ms": 0, "error_type": "connect_permission_denied", "error": "[Errno 13] Permission denied"}
+2026-02-15T00:01:22+00:00 [SKIP] C1_tier_readonly (read-only user cannot connect due to socket permissions)
+2026-02-15T00:01:22+00:00 [RPC] C2 Health (user=rjdiag_op)
+2026-02-15T00:01:23+00:00 [PASS] RPC C2 Health
+2026-02-15T00:01:23+00:00 [PASS] C2_tier_operator (role=operator)
+2026-02-15T00:01:23+00:00 [RPC] C3 Health (user=rjdiag_admin)
+2026-02-15T00:01:24+00:00 [PASS] RPC C3 Health
+2026-02-15T00:01:24+00:00 [SKIP] C3_tier_admin (admin group 'rustyjack-admin' not configured)
+2026-02-15T00:01:24+00:00 Testing endpoint tier enforcement...
+2026-02-15T00:01:24+00:00 [RPC] C4 LoggingConfigSet (user=rjdiag_op)
+2026-02-15T00:01:24+00:00 [FAIL] RPC C4 LoggingConfigSet (python rc=10)
+2026-02-15T00:01:24+00:00   Response: {"ok": false, "timing_ms": 8, "error_type": "daemon_error", "error": null, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 995, "gid": 982, "role": "operator"}}, "request_id": 1771113684775877, "response": {"v": 1, "request_id": 1771113684775877, "body": {"type": "Err", "data": {"code": 4, "message": "forbidden", "detail": null, "retryable": false, "source": null}}}, "daemon_e
+2026-02-15T00:01:25+00:00 [PASS] C4_admin_endpoint_op_denied (correctly denied)
+2026-02-15T00:01:25+00:00 [RPC] C5 SystemLogsGet (user=rjdiag_ro)
+2026-02-15T00:01:25+00:00 [FAIL] RPC C5 SystemLogsGet (python rc=2)
+2026-02-15T00:01:25+00:00   Response: {"ok": false, "timing_ms": 0, "error_type": "connect_permission_denied", "error": "[Errno 13] Permission denied"}
+2026-02-15T00:01:25+00:00 [PASS] C5_operator_endpoint_ro_denied (correctly denied)
+2026-02-15T00:01:25+00:00 [SKIP] C6_admin_endpoint_allowed (admin group 'rustyjack-admin' not configured)
+2026-02-15T00:01:25+00:00 Testing authorization matrix samples...
+2026-02-15T00:01:25+00:00 [SKIP] C7_readonly_status (RO socket access denied by policy)
+2026-02-15T00:01:25+00:00 [RPC] C8 Version (user=rjdiag_op)
+2026-02-15T00:01:26+00:00 [PASS] RPC C8 Version
+2026-02-15T00:01:26+00:00 [SKIP] C9_admin_block_devices (admin group 'rustyjack-admin' not configured)
+2026-02-15T00:01:26+00:00 [SKIP] C10_op_endpoint_denied (RO socket access denied by policy)
+2026-02-15T00:01:26+00:00
+2026-02-15T00:01:26+00:00 ========================================
+2026-02-15T00:01:26+00:00 SUITE D: Protocol Robustness (Negative)
+2026-02-15T00:01:26+00:00 ========================================
+2026-02-15T00:01:26+00:00 D1: Testing protocol version mismatch...
+D1_OK
+2026-02-15T00:01:26+00:00 [FAIL] D1_protocol_version_mismatch (expected error response)
+2026-02-15T00:01:26+00:00 D2: Testing oversized frame rejection...
+D2_ERROR:
+2026-02-15T00:01:26+00:00 [PASS] D2_oversize_frame_rejected
+2026-02-15T00:01:26+00:00 D3: Testing repeated violations disconnect...
+D3_OK
+2026-02-15T00:01:27+00:00 [PASS] D3_repeated_violations_disconnect
+2026-02-15T00:01:27+00:00 D4: Testing endpoint/body mismatch...
+2026-02-15T00:01:27+00:00 [RPC] D4 Health (user=root)
+2026-02-15T00:01:27+00:00 [PASS] RPC D4 Health
+D4_OK
+2026-02-15T00:01:28+00:00 [PASS] D4_endpoint_body_mismatch
+2026-02-15T00:01:28+00:00
+2026-02-15T00:01:28+00:00 ========================================
+2026-02-15T00:01:28+00:00 SUITE E: Safe Functional Smoke Tests
+2026-02-15T00:01:28+00:00 ========================================
+2026-02-15T00:01:28+00:00 [RPC] E1 Health (user=root)
+2026-02-15T00:01:28+00:00 [PASS] RPC E1 Health
+2026-02-15T00:01:29+00:00 [RPC] E2 Version (user=root)
+2026-02-15T00:01:29+00:00 [PASS] RPC E2 Version
+2026-02-15T00:01:29+00:00 [RPC] E3 Status (user=root)
+2026-02-15T00:01:30+00:00 [PASS] RPC E3 Status
+2026-02-15T00:01:30+00:00 [RPC] E4 SystemStatusGet (user=root)
+2026-02-15T00:01:31+00:00 [PASS] RPC E4 SystemStatusGet
+2026-02-15T00:01:31+00:00 [RPC] E5 DiskUsageGet (user=root)
+2026-02-15T00:01:31+00:00 [PASS] RPC E5 DiskUsageGet
+2026-02-15T00:01:31+00:00 [RPC] E6 BlockDevicesList (user=root)
+2026-02-15T00:01:32+00:00 [PASS] RPC E6 BlockDevicesList
+2026-02-15T00:01:32+00:00 [RPC] E7 ActiveInterfaceGet (user=root)
+2026-02-15T00:01:33+00:00 [PASS] RPC E7 ActiveInterfaceGet
+2026-02-15T00:01:33+00:00 [RPC] E8 InterfaceStatusGet (user=root)
+2026-02-15T00:01:33+00:00 [PASS] RPC E8 InterfaceStatusGet
+2026-02-15T00:01:34+00:00 [RPC] E9 WifiInterfacesList (user=root)
+2026-02-15T00:01:34+00:00 [PASS] RPC E9 WifiInterfacesList
+2026-02-15T00:01:34+00:00 [RPC] E10 WifiCapabilitiesGet (user=root)
+2026-02-15T00:01:35+00:00 [PASS] RPC E10 WifiCapabilitiesGet
+2026-02-15T00:01:36+00:00 [RPC] E11 PortalStatus (user=root)
+2026-02-15T00:01:36+00:00 [PASS] RPC E11 PortalStatus
+2026-02-15T00:01:36+00:00 [RPC] E12 MountList (user=root)
+2026-02-15T00:01:37+00:00 [PASS] RPC E12 MountList
+2026-02-15T00:01:37+00:00 [RPC] E13 LoggingConfigGet (user=root)
+2026-02-15T00:01:38+00:00 [PASS] RPC E13 LoggingConfigGet
+2026-02-15T00:01:38+00:00 [RPC] E14 LogTailGet (user=root)
+2026-02-15T00:01:38+00:00 [PASS] RPC E14 LogTailGet
+2026-02-15T00:01:39+00:00 [PASS] E15_health_latency (7ms < 100ms)
+2026-02-15T00:01:39+00:00
+2026-02-15T00:01:39+00:00 ========================================
+2026-02-15T00:01:39+00:00 SUITE F: Job Subsystem Reliability
+2026-02-15T00:01:39+00:00 ========================================
+2026-02-15T00:01:39+00:00 [RPC] F1 JobStart (user=root)
+2026-02-15T00:01:39+00:00 [FAIL] RPC F1 JobStart (python rc=10)
+2026-02-15T00:01:39+00:00   Response: {"ok": false, "timing_ms": 14, "error_type": "daemon_error", "error": null, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 0, "gid": 0, "role": "admin"}}, "request_id": 1771113699660952, "response": {"v": 1, "request_id": 1771113699660952, "body": {"type": "Err", "data": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 9518 uid 0 is
+2026-02-15T00:01:39+00:00 [SKIP] Suite F (JobStart failed)
+2026-02-15T00:01:39+00:00
+2026-02-15T00:01:39+00:00 ========================================
+2026-02-15T00:01:39+00:00 SUITE G: Logging & Observability
+2026-02-15T00:01:39+00:00 ========================================
+2026-02-15T00:01:40+00:00 [PASS] G1_journal_capture
+2026-02-15T00:01:40+00:00 [RPC] G2 LogTailGet (user=root)
+2026-02-15T00:01:41+00:00 [PASS] RPC G2 LogTailGet
+2026-02-15T00:01:41+00:00 [PASS] G3_log_dir_perms
+2026-02-15T00:01:41+00:00 [FAIL] G4_log_dir_secure (perms=2770, world-write bit set)
+2026-02-15T00:01:41+00:00 [INFO] G5_errors_in_journal (found errors, see journal_full.txt)
+2026-02-15T00:01:41+00:00
+2026-02-15T00:01:41+00:00 ========================================
+2026-02-15T00:01:41+00:00 SUITE H: Stress & Soak Tests
+2026-02-15T00:01:41+00:00 ========================================
+2026-02-15T00:01:41+00:00   Initial FD count: 25 (pid=621)
+2026-02-15T00:01:41+00:00 H1: Sequential Health burst (200 requests)...
+2026-02-15T00:02:18+00:00   ... 50/200 requests
+2026-02-15T00:02:54+00:00   ... 100/200 requests
+2026-02-15T00:03:31+00:00   ... 150/200 requests
+2026-02-15T00:04:07+00:00   ... 200/200 requests
+2026-02-15T00:04:07+00:00   Completed: 200 requests in 146051ms (~1 req/s)
+2026-02-15T00:04:07+00:00   Failures: 0
+2026-02-15T00:04:07+00:00 [PASS] H1_sequential_burst (failures=0/200)
+2026-02-15T00:04:07+00:00 H2: Connection churn (100 cycles)...
+2026-02-15T00:05:21+00:00 [PASS] H2_connection_churn (failures=0/100)
+2026-02-15T00:05:21+00:00   Final FD count: 23 (delta: -2)
+2026-02-15T00:05:21+00:00 [PASS] H3_fd_leak_check (delta=-2 < 10)
+2026-02-15T00:05:21+00:00   RSS: 48936 KB
+2026-02-15T00:05:21+00:00 [PASS] H4_memory_check (rss=48936KB)
+2026-02-15T00:05:21+00:00
+2026-02-15T00:05:21+00:00 ========================================
+2026-02-15T00:05:21+00:00 SUITE I: Security Adversarial Tests
+2026-02-15T00:05:21+00:00 ========================================
+2026-02-15T00:05:21+00:00 I1: Testing PID disappears auth bypass...
+2026-02-15T00:05:22+00:00 [FAIL] I1_pid_disappears_auth_VULNERABLE (CRITICAL SECURITY BUG!)
+2026-02-15T00:05:22+00:00   !!! PRIVILEGE ESCALATION DETECTED !!!
+2026-02-15T00:05:22+00:00 I2: Testing comprehensive tier enforcement...
+2026-02-15T00:05:23+00:00 [PASS] I2_SystemReboot_denied
+2026-02-15T00:05:23+00:00 [PASS] I2_SystemShutdown_denied
+2026-02-15T00:05:24+00:00 [PASS] I2_HostnameRandomizeNow_denied
+2026-02-15T00:05:25+00:00 [PASS] I2_LoggingConfigSet_denied
+2026-02-15T00:05:25+00:00 [PASS] I2_tier_enforcement_comprehensive
+2026-02-15T00:05:25+00:00 I3: Testing protocol abuse DOS resistance...
+2026-02-15T00:05:25+00:00 [PASS] I3_protocol_abuse_dos_resistant (service still active)
+2026-02-15T00:05:25+00:00 [SKIP] Suite J (requires --dangerous flag)
+2026-02-15T00:05:25+00:00
+2026-02-15T00:05:25+00:00 ========================================
+2026-02-15T00:05:25+00:00 DIAGNOSTIC RUN COMPLETE
+2026-02-15T00:05:25+00:00 ========================================
+2026-02-15T00:05:25+00:00 Results Summary:
+2026-02-15T00:05:25+00:00   Total Tests: 368
+2026-02-15T00:05:25+00:00   Passed:      349
+2026-02-15T00:05:25+00:00   Failed:      11
+2026-02-15T00:05:25+00:00   Skipped:     8
+2026-02-15T00:05:25+00:00   Pass Rate:   94%
+2026-02-15T00:05:25+00:00
+2026-02-15T00:05:25+00:00 Artifacts:
+2026-02-15T00:05:25+00:00   Run Directory: /var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118
+2026-02-15T00:05:25+00:00   Diagnostic Log: /var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118/diag.log
+2026-02-15T00:05:25+00:00   Summary JSON: /var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118/summary.json
+2026-02-15T00:05:25+00:00   System Info: /var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118/sysinfo.txt
+2026-02-15T00:05:25+00:00
+{
+  "run_id": "20260215-000118",
+  "timestamp": "20260215-000118",
+  "totals": {
+    "total": 368,
+    "passed": 349,
+    "failed": 11,
+    "skipped": 8,
+    "pass_rate": 94.84
+  }
+}
+2026-02-15T00:05:25+00:00 STATUS: FAILURES DETECTED (11 failed tests)
+2026-02-15T00:05:25+00:00 Review: /var/tmp/rustyjack-tests/20260214-235815/deep_daemon/20260215-000118/diag.log
+2026-02-15T00:05:25+00:00 Cleaning up test users...
+2026-02-15T00:05:26+00:00   - Removed user: rjdiag_ro
+2026-02-15T00:05:26+00:00   - Removed user: rjdiag_op
+2026-02-15T00:05:26+00:00   - Removed user: rjdiag_admin
+[DONE]  2026-02-15T00:05:26+00:00 :: Daemon Deep Diagnostics (fail rc=1)
+================================================================
+[SUITE] Installers
+[START] 2026-02-15T00:05:26+00:00 :: /root/Rustyjack/scripts/rj_test_installers.sh
+2026-02-15T00:05:26+00:00 Suite: installers
+2026-02-15T00:05:26+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/installers
+2026-02-15T00:05:26+00:00 [PASS] installer_executable (/root/Rustyjack/install_rustyjack.sh)
+2026-02-15T00:05:26+00:00 [CMD] syntax_install_rustyjack.sh :: bash -n /root/Rustyjack/install_rustyjack.sh (output: /var/tmp/rustyjack-tests/20260214-235815/installers/artifacts/syntax_install_rustyjack_sh.log)
+2026-02-15T00:05:26+00:00 [PASS] syntax_install_rustyjack.sh
+2026-02-15T00:05:27+00:00 [WARN] Missing required tool: shellcheck (shellcheck (lint))
+2026-02-15T00:05:27+00:00 [SKIP] Skipping tests that require shellcheck
+2026-02-15T00:05:27+00:00 [SKIP] shellcheck not available
+2026-02-15T00:05:27+00:00 [PASS] has_shebang (1:#!/usr/bin/env bash)
+2026-02-15T00:05:27+00:00 [PASS] has_set_euo (11:set -euo pipefail)
+2026-02-15T00:05:27+00:00 [PASS] purge_network_manager (208:  sudo apt-get -y purge network-manager || true)
+2026-02-15T00:05:27+00:00 [PASS] disable_conflicting_services (216:disable_conflicting_services() {)
+2026-02-15T00:05:27+00:00 [PASS] claim_resolv_conf (144:claim_resolv_conf() {)
+2026-02-15T00:05:27+00:00 [PASS] post_install_checks (1106:step "Running post install checks...")
+2026-02-15T00:05:27+00:00 [PASS] log_dir_chown (786:sudo chown -R rustyjack-ui:rustyjack "$RUNTIME_ROOT/logs" 2>/dev/null || true)
+2026-02-15T00:05:27+00:00 [PASS] socket_unit (567:sudo systemctl stop rustyjackd.socket 2>/dev/null || true)
+2026-02-15T00:05:27+00:00 [PASS] ui_service (302:  journalctl -u rustyjack-ui.service -n 120 --no-pager 2>/dev/null || true)
+2026-02-15T00:05:27+00:00 [PASS] installer_executable (/root/Rustyjack/install_rustyjack_dev.sh)
+2026-02-15T00:05:27+00:00 [CMD] syntax_install_rustyjack_dev.sh :: bash -n /root/Rustyjack/install_rustyjack_dev.sh (output: /var/tmp/rustyjack-tests/20260214-235815/installers/artifacts/syntax_install_rustyjack_dev_sh.log)
+2026-02-15T00:05:27+00:00 [PASS] syntax_install_rustyjack_dev.sh
+2026-02-15T00:05:27+00:00 [SKIP] Skipping tests that require shellcheck (install previously declined in this run)
+2026-02-15T00:05:27+00:00 [SKIP] shellcheck not available
+2026-02-15T00:05:27+00:00 [PASS] has_shebang (1:#!/usr/bin/env bash)
+2026-02-15T00:05:27+00:00 [PASS] has_set_euo (10:set -euo pipefail)
+2026-02-15T00:05:27+00:00 [PASS] purge_network_manager (427:  sudo apt-get -y purge network-manager || true)
+2026-02-15T00:05:27+00:00 [PASS] disable_conflicting_services (435:disable_conflicting_services() {)
+2026-02-15T00:05:27+00:00 [PASS] claim_resolv_conf (228:claim_resolv_conf() {)
+2026-02-15T00:05:28+00:00 [PASS] post_install_checks (1050:step "Running post install checks...")
+2026-02-15T00:05:28+00:00 [PASS] log_dir_chown (786:sudo chown -R rustyjack-ui:rustyjack "$RUNTIME_ROOT/logs" 2>/dev/null || true)
+2026-02-15T00:05:28+00:00 [PASS] socket_unit (566:sudo systemctl stop rustyjackd.socket 2>/dev/null || true)
+2026-02-15T00:05:28+00:00 [PASS] ui_service (189:  journalctl -u rustyjack-ui.service -n 120 --no-pager 2>/dev/null || true)
+2026-02-15T00:05:28+00:00 [PASS] installer_executable (/root/Rustyjack/install_rustyjack_prebuilt.sh)
+2026-02-15T00:05:28+00:00 [CMD] syntax_install_rustyjack_prebuilt.sh :: bash -n /root/Rustyjack/install_rustyjack_prebuilt.sh (output: /var/tmp/rustyjack-tests/20260214-235815/installers/artifacts/syntax_install_rustyjack_prebuilt_sh.log)
+2026-02-15T00:05:28+00:00 [PASS] syntax_install_rustyjack_prebuilt.sh
+2026-02-15T00:05:28+00:00 [SKIP] Skipping tests that require shellcheck (install previously declined in this run)
+2026-02-15T00:05:28+00:00 [SKIP] shellcheck not available
+2026-02-15T00:05:28+00:00 [PASS] has_shebang (1:#!/usr/bin/env bash)
+2026-02-15T00:05:28+00:00 [PASS] has_set_euo (11:set -euo pipefail)
+2026-02-15T00:05:28+00:00 [PASS] purge_network_manager (396:  sudo apt-get -y purge network-manager || true)
+2026-02-15T00:05:28+00:00 [PASS] disable_conflicting_services (404:disable_conflicting_services() {)
+2026-02-15T00:05:28+00:00 [PASS] claim_resolv_conf (367:claim_resolv_conf() {)
+2026-02-15T00:05:28+00:00 [PASS] post_install_checks (1989:step "Running post install checks...")
+2026-02-15T00:05:28+00:00 [PASS] log_dir_chown (1554:sudo chown -R rustyjack-ui:rustyjack "$RUNTIME_ROOT/logs" 2>/dev/null || true)
+2026-02-15T00:05:28+00:00 [PASS] socket_unit (1348:sudo systemctl stop rustyjackd.socket 2>/dev/null || true)
+2026-02-15T00:05:28+00:00 [PASS] ui_service (328:  journalctl -u rustyjack-ui.service -n 120 --no-pager 2>/dev/null || true)
+2026-02-15T00:05:28+00:00 [PASS] installer_executable (/root/Rustyjack/install_rustyjack_usb.sh)
+2026-02-15T00:05:28+00:00 [CMD] syntax_install_rustyjack_usb.sh :: bash -n /root/Rustyjack/install_rustyjack_usb.sh (output: /var/tmp/rustyjack-tests/20260214-235815/installers/artifacts/syntax_install_rustyjack_usb_sh.log)
+2026-02-15T00:05:28+00:00 [PASS] syntax_install_rustyjack_usb.sh
+2026-02-15T00:05:29+00:00 [SKIP] Skipping tests that require shellcheck (install previously declined in this run)
+2026-02-15T00:05:29+00:00 [SKIP] shellcheck not available
+2026-02-15T00:05:29+00:00 [PASS] has_shebang (1:#!/usr/bin/env bash)
+2026-02-15T00:05:29+00:00 [PASS] has_set_euo (20:set -euo pipefail)
+2026-02-15T00:05:29+00:00 [PASS] purge_network_manager (288:  sudo apt-get -y purge network-manager >/dev/null 2>&1 || true)
+2026-02-15T00:05:29+00:00 [PASS] disable_conflicting_services (296:disable_conflicting_services() {)
+2026-02-15T00:05:29+00:00 [PASS] claim_resolv_conf (175:claim_resolv_conf() {)
+2026-02-15T00:05:29+00:00 [PASS] post_install_checks (1114:step "Running post install checks...")
+2026-02-15T00:05:29+00:00 [PASS] log_dir_chown (825:sudo chown -R rustyjack-ui:rustyjack "$RUNTIME_ROOT/logs" 2>/dev/null || true)
+2026-02-15T00:05:29+00:00 [PASS] socket_unit (683:sudo systemctl stop rustyjackd.socket 2>/dev/null || true)
+2026-02-15T00:05:29+00:00 [PASS] ui_service (245:  journalctl -u rustyjack-ui.service -n 120 --no-pager 2>/dev/null || true)
+2026-02-15T00:05:29+00:00 [PASS] usb_lsblk (347:  if cmd lsblk; then)
+2026-02-15T00:05:29+00:00 [PASS] usb_lsusb (354:  if cmd lsusb; then)
+2026-02-15T00:05:29+00:00 [PASS] usb_dmesg (366:  if cmd dmesg; then)
+2026-02-15T00:05:29+00:00 [FAIL] Isolation check failed: installers_readonly (route changed)
+2026-02-15T00:05:29+00:00 Capturing installer test failure context...
+2026-02-15T00:05:29+00:00 [DIFF] /var/tmp/rustyjack-tests/20260214-235815/installers/artifacts/net_installers_readonly_route.diff
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:05:29+00:00 :: Installers (fail rc=2)
+================================================================
+[SUITE] USB Mount
+[START] 2026-02-15T00:05:30+00:00 :: /root/Rustyjack/scripts/rj_test_usb.sh
+2026-02-15T00:05:30+00:00 Suite: usb_mount
+2026-02-15T00:05:30+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/usb_mount
+2026-02-15T00:05:30+00:00 [PASS] proc_mounts_readable
+2026-02-15T00:05:30+00:00 [PASS] sys_class_block_available
+2026-02-15T00:05:30+00:00 Using USB device: /dev/sda1
+2026-02-15T00:05:30+00:00 Base USB disk: /dev/sda
+2026-02-15T00:05:30+00:00 [CMD] usb_detect_preflight :: rustyjack system fde-prepare --device /dev/sda --output json (output: /var/tmp/rustyjack-tests/20260214-235815/usb_mount/artifacts/usb_detect_preflight.json)
+2026-02-15T00:05:30+00:00 [PASS] usb_detect_preflight
+2026-02-15T00:05:31+00:00 [FAIL] usb_detectability_preflight (/dev/sda)
+2026-02-15T00:05:31+00:00 Capturing USB failure context...
+2026-02-15T00:05:31+00:00 [CMD] usb_mount_read_write :: rustyjack system usb-mount --device /dev/sda1 --mode read-write --preferred-name rjtest_usb_mount --output json (output: /var/tmp/rustyjack-tests/20260214-235815/usb_mount/artifacts/usb_mount_rw.json)
+2026-02-15T00:05:31+00:00 [FAIL] usb_mount_read_write (rc=1)
+2026-02-15T00:05:31+00:00 [TAIL] usb_mount_read_write output (deduped)
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:05:31+00:00 :: USB Mount (fail rc=2)
+================================================================
+[SUITE] UI Layout/Display
+[START] 2026-02-15T00:05:31+00:00 :: /root/Rustyjack/scripts/rj_test_ui_layout.sh
+Unknown arg: --ui
+Usage: rj_test_ui_layout.sh [--outroot DIR]
+
+Runs dynamic display/layout tests for rustyjack-ui:
+- runtime metrics across resolutions
+- wrap/ellipsis/pagination bounds
+- display config persistence/cache tests
+- display menu manual rerun action coverage
+[DONE]  2026-02-15T00:05:31+00:00 :: UI Layout/Display (fail rc=2)
+================================================================
+[SUITE] Theme/Palette
+[START] 2026-02-15T00:05:31+00:00 :: /root/Rustyjack/scripts/rj_test_theme.sh
+2026-02-15T00:05:32+00:00 Suite: theme
+2026-02-15T00:05:32+00:00 Output: /var/tmp/rustyjack-tests/20260214-235815/theme
+2026-02-15T00:05:32+00:00 [PASS] python3_available
+2026-02-15T00:05:32+00:00 [PASS] systemctl_available
+2026-02-15T00:05:32+00:00 [PASS] gui_conf_present (/var/lib/rustyjack/gui_conf.json)
+2026-02-15T00:05:32+00:00 [PASS] theme_mutate_helper_present (129:    pub fn mutate_theme_and_persist<F>()
+2026-02-15T00:05:32+00:00 [PASS] theme_normalize_present (276:    pub fn normalize(&mut self) -> bool {)
+2026-02-15T00:05:32+00:00 [PASS] theme_preset_present (318:pub enum ThemePreset {)
+2026-02-15T00:05:32+00:00 [PASS] theme_contrast_present (290:    pub fn contrast_warnings(&self, min_ratio: f32) -> Vec<String> {)
+2026-02-15T00:05:32+00:00 [PASS] theme_atomic_save_temp (102:        tmp.set_file_name(format!(".{filename}.tmp.{}.{}", process::id(), now_ns));)
+2026-02-15T00:05:32+00:00 [PASS] theme_atomic_save_sync (110:        file.sync_all())
+2026-02-15T00:05:32+00:00 [PASS] theme_atomic_save_rename (114:        fs::rename(&tmp, path).with_context(|| {)
+2026-02-15T00:05:32+00:00 [PASS] theme_dead_field_removed_gamepad
+2026-02-15T00:05:32+00:00 [PASS] theme_color_roles_centralized (278:    pub const ALL: [Self; 6] = [)
+2026-02-15T00:05:32+00:00 [PASS] theme_colors_menu_data_driven (645:    let mut entries: Vec<MenuEntry> = ColorTarget::ALL)
+2026-02-15T00:05:32+00:00 [PASS] theme_apply_preset_menu_entry (649:    entries.push(MenuEntry::new("Apply Preset", MenuAction::ApplyThemePreset));)
+2026-02-15T00:05:32+00:00 [PASS] theme_single_mutate_flow (99:    fn mutate_theme_config_and_refresh<F>(&mut self, mutate: F) -> ThemeUpdateStatus)
+2026-02-15T00:05:32+00:00 [PASS] theme_feedback_flow (126:    fn show_theme_update_result()
+2026-02-15T00:05:32+00:00 [PASS] theme_preset_flow (82:    pub(crate) fn apply_theme_preset(&mut self) -> Result<()> {)
+2026-02-15T00:05:32+00:00 [PASS] theme_contrast_warning_text (142:            lines.push("Contrast warning".to_string());)
+2026-02-15T00:05:32+00:00 [PASS] theme_startup_clear_uses_palette (757:        .into_styled(PrimitiveStyle::with_fill(palette.background)))
+2026-02-15T00:05:32+00:00 [PASS] theme_splash_clear_uses_palette (1283:        let style = PrimitiveStyle::with_fill(self.palette.background);)
+2026-02-15T00:05:32+00:00 [PASS] theme_splash_text_uses_palette (1019:            .text_color(self.palette.text))
+2026-02-15T00:05:32+00:00 [PASS] theme_splash_hardcoded_purple_removed
+2026-02-15T00:05:32+00:00 [PASS] theme_action_map_updated (18:| ApplyThemePreset | `App::apply_theme_preset` | Local | N/A |)
+2026-02-15T00:05:33+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T00:05:33+00:00 [SKIP] Theme unit tests skipped (cargo unavailable)
+2026-02-15T00:05:33+00:00 [PASS] theme_role_present (background present: #000000)
+2026-02-15T00:05:33+00:00 [PASS] theme_role_present (border present: #8800AA)
+2026-02-15T00:05:33+00:00 [PASS] theme_role_present (text present: #AA00FF)
+2026-02-15T00:05:33+00:00 [PASS] theme_role_present (selected_text present: #CC44FF)
+2026-02-15T00:05:34+00:00 [PASS] theme_role_present (selected_background present: #330055)
+2026-02-15T00:05:34+00:00 [PASS] theme_role_present (toolbar present: #141414)
+2026-02-15T00:05:40+00:00 [CMD] theme_ui_restart_background :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_background.log)
+2026-02-15T00:05:41+00:00 [PASS] theme_ui_restart_background
+2026-02-15T00:05:45+00:00 [PASS] theme_ui_restart_background_active
+2026-02-15T00:05:51+00:00 [FAIL] ui_immediate_persist_background (background expected=#0000FF actual=#000000)
+2026-02-15T00:05:51+00:00 Capturing theme failure context...
+2026-02-15T00:05:52+00:00 [TAIL] rustyjack-ui.service.fail.log
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+2026-02-15T00:05:52+00:00 [TAIL] rustyjackd.service.fail.log
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+2026-02-15T00:05:52+00:00 [FAIL] ui_immediate_file_update_background (mtime unchanged: 1771113663)
+2026-02-15T00:05:52+00:00 [CMD] theme_ui_restart_border :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_border.log)
+2026-02-15T00:05:52+00:00 [PASS] theme_ui_restart_border
+2026-02-15T00:05:56+00:00 [PASS] theme_ui_restart_border_active
+2026-02-15T00:06:03+00:00 [FAIL] ui_immediate_persist_border (border expected=#FF0000 actual=#8800AA)
+2026-02-15T00:06:03+00:00 [FAIL] ui_immediate_file_update_border (mtime unchanged: 1771113663)
+2026-02-15T00:06:03+00:00 [CMD] theme_ui_restart_text :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_text.log)
+2026-02-15T00:06:03+00:00 [PASS] theme_ui_restart_text
+2026-02-15T00:06:07+00:00 [PASS] theme_ui_restart_text_active
+2026-02-15T00:06:14+00:00 [FAIL] ui_immediate_persist_text (text expected=#000000 actual=#AA00FF)
+2026-02-15T00:06:14+00:00 [FAIL] ui_immediate_file_update_text (mtime unchanged: 1771113663)
+2026-02-15T00:06:14+00:00 [CMD] theme_ui_restart_selected_text :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_selected_text.log)
+2026-02-15T00:06:14+00:00 [PASS] theme_ui_restart_selected_text
+2026-02-15T00:06:18+00:00 [PASS] theme_ui_restart_selected_text_active
+2026-02-15T00:06:25+00:00 [FAIL] ui_immediate_persist_selected_text (selected_text expected=#FFFFFF actual=#CC44FF)
+2026-02-15T00:06:25+00:00 [FAIL] ui_immediate_file_update_selected_text (mtime unchanged: 1771113663)
+2026-02-15T00:06:25+00:00 [CMD] theme_ui_restart_selected_background :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_selected_background.log)
+2026-02-15T00:06:25+00:00 [PASS] theme_ui_restart_selected_background
+2026-02-15T00:06:29+00:00 [PASS] theme_ui_restart_selected_background_active
+2026-02-15T00:06:37+00:00 [FAIL] ui_immediate_persist_selected_background (selected_background expected=#AA00FF actual=#330055)
+2026-02-15T00:06:37+00:00 [FAIL] ui_immediate_file_update_selected_background (mtime unchanged: 1771113663)
+2026-02-15T00:06:37+00:00 [CMD] theme_ui_restart_toolbar :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_toolbar.log)
+2026-02-15T00:06:37+00:00 [PASS] theme_ui_restart_toolbar
+2026-02-15T00:06:42+00:00 [PASS] theme_ui_restart_toolbar_active
+2026-02-15T00:06:50+00:00 [FAIL] ui_immediate_persist_toolbar (toolbar expected=#FFBF00 actual=#141414)
+2026-02-15T00:06:50+00:00 [FAIL] ui_immediate_file_update_toolbar (mtime unchanged: 1771113663)
+2026-02-15T00:06:50+00:00 [CMD] theme_ui_restart_verify_persistence :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_verify_persistence.log)
+2026-02-15T00:06:51+00:00 [PASS] theme_ui_restart_verify_persistence
+2026-02-15T00:06:55+00:00 [PASS] theme_ui_restart_verify_persistence_active
+2026-02-15T00:06:55+00:00 [FAIL] theme_restart_persist (background expected=#0000FF actual=#000000)
+2026-02-15T00:06:55+00:00 [FAIL] theme_restart_persist (border expected=#FF0000 actual=#8800AA)
+2026-02-15T00:06:56+00:00 [FAIL] theme_restart_persist (text expected=#000000 actual=#AA00FF)
+2026-02-15T00:06:56+00:00 [FAIL] theme_restart_persist (selected_text expected=#FFFFFF actual=#CC44FF)
+2026-02-15T00:06:56+00:00 [FAIL] theme_restart_persist (selected_background expected=#AA00FF actual=#330055)
+2026-02-15T00:06:56+00:00 [FAIL] theme_restart_persist (toolbar expected=#FFBF00 actual=#141414)
+2026-02-15T00:06:56+00:00 [CMD] theme_ui_restart_apply_preset :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_ui_restart_apply_preset.log)
+2026-02-15T00:06:56+00:00 [PASS] theme_ui_restart_apply_preset
+2026-02-15T00:07:01+00:00 [PASS] theme_ui_restart_apply_preset_active
+2026-02-15T00:07:08+00:00 [PASS] ui_apply_preset_high_contrast (background=#000000)
+2026-02-15T00:07:08+00:00 [FAIL] ui_apply_preset_high_contrast (border expected=#FFFFFF actual=#8800AA)
+2026-02-15T00:07:09+00:00 [FAIL] ui_apply_preset_high_contrast (text expected=#FFFFFF actual=#AA00FF)
+2026-02-15T00:07:09+00:00 [FAIL] ui_apply_preset_high_contrast (selected_text expected=#000000 actual=#CC44FF)
+2026-02-15T00:07:09+00:00 [FAIL] ui_apply_preset_high_contrast (selected_background expected=#FFFF00 actual=#330055)
+2026-02-15T00:07:09+00:00 [FAIL] ui_apply_preset_high_contrast (toolbar expected=#000000 actual=#141414)
+2026-02-15T00:07:09+00:00 [CMD] theme_write_invalid_config :: write_invalid_theme_config (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_write_invalid_config.log)
+2026-02-15T00:07:10+00:00 [PASS] theme_write_invalid_config
+2026-02-15T00:07:10+00:00 [CMD] theme_restart_repair_invalid_config :: systemctl restart rustyjack-ui.service (output: /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/theme_restart_repair_invalid_config.log)
+2026-02-15T00:07:10+00:00 [PASS] theme_restart_repair_invalid_config
+2026-02-15T00:07:14+00:00 [PASS] theme_restart_repair_invalid_config_active
+2026-02-15T00:07:15+00:00 [PASS] theme_repair_rewrites_config (mtime 1771113663 -> 1771114030)
+2026-02-15T00:07:16+00:00 [PASS] theme_invalid_repair (background=#000000)
+2026-02-15T00:07:16+00:00 [PASS] theme_invalid_repair (border=#8800AA)
+2026-02-15T00:07:16+00:00 [PASS] theme_invalid_repair (text=#AA00FF)
+2026-02-15T00:07:16+00:00 [PASS] theme_invalid_repair (selected_text=#ABCDEF)
+2026-02-15T00:07:16+00:00 [PASS] theme_invalid_repair (selected_background=#330055)
+2026-02-15T00:07:17+00:00 [PASS] theme_invalid_repair (toolbar=#0F0F0F)
+2026-02-15T00:07:17+00:00 [PASS] theme_removed_dead_field (gamepad absent)
+2026-02-15T00:07:17+00:00 [PASS] theme_removed_dead_field (gamepad_fill absent)
+2026-02-15T00:07:17+00:00 [FAIL] Isolation check failed: theme_readonly (route changed)
+2026-02-15T00:07:17+00:00 [DIFF] /var/tmp/rustyjack-tests/20260214-235815/theme/artifacts/net_theme_readonly_route.diff
+awk: unsupported program:
+    NR==1 { prev=$0; count=1; next }
+    $0==prev { count++; next }
+    {
+      if (count > 1) {
+        printf "%s [repeated %dx]\n", prev, count
+      } else {
+        print prev
+      }
+      prev=$0
+      count=1
+    }
+    END {
+      if (NR>=1) {
+        if (count > 1) {
+          printf "%s [repeated %dx]\n", prev, count
+        } else {
+          print prev
+        }
+      }
+    }
+
+[DONE]  2026-02-15T00:07:20+00:00 :: Theme/Palette (fail rc=2)
+================================================================
+Suite summary:
+  [FAIL] Discord Webhook (rc=1)
+  [FAIL] Wireless (rc=2)
+  [FAIL] Ethernet (rc=2)
+  [FAIL] Interface Selection (rc=2)
+  [FAIL] Encryption (rc=2)
+  [FAIL] Loot (rc=2)
+  [PASS] MAC Randomization
+  [FAIL] Daemon/IPC (rc=2)
+  [FAIL] Daemon Deep Diagnostics (rc=1)
+  [FAIL] Installers (rc=2)
+  [FAIL] USB Mount (rc=2)
+  [FAIL] UI Layout/Display (rc=2)
+  [FAIL] Theme/Palette (rc=2)
+
+Detailed summary:
+Suite                    Status RC  Duration Tests Pass  Fail  Skip
+-----                    ------ --  -------- ----- ----  ----  ----
+Discord Webhook          FAIL   1   3s       3     4     3     0
+Wireless                 FAIL   2   5s       -     -     -     -
+Ethernet                 FAIL   2   2s       -     -     -     -
+Interface Selection      FAIL   2   4s       -     -     -     -
+Encryption               FAIL   2   26s      -     -     -     -
+Loot                     FAIL   2   3s       -     -     -     -
+MAC Randomization        PASS   0   1s       1     1     0     8
+Daemon/IPC               FAIL   2   8s       -     -     -     -
+Daemon Deep Diagnostics  FAIL   1   4m08s    -     -     -     -
+Installers               FAIL   2   3s       -     -     -     -
+USB Mount                FAIL   2   1s       -     -     -     -
+UI Layout/Display        FAIL   2   0s       -     -     -     -
+Theme/Palette            FAIL   2   1m49s    -     -     -     -
+
+Top failure snippets:
+  [Discord Webhook]
+    [FAIL] webhook_file_missing (/var/lib/rustyjack/discord_webhook.txt)
+  [Wireless]
+    [FAIL] wifi_scan_wlan0 (rc=101)
+  [Ethernet]
+    [FAIL] eth_discover_eth0 (rc=101)
+  [Interface Selection]
+    [FAIL] set_active_eth0 (rc=0)
+  [Encryption]
+    [FAIL] Isolation check failed: encryption_readonly (route changed)
+  [Loot]
+    [FAIL] Isolation check failed: loot_readonly (route changed)
+  [Daemon/IPC]
+    [FAIL] rpc_ok_A7 (expected Ok, got Err) err=operations are restricted to the UI runtime
+  [Installers]
+    [FAIL] Isolation check failed: installers_readonly (route changed)
+  [USB Mount]
+    [FAIL] usb_detectability_preflight (/dev/sda)
+  [Theme/Palette]
+    [FAIL] ui_immediate_persist_background (background expected=#0000FF actual=#000000)
+
+Artifacts:
+  - Discord Webhook report: /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/report.md
+    Discord Webhook log:    /var/tmp/rustyjack-tests/20260214-235815/discord_webhook/run.log
+  - Wireless report: /var/tmp/rustyjack-tests/20260214-235815/wireless/report.md
+    Wireless log:    /var/tmp/rustyjack-tests/20260214-235815/wireless/run.log
+  - Ethernet report: /var/tmp/rustyjack-tests/20260214-235815/ethernet/report.md
+    Ethernet log:    /var/tmp/rustyjack-tests/20260214-235815/ethernet/run.log
+  - Interface Selection report: /var/tmp/rustyjack-tests/20260214-235815/interface_selection/report.md
+    Interface Selection log:    /var/tmp/rustyjack-tests/20260214-235815/interface_selection/run.log
+  - Encryption report: /var/tmp/rustyjack-tests/20260214-235815/encryption/report.md
+    Encryption log:    /var/tmp/rustyjack-tests/20260214-235815/encryption/run.log
+  - Loot report: /var/tmp/rustyjack-tests/20260214-235815/loot/report.md
+    Loot log:    /var/tmp/rustyjack-tests/20260214-235815/loot/run.log
+  - MAC Randomization report: /var/tmp/rustyjack-tests/20260214-235815/mac_randomization/report.md
+    MAC Randomization log:    /var/tmp/rustyjack-tests/20260214-235815/mac_randomization/run.log
+  - Daemon/IPC report: /var/tmp/rustyjack-tests/20260214-235815/daemon/report.md
+    Daemon/IPC log:    /var/tmp/rustyjack-tests/20260214-235815/daemon/run.log
+  - Daemon Deep Diagnostics report: /var/tmp/rustyjack-tests/20260214-235815/daemon_deep/report.md
+    Daemon Deep Diagnostics log:    /var/tmp/rustyjack-tests/20260214-235815/daemon_deep/run.log
+  - Installers report: /var/tmp/rustyjack-tests/20260214-235815/installers/report.md
+    Installers log:    /var/tmp/rustyjack-tests/20260214-235815/installers/run.log
+  - USB Mount report: /var/tmp/rustyjack-tests/20260214-235815/usb_mount/report.md
+    USB Mount log:    /var/tmp/rustyjack-tests/20260214-235815/usb_mount/run.log
+  - UI Layout/Display report: /var/tmp/rustyjack-tests/20260214-235815/ui_layout/report.md
+    UI Layout/Display log:    /var/tmp/rustyjack-tests/20260214-235815/ui_layout/run.log
+  - Theme/Palette report: /var/tmp/rustyjack-tests/20260214-235815/theme/report.md
+    Theme/Palette log:    /var/tmp/rustyjack-tests/20260214-235815/theme/run.log
+Suites run: 13
+Suites passed: 1
+Suites failed: 12
+Tests total: 4
+Tests passed: 5
+Tests failed: 3
+Tests skipped: 8
+Results root: /var/tmp/rustyjack-tests/20260214-235815
+Consolidated summary: /var/tmp/rustyjack-tests/20260214-235815/run_summary.md
+Consolidated JSON: /var/tmp/rustyjack-tests/20260214-235815/run_summary.json
+[INFO] Discord webhook notifications disabled.

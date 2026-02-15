@@ -1,0 +1,577 @@
+You are Claude Opus 4.6 running as an autonomous coding agent in a terminal with full repo access.
+
+MISSION
+Implement ALL remaining code/config/test changes from the analysis documents in:
+  ./patched_analysis_docs/
+A prior session completed 13 tasks (T1-T13). Read ./patched_analysis_docs/PROGRESS.md for what was already done. This session handles EVERYTHING ELSE. Do the entire batch in this one continuous run. Do NOT ask me for another prompt.
+
+ABSOLUTE CONSTRAINTS (MUST FOLLOW)
+1) Read and obey ./CLAUDE.md and ./AGENTS.md as binding constraints.
+   - No NEW third-party system binaries. Pure Rust preferred. Existing project patterns.
+   - Follow existing CI guardrails (no new Command::new, no new unwrap/expect, no blocking in async, no emojis).
+2) Avoid overengineering: implement what the analysis docs require. Keep diffs small and targeted.
+3) No file deletions or history rewrites. No force push. No destructive operations outside the repo.
+4) Preserve style, structure, and public interfaces unless the docs call for change.
+5) Prefer adding tests over adding complexity.
+6) This codebase targets Linux (Raspberry Pi). Many crates use Linux-only APIs (netlink, zbus). Full workspace `cargo check` will not work on Windows. Use per-crate checks for crates you modify: `cargo check -p <crate>`. Do NOT waste time trying to make `cargo check --workspace` pass on Windows.
+
+WORKING MEMORY / PROGRESS FILE (REQUIRED)
+Update the existing file:
+  ./patched_analysis_docs/PROGRESS.md
+Append a new "## Phase 2 Session" section. Use the same ledger format (ID | Source | Finding | Target Files | Risk | Status | Evidence). Number new tasks starting at T14. Update frequently after each milestone.
+
+────────────────────────────────────────────────────
+TASK GROUPS — IMPLEMENT IN THIS ORDER
+────────────────────────────────────────────────────
+
+All tasks below are derived from the 18 analysis documents. They are grouped by theme and ordered by criticality. Each group lists the source area/finding IDs, the specific files and line numbers to change, and the minimal fix required.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP A — SYSTEMD SERVICE HARDENING (Area 1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  services/rustyjackd.service
+  services/rustyjack-ui.service
+
+A1 [Area1-F7, CRITICAL]: UI service grants /dev/mem access — privilege escalation path.
+   File: services/rustyjack-ui.service line 68: `DeviceAllow=/dev/mem r`
+   FIX: Remove this line entirely. The ST7735 LCD uses SPI (/dev/spidev*), not /dev/mem.
+
+A2 [Area1-F2, CRITICAL]: Conflicting SystemCallFilter in daemon service.
+   File: services/rustyjackd.service lines 80-81: allows @mount but denies @privileged (which includes mount).
+   FIX: Remove `@mount` from the allow-list on line 80 since mount operations go through netlink/nf_tables, not mount(2).
+
+A3 [Area1-F9, HIGH]: Daemon has writable /usr/local/bin — allows self-modification.
+   File: services/rustyjackd.service line 55: `ReadWritePaths=... /usr/local/bin`
+   FIX: Remove `/usr/local/bin` from ReadWritePaths. The updater should use a staging directory under /var/lib/rustyjack/ instead (the updater already stages to /var/lib/rustyjack/updates/).
+
+A4 [Area1-F6, HIGH]: DeviceAllow lines without explicit DevicePolicy.
+   File: services/rustyjack-ui.service — has DeviceAllow but no DevicePolicy=closed.
+   FIX: Add `DevicePolicy=closed` before the DeviceAllow lines (around line 65).
+
+A5 [Area1-F14, HIGH]: Daemon state file /run/rustyjack/state.json is world-readable.
+   File: crates/rustyjack-daemon/src/state.rs — wherever state.json is written.
+   FIX: Set file permissions to 0o600 on the state file after writing. Use `std::os::unix::fs::PermissionsExt`.
+
+A6 [Area1-F8, MEDIUM]: CAP_SYS_ADMIN granted too broadly.
+   File: services/rustyjackd.service line 48-50.
+   FIX: Add a comment documenting why CAP_SYS_ADMIN is required (nf_tables netlink operations). This is a known limitation — removing it breaks netfilter. Document, don't change.
+
+A7 [Area1-F1, HIGH]: install_rustyjack.sh uses $SERVICE variable that may be undefined under set -u.
+   File: install_rustyjack.sh around line 970.
+   FIX: Verify $SERVICE is assigned before use. If it's defined earlier in the script, add a guard: `SERVICE="${SERVICE:-/etc/systemd/system/rustyjack-ui.service}"` before first use, or ensure the assignment block always runs.
+
+A8 [Area1-F12, MEDIUM]: Boot config editing (config.txt) is not idempotent.
+   File: install_rustyjack.sh — wherever /boot/config.txt or /boot/firmware/config.txt is modified.
+   FIX: Before appending SPI/GPIO overlay lines, grep for existing entries. Only append if not already present. Pattern: `grep -qF "dtparam=spi=on" "$CONFIG" || echo "dtparam=spi=on" >> "$CONFIG"`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP B — FIREWALL / NAT SAFETY (Area 7)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-netlink/src/nf_tables.rs
+  crates/rustyjack-wireless/src/hotspot.rs
+  crates/rustyjack-wireless/src/evil_twin.rs
+
+B1 [Area7-F1/F2, CRITICAL]: flush_table() and setup_captive_portal flush ALL rules in nat/filter tables, destroying non-owned rules.
+   File: crates/rustyjack-netlink/src/nf_tables.rs — flush_table (line 366), flush_chain (line 343).
+   FIX: Ensure flush operations only target chains/rules owned by RustyJack. The table and chain names should be prefixed (e.g., "rustyjack_nat", "rustyjack_filter"). If the code already uses named tables, verify flush_table only flushes the RustyJack-owned table, not the system "nat"/"filter" tables. If it does flush system tables, scope it to RustyJack-owned chains only. Add a constant like `const RUSTYJACK_TABLE: &str = "rustyjack";` and ensure all rule creation and deletion uses it.
+
+B2 [Area7-F7/F8, CRITICAL]: ip_forward enabled but never disabled on stop/cleanup.
+   File: crates/rustyjack-wireless/src/hotspot.rs — enable_ip_forwarding() called at line 515, but stop_hotspot (line 699) never disables it.
+   File: crates/rustyjack-wireless/src/evil_twin.rs — ip_forward set to "1" at line 490, never restored.
+   FIX:
+   (a) Add `disable_ip_forwarding()` that writes "0" to /proc/sys/net/ipv4/ip_forward and /proc/sys/net/ipv4/conf/all/forwarding.
+   (b) Call it in stop_hotspot() after NAT teardown (around line 720).
+   (c) In evil_twin.rs, add cleanup that disables ip_forward when the evil twin stops.
+   IMPORTANT: Before enabling, save the current value. Only disable if WE were the ones who enabled it (check saved state).
+
+B3 [Area7-F5, HIGH]: iptables.rs coexists with nf_tables.rs — dual firewall manager conflict.
+   File: crates/rustyjack-netlink/src/iptables.rs
+   FIX: Add a prominent doc comment at the top of iptables.rs: `// DEPRECATED: This module wraps nf_tables operations. All new firewall code should use nf_tables.rs directly.` — and verify that iptables.rs actually delegates to nf_tables.rs (if it doesn't, that's a deeper issue to document in PROGRESS.md).
+
+B4 [Area7-F9, HIGH]: NAT rules not cleaned up on daemon SIGTERM.
+   File: crates/rustyjack-daemon/src/server.rs or main daemon entry point.
+   FIX: Register a shutdown hook (tokio signal handler or Drop guard) that calls NAT teardown. The daemon should clean up nf_tables rules on graceful shutdown.
+
+B5 [Area7-F4, HIGH]: NAT teardown is best-effort (errors silently dropped).
+   FIX: Log warnings on teardown failures instead of silently dropping. Use `if let Err(e) = ... { tracing::warn!("NAT teardown failed: {e}"); }` pattern.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP C — SENSITIVE DATA ZEROIZATION (Areas 8, 12, 10)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-wpa/src/crack.rs
+  crates/rustyjack-encryption/src/lib.rs
+  crates/rustyjack-evasion/src/mac.rs
+
+C1 [Area8-F15, HIGH]: WPA key material (PMK, PTK, MIC) computed in stack arrays in crack.rs but never zeroized.
+   File: crates/rustyjack-wpa/src/crack.rs — try_password/calculate_pmk/calculate_ptk/calculate_mic (lines 391-483).
+   FIX: Add `use zeroize::Zeroize;` (zeroize crate is already a workspace dependency). At the end of try_password() and similar functions, explicitly zeroize PMK/PTK byte arrays before return. Wrap sensitive arrays in a scope and call `.zeroize()` or use `Zeroizing<[u8; N]>` wrapper.
+
+C2 [Area12-F6/F7, HIGH]: Key copies not zeroized in encryption lib.
+   File: crates/rustyjack-encryption/src/lib.rs
+   FIX: Ensure `KeyBytes` type (the 32-byte key) implements Zeroize + ZeroizeOnDrop. If it's a `[u8; 32]`, wrap it in a newtype that derives Zeroize, ZeroizeOnDrop. The `clear_encryption_key` function (line 39) already does some cleanup — verify it zeroizes the old value.
+
+C3 [Area12-F8, HIGH]: Keyfile parsing leaves key material in heap via String.
+   File: crates/rustyjack-encryption/src/lib.rs or wherever keyfiles are read.
+   FIX: After extracting the key bytes from a String, zeroize the String buffer. Use `unsafe { key_string.as_bytes_mut().zeroize(); }` or read into a `Zeroizing<Vec<u8>>` instead of String.
+
+C4 [Area10-F3, HIGH]: MAC state recorded even if set_mac operation fails.
+   File: crates/rustyjack-evasion/src/mac.rs — set_mac() lines 348-361.
+   FIX: Move the state insertion (lines 348-357) to AFTER the set_mac_raw/interface_up calls succeed. Only record state on success.
+
+C5 [Area10-F11, HIGH]: TxPowerManager::restore() logic is broken.
+   File: crates/rustyjack-evasion/src/txpower.rs — restore() line 268.
+   FIX: The restore function should set power back to `state.original_dbm` and then REMOVE the state entry — it should NOT re-record the current power as the new "original". Verify the logic: remove state first, then set power to original_dbm.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP D — ASYNC / BLOCKING FIXES (Areas 4, 6, 8)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-core/src/netlink_helpers.rs
+  crates/rustyjack-netlink/src/dhcp.rs
+  crates/rustyjack-netlink/src/interface.rs
+
+D1 [Area4-F7, CRITICAL]: block_on called on current Tokio Handle in netlink_helpers.rs — deadlocks the daemon.
+   File: crates/rustyjack-core/src/netlink_helpers.rs — block_on at lines 23, 42, 61, 84, 119, 138, 161, 184, 203, 226, 259, 278, 297, 330, 363.
+   FIX: The pattern `Handle::try_current() -> handle.block_on()` WILL deadlock if called from within a Tokio async context. Change the fallback logic: if we're already on a Tokio runtime, use `tokio::task::block_in_place(|| handle.block_on(async { ... }))` instead of bare `handle.block_on()`. This allows the blocking call without deadlocking the worker thread. Apply this pattern to ALL ~15 functions in this file.
+
+D2 [Area4-F1, MEDIUM]: Fallback path creates multi-thread Tokio runtime per manager.
+   File: crates/rustyjack-core/src/netlink_helpers.rs — shared_runtime() or wherever the fallback runtime is created.
+   FIX: Change `Runtime::new()` (multi-thread) to `Builder::new_current_thread().enable_all().build()` for the fallback runtime. On the 512MB Pi, a multi-thread runtime per netlink call is wasteful.
+
+D3 [Area6-F1, HIGH]: Blocking std::net::UdpSocket::recv_from inside async DHCP.
+   File: crates/rustyjack-netlink/src/dhcp.rs — recv_from at lines 871, 945.
+   FIX: Wrap the blocking recv_from calls in `tokio::task::spawn_blocking()` or `block_in_place()`. Alternatively, set a socket timeout via `socket.set_read_timeout(Some(Duration::from_secs(5)))` so recv_from doesn't block forever — this is the minimal fix. At minimum, add the read timeout.
+
+D4 [Area6-F15, HIGH]: No maximum DHCP retransmission count.
+   File: crates/rustyjack-netlink/src/dhcp.rs — the DHCP acquire loop.
+   FIX: Add a constant `const MAX_DHCP_RETRIES: u32 = 10;` and break the retry loop after that many attempts, returning an error.
+
+D5 [Area4-F6, HIGH]: No explicit timeouts on netlink operations.
+   File: crates/rustyjack-netlink/src/interface.rs and crates/rustyjack-netlink/src/route.rs.
+   FIX: Wrap key netlink async operations in `tokio::time::timeout(Duration::from_secs(10), ...)`. At minimum, add timeouts to `flush_addresses`, `list_interfaces`, route add/delete. Return a descriptive error on timeout.
+
+D6 [Area4-F5, HIGH]: flush_addresses silently ignores individual deletion failures.
+   File: crates/rustyjack-netlink/src/interface.rs — flush_addresses (line 406).
+   FIX: Collect errors from individual address deletions. Log each failure with tracing::warn. Return the first error (or a combined error) instead of silently continuing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP E — WIRELESS INTERFACE SAFETY (Area 8)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-wireless/src/interface.rs
+  crates/rustyjack-wireless/src/hotspot.rs
+  crates/rustyjack-wireless/src/capture.rs
+
+E1 [Area8-F1, HIGH]: WirelessInterface doesn't restore original MAC/channel on drop.
+   File: crates/rustyjack-wireless/src/interface.rs — Drop impl (line 219).
+   FIX: The existing Drop impl only restores managed mode. Add: (a) restore original MAC if it was changed, (b) log if restoration fails (don't panic in Drop).
+
+E2 [Area8-F3, HIGH]: supports_injection() returns supports_monitor_mode (wrong check).
+   File: crates/rustyjack-wireless/src/interface.rs — around line 286-288.
+   FIX: Verify that the nl80211 capability check actually tests for injection support (TX capability in monitor mode), not just monitor mode support. If nl80211::supports_injection already does the right thing, document it. If it returns monitor support, rename it or add a comment clarifying the limitation.
+
+E3 [Area8-F4, HIGH]: rfkill "unblock all" in hotspot setup breaks isolation.
+   File: crates/rustyjack-wireless/src/hotspot.rs — rfkill unblock at lines 363-419, 576-578, 738.
+   FIX: Change `rfkill_unblock_all()` to only unblock the specific interface being used for the hotspot. If the rfkill API only supports "unblock all", add a targeted wrapper that re-blocks other interfaces after. At minimum, add a tracing::warn noting the isolation violation.
+
+E4 [Area8-F11, MEDIUM]: PMKID capture has no timeout.
+   File: crates/rustyjack-wireless/src/capture.rs or the PMKID capture function.
+   FIX: Add a configurable timeout (default 120 seconds). Use tokio::time::timeout or check elapsed time in the capture loop.
+
+E5 [Area8-F16, MEDIUM]: pcap writer flushes after every packet — I/O amplification on flash.
+   File: crates/rustyjack-wireless/src/pcap.rs
+   FIX: Buffer writes. Flush every N packets (e.g., 100) or every N seconds (e.g., 5), not after every single packet. Use a BufWriter wrapper.
+
+E6 [Area8-F17, MEDIUM]: No PCAP rotation/size cap.
+   File: crates/rustyjack-wireless/src/pcap.rs
+   FIX: Add a constant `const MAX_PCAP_BYTES: u64 = 100 * 1024 * 1024;` (100MB). Check file size before each write. When exceeded, close current file and open a new one with incremented suffix, or stop capture with a warning.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP F — ETHERNET HARDENING (Area 9)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-ethernet/src/lib.rs
+  crates/rustyjack-core/src/operations.rs
+
+F1 [Area9-F7, HIGH]: ARP spoof doesn't restore victim/gateway ARP tables on stop.
+   FIX: On ARP spoof stop, send gratuitous ARP replies restoring the real gateway MAC to victims. Add a cleanup function called on stop/drop.
+
+F2 [Area9-F8, MEDIUM]: ICMP parsing assumes 20-byte IPv4 header (IHL ignored).
+   FIX: Read the IHL field (first byte & 0x0F, multiply by 4) to get actual header length. Use that offset to find the ICMP payload.
+
+F3 [Area9-F12, MEDIUM]: Banner grab timeout not enforced for slow services.
+   FIX: Add a per-connection timeout (e.g., 5 seconds) for banner reads using `tokio::time::timeout` or socket SO_RCVTIMEO.
+
+F4 [Area9-F18, MEDIUM]: grab_banner doesn't handle partial reads.
+   FIX: Loop on read until delimiter (newline/null) or timeout, accumulating into a buffer with a size cap (reuse the 512B cap from T2).
+
+F5 [Area9-F20, HIGH]: Ethernet MITM doesn't restore IP forwarding on stop.
+   FIX: Same pattern as B2 — save original ip_forward state, restore on stop.
+
+F6 [Area9-F6, MEDIUM]: No sanitization of banner data before JSON/IPC emission.
+   FIX: Apply the same `sanitize_banner()` function (added in T2) to banner data before serializing to JSON or sending over IPC, not just before writing to loot files.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP G — DNS OWNERSHIP & ROBUSTNESS (Area 5)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-core/src/system/dns.rs
+  crates/rustyjack-core/src/system/mod.rs
+  crates/rustyjack-core/src/operations.rs
+
+G1 [Area5-F1, HIGH]: No runtime reassert of /etc/resolv.conf ownership at daemon boot.
+   FIX: At daemon startup, verify /etc/resolv.conf is a symlink pointing to /var/lib/rustyjack/resolv.conf. If not, log a warning. Add a `verify_dns_ownership()` function to dns.rs that checks the symlink target.
+
+G2 [Area5-F3, HIGH]: Empty DNS list in set_dns() is a no-op (stale DNS persists).
+   FIX: In DnsManager::set_dns() (line 17 of dns.rs), if `servers` is empty, write a resolv.conf with no nameserver lines (effectively clearing DNS), or return an explicit error. Don't silently keep stale entries.
+
+G3 [Area5-F4, MEDIUM]: select_active_uplink silently drops DNS rewrite failures.
+   File: crates/rustyjack-core/src/operations.rs line 3128: `select_active_uplink().ok()`
+   FIX: Replace `.ok()` with proper error handling. At minimum, log the error: `if let Err(e) = select_active_uplink() { tracing::warn!("uplink selection failed: {e}"); }`
+
+G4 [Area5-F14, MEDIUM]: Upstream DNS forwarding creates a fresh UDP socket per query.
+   File: crates/rustyjack-netlink/src/dns_server.rs
+   FIX: Cache and reuse the upstream forwarding socket across queries. Create it once on DNS server start and share via Arc.
+
+G5 [Area5-F16, MEDIUM]: Mode teardown lacks explicit DNS server stop.
+   FIX: Ensure DNS spoof/portal teardown explicitly stops the embedded DNS server and clears state. Add `stop_dns_server()` calls in teardown paths.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP H — DHCP ROBUSTNESS (Area 6)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-netlink/src/dhcp.rs
+  crates/rustyjack-core/src/system/mod.rs
+
+H1 [Area6-F3, HIGH]: No DHCP lease renewal (lease expires silently).
+   FIX: After acquiring a lease, spawn a background task that sleeps until T1 (50% of lease time) and attempts renewal. On failure, retry at T2 (87.5%). On total failure, log error and release lease.
+
+H2 [Area6-F9, MEDIUM]: No DHCP NAK handling.
+   FIX: In the DHCP state machine, handle NAK responses by restarting the DISCOVER phase instead of retrying REQUEST.
+
+H3 [Area6-F14, MEDIUM]: LEASE_RECORD global not zeroized on interface down.
+   File: crates/rustyjack-core/src/system/mod.rs — wherever the global LEASE_RECORD is.
+   FIX: Clear the LEASE_RECORD when the interface goes down or changes.
+
+H4 [Area6-F2, MEDIUM]: No randomized exponential backoff for DHCP retransmissions.
+   FIX: Replace fixed retry delays with randomized exponential backoff: base=1s, max=64s, jitter=±rand(0..1s). Follow RFC 2131 Section 4.1 retransmission guidance.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP I — EVASION CONTROLS (Area 10)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-evasion/src/mac.rs
+  crates/rustyjack-evasion/src/txpower.rs
+  crates/rustyjack-evasion/src/passive.rs
+
+I1 [Area10-F2, HIGH]: MAC set forces interface admin-UP even if it started DOWN.
+   File: crates/rustyjack-evasion/src/mac.rs — set_mac() lines 358-361.
+   FIX: Save the interface's UP/DOWN state before set_mac. After setting MAC, only bring it UP if it was UP before.
+
+I2 [Area10-F8, HIGH]: Hostname randomization is one-way (original not captured).
+   FIX: Before first hostname randomization, read and save the current hostname. Provide a restore_hostname() function.
+
+I3 [Area10-F19, MEDIUM]: No verification that MAC change was accepted by kernel.
+   FIX: After set_mac_raw(), read back the interface MAC and verify it matches. If not, return an error.
+
+I4 [Area10-F10, MEDIUM]: TX power control has no state capture before first change.
+   FIX: In TxPowerManager, query and save the current TX power level BEFORE the first set_power call. The current code (line 216-224) should already do this — verify it does. If not, add the query.
+
+I5 [Area10-F14, HIGH]: "Passive recon" is a stub but UI claims "NO transmissions".
+   File: crates/rustyjack-evasion/src/passive.rs
+   FIX: If passive mode is a stub, clearly label it in the UI and in the module doc. Add `tracing::warn!("passive recon mode is not fully implemented — RF transmissions may still occur");` at mode entry. Do not claim guarantees that aren't enforced.
+
+I6 [Area10-F20, MEDIUM]: TX power not restored on daemon shutdown.
+   FIX: Ensure TxPowerManager's Drop impl (line 309) is actually triggered on daemon shutdown. If the daemon uses process::exit() anywhere, the Drop won't fire. Add explicit cleanup to the daemon shutdown path.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP J — CAPTIVE PORTAL / LOOT SAFETY (Areas 11, 12)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-portal/src/server.rs
+  crates/rustyjack-portal/src/state.rs
+  crates/rustyjack-core/src/operations.rs
+  crates/rustyjack-encryption/src/lib.rs
+
+J1 [Area11-F1, HIGH]: Portal stores captured credentials in plaintext.
+   FIX: If the encryption key is set, encrypt captured form data before writing to disk. Use the existing `encrypt_bytes` from rustyjack-encryption. If no key is set, log a warning that credentials are stored unencrypted.
+
+J2 [Area11-F2, HIGH]: Portal form data not sanitized before storage.
+   FIX: Apply control-character stripping and length capping to username/password fields before storage. Reuse the sanitize pattern from T2.
+
+J3 [Area11-F5, MEDIUM]: DNSSpoof captures stored outside standard loot/purge coverage.
+   FIX: Ensure DNS spoof capture files are written under the standard loot directory ($RUSTYJACK_ROOT/loot/), not a separate path. Verify the path in operations.rs DNS spoof handlers.
+
+J4 [Area11-F11, HIGH]: Portal HTTP server binding.
+   File: crates/rustyjack-portal/src/state.rs — line 131 already validates against 0.0.0.0.
+   FIX: Verify this validation exists and is correct. If it does, mark as already-addressed in PROGRESS.md. If not, add `bail!("portal listen_ip must not be 0.0.0.0")`.
+
+J5 [Area12-F1/F2, HIGH]: Encrypted file writes not atomic.
+   FIX: Use write-to-temp-then-rename pattern for encrypted file operations. Write to `path.with_extension("tmp")`, fsync, then rename to final path.
+
+J6 [Area12-F5, MEDIUM]: Key derivation uses static salt.
+   File: crates/rustyjack-core/src/external_tools/anti_forensics.rs — ENC_SALT_LEN_GCM constant.
+   FIX: Generate a random salt per encryption operation using OsRng. Prepend the salt to the ciphertext output (format: [salt || nonce || ciphertext+tag]).
+
+J7 [Area12-F13, HIGH]: Loot artifact sweep follows symlinks (can escape loot dir).
+   FIX: In the artifact collection code, add a symlink check before following any path. Use `std::fs::symlink_metadata()` and skip entries where `metadata.file_type().is_symlink()` is true. Alternatively, canonicalize and verify the resolved path is still under the loot root.
+
+J8 [Area12-F9, MEDIUM]: Nonce uniqueness relies on RNG only.
+   FIX: This is acceptable for AES-GCM with 96-bit nonces if using a CSPRNG (OsRng). Add a doc comment explaining the collision probability is negligible (~2^-48 after 2^32 encryptions) and that this is per NIST SP 800-38D guidance. No code change needed unless you find non-CSPRNG usage.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP K — IPC / JOB HARDENING (Area 2)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-daemon/src/server.rs
+  crates/rustyjack-daemon/src/jobs/mod.rs
+
+K1 [Area2-F4, MEDIUM]: requested_by always "unknown" despite peer creds being read.
+   File: crates/rustyjack-daemon/src/server.rs — peer credentials read at line 106.
+   FIX: Pass the peer UID/PID from `peer_credentials()` into job records. Set `requested_by` to `format!("uid={},pid={}", peer.uid(), peer.pid())`.
+
+K2 [Area2-F7, MEDIUM]: Error responses leak internal anyhow error chains to UI.
+   FIX: Before sending error responses over IPC, strip internal details. Send only the top-level error message, not the full chain. Use `format!("{}", err)` not `format!("{:?}", err)` or `format!("{:#}", err)`.
+
+K3 [Area2-F11, MEDIUM]: No rate limiting on IPC connections.
+   File: crates/rustyjack-daemon/src/server.rs — connection accept loop (line 77).
+   FIX: Add a simple per-second connection rate limiter. Track connection count with a sliding window. If >50 connections/second, reject with a brief sleep. Use an AtomicU32 counter reset every second.
+
+K4 [Area2-F15, LOW]: No maximum concurrent job limit.
+   FIX: Add `const MAX_CONCURRENT_JOBS: usize = 16;`. Before spawning a new job, check the active job count. If at limit, return an error "too many concurrent jobs".
+
+K5 [Area2-F17, MEDIUM]: Daemon accepts connections before subsystems are initialized.
+   FIX: Delay binding/accepting on the Unix socket until after all subsystem initialization is complete. Move the listener.accept() loop start to after init.
+
+K6 [Area2-F13, MEDIUM]: spawn_blocking can cause unbounded thread pool growth.
+   FIX: Configure the Tokio runtime with a max_blocking_threads limit: `Builder::new_multi_thread().max_blocking_threads(4).build()`. On a 512MB Pi, 4 blocking threads is plenty.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP L — ANTI-FORENSICS HARDENING (Area 14)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-core/src/external_tools/anti_forensics.rs
+
+L1 [Area14-F3, HIGH]: manual_secure_delete allocates file-size-proportional buffer — OOM on 512MB device.
+   File: line 84 of anti_forensics.rs.
+   FIX: Use a fixed-size buffer (e.g., 64KB) and loop over the file in chunks instead of allocating a buffer the size of the entire file.
+
+L2 [Area14-F18, HIGH]: Secure delete writes only 0x00, not the 7-pass DoD standard claimed.
+   FIX: Verify the overwrite pattern matches the documented standard. The function should do: pass 1: 0xFF, pass 2: 0x00, pass 3: random, (repeat for 7 passes). If the current code only does a subset, fix it. Also add a doc comment noting that on flash/SSD media, overwrite-based deletion is NOT guaranteed to erase all copies due to wear leveling.
+
+L3 [Area14-F6, HIGH]: Anti-forensics operations not gated on explicit confirmation.
+   FIX: Add a confirmation check before destructive operations. The `REVIEW_APPROVED` gating mechanism exists but may be bypassed. Ensure emergency_wipe and clear_system_logs check for explicit authorization (e.g., a flag in the IPC request, not just a file).
+
+L4 [Area14-F9, MEDIUM]: No dry-run mode for destructive operations.
+   FIX: Add a `dry_run: bool` parameter to emergency_wipe and the public-facing destructive functions. In dry-run mode, log what WOULD be deleted without actually deleting. This aids testing and operator review.
+
+L5 [Area14-F4, MEDIUM]: Log purge doesn't sync after deletion.
+   FIX: After deleting log files, call `std::fs::File::open(parent_dir)?.sync_all()` to ensure directory entries are flushed to disk.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP M — OBSERVABILITY / LOGGING / REDACTION (Area 16)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-core/src/redact.rs
+  crates/rustyjack-core/src/audit.rs
+  crates/rustyjack-wpa/src/crack.rs
+  Various files with Debug derives on sensitive structs
+
+M1 [Area16-F11, HIGH]: WifiProfile and similar structs derive Debug with password fields unredacted.
+   FIX: Find structs that contain password/key/secret fields and derive Debug. Replace `#[derive(Debug)]` with a manual Debug impl that redacts sensitive fields. Search for `password` and `psk` fields in structs with `#[derive(Debug)]`. Use the `Redacted<T>` wrapper from redact.rs where appropriate.
+
+M2 [Area16-F7, MEDIUM]: Audit log rotation not implemented.
+   File: crates/rustyjack-core/src/audit.rs
+   FIX: Add log rotation: when the audit file exceeds 10MB, rename it to `audit.log.1` (shifting existing rotations), and open a new file. Cap at 5 rotated files.
+
+M3 [Area16-F12, MEDIUM]: IPC error messages include internal Rust type/source info.
+   FIX: Same as K2 — ensure IPC errors sent to clients use Display format, not Debug.
+
+M4 [Area16-F2, MEDIUM]: Redaction utilities exist but aren't enforced broadly.
+   FIX: Add redaction calls at key logging boundaries: (a) before writing loot summaries, (b) in audit event formatting, (c) in IPC error responses. Use `redact_if_sensitive()` from redact.rs.
+
+M5 [Area16-F3, MEDIUM]: MAC addresses in logs not redacted.
+   FIX: Add a `redact_mac(mac: &str) -> String` helper to redact.rs that replaces the last 3 octets with `XX:XX:XX`. Apply it in tracing calls that log target/gateway MACs in ethernet and wireless operations.
+
+M6 [Area16-F6, MEDIUM]: Audit file writes can interleave under concurrent operations.
+   FIX: Ensure the audit file writer uses a Mutex or is serialized through a channel. If it already uses a lock, verify correctness.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP N — UPDATE / SUPPLY CHAIN (Area 13)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-updater/src/lib.rs
+
+N1 [Area13-F5, HIGH]: No rollback protection — older valid updates can be re-installed.
+   FIX: Compare manifest version against currently installed version. Reject updates where `manifest.version <= current_version`. Use semver comparison. Read current version from Cargo.toml or a version file.
+
+N2 [Area13-F6, HIGH]: TOCTOU between hash verification and install copy.
+   FIX: After verifying the hash, rename-into-place atomically (on the same filesystem). Don't copy — rename. This eliminates the window between verify and use.
+
+N3 [Area13-F13, MEDIUM]: Update URL constructed by string concatenation.
+   FIX: Use the `url` crate's URL builder or `format!()` with validated components. Ensure the version string (already validated by T9) is URL-encoded if needed.
+
+N4 [Area13-F2, MEDIUM]: Stage directory permissions not enforced.
+   FIX: After creating the staging directory, set permissions to 0o700. Verify ownership matches root.
+
+N5 [Area13-F18, MEDIUM]: No staging area cleanup on failed update.
+   FIX: On any error in the update process, remove the staging directory before returning. Use a Drop guard or explicit cleanup in error paths.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP O — INTERFACE ISOLATION (Area 3, targeted fixes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-core/src/system/interface_selection.rs
+  crates/rustyjack-core/src/system/isolation.rs
+  crates/rustyjack-daemon/src/netlink_watcher.rs
+
+O1 [Area3-F1/F2/F3, HIGH]: Interface switch creates overlap where two uplinks are admin-UP.
+   FIX: Reverse the order: bring DOWN the old interface BEFORE bringing UP the new one (Phase B before Phase A). Accept the brief connectivity gap — it's safer than two active uplinks leaking traffic.
+
+O2 [Area3-F9, MEDIUM]: Hotspot exception is in-memory only via OnceLock.
+   FIX: Persist the hotspot exception flag to the state file so it survives daemon restart.
+
+O3 [Area3-F12, MEDIUM]: Carrier detection uses admin state (UP) not operational state (LOWER_UP).
+   FIX: Check for IFF_LOWER_UP flag (which indicates carrier/link present), not just IFF_UP (admin state). Use `flags & libc::IFF_LOWER_UP != 0`.
+
+O4 [Area3-F15, MEDIUM]: No hysteresis for flapping interfaces.
+   FIX: Add a debounce timer: ignore UP/DOWN transitions within 2 seconds of the previous one. Track last transition timestamp per interface.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP P — UI FIXES (Area 15)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-ui/src/input.rs
+  crates/rustyjack-ui/src/display.rs
+  crates/rustyjack-ui/src/app/menu.rs
+
+P1 [Area15-F9, MEDIUM]: Stats overlay opens multiple daemon connections per cycle.
+   FIX: Reuse a single persistent daemon connection for stats queries. Create the connection once and cache it.
+
+P2 [Area15-F14, MEDIUM]: UI doesn't indicate daemon connection failure.
+   FIX: On connection failure, display "DAEMON OFFLINE" or similar on the LCD instead of showing stale data. Set a flag and check it in the render loop.
+
+P3 [Area15-F6, MEDIUM]: Calibration edges not validated.
+   FIX: After calibration, validate that LEFT < RIGHT and TOP < BOTTOM. Reject impossible geometry with an error message.
+
+P4 [Area15-F11, MEDIUM]: Cancellation falsely reported after 3s timeout.
+   FIX: Distinguish between "cancelled by user" and "timed out waiting for response". Use different status messages.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP Q — CI / QUALITY GATES (Area 17)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  .github/workflows/ci.yml
+  ci/ directory
+
+Q1 [Area17-F7]: Add `cargo fmt --all -- --check` step to CI.
+   FIX: Add a new job step in .github/workflows/ci.yml that runs `cargo fmt --all -- --check`.
+
+Q2 [Area17-F8]: Add `cargo clippy` step to CI.
+   FIX: Add `cargo clippy --workspace --all-targets -- -D warnings` to CI. If there are too many existing warnings, use `--allow` for specific lints initially and document them.
+
+Q3 [Area17-F13]: Add `cargo audit` step to CI.
+   FIX: Add a CI step: `cargo install cargo-audit && cargo audit`. Use `--ignore` for any known advisories that are false positives (document them).
+
+Q4 [Area17-F10]: No unsafe inventory gate.
+   FIX: Create `ci/unsafe_audit.rs` — a small program that scans .rs files for `unsafe` blocks/functions and verifies each has a `// SAFETY:` comment on the preceding line. Wire it into CI. Don't fail on existing violations — generate a baseline count like the unwrap/expect check.
+
+Q5 [Area17-F5/F6]: CI doesn't run cargo check or cargo test for workspace.
+   FIX: Add `cargo check --workspace` and `cargo test --workspace` steps to CI. These run on the Linux CI runner (not Windows), so Linux-only crates will work.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUP R — NETLINK ROBUSTNESS (Area 4, remaining)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Target files:
+  crates/rustyjack-netlink/src/interface.rs
+  crates/rustyjack-netlink/src/route.rs
+
+R1 [Area4-F3, MEDIUM]: list_interfaces does N+1 address dumps.
+   FIX: Do a single `AddressHandle::get().execute()` dump upfront, then match addresses to interfaces by ifindex. Avoid calling get().execute() per interface.
+
+R2 [Area4-F10, MEDIUM]: No retry on ENOBUFS netlink errors.
+   FIX: On ENOBUFS (errno 105), retry the operation after a short delay (100ms), up to 3 times. Add a helper: `async fn with_retry<F, T>(op: F) -> Result<T>`.
+
+R3 [Area4-F12, MEDIUM]: set_interface_flags uses read-modify-write (race).
+   FIX: Document the race condition with a comment. True fix requires netlink RTM_SETLINK with only the changed flags, but the current approach is standard. Add `// NOTE: read-modify-write race exists; netlink doesn't support atomic flag CAS`.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WORKFLOW (DO NOT SKIP)
+
+PHASE 0 — BOOTSTRAP
+- Confirm repo root (Cargo.toml, CLAUDE.md present).
+- Read CLAUDE.md, AGENTS.md.
+- Read existing PROGRESS.md to understand completed work (T1-T13).
+
+PHASE 1 — READ ALL ANALYSIS DOCS
+- Read every .md file in patched_analysis_docs/.
+- Cross-reference with the task groups above to understand full context.
+- Note any findings NOT covered in the groups above — add them if they're HIGH+ risk.
+
+PHASE 2 — IMPLEMENT
+- Work through Groups A → R in order.
+- Update PROGRESS.md after completing each group.
+- If a task requires a crate you can't check on Windows, still make the change but note "needs Linux verification" in PROGRESS.md.
+- For each code change, verify with `cargo check -p <crate>` where possible.
+
+PHASE 3 — VERIFY
+Run verification in this order, recording results in PROGRESS.md:
+
+1) CI checks (existing):
+   - rustc ci/forbid_command_new.rs -o /tmp/forbid_command_new && /tmp/forbid_command_new
+   - rustc ci/no_new_unwrap_expect.rs -o /tmp/no_new_unwrap_expect && /tmp/no_new_unwrap_expect
+   - rustc ci/no_blocking_in_async.rs -o /tmp/no_blocking_in_async && /tmp/no_blocking_in_async
+   - rustc ci/no_emoji_in_source.rs -o /tmp/no_emoji_in_source && /tmp/no_emoji_in_source
+   (On Windows, compile with: rustc ci/file.rs -o ci/file.exe && ci/file.exe)
+
+2) Per-crate compilation checks for every crate you modified:
+   - cargo check -p rustyjack-wpa
+   - cargo check -p rustyjack-ethernet
+   - cargo check -p rustyjack-encryption
+   - cargo check -p rustyjack-evasion
+   - cargo check -p rustyjack-portal
+   - (etc. — every modified crate)
+
+3) Run available tests:
+   - cargo test -p rustyjack-ethernet
+   - cargo test -p rustyjack-wpa
+   - cargo test -p rustyjack-encryption
+   - (any other crate with tests)
+
+4) Formatting:
+   - cargo fmt --all -- --check (or apply and verify)
+
+5) Regression scans:
+   - Search for plaintext secret patterns (password, key, psk, token) in log/tracing calls.
+   - Search for new unwrap/expect that aren't in the baseline.
+   - Search for new Command::new not in the allowlist.
+   - Search for emojis in code/scripts.
+
+DELIVERABLES
+1) PROGRESS.md updated with all new tasks (T14+), each marked DONE or BLOCKED.
+2) Print final summary: total tasks, files changed by area, tests run, remaining risks.
+3) Working tree clean or with clearly stated uncommitted changes.
+
+Now begin: start with PHASE 0 and proceed through PHASE 3 without stopping.
