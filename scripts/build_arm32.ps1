@@ -675,13 +675,20 @@ function Invoke-UsbExport {
         if ($script:UsbAutoEject) {
             Write-Host "Ejecting USB drive $($script:UsbExportDrive) ..." -ForegroundColor Yellow
             try {
-                $driveObj = Get-WmiObject Win32_Volume -Filter "DriveLetter = '$($script:UsbExportDrive)'" -ErrorAction SilentlyContinue
+                # Flush file system buffers first
+                Write-Volume -DriveLetter $($script:UsbExportDrive.TrimEnd(':')) -ErrorAction SilentlyContinue | Out-Null
+                Start-Sleep -Milliseconds 500
+                
+                # Build WMI filter with proper escaping
+                $driveLetter = $script:UsbExportDrive
+                $driveObj = Get-WmiObject Win32_Volume -Filter "DriveLetter = '$driveLetter'" -ErrorAction SilentlyContinue
                 if ($driveObj) {
                     $result = $driveObj.Dismount($false, $false)
                     if ($result.ReturnValue -eq 0) {
                         Write-Host "USB drive ejected successfully. Safe to remove." -ForegroundColor Green
                     } else {
                         Write-Host "Failed to eject USB drive (error code: $($result.ReturnValue)). Please eject manually." -ForegroundColor Yellow
+                        Write-Host "You may need to close any programs accessing the drive." -ForegroundColor Gray
                     }
                 } else {
                     Write-Host "Could not find USB drive to eject. Please eject manually." -ForegroundColor Yellow

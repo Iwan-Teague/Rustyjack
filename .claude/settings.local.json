@@ -21,7 +21,19 @@
       "Bash(powershell -NoProfile -Command:*)",
       "Bash(docker:*)",
       "Bash(powershell -Command \"Get-Process | Where-Object {$_ProcessName -like ''*cargo*'' -or $_ProcessName -like ''*rustc*''} | Select-Object -First 5 ProcessName,Id\")",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(git config:*)",
+      "Bash(git -C \"C:\\\\Users\\\\Iwan\\\\Desktop\\\\Rusty\\\\Rustyjack\" status)",
+      "Bash(git -C \"C:\\\\Users\\\\Iwan\\\\Desktop\\\\Rusty\\\\Rustyjack\" log --oneline -5)",
+      "Bash(git -C \"C:\\\\Users\\\\Iwan\\\\Desktop\\\\Rusty\\\\Rustyjack\" log --oneline -3)",
+      "Bash(git -C \"C:\\\\Users\\\\Iwan\\\\Desktop\\\\Rusty\\\\Rustyjack\" commit -m \"$\\(cat <<''EOF''\nUpdate test suite, UI scenarios, and add critique reports\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C \"C:\\\\Users\\\\Iwan\\\\Desktop\\\\Rusty\\\\Rustyjack\" commit -m \"Update test suite, UI scenarios, and add critique reports\" -m \"Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\")",
+      "Bash(git -C C:/Users/Iwan/Desktop/Rusty/Rustyjack config --list)",
+      "Bash(winget install:*)",
+      "Bash(git -C C:/Users/Iwan/Desktop/Rusty/Rustyjack commit -m \"Update test suite, UI scenarios, and add critique reports\" -m \"Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\")",
+      "Bash(/c/Users/Iwan/AppData/Local/Programs/Python/Python312/python.exe:*)",
+      "Bash(export PATH=\"/c/Users/Iwan/AppData/Local/Programs/Python/Python312:$PATH\")"
     ]
   },
   "enableAllProjectMcpServers": true,

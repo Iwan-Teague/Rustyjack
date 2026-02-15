@@ -612,13 +612,28 @@ invoke_usb_export() {
         echo "USB export complete: $USB_EXPORT_DEST"
         if [ -n "$USB_AUTO_EJECT" ] && [ "$USB_AUTO_EJECT" = "1" ]; then
             echo "Ejecting USB drive..."
+            
+            # Flush all pending writes to disk first
+            sync
+            sleep 1
+            
+            # Get the mount point from df (column 6 is the mount point)
             local mount_point
-            mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
+            mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
+            
+            if [ -z "$mount_point" ]; then
+                # Fallback: try to find the mount point by walking up the directory tree
+                mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | tail -1 | awk '{print $NF}')
+            fi
+            
             if [ -n "$mount_point" ]; then
+                # Try umount with the mount point
                 if umount "$mount_point" 2>/dev/null; then
                     echo "USB drive ejected successfully. Safe to remove."
+                elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
+                    echo "USB drive ejected successfully (required sudo). Safe to remove."
                 else
-                    echo "Failed to eject USB drive. Please eject manually."
+                    echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
                 fi
             else
                 echo "Could not determine USB mount point. Please eject manually."
