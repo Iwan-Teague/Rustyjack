@@ -2167,16 +2167,13 @@ else
 fi
 
 info "Prebuilt installation finished."
-if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
-  if [ "$WARN_COUNT" -gt 0 ]; then
-    info "Warnings detected ($WARN_COUNT). Rebooting to apply overlay and service changes."
-  fi
-  info "Rebooting in 5 seconds..."
-  sleep 5
-  sudo reboot
-else
-  info "SKIP_REBOOT set - installer finished without reboot."
+if [ "${NO_REBOOT:-0}" = "1" ]; then
+  info "NO_REBOOT=1 set - installer finished without reboot."
   if [ "$SPI_REBOOT_REQUIRED" -eq 1 ]; then
     warn "Manual reboot required for SPI device availability."
   fi
+else
+  info "Rebooting system to apply all changes..."
+  sleep 3
+  sudo reboot
 fi

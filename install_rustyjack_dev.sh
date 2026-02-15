@@ -1183,16 +1183,13 @@ info "  - RUST_BACKTRACE=1 enabled"
 info "=========================================="
 echo ""
 
-if [ "${SKIP_REBOOT:-0}" != "1" ] && [ "${NO_REBOOT:-0}" != "1" ]; then
-  if [ "$WARN_COUNT" -gt 0 ]; then
-    info "Warnings detected ($WARN_COUNT). Rebooting to apply configuration and overlay changes."
-  fi
-  info "System rebooting in 5 seconds - press Ctrl+C to abort."
-  sleep 5
-  sudo reboot
-else
-  info "SKIP_REBOOT set - skipping reboot."
+if [ "${NO_REBOOT:-0}" = "1" ]; then
+  info "NO_REBOOT=1 set - skipping reboot."
   if [ "$SPI_REBOOT_REQUIRED" -eq 1 ]; then
     warn "Manual reboot required for SPI device availability."
   fi
+else
+  info "System rebooting in 3 seconds to apply configuration - press Ctrl+C to abort."
+  sleep 3
+  sudo reboot
 fi
