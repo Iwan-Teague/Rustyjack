@@ -1,0 +1,9 @@
+{"ts": "2026-02-15T20:45:26+00:00", "status": "pass", "name": "loot_list_wireless", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_wireless.json"}
+{"ts": "2026-02-15T20:45:27+00:00", "status": "pass", "name": "loot_list_ethernet", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_ethernet.json"}
+{"ts": "2026-02-15T20:45:27+00:00", "status": "pass", "name": "loot_list_scan", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_scan.json"}
+{"ts": "2026-02-15T20:45:27+00:00", "status": "pass", "name": "loot_list_dnsspoof", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_dnsspoof.json"}
+{"ts": "2026-02-15T20:45:28+00:00", "status": "pass", "name": "loot_read_wireless", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_read_wireless.txt"}
+{"ts": "2026-02-15T20:45:28+00:00", "status": "pass", "name": "loot_read_ethernet", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_read_ethernet.txt"}
+{"ts": "2026-02-15T20:45:28+00:00", "status": "pass", "name": "loot_read_report", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/loot/artifacts/loot_read_report.txt"}
+{"ts": "2026-02-15T20:45:29+00:00", "status": "info", "name": "loot_read_missing", "detail": "rc=1"}
+{"ts": "2026-02-15T20:45:29+00:00", "status": "pass", "name": "loot_list_invalid_kind", "detail": "expected failure"}

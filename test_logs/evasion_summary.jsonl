@@ -1,0 +1,6 @@
+{"ts": "2026-02-15T20:45:56+00:00", "status": "fail", "name": "evasion_mac_status", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/evasion/artifacts/mac_status.json"}
+{"ts": "2026-02-15T20:45:57+00:00", "status": "fail", "name": "evasion_hostname_status", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/evasion/artifacts/hostname_status.json"}
+{"ts": "2026-02-15T20:45:57+00:00", "status": "fail", "name": "evasion_txpower_status", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/evasion/artifacts/txpower_status.json"}
+{"ts": "2026-02-15T20:45:58+00:00", "status": "fail", "name": "evasion_mode_status", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/evasion/artifacts/mode_status.json"}
+{"ts": "2026-02-15T20:45:58+00:00", "status": "fail", "name": "evasion_mac_randomize", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/evasion/artifacts/mac_randomize.json"}
+{"ts": "2026-02-15T20:45:59+00:00", "status": "fail", "name": "evasion_hostname_randomize", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/evasion/artifacts/hostname_randomize.json"}

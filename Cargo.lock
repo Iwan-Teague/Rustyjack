@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "rustyjack-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2611,7 +2611,7 @@ dependencies = [
 
 [[package]]
 name = "rustyjack-ethernet"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ipnet",
@@ -2672,7 +2672,7 @@ dependencies = [
 
 [[package]]
 name = "rustyjack-netlink"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "anyhow",
@@ -2768,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "rustyjack-wireless"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "byteorder",

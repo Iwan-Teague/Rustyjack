@@ -1,0 +1,272 @@
+2026-02-15T20:46:23+00:00 Suite: daemon
+2026-02-15T20:46:23+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/daemon
+2026-02-15T20:46:23+00:00 [PASS] python3 available
+2026-02-15T20:46:23+00:00 [PASS] systemctl available
+2026-02-15T20:46:23+00:00 [PASS] ss available
+2026-02-15T20:46:23+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T20:46:23+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T20:46:23+00:00 [PASS] daemon_service_active (rustyjackd.service)
+2026-02-15T20:46:23+00:00 [PASS] daemon_socket_present (/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:46:23+00:00 Socket perms: mode=660 owner=root group=rustyjack
+2026-02-15T20:46:23+00:00 [PASS] daemon_socket_perms_secure (others=0)
+2026-02-15T20:46:23+00:00 [RPC] BASE LoggingConfigGet (user=root)
+2026-02-15T20:46:24+00:00 Baseline logging config: enabled=true level=info
+2026-02-15T20:46:24+00:00 [SKIP] Admin group missing: rustyjack-admin (root will be used for admin checks)
+2026-02-15T20:46:24+00:00 [RPC] A1 Health (user=rjtest_ro)
+2026-02-15T20:46:25+00:00 [PASS] ro_user_connect_denied (socket perms enforce group access)
+2026-02-15T20:46:25+00:00 [SKIP] Read-only RPC tests skipped (socket perms deny RO user)
+2026-02-15T20:46:25+00:00 [RPC] A6 SystemLogsGet (user=rjtest_op)
+2026-02-15T20:46:26+00:00 [PASS] rpc_ok_A6
+2026-02-15T20:46:26+00:00 [RPC] A7 ActiveInterfaceClear (user=rjtest_op)
+2026-02-15T20:46:26+00:00 [FAIL] rpc_ok_A7 (expected Ok, got Err) err=operations are restricted to the UI runtime
+2026-02-15T20:46:26+00:00 Capturing failure context...
+2026-02-15T20:46:27+00:00 [RPC] A8 LoggingConfigSet (user=rjtest_op)
+2026-02-15T20:46:27+00:00 [PASS] rpc_err_A8
+2026-02-15T20:46:27+00:00 [RPC] A9 SystemSync (user=root)
+2026-02-15T20:46:28+00:00 [FAIL] rpc_ok_A9 (expected Ok, got Err) err=operations are restricted to the UI runtime
+2026-02-15T20:46:28+00:00 [FAIL] protocol_version_mismatch_rejected
+2026-02-15T20:46:29+00:00 [PASS] oversized_frame_sent (review daemon logs for rejection)
+2026-02-15T20:46:29+00:00 [RPC] P3 Health (user=root)
+2026-02-15T20:46:29+00:00 [PASS] rpc_ok_P3
+2026-02-15T20:46:29+00:00 [FAIL] Isolation check failed: daemon_rpc_readonly (route changed)
+2026-02-15T20:46:29+00:00 [DIFF] /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/net_daemon_rpc_readonly_route.diff
+2026-02-15T20:46:29+00:00   --- /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/net_daemon_pre_route.txt	2026-02-15 20:46:23.471698366 +0000
+2026-02-15T20:46:29+00:00   +++ /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/net_daemon_post_route.txt	2026-02-15 20:46:29.607698364 +0000
+2026-02-15T20:46:29+00:00   @@ -1 +1,2 @@
+2026-02-15T20:46:29+00:00   +default via 192.168.18.1 dev eth0 proto static metric 100 
+2026-02-15T20:46:29+00:00    192.168.18.0/24 dev eth0 proto kernel scope link src 192.168.18.6 
+2026-02-15T20:46:29+00:00 Running comprehensive suite...
+2026-02-15T20:46:29+00:00 ==========================================
+2026-02-15T20:46:29+00:00 RustyJack Comprehensive Diagnostic Suite
+2026-02-15T20:46:29+00:00 ==========================================
+2026-02-15T20:46:29+00:00 Run ID: 20260215-204629
+2026-02-15T20:46:29+00:00 Socket: /run/rustyjack/rustyjackd.sock
+2026-02-15T20:46:30+00:00 Service: rustyjackd.service
+2026-02-15T20:46:30+00:00 Dangerous Mode: 1
+2026-02-15T20:46:30+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629
+2026-02-15T20:46:30+00:00 ==========================================
+2026-02-15T20:46:30+00:00 
+2026-02-15T20:46:30+00:00 ========================================
+2026-02-15T20:46:30+00:00 SUITE A: Installation & Service Sanity
+2026-02-15T20:46:30+00:00 ========================================
+2026-02-15T20:46:30+00:00 [CMD] A1_service_enabled :: systemctl is-enabled --quiet rustyjackd.service
+2026-02-15T20:46:30+00:00 [PASS] A1_service_enabled
+2026-02-15T20:46:30+00:00 [CMD] A2_service_active :: systemctl is-active --quiet rustyjackd.service
+2026-02-15T20:46:30+00:00 [PASS] A2_service_active
+2026-02-15T20:46:30+00:00 [PASS] A3_service_show
+2026-02-15T20:46:31+00:00 [CMD] A5_runtime_dirs :: bash -c ls -ld /run/rustyjack /var/lib/rustyjack 2>&1 | tee -a '/var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629/diag.log'
+2026-02-15T20:46:31+00:00 [PASS] A5_runtime_dirs
+2026-02-15T20:46:31+00:00 [PASS] A6_socket_exists (type=socket, perms=660)
+2026-02-15T20:46:31+00:00 [PASS] A7_socket_perms_secure (others=0)
+2026-02-15T20:46:32+00:00 [WARN] A8_journal: did not find 'ready' indicator in recent journal
+2026-02-15T20:46:32+00:00 [PASS] A9_main_pid (pid=627)
+2026-02-15T20:46:32+00:00 
+2026-02-15T20:46:32+00:00 ========================================
+2026-02-15T20:46:32+00:00 SUITE B: Systemd Hardening Posture
+2026-02-15T20:46:32+00:00 ========================================
+2026-02-15T20:46:32+00:00 [PASS] B1_analyze_security
+2026-02-15T20:46:32+00:00   Security exposure: unknown
+2026-02-15T20:46:32+00:00 [PASS] B2_hardening_props
+2026-02-15T20:46:32+00:00   NoNewPrivileges: yes
+2026-02-15T20:46:32+00:00   ProtectSystem: strict
+2026-02-15T20:46:32+00:00   MemoryDenyWriteExecute: yes
+2026-02-15T20:46:32+00:00 [PASS] B3_proc_status (pid=627)
+2026-02-15T20:46:32+00:00   CapEff: 000001ffffffffff
+2026-02-15T20:46:32+00:00 
+2026-02-15T20:46:32+00:00 ========================================
+2026-02-15T20:46:32+00:00 SUITE C: Authorization Matrix & Tiers
+2026-02-15T20:46:32+00:00 ========================================
+2026-02-15T20:46:32+00:00 Creating ephemeral test users for authorization tests...
+2026-02-15T20:46:32+00:00 [WARN] group 'rustyjack-admin' missing - admin role tests will be skipped
+2026-02-15T20:46:32+00:00   - Created user: rjdiag_ro
+2026-02-15T20:46:33+00:00   - Created user: rjdiag_op
+2026-02-15T20:46:33+00:00   - Created user: rjdiag_admin
+2026-02-15T20:46:33+00:00 Test users configured:
+2026-02-15T20:46:33+00:00   - rjdiag_ro: ReadOnly (no groups)
+2026-02-15T20:46:33+00:00   - rjdiag_op: Operator (rustyjack)
+2026-02-15T20:46:33+00:00   - rjdiag_admin: Admin fallback (rustyjack only)
+2026-02-15T20:46:33+00:00 Testing tier assignment...
+2026-02-15T20:46:33+00:00 [RPC] C1 Health (user=rjdiag_ro)
+2026-02-15T20:46:33+00:00 [FAIL] RPC C1 Health (python rc=2)
+2026-02-15T20:46:33+00:00   Response: {"ok": false, "timing_ms": 0, "error_type": "connect_permission_denied", "error": "[Errno 13] Permission denied"}
+2026-02-15T20:46:34+00:00 [SKIP] C1_tier_readonly (read-only user cannot connect due to socket permissions)
+2026-02-15T20:46:34+00:00 [RPC] C2 Health (user=rjdiag_op)
+2026-02-15T20:46:34+00:00 [PASS] RPC C2 Health
+2026-02-15T20:46:35+00:00 [PASS] C2_tier_operator (role=operator)
+2026-02-15T20:46:35+00:00 [RPC] C3 Health (user=rjdiag_admin)
+2026-02-15T20:46:35+00:00 [PASS] RPC C3 Health
+2026-02-15T20:46:36+00:00 [SKIP] C3_tier_admin (admin group 'rustyjack-admin' not configured)
+2026-02-15T20:46:36+00:00 Testing endpoint tier enforcement...
+2026-02-15T20:46:36+00:00 [RPC] C4 LoggingConfigSet (user=rjdiag_op)
+2026-02-15T20:46:36+00:00 [FAIL] RPC C4 LoggingConfigSet (python rc=10)
+2026-02-15T20:46:36+00:00   Response: {"ok": false, "timing_ms": 8, "error_type": "daemon_error", "error": null, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 993, "gid": 980, "role": "operator"}}, "request_id": 1771188396346710, "response": {"v": 1, "request_id": 1771188396346710, "body": {"type": "Err", "data": {"code": 4, "message": "forbidden", "detail": null, "retryable": false, "source": null}}}, "daemon_e
+2026-02-15T20:46:36+00:00 [PASS] C4_admin_endpoint_op_denied (correctly denied)
+2026-02-15T20:46:36+00:00 [RPC] C5 SystemLogsGet (user=rjdiag_ro)
+2026-02-15T20:46:37+00:00 [FAIL] RPC C5 SystemLogsGet (python rc=2)
+2026-02-15T20:46:37+00:00   Response: {"ok": false, "timing_ms": 0, "error_type": "connect_permission_denied", "error": "[Errno 13] Permission denied"}
+2026-02-15T20:46:37+00:00 [PASS] C5_operator_endpoint_ro_denied (correctly denied)
+2026-02-15T20:46:37+00:00 [SKIP] C6_admin_endpoint_allowed (admin group 'rustyjack-admin' not configured)
+2026-02-15T20:46:37+00:00 Testing authorization matrix samples...
+2026-02-15T20:46:37+00:00 [SKIP] C7_readonly_status (RO socket access denied by policy)
+2026-02-15T20:46:37+00:00 [RPC] C8 Version (user=rjdiag_op)
+2026-02-15T20:46:37+00:00 [PASS] RPC C8 Version
+2026-02-15T20:46:37+00:00 [SKIP] C9_admin_block_devices (admin group 'rustyjack-admin' not configured)
+2026-02-15T20:46:38+00:00 [SKIP] C10_op_endpoint_denied (RO socket access denied by policy)
+2026-02-15T20:46:38+00:00 
+2026-02-15T20:46:38+00:00 ========================================
+2026-02-15T20:46:38+00:00 SUITE D: Protocol Robustness (Negative)
+2026-02-15T20:46:38+00:00 ========================================
+2026-02-15T20:46:38+00:00 D1: Testing protocol version mismatch...
+D1_OK
+2026-02-15T20:46:38+00:00 [FAIL] D1_protocol_version_mismatch (expected error response)
+2026-02-15T20:46:38+00:00 D2: Testing oversized frame rejection...
+D2_ERROR: 
+2026-02-15T20:46:38+00:00 [PASS] D2_oversize_frame_rejected
+2026-02-15T20:46:38+00:00 D3: Testing repeated violations disconnect...
+D3_OK
+2026-02-15T20:46:38+00:00 [PASS] D3_repeated_violations_disconnect
+2026-02-15T20:46:38+00:00 D4: Testing endpoint/body mismatch...
+2026-02-15T20:46:38+00:00 [RPC] D4 Health (user=root)
+2026-02-15T20:46:39+00:00 [PASS] RPC D4 Health
+D4_OK
+2026-02-15T20:46:39+00:00 [PASS] D4_endpoint_body_mismatch
+2026-02-15T20:46:39+00:00 
+2026-02-15T20:46:39+00:00 ========================================
+2026-02-15T20:46:39+00:00 SUITE E: Safe Functional Smoke Tests
+2026-02-15T20:46:39+00:00 ========================================
+2026-02-15T20:46:39+00:00 [RPC] E1 Health (user=root)
+2026-02-15T20:46:40+00:00 [PASS] RPC E1 Health
+2026-02-15T20:46:40+00:00 [RPC] E2 Version (user=root)
+2026-02-15T20:46:41+00:00 [PASS] RPC E2 Version
+2026-02-15T20:46:41+00:00 [RPC] E3 Status (user=root)
+2026-02-15T20:46:41+00:00 [PASS] RPC E3 Status
+2026-02-15T20:46:42+00:00 [RPC] E4 SystemStatusGet (user=root)
+2026-02-15T20:46:42+00:00 [PASS] RPC E4 SystemStatusGet
+2026-02-15T20:46:42+00:00 [RPC] E5 DiskUsageGet (user=root)
+2026-02-15T20:46:43+00:00 [PASS] RPC E5 DiskUsageGet
+2026-02-15T20:46:43+00:00 [RPC] E6 BlockDevicesList (user=root)
+2026-02-15T20:46:44+00:00 [PASS] RPC E6 BlockDevicesList
+2026-02-15T20:46:44+00:00 [RPC] E7 ActiveInterfaceGet (user=root)
+2026-02-15T20:46:44+00:00 [PASS] RPC E7 ActiveInterfaceGet
+2026-02-15T20:46:44+00:00 [RPC] E8 InterfaceStatusGet (user=root)
+2026-02-15T20:46:45+00:00 [PASS] RPC E8 InterfaceStatusGet
+2026-02-15T20:46:45+00:00 [RPC] E9 WifiInterfacesList (user=root)
+2026-02-15T20:46:46+00:00 [PASS] RPC E9 WifiInterfacesList
+2026-02-15T20:46:46+00:00 [RPC] E10 WifiCapabilitiesGet (user=root)
+2026-02-15T20:46:47+00:00 [PASS] RPC E10 WifiCapabilitiesGet
+2026-02-15T20:46:47+00:00 [RPC] E11 PortalStatus (user=root)
+2026-02-15T20:46:48+00:00 [PASS] RPC E11 PortalStatus
+2026-02-15T20:46:48+00:00 [RPC] E12 MountList (user=root)
+2026-02-15T20:46:48+00:00 [PASS] RPC E12 MountList
+2026-02-15T20:46:49+00:00 [RPC] E13 LoggingConfigGet (user=root)
+2026-02-15T20:46:49+00:00 [PASS] RPC E13 LoggingConfigGet
+2026-02-15T20:46:49+00:00 [RPC] E14 LogTailGet (user=root)
+2026-02-15T20:46:50+00:00 [PASS] RPC E14 LogTailGet
+2026-02-15T20:46:50+00:00 [PASS] E15_health_latency (7ms < 100ms)
+2026-02-15T20:46:50+00:00 
+2026-02-15T20:46:50+00:00 ========================================
+2026-02-15T20:46:50+00:00 SUITE F: Job Subsystem Reliability
+2026-02-15T20:46:50+00:00 ========================================
+2026-02-15T20:46:50+00:00 [RPC] F1 JobStart (user=root)
+2026-02-15T20:46:51+00:00 [FAIL] RPC F1 JobStart (python rc=10)
+2026-02-15T20:46:51+00:00   Response: {"ok": false, "timing_ms": 15, "error_type": "daemon_error", "error": null, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 0, "gid": 0, "role": "admin"}}, "request_id": 1771188411049427, "response": {"v": 1, "request_id": 1771188411049427, "body": {"type": "Err", "data": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 42396 uid 0 is
+2026-02-15T20:46:51+00:00 [SKIP] Suite F (JobStart failed)
+2026-02-15T20:46:51+00:00 
+2026-02-15T20:46:51+00:00 ========================================
+2026-02-15T20:46:51+00:00 SUITE G: Logging & Observability
+2026-02-15T20:46:51+00:00 ========================================
+2026-02-15T20:46:52+00:00 [PASS] G1_journal_capture
+2026-02-15T20:46:52+00:00 [RPC] G2 LogTailGet (user=root)
+2026-02-15T20:46:52+00:00 [PASS] RPC G2 LogTailGet
+2026-02-15T20:46:52+00:00 [PASS] G3_log_dir_perms
+2026-02-15T20:46:52+00:00 [FAIL] G4_log_dir_secure (perms=2770, world-write bit set)
+2026-02-15T20:46:52+00:00 [INFO] G5_errors_in_journal (found errors, see journal_full.txt)
+2026-02-15T20:46:52+00:00 
+2026-02-15T20:46:52+00:00 ========================================
+2026-02-15T20:46:52+00:00 SUITE H: Stress & Soak Tests
+2026-02-15T20:46:52+00:00 ========================================
+2026-02-15T20:46:52+00:00   Initial FD count: 22 (pid=627)
+2026-02-15T20:46:52+00:00 H1: Sequential Health burst (200 requests)...
+2026-02-15T20:47:29+00:00   ... 50/200 requests
+2026-02-15T20:48:05+00:00   ... 100/200 requests
+2026-02-15T20:48:41+00:00   ... 150/200 requests
+2026-02-15T20:49:17+00:00   ... 200/200 requests
+2026-02-15T20:49:17+00:00   Completed: 200 requests in 144817ms (~1 req/s)
+2026-02-15T20:49:17+00:00   Failures: 0
+2026-02-15T20:49:17+00:00 [PASS] H1_sequential_burst (failures=0/200)
+2026-02-15T20:49:17+00:00 H2: Connection churn (100 cycles)...
+2026-02-15T20:50:30+00:00 [PASS] H2_connection_churn (failures=0/100)
+2026-02-15T20:50:30+00:00   Final FD count: 22 (delta: 0)
+2026-02-15T20:50:30+00:00 [PASS] H3_fd_leak_check (delta=0 < 10)
+2026-02-15T20:50:30+00:00   RSS: 48704 KB
+2026-02-15T20:50:30+00:00 [PASS] H4_memory_check (rss=48704KB)
+2026-02-15T20:50:30+00:00 
+2026-02-15T20:50:30+00:00 ========================================
+2026-02-15T20:50:30+00:00 SUITE I: Security Adversarial Tests
+2026-02-15T20:50:30+00:00 ========================================
+2026-02-15T20:50:30+00:00 I1: Testing PID disappears auth bypass...
+2026-02-15T20:50:31+00:00 [FAIL] I1_pid_disappears_auth_VULNERABLE (CRITICAL SECURITY BUG!)
+2026-02-15T20:50:31+00:00   !!! PRIVILEGE ESCALATION DETECTED !!!
+2026-02-15T20:50:32+00:00 I2: Testing comprehensive tier enforcement...
+2026-02-15T20:50:32+00:00 [PASS] I2_SystemReboot_denied
+2026-02-15T20:50:33+00:00 [PASS] I2_SystemShutdown_denied
+2026-02-15T20:50:33+00:00 [PASS] I2_HostnameRandomizeNow_denied
+2026-02-15T20:50:34+00:00 [PASS] I2_LoggingConfigSet_denied
+2026-02-15T20:50:34+00:00 [PASS] I2_tier_enforcement_comprehensive
+2026-02-15T20:50:34+00:00 I3: Testing protocol abuse DOS resistance...
+2026-02-15T20:50:34+00:00 [PASS] I3_protocol_abuse_dos_resistant (service still active)
+2026-02-15T20:50:34+00:00 
+2026-02-15T20:50:34+00:00 ========================================
+2026-02-15T20:50:34+00:00 SUITE J: Dangerous/Disruptive Tests
+2026-02-15T20:50:34+00:00 ========================================
+2026-02-15T20:50:34+00:00 [WARN] Running disruptive tests - network state may change!
+2026-02-15T20:50:34+00:00 [RPC] J1 WifiScanStart (user=root)
+2026-02-15T20:50:35+00:00 [FAIL] RPC J1 WifiScanStart (python rc=10)
+2026-02-15T20:50:35+00:00   Response: {"ok": false, "timing_ms": 4, "error_type": "daemon_error", "error": null, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 0, "gid": 0, "role": "admin"}}, "request_id": 1771188634975715, "response": {"v": 1, "request_id": 0, "body": {"type": "Err", "data": {"code": 1, "message": "invalid request: missing field `timeout_ms` at line 1 column 125", "detail": null, "retryable": fa
+2026-02-15T20:50:35+00:00 [SKIP] J1_wifi_scan (no wlan0 or failed)
+2026-02-15T20:50:35+00:00 J2: Testing hotspot start/stop...
+2026-02-15T20:50:35+00:00 [SKIP] J2_hotspot_start_stop (failed to start)
+2026-02-15T20:50:35+00:00 [SKIP] J3_mount_unmount (requires manual USB device setup)
+2026-02-15T20:50:35+00:00 [RPC] J4 SystemSync (user=rjdiag_admin)
+2026-02-15T20:50:36+00:00 [FAIL] RPC J4 SystemSync (python rc=10)
+2026-02-15T20:50:36+00:00   Response: {"ok": false, "timing_ms": 6, "error_type": "daemon_error", "error": null, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 992, "gid": 979, "role": "operator"}}, "request_id": 1771188636110598, "response": {"v": 1, "request_id": 1771188636110598, "body": {"type": "Err", "data": {"code": 4, "message": "forbidden", "detail": null, "retryable": false, "source": null}}}, "daemon_e
+2026-02-15T20:50:36+00:00 [WARN] Dangerous tests complete - verify network connectivity!
+2026-02-15T20:50:36+00:00 
+2026-02-15T20:50:36+00:00 ========================================
+2026-02-15T20:50:36+00:00 DIAGNOSTIC RUN COMPLETE
+2026-02-15T20:50:36+00:00 ========================================
+2026-02-15T20:50:36+00:00 Results Summary:
+2026-02-15T20:50:36+00:00   Total Tests: 373
+2026-02-15T20:50:36+00:00   Passed:      349
+2026-02-15T20:50:36+00:00   Failed:      14
+2026-02-15T20:50:36+00:00   Skipped:     10
+2026-02-15T20:50:36+00:00   Pass Rate:   93%
+2026-02-15T20:50:36+00:00 
+2026-02-15T20:50:36+00:00 Artifacts:
+2026-02-15T20:50:36+00:00   Run Directory: /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629
+2026-02-15T20:50:36+00:00   Diagnostic Log: /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629/diag.log
+2026-02-15T20:50:36+00:00   Summary JSON: /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629/summary.json
+2026-02-15T20:50:36+00:00   System Info: /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629/sysinfo.txt
+2026-02-15T20:50:36+00:00 
+{
+  "run_id": "20260215-204629",
+  "timestamp": "20260215-204629",
+  "totals": {
+    "total": 373,
+    "passed": 349,
+    "failed": 14,
+    "skipped": 10,
+    "pass_rate": 93.57
+  }
+}
+2026-02-15T20:50:36+00:00 STATUS: FAILURES DETECTED (14 failed tests)
+2026-02-15T20:50:36+00:00 Review: /var/tmp/rustyjack-tests/20260215-204314/daemon/artifacts/comprehensive/20260215-204629/diag.log
+2026-02-15T20:50:36+00:00 Cleaning up test users...
+2026-02-15T20:50:37+00:00   - Removed user: rjdiag_ro
+2026-02-15T20:50:37+00:00   - Removed user: rjdiag_op
+2026-02-15T20:50:37+00:00   - Removed user: rjdiag_admin
+2026-02-15T20:50:37+00:00 [FAIL] comprehensive_suite (failures detected)
+2026-02-15T20:50:37+00:00 [SUMMARY] Tests=6 Passed=11 Failed=5 Skipped=4
+2026-02-15T20:50:37+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/daemon/report.md
+2026-02-15T20:50:37+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/daemon/run.log
+2026-02-15T20:50:37+00:00 Daemon tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/daemon

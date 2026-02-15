@@ -1,0 +1,4 @@
+{"ts": "2026-02-15T20:46:09+00:00", "status": "fail", "name": "audit_log_status", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/anti_forensics/artifacts/audit_log_status.json"}
+{"ts": "2026-02-15T20:46:09+00:00", "status": "fail", "name": "secure_delete_test", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/anti_forensics/artifacts/secure_delete.json"}
+{"ts": "2026-02-15T20:46:10+00:00", "status": "fail", "name": "log_purge_status", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/anti_forensics/artifacts/log_purge_status.json"}
+{"ts": "2026-02-15T20:46:10+00:00", "status": "fail", "name": "artifact_sweep_list", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/anti_forensics/artifacts/artifact_sweep_list.json"}

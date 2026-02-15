@@ -1,0 +1,69 @@
+2026-02-15T20:44:42+00:00 Suite: interface_selection
+2026-02-15T20:44:42+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/interface_selection
+2026-02-15T20:44:42+00:00 [INFO] Wireless interfaces under test: wlan0 wlan1
+2026-02-15T20:44:42+00:00 [INFO] Ethernet interfaces under test: eth0
+2026-02-15T20:44:42+00:00 [CMD] hardware_detect :: rustyjack hardware detect --output json (output: /var/tmp/rustyjack-tests/20260215-204314/interface_selection/artifacts/hardware_detect.json)
+2026-02-15T20:44:42+00:00 [PASS] hardware_detect
+2026-02-15T20:44:42+00:00 [CMD] status_network :: rustyjack status network --output json (output: /var/tmp/rustyjack-tests/20260215-204314/interface_selection/artifacts/status_network.json)
+2026-02-15T20:44:42+00:00 [PASS] status_network
+2026-02-15T20:44:42+00:00 [CMD] iw_dev :: iw dev (output: /var/tmp/rustyjack-tests/20260215-204314/interface_selection/artifacts/iw_dev.txt)
+2026-02-15T20:44:43+00:00 [PASS] iw_dev
+2026-02-15T20:44:43+00:00 [CMD] rfkill_list :: rfkill list (output: /var/tmp/rustyjack-tests/20260215-204314/interface_selection/artifacts/rfkill_list.txt)
+2026-02-15T20:44:43+00:00 [PASS] rfkill_list
+2026-02-15T20:44:43+00:00 [RPC] active_before :: ActiveInterfaceGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:43+00:00 [PASS] active_before
+2026-02-15T20:44:44+00:00 [INFO] Active interface before tests: <none>
+2026-02-15T20:44:44+00:00 [INFO] Default route interface before tests: <none>
+2026-02-15T20:44:44+00:00 [INFO] SSH route interface: <none>
+2026-02-15T20:44:44+00:00 [INFO] Recovery interface: <none>
+2026-02-15T20:44:44+00:00 [RPC] iface_status_pre_eth0 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:44+00:00 [PASS] iface_status_pre_eth0
+2026-02-15T20:44:44+00:00 [RPC] set_active_eth0 :: SetActiveInterface (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:45+00:00 [FAIL] set_active_eth0 (rc=0)
+2026-02-15T20:44:45+00:00 Capturing interface-selection failure context...
+2026-02-15T20:44:45+00:00 [TAIL] set_active_eth0 response
+2026-02-15T20:44:45+00:00   {"ok": false, "timing_ms": 9, "request_id": 1771188285092935, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 0, "gid": 0, "role": "admin"}}, "response": {"v": 1, "request_id": 1771188285092935, "body": {"type": "Err", "data": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 35271 uid 0 is not UI user 'rustyjack-ui' and not daemon-spawned", "retryable": false, "source": null}}}, "error_type": "daemon_error", "daemon_error": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 35271 uid 0 is not UI user 'rustyjack-ui' and not daemon-spawned", "retryable": false, "source": null}}
+2026-02-15T20:44:45+00:00 [RPC] active_after_eth0 :: ActiveInterfaceGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:46+00:00 [PASS] active_after_eth0
+2026-02-15T20:44:46+00:00 [RPC] iface_status_after_eth0 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:46+00:00 [PASS] iface_status_after_eth0
+2026-02-15T20:44:46+00:00 [FAIL] active_interface_set_eth0 (expected=eth0 actual=<none>)
+2026-02-15T20:44:47+00:00 [PASS] set_active_errors_eth0 (no daemon-reported errors)
+2026-02-15T20:44:47+00:00 [PASS] target_admin_up_eth0
+2026-02-15T20:44:47+00:00 [PASS] nonempty_uplink_set_eth0 (up_non_lo=1)
+2026-02-15T20:44:47+00:00 [RPC] iface_status_pre_wlan0 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:48+00:00 [PASS] iface_status_pre_wlan0
+2026-02-15T20:44:48+00:00 [RPC] set_active_wlan0 :: SetActiveInterface (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:48+00:00 [FAIL] set_active_wlan0 (rc=0)
+2026-02-15T20:44:48+00:00 [TAIL] set_active_wlan0 response
+2026-02-15T20:44:48+00:00   {"ok": false, "timing_ms": 7, "request_id": 1771188288570324, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 0, "gid": 0, "role": "admin"}}, "response": {"v": 1, "request_id": 1771188288570324, "body": {"type": "Err", "data": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 35516 uid 0 is not UI user 'rustyjack-ui' and not daemon-spawned", "retryable": false, "source": null}}}, "error_type": "daemon_error", "daemon_error": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 35516 uid 0 is not UI user 'rustyjack-ui' and not daemon-spawned", "retryable": false, "source": null}}
+2026-02-15T20:44:48+00:00 [RPC] active_after_wlan0 :: ActiveInterfaceGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:49+00:00 [PASS] active_after_wlan0
+2026-02-15T20:44:49+00:00 [RPC] iface_status_after_wlan0 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:49+00:00 [PASS] iface_status_after_wlan0
+2026-02-15T20:44:50+00:00 [FAIL] active_interface_set_wlan0 (expected=wlan0 actual=<none>)
+2026-02-15T20:44:50+00:00 [PASS] set_active_errors_wlan0 (no daemon-reported errors)
+2026-02-15T20:44:50+00:00 [FAIL] target_admin_up_wlan0 (is_up=false)
+2026-02-15T20:44:50+00:00 [PASS] nonempty_uplink_set_wlan0 (up_non_lo=1)
+2026-02-15T20:44:51+00:00 [RPC] iface_status_pre_wlan1 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:51+00:00 [PASS] iface_status_pre_wlan1
+2026-02-15T20:44:51+00:00 [RPC] set_active_wlan1 :: SetActiveInterface (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:52+00:00 [FAIL] set_active_wlan1 (rc=0)
+2026-02-15T20:44:52+00:00 [TAIL] set_active_wlan1 response
+2026-02-15T20:44:52+00:00   {"ok": false, "timing_ms": 7, "request_id": 1771188292020728, "handshake": {"protocol_version": 1, "daemon_version": "0.1.3", "features": ["job_progress", "uds_timeouts", "group_based_auth"], "max_frame": 1048576, "authz": {"uid": 0, "gid": 0, "role": "admin"}}, "response": {"v": 1, "request_id": 1771188292020728, "body": {"type": "Err", "data": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 35718 uid 0 is not UI user 'rustyjack-ui' and not daemon-spawned", "retryable": false, "source": null}}}, "error_type": "daemon_error", "daemon_error": {"code": 4, "message": "operations are restricted to the UI runtime", "detail": "client pid 35718 uid 0 is not UI user 'rustyjack-ui' and not daemon-spawned", "retryable": false, "source": null}}
+2026-02-15T20:44:52+00:00 [RPC] active_after_wlan1 :: ActiveInterfaceGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:52+00:00 [PASS] active_after_wlan1
+2026-02-15T20:44:52+00:00 [RPC] iface_status_after_wlan1 :: InterfaceStatusGet (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:53+00:00 [PASS] iface_status_after_wlan1
+2026-02-15T20:44:53+00:00 [FAIL] active_interface_set_wlan1 (expected=wlan1 actual=<none>)
+2026-02-15T20:44:54+00:00 [PASS] set_active_errors_wlan1 (no daemon-reported errors)
+2026-02-15T20:44:54+00:00 [FAIL] target_admin_up_wlan1 (is_up=false)
+2026-02-15T20:44:54+00:00 [PASS] nonempty_uplink_set_wlan1 (up_non_lo=1)
+2026-02-15T20:44:54+00:00 [RPC] set_active_bad_iface :: SetActiveInterface (socket=/run/rustyjack/rustyjackd.sock)
+2026-02-15T20:44:54+00:00 [PASS] set_active_bad_iface failed as expected (rc=0)
+2026-02-15T20:45:01+00:00 [WARN] UI service failed to start after enabling virtual input
+2026-02-15T20:45:01+00:00 [SKIP] Failed to enable UI virtual input
+2026-02-15T20:45:01+00:00 [SUMMARY] Tests=18 Passed=22 Failed=8 Skipped=1
+2026-02-15T20:45:01+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/interface_selection/report.md
+2026-02-15T20:45:01+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/interface_selection/run.log
+2026-02-15T20:45:01+00:00 Interface-selection tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/interface_selection

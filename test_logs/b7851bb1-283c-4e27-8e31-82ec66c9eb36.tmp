@@ -1,0 +1,13 @@
+# Rustyjack Test Report
+
+- Run: 20260215-204314
+- Output: /var/tmp/rustyjack-tests/20260215-204314/installers
+- Tests: 4
+- Passed: 48
+- Failed: 0
+- Skipped: 8
+
+Artifacts:
+- /var/tmp/rustyjack-tests/20260215-204314/installers/run.log
+- /var/tmp/rustyjack-tests/20260215-204314/installers/summary.jsonl
+- /var/tmp/rustyjack-tests/20260215-204314/installers/report.md

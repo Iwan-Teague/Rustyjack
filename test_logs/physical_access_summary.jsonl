@@ -1,0 +1,3 @@
+{"ts": "2026-02-15T20:46:14+00:00", "status": "fail", "name": "router_fingerprint_help", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/physical_access/artifacts/router_fingerprint_help.txt"}
+{"ts": "2026-02-15T20:46:14+00:00", "status": "fail", "name": "credential_extract_help", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/physical_access/artifacts/credential_extract_help.txt"}
+{"ts": "2026-02-15T20:46:15+00:00", "status": "fail", "name": "default_creds_list", "detail": "rc=2; saved=/var/tmp/rustyjack-tests/20260215-204314/physical_access/artifacts/default_creds_list.json"}

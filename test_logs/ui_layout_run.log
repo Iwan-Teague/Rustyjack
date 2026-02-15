@@ -1,0 +1,7 @@
+2026-02-15T20:55:11+00:00 Suite: ui_layout
+2026-02-15T20:55:11+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/ui_layout
+2026-02-15T20:55:11+00:00 [SKIP] Skipping tests that require cargo (install previously declined in this run)
+2026-02-15T20:55:11+00:00 [SKIP] UI layout tests skipped (cargo unavailable)
+2026-02-15T20:55:11+00:00 [SUMMARY] Tests=0 Passed=0 Failed=0 Skipped=2
+2026-02-15T20:55:11+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/ui_layout/report.md
+2026-02-15T20:55:11+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/ui_layout/run.log

@@ -1,0 +1,100 @@
+2026-02-15T20:43:27+00:00 Suite: wireless
+2026-02-15T20:43:27+00:00 Output: /var/tmp/rustyjack-tests/20260215-204314/wireless
+2026-02-15T20:43:27+00:00 [INFO] Wireless interfaces under test: wlan0 wlan1
+2026-02-15T20:43:27+00:00 [CMD] ip_link :: ip -br link show (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/ip_link.txt)
+2026-02-15T20:43:27+00:00 [PASS] ip_link
+2026-02-15T20:43:27+00:00 [CMD] ip_addr :: ip -br addr show (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/ip_addr.txt)
+2026-02-15T20:43:27+00:00 [PASS] ip_addr
+2026-02-15T20:43:27+00:00 [CMD] iw_dev :: iw dev (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/iw_dev.txt)
+2026-02-15T20:43:27+00:00 [PASS] iw_dev
+2026-02-15T20:43:27+00:00 [CMD] iw_list :: iw list (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/iw_list.txt)
+2026-02-15T20:43:27+00:00 [PASS] iw_list
+2026-02-15T20:43:28+00:00 [CMD] rfkill_list :: rfkill list (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/rfkill_list.txt)
+2026-02-15T20:43:28+00:00 [PASS] rfkill_list
+2026-02-15T20:43:28+00:00 [CMD] wpa_cli_version :: wpa_cli -v (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wpa_cli_version.txt)
+2026-02-15T20:43:28+00:00 [PASS] wpa_cli_version
+2026-02-15T20:43:28+00:00 [WARN] Missing required tool: cargo (Rust toolchain (unit tests))
+2026-02-15T20:43:28+00:00 [SKIP] Skipping tests that require cargo
+2026-02-15T20:43:28+00:00 [SKIP] Unit tests skipped (cargo unavailable)
+2026-02-15T20:43:28+00:00 [CMD] status_network :: rustyjack status network --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/status_network.json)
+2026-02-15T20:43:29+00:00 [PASS] status_network
+2026-02-15T20:43:29+00:00 [CMD] hardware_detect :: rustyjack hardware detect --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/hardware_detect.json)
+2026-02-15T20:43:29+00:00 [PASS] hardware_detect
+2026-02-15T20:43:29+00:00 [INFO] Running wireless interface tests for wlan0
+2026-02-15T20:43:30+00:00 [CMD] wifi_list_wlan0 :: rustyjack wifi list --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_list_wlan0.json)
+2026-02-15T20:43:30+00:00 [PASS] wifi_list_wlan0
+2026-02-15T20:43:30+00:00 [CMD] wifi_best_wlan0 :: rustyjack wifi best --prefer-wifi --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_best_wlan0.json)
+2026-02-15T20:43:30+00:00 [PASS] wifi_best_wlan0
+2026-02-15T20:43:30+00:00 [CMD] wifi_status_wlan0 :: rustyjack wifi status --interface wlan0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_status_wlan0.json)
+2026-02-15T20:43:30+00:00 [PASS] wifi_status_wlan0
+2026-02-15T20:43:31+00:00 [CMD] wifi_scan_wlan0 :: rustyjack wifi scan --interface wlan0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_scan_wlan0.json)
+
+thread 'main' panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/netlink-sys-0.8.7/src/tokio.rs:45:17:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-02-15T20:43:31+00:00 [FAIL] wifi_scan_wlan0 (rc=101)
+2026-02-15T20:43:31+00:00 Capturing wireless failure context...
+2026-02-15T20:43:32+00:00 [TAIL] wifi_scan_wlan0 output (deduped)
+2026-02-15T20:43:32+00:00   [2m2026-02-15T20:43:31.063743Z[0m [32m INFO[0m [2mrustyjack_core::operations[0m[2m:[0m Starting WiFi scan
+2026-02-15T20:43:32+00:00   [2m2026-02-15T20:43:31.074531Z[0m [32m INFO[0m [2mwifi[0m[2m:[0m wifi_interface_override_selected [3miface[0m[2m=[0mwlan0
+2026-02-15T20:43:32+00:00   [2m2026-02-15T20:43:31.081345Z[0m [32m INFO[0m [2mnet[0m[2m:[0m enforce_single_interface [3miface[0m[2m=[0mwlan0
+2026-02-15T20:43:32+00:00 [CMD] wifi_route_status_wlan0 :: rustyjack wifi route status --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_route_status_wlan0.json)
+2026-02-15T20:43:32+00:00 [PASS] wifi_route_status_wlan0
+2026-02-15T20:43:32+00:00 [CMD] wifi_profile_list_wlan0 :: rustyjack wifi profile list --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_list_wlan0.json)
+2026-02-15T20:43:32+00:00 [PASS] wifi_profile_list_wlan0
+2026-02-15T20:43:33+00:00 [PASS] Isolation check passed: wifi_wlan0_readonly
+2026-02-15T20:43:33+00:00 [CMD] wifi_profile_save_wlan0 :: rustyjack wifi profile save --ssid RJ_TEST_PROFILE_wlan0 --password testpass123 --interface wlan0 --priority 5 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_save_wlan0.json)
+2026-02-15T20:43:33+00:00 [PASS] wifi_profile_save_wlan0
+2026-02-15T20:43:33+00:00 [CMD] wifi_profile_show_wlan0 :: rustyjack wifi profile show --ssid RJ_TEST_PROFILE_wlan0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_show_wlan0.json)
+2026-02-15T20:43:33+00:00 [PASS] wifi_profile_show_wlan0
+2026-02-15T20:43:33+00:00 [CMD] wifi_profile_delete_wlan0 :: rustyjack wifi profile delete --ssid RJ_TEST_PROFILE_wlan0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_delete_wlan0.json)
+2026-02-15T20:43:33+00:00 [PASS] wifi_profile_delete_wlan0
+2026-02-15T20:43:34+00:00 [CMD] wifi_status_after_profile_wlan0 :: rustyjack wifi status --interface wlan0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_status_after_profile_wlan0.json)
+2026-02-15T20:43:34+00:00 [PASS] wifi_status_after_profile_wlan0
+2026-02-15T20:43:34+00:00 [SKIP] Dangerous Wi-Fi tests require RJ_WIFI_TARGET_BSSID and RJ_WIFI_TARGET_CHANNEL
+2026-02-15T20:43:34+00:00 [INFO] Running wireless interface tests for wlan1
+2026-02-15T20:43:34+00:00 [CMD] wifi_list_wlan1 :: rustyjack wifi list --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_list_wlan1.json)
+2026-02-15T20:43:34+00:00 [PASS] wifi_list_wlan1
+2026-02-15T20:43:34+00:00 [CMD] wifi_best_wlan1 :: rustyjack wifi best --prefer-wifi --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_best_wlan1.json)
+2026-02-15T20:43:34+00:00 [PASS] wifi_best_wlan1
+2026-02-15T20:43:35+00:00 [CMD] wifi_status_wlan1 :: rustyjack wifi status --interface wlan1 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_status_wlan1.json)
+2026-02-15T20:43:35+00:00 [PASS] wifi_status_wlan1
+2026-02-15T20:43:35+00:00 [CMD] wifi_scan_wlan1 :: rustyjack wifi scan --interface wlan1 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_scan_wlan1.json)
+
+thread 'main' panicked at /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/netlink-sys-0.8.7/src/tokio.rs:45:17:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-02-15T20:43:35+00:00 [FAIL] wifi_scan_wlan1 (rc=101)
+2026-02-15T20:43:35+00:00 [TAIL] wifi_scan_wlan1 output (deduped)
+2026-02-15T20:43:35+00:00   [2m2026-02-15T20:43:35.391579Z[0m [32m INFO[0m [2mrustyjack_core::operations[0m[2m:[0m Starting WiFi scan
+2026-02-15T20:43:35+00:00   [2m2026-02-15T20:43:35.402525Z[0m [32m INFO[0m [2mwifi[0m[2m:[0m wifi_interface_override_selected [3miface[0m[2m=[0mwlan1
+2026-02-15T20:43:36+00:00   [2m2026-02-15T20:43:35.402799Z[0m [32m INFO[0m [2mnet[0m[2m:[0m enforce_single_interface [3miface[0m[2m=[0mwlan1
+2026-02-15T20:43:36+00:00 [CMD] wifi_route_status_wlan1 :: rustyjack wifi route status --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_route_status_wlan1.json)
+2026-02-15T20:43:36+00:00 [PASS] wifi_route_status_wlan1
+2026-02-15T20:43:36+00:00 [CMD] wifi_profile_list_wlan1 :: rustyjack wifi profile list --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_list_wlan1.json)
+2026-02-15T20:43:36+00:00 [PASS] wifi_profile_list_wlan1
+2026-02-15T20:43:36+00:00 [PASS] Isolation check passed: wifi_wlan1_readonly
+2026-02-15T20:43:36+00:00 [CMD] wifi_profile_save_wlan1 :: rustyjack wifi profile save --ssid RJ_TEST_PROFILE_wlan1 --password testpass123 --interface wlan1 --priority 5 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_save_wlan1.json)
+2026-02-15T20:43:37+00:00 [PASS] wifi_profile_save_wlan1
+2026-02-15T20:43:37+00:00 [CMD] wifi_profile_show_wlan1 :: rustyjack wifi profile show --ssid RJ_TEST_PROFILE_wlan1 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_show_wlan1.json)
+2026-02-15T20:43:37+00:00 [PASS] wifi_profile_show_wlan1
+2026-02-15T20:43:37+00:00 [CMD] wifi_profile_delete_wlan1 :: rustyjack wifi profile delete --ssid RJ_TEST_PROFILE_wlan1 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_delete_wlan1.json)
+2026-02-15T20:43:37+00:00 [PASS] wifi_profile_delete_wlan1
+2026-02-15T20:43:37+00:00 [CMD] wifi_status_after_profile_wlan1 :: rustyjack wifi status --interface wlan1 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_status_after_profile_wlan1.json)
+2026-02-15T20:43:37+00:00 [PASS] wifi_status_after_profile_wlan1
+2026-02-15T20:43:38+00:00 [SKIP] Dangerous Wi-Fi tests require RJ_WIFI_TARGET_BSSID and RJ_WIFI_TARGET_CHANNEL
+2026-02-15T20:43:38+00:00 [CMD] wifi_status_bad_iface (allow fail) :: rustyjack wifi status --interface rjbad0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_status_bad_iface.json)
+2026-02-15T20:43:38+00:00 [CMD] wifi_status_bad_iface exited rc=1 (allowed)
+2026-02-15T20:43:38+00:00 [PASS] Bad interface rejected in wifi status
+2026-02-15T20:43:38+00:00 [CMD] wifi_scan_bad_iface (allow fail) :: rustyjack wifi scan --interface rjbad0 --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_scan_bad_iface.json)
+2026-02-15T20:43:38+00:00 [CMD] wifi_scan_bad_iface exited rc=1 (allowed)
+2026-02-15T20:43:38+00:00 [PASS] Bad interface rejected in wifi scan
+2026-02-15T20:43:38+00:00 [CMD] wifi_profile_show_missing (allow fail) :: rustyjack wifi profile show --ssid RJ_MISSING_PROFILE --output json (output: /var/tmp/rustyjack-tests/20260215-204314/wireless/artifacts/wifi_profile_show_missing.json)
+2026-02-15T20:43:38+00:00 [CMD] wifi_profile_show_missing exited rc=1 (allowed)
+2026-02-15T20:43:39+00:00 [PASS] Missing profile correctly rejected
+2026-02-15T20:43:45+00:00 [WARN] UI service failed to start after enabling virtual input
+2026-02-15T20:43:45+00:00 [SKIP] Failed to enable UI virtual input
+2026-02-15T20:43:46+00:00 [SUMMARY] Tests=31 Passed=31 Failed=2 Skipped=5
+2026-02-15T20:43:46+00:00 [SUMMARY] Report: /var/tmp/rustyjack-tests/20260215-204314/wireless/report.md
+2026-02-15T20:43:46+00:00 [SUMMARY] Log: /var/tmp/rustyjack-tests/20260215-204314/wireless/run.log
+2026-02-15T20:43:46+00:00 Wireless tests completed. Output: /var/tmp/rustyjack-tests/20260215-204314/wireless
