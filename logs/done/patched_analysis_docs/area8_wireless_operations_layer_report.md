@@ -1,4 +1,6 @@
 # Area 8 — Wireless operations layer (Architecture Doc 2)
+Date: 2026-02-15
+
 **Repository snapshot:** `watchdog/` workspace (Rust)
 **Report type:** Codebase audit (safety, correctness, guardrails, secure engineering) — **no operational “how‑to”** content.
 

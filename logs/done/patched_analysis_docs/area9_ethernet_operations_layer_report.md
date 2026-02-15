@@ -1,4 +1,6 @@
 # Area 9 — Ethernet operations layer (Architecture Doc 2) — Read‑only review
+Date: 2026-02-15
+
 
 **Repository snapshot:** `watchdog_shallow_20260213-173640.zip` (read-only analysis; no files modified)
 

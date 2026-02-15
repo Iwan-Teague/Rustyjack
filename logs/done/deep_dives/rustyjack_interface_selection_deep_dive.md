@@ -1,4 +1,6 @@
 # RustyJack Network Interface Selection Deep Dive (Pi Zero 2 W)
+Date: 2026-02-10
+
 
 **Goal:** fix the “Hardware / Network Interface Select” feature so a user can reliably switch between `eth0` and `wlan0` on a Raspberry Pi Zero 2 W **without ever getting stranded** in an “all interfaces DOWN” state, while keeping the **only 1 active interface** isolation invariant.
 

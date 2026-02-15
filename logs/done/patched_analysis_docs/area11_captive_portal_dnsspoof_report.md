@@ -1,4 +1,6 @@
 # Area 11 — Captive portal + DNSSpoof templates  
+Date: 2026-02-15
+
 **Repository:** `watchdog/` (RustyJack)  
 **Scope (per request):** portal HTTP service (handlers, templating, form processing), template assets under `DNSSpoof/`, and redirection glue (DNAT/forward rules).  
 **Hard rule respected:** this report is **read-only** and does **not** modify any repository files.

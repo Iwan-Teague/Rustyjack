@@ -1,4 +1,6 @@
 # Area 6 — DHCP and address management (Architecture Doc 2)
+Date: 2026-02-15
+
 
 > **Read-only report.** No repository files were modified.
 

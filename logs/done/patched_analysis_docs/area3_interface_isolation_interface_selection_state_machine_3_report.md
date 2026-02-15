@@ -1,4 +1,6 @@
 # Area 3 — Interface isolation & interface selection state machine (Report)
+Date: 2026-02-15
+
 
 **Scope (per Architecture Doc 2, Area 3):** isolation engine/state machine, interface selection logic, watcher/enforcer loops, rollback, verification; interaction with DHCP/DNS/routing/rfkill; hotspot exceptions.  
 **Safety property (hard requirement):** *“Only one network interface can be up at one time; others down; rfkill where applicable”* must be **continuously enforced** (no deliberate overlap windows), except for an explicit, bounded hotspot exception.
