@@ -28,19 +28,6 @@ WIFI_ALL_IFACES=0
 ETH_IFACE=""
 ETH_IFACES=""
 ETH_ALL_IFACES=0
-WIRELESS_EXTRA_ARGS=()
-ETHERNET_EXTRA_ARGS=()
-IFACE_SELECT_EXTRA_ARGS=()
-ENCRYPTION_EXTRA_ARGS=()
-LOOT_EXTRA_ARGS=()
-MAC_EXTRA_ARGS=()
-DAEMON_EXTRA_ARGS=()
-INSTALLERS_EXTRA_ARGS=()
-USB_EXTRA_ARGS=()
-UI_LAYOUT_EXTRA_ARGS=()
-THEME_EXTRA_ARGS=()
-DAEMON_DEEP_EXTRA_ARGS=()
-DISCORD_TEST_EXTRA_ARGS=()
 
 DISCORD_WEBHOOK_ENABLED="${RJ_DISCORD_WEBHOOK_ENABLED:-1}"
 DISCORD_RUNTIME_ROOT="${RJ_RUNTIME_ROOT:-/var/lib/rustyjack}"
@@ -53,6 +40,9 @@ DISCORD_WEBHOOK_USERNAME="${RJ_DISCORD_WEBHOOK_USERNAME:-RustyJack}"
 DISCORD_WEBHOOK_AVATAR_URL="${RJ_DISCORD_WEBHOOK_AVATAR_URL:-}"
 DISCORD_WEBHOOK_ATTACH_SUMMARY="${RJ_DISCORD_WEBHOOK_ATTACH_SUMMARY:-1}"
 DISCORD_WEBHOOK_MENTION="${RJ_DISCORD_WEBHOOK_MENTION:-}"
+DISCORD_MAX_CONTENT_LEN=2000
+DISCORD_MAX_RETRIES=5
+DISCORD_BUNDLE_MAX_BYTES=$((8 * 1024 * 1024))
 
 MASTER_REPORT_PATH=""
 MASTER_JSON_PATH=""
@@ -67,50 +57,45 @@ usage() {
   cat <<'USAGE'
 Usage: rj_run_tests.sh [options]
 
-Options:
-  --all         Run all test suites
-  --wireless    Run wireless tests
-  --ethernet    Run ethernet tests
-  --iface-select Run interface selection/set-active tests
-  --encryption  Run encryption tests
-  --loot        Run loot tests
-  --mac         Run MAC randomization tests
-  --daemon      Run daemon/IPC security tests
-  --daemon-deep Run deep daemon comprehensive diagnostics (longer)
-  --discord-test Run Discord webhook connectivity preflight (UI-only)
-  --installers  Run installer script tests
-  --usb         Run USB mount detect/read/write tests
-  --ui-layout   Run dynamic UI layout/resolution tests
-  --theme       Run UI theme/palette stabilization tests
-  --dangerous   Enable dangerous tests (passed to suites)
+Suite selection:
+  --all           Run all core test suites
+  --wireless      Run wireless tests
+  --ethernet      Run ethernet tests
+  --iface-select  Run interface selection/set-active tests
+  --encryption    Run encryption tests
+  --loot          Run loot tests
+  --mac           Run MAC randomization tests
+  --daemon        Run daemon/IPC security tests
+  --daemon-deep   Run deep daemon comprehensive diagnostics (longer)
+  --discord-test  Run Discord webhook connectivity preflight (UI-only)
+  --installers    Run installer script tests
+  --usb           Run USB mount detect/read/write tests
+  --ui-layout     Run dynamic UI layout/resolution tests
+  --theme         Run UI theme/palette stabilization tests
+
+Test options:
+  --dangerous     Enable dangerous tests (passed to suites)
+
+Discord options:
   --discord-enable        Enable Discord webhook notification (default: enabled)
   --discord-disable       Disable Discord webhook notification
   --discord-webhook URL   Override Discord webhook URL for this run
   --discord-username STR  Override Discord username for this run
   --discord-mention STR   Prefix Discord message with mention text (e.g. <@123>)
   --discord-no-attach     Do not attach consolidated summary markdown to Discord
+
+Interface targeting:
   --wifi-interface IFACE   Run wireless suite on a single Wi-Fi interface
   --wifi-interfaces LIST   Comma-separated Wi-Fi interfaces for wireless suite
   --wifi-all-interfaces    Auto-detect all Wi-Fi interfaces for wireless suite
   --eth-interface IFACE    Run ethernet suite on a single ethernet interface
   --eth-interfaces LIST    Comma-separated ethernet interfaces for ethernet suite
   --eth-all-interfaces     Auto-detect all ethernet interfaces for ethernet suite
-  --wireless-arg ARG       Append raw argument to rj_test_wireless.sh (repeatable)
-  --ethernet-arg ARG       Append raw argument to rj_test_ethernet.sh (repeatable)
-  --iface-select-arg ARG   Append raw argument to rj_test_interface_selection.sh (repeatable)
-  --encryption-arg ARG     Append raw argument to rj_test_encryption.sh (repeatable)
-  --loot-arg ARG           Append raw argument to rj_test_loot.sh (repeatable)
-  --mac-arg ARG            Append raw argument to rj_test_mac_randomization.sh (repeatable)
-  --daemon-arg ARG         Append raw argument to rj_test_daemon.sh (repeatable)
-  --daemon-deep-arg ARG    Append raw argument to rustyjack_comprehensive_test.sh (repeatable)
-  --discord-test-arg ARG   Append raw argument to rj_test_discord.sh (repeatable)
-  --installers-arg ARG     Append raw argument to rj_test_installers.sh (repeatable)
-  --usb-arg ARG            Append raw argument to rj_test_usb.sh (repeatable)
-  --ui-layout-arg ARG      Append raw argument to rj_test_ui_layout.sh (repeatable)
-  --theme-arg ARG          Append raw argument to rj_test_theme.sh (repeatable)
-  --runtime-root DIR       Runtime root used to discover UI webhook (default: /var/lib/rustyjack)
-  --outroot DIR Output root (default: /var/tmp/rustyjack-tests)
-  -h, --help    Show help
+
+Other:
+  --runtime-root DIR  Runtime root used to discover UI webhook (default: /var/lib/rustyjack)
+  --outroot DIR       Output root (default: /var/tmp/rustyjack-tests)
+  -h, --help          Show help
 
 If no options are provided, a menu will be shown.
 UI automation is always enabled by policy.
@@ -257,21 +242,89 @@ discord_can_send() {
   return 0
 }
 
+# Truncate content to Discord's 2000 character limit.
+discord_truncate_content() {
+  local s="$1"
+  if [[ ${#s} -gt $DISCORD_MAX_CONTENT_LEN ]]; then
+    s="${s:0:$((DISCORD_MAX_CONTENT_LEN - 15))}...[truncated]"
+  fi
+  printf '%s' "$s"
+}
+
+# Build a Discord payload_json string with content, username, and avatar.
+discord_build_payload_json() {
+  local content="$1"
+  content="$(discord_truncate_content "$content")"
+  local pj="{\"content\":\"$(json_escape "$content")\""
+  if [[ -n "$DISCORD_WEBHOOK_USERNAME" ]]; then
+    pj+=",\"username\":\"$(json_escape "$DISCORD_WEBHOOK_USERNAME")\""
+  fi
+  if [[ -n "$DISCORD_WEBHOOK_AVATAR_URL" ]]; then
+    pj+=",\"avatar_url\":\"$(json_escape "$DISCORD_WEBHOOK_AVATAR_URL")\""
+  fi
+  pj+="}"
+  printf '%s' "$pj"
+}
+
+# Curl wrapper with Discord 429 rate-limit retry handling.
+# Usage: discord_curl_with_retry [curl args...]
+# All args are passed directly to curl after the common flags.
+# Returns 0 on success (HTTP 2xx), 1 on exhausted retries or error.
+discord_curl_with_retry() {
+  local max_retries="$DISCORD_MAX_RETRIES"
+  local attempt=0
+  local http_code
+  local tmpfile
+  tmpfile="$(mktemp "${TMPDIR:-/tmp}/rj_discord_XXXXXX")"
+
+  while [[ $attempt -lt $max_retries ]]; do
+    attempt=$((attempt + 1))
+    http_code="$(curl -sS -o "$tmpfile" -w '%{http_code}' \
+      -X POST "$DISCORD_WEBHOOK_URL" "$@" 2>/dev/null)" || http_code="000"
+
+    if [[ "$http_code" == "429" ]]; then
+      # Parse retry_after from JSON response body
+      local retry_after=""
+      retry_after="$(sed -n 's/.*"retry_after" *: *\([0-9.]*\).*/\1/p' "$tmpfile" 2>/dev/null | head -n1)" || true
+      if [[ -z "$retry_after" || "$retry_after" == "0" ]]; then
+        retry_after="5"
+      fi
+      # Convert float to integer ceiling and add jitter
+      local wait_int
+      wait_int="$(printf '%.0f' "$retry_after" 2>/dev/null || echo "${retry_after%%.*}")" || wait_int=5
+      wait_int=$((wait_int + 1))
+      echo "[WARN] Discord rate limited (429). Waiting ${wait_int}s before retry ${attempt}/${max_retries}."
+      sleep "$wait_int"
+      continue
+    fi
+
+    if [[ "$http_code" =~ ^2 ]]; then
+      rm -f "$tmpfile" 2>/dev/null || true
+      return 0
+    fi
+
+    echo "[WARN] Discord returned HTTP ${http_code} on attempt ${attempt}/${max_retries}."
+    if [[ $attempt -lt $max_retries ]]; then
+      sleep 2
+    fi
+  done
+
+  echo "[WARN] Discord upload failed after ${max_retries} attempts (last HTTP ${http_code})."
+  rm -f "$tmpfile" 2>/dev/null || true
+  return 1
+}
+
+# Post a JSON-only payload to Discord (no file attachment).
 post_discord_payload_json() {
   local payload_json="$1"
-  if ! curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
+  discord_curl_with_retry \
     -H "Content-Type: application/json" \
-    -d "$payload_json" \
-    >/dev/null; then
-    return 1
-  fi
-  return 0
+    -d "$payload_json"
 }
 
 send_discord_text_message() {
   local content="$1"
   local include_mention="${2:-0}"
-  local payload_json
 
   if ! discord_can_send; then
     return 0
@@ -281,14 +334,8 @@ send_discord_text_message() {
     content="${DISCORD_WEBHOOK_MENTION}"$'\n'"${content}"
   fi
 
-  payload_json="{\"content\":\"$(json_escape "$content")\""
-  if [[ -n "$DISCORD_WEBHOOK_USERNAME" ]]; then
-    payload_json+=",\"username\":\"$(json_escape "$DISCORD_WEBHOOK_USERNAME")\""
-  fi
-  if [[ -n "$DISCORD_WEBHOOK_AVATAR_URL" ]]; then
-    payload_json+=",\"avatar_url\":\"$(json_escape "$DISCORD_WEBHOOK_AVATAR_URL")\""
-  fi
-  payload_json+="}"
+  local payload_json
+  payload_json="$(discord_build_payload_json "$content")"
 
   if ! post_discord_payload_json "$payload_json"; then
     echo "[WARN] Failed to send Discord webhook."
@@ -418,20 +465,12 @@ send_discord_summary() {
   content+="Results root: ${run_dir}"$'\n'
   content+="Summary: ${MASTER_REPORT_PATH}"
 
-  payload_json="{\"content\":\"$(json_escape "$content")\""
-  if [[ -n "$DISCORD_WEBHOOK_USERNAME" ]]; then
-    payload_json+=",\"username\":\"$(json_escape "$DISCORD_WEBHOOK_USERNAME")\""
-  fi
-  if [[ -n "$DISCORD_WEBHOOK_AVATAR_URL" ]]; then
-    payload_json+=",\"avatar_url\":\"$(json_escape "$DISCORD_WEBHOOK_AVATAR_URL")\""
-  fi
-  payload_json+="}"
+  payload_json="$(discord_build_payload_json "$content")"
 
   if [[ "$DISCORD_WEBHOOK_ATTACH_SUMMARY" == "1" && -f "$MASTER_REPORT_PATH" ]]; then
-    if ! curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
+    if ! discord_curl_with_retry \
       -F "payload_json=$payload_json" \
-      -F "file1=@${MASTER_REPORT_PATH};filename=rustyjack_${RUN_ID}_summary.md" \
-      >/dev/null; then
+      -F "file1=@${MASTER_REPORT_PATH};filename=rustyjack_${RUN_ID}_summary.md"; then
       echo "[WARN] Failed to send Discord webhook with attachment."
       return 0
     fi
@@ -470,6 +509,72 @@ Report: ${report_path}" \
     0
 }
 
+# Upload per-suite artifacts as a tar.gz bundle to Discord after each suite.
+send_discord_suite_artifacts() {
+  local suite_id="$1"
+  local suite_label="$2"
+  local status="$3"
+  local rc="$4"
+  local duration="$5"
+  local suite_dir="$6"
+
+  if ! discord_can_send; then
+    return 0
+  fi
+
+  if [[ ! -d "$suite_dir" ]]; then
+    echo "[WARN] Suite directory missing for artifact upload: $suite_dir"
+    return 0
+  fi
+
+  local bundle="${suite_dir}/suite_${suite_id}_${RUN_ID}.tar.gz"
+  local upload_file=""
+  local upload_filename=""
+
+  # Try to create a bundle of the suite directory
+  if command -v tar >/dev/null 2>&1; then
+    if tar -C "$suite_dir" -czf "$bundle" \
+      --exclude='*.core' --exclude='*.tar.gz' . 2>/dev/null; then
+      local bundle_size=0
+      bundle_size="$(stat -c%s "$bundle" 2>/dev/null || stat -f%z "$bundle" 2>/dev/null || echo 0)"
+      if [[ "$bundle_size" -gt 0 && "$bundle_size" -le "$DISCORD_BUNDLE_MAX_BYTES" ]]; then
+        upload_file="$bundle"
+        upload_filename="suite_${suite_id}_${RUN_ID}.tar.gz"
+      else
+        echo "[WARN] Suite bundle too large (${bundle_size} bytes); falling back to report.md only."
+        rm -f "$bundle" 2>/dev/null || true
+      fi
+    else
+      echo "[WARN] Failed to create suite bundle; falling back to report.md only."
+    fi
+  fi
+
+  # Fall back to just report.md if bundle failed or too large
+  if [[ -z "$upload_file" ]]; then
+    local report_file="${suite_dir}/report.md"
+    if [[ -f "$report_file" ]]; then
+      upload_file="$report_file"
+      upload_filename="${suite_id}_${RUN_ID}_report.md"
+    else
+      echo "[WARN] No artifacts to upload for suite ${suite_label}."
+      return 0
+    fi
+  fi
+
+  local content
+  content="Suite artifacts: ${suite_label} [${status}] (rc=${rc}, ${duration})"
+  local payload_json
+  payload_json="$(discord_build_payload_json "$content")"
+
+  if ! discord_curl_with_retry \
+    -F "payload_json=$payload_json" \
+    -F "file1=@${upload_file};filename=${upload_filename}"; then
+    echo "[WARN] Failed to upload suite artifacts for ${suite_label} to Discord."
+  fi
+
+  return 0
+}
+
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-N}"
@@ -485,200 +590,6 @@ prompt_yes_no() {
     y|Y|yes|YES) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-add_skip_flag() {
-  local -n arr_ref="$1"
-  local label="$2"
-  local flag="$3"
-  if prompt_yes_no "Skip ${label}?" "N"; then
-    arr_ref+=("$flag")
-  fi
-}
-
-interactive_collect_advanced_options() {
-  local val
-  if ! prompt_yes_no "Configure advanced per-suite options?" "N"; then
-    return 0
-  fi
-
-  if [[ $RUN_WIRELESS -eq 1 ]]; then
-    echo
-    echo "Advanced: Wireless"
-    add_skip_flag WIRELESS_EXTRA_ARGS "wireless unit tests" "--no-unit"
-    add_skip_flag WIRELESS_EXTRA_ARGS "wireless integration tests" "--no-integration"
-    add_skip_flag WIRELESS_EXTRA_ARGS "wireless negative tests" "--no-negative"
-    add_skip_flag WIRELESS_EXTRA_ARGS "wireless isolation checks" "--no-isolation"
-    add_skip_flag WIRELESS_EXTRA_ARGS "wireless compatibility checks" "--no-compat"
-    if prompt_yes_no "Enable wireless recon tests?" "N"; then
-      WIRELESS_EXTRA_ARGS+=("--recon")
-    fi
-  fi
-
-  if [[ $RUN_ETHERNET -eq 1 ]]; then
-    echo
-    echo "Advanced: Ethernet"
-    add_skip_flag ETHERNET_EXTRA_ARGS "ethernet unit tests" "--no-unit"
-    add_skip_flag ETHERNET_EXTRA_ARGS "ethernet integration tests" "--no-integration"
-    add_skip_flag ETHERNET_EXTRA_ARGS "ethernet negative tests" "--no-negative"
-    add_skip_flag ETHERNET_EXTRA_ARGS "ethernet isolation checks" "--no-isolation"
-    add_skip_flag ETHERNET_EXTRA_ARGS "ethernet compatibility checks" "--no-compat"
-    read -r -p "Ethernet target CIDR/IP (blank to skip): " val
-    if [[ -n "${val// }" ]]; then
-      ETHERNET_EXTRA_ARGS+=(--target "${val// /}")
-    fi
-    read -r -p "Ethernet ports list (e.g. 22,80,443; blank to skip): " val
-    if [[ -n "${val// }" ]]; then
-      ETHERNET_EXTRA_ARGS+=(--ports "${val// /}")
-    fi
-  fi
-
-  if [[ $RUN_IFACE_SELECT -eq 1 ]]; then
-    echo
-    echo "Advanced: Interface Selection"
-    add_skip_flag IFACE_SELECT_EXTRA_ARGS "interface selection negative tests" "--no-negative"
-    add_skip_flag IFACE_SELECT_EXTRA_ARGS "interface selection compatibility checks" "--no-compat"
-    add_skip_flag IFACE_SELECT_EXTRA_ARGS "interface selection isolation snapshots" "--no-isolation"
-    if prompt_yes_no "Allow remote interface switching (may drop SSH)?" "N"; then
-      IFACE_SELECT_EXTRA_ARGS+=(--allow-remote-switch)
-    fi
-    read -r -p "Recovery interface override (blank for auto): " val
-    if [[ -n "${val// }" ]]; then
-      IFACE_SELECT_EXTRA_ARGS+=(--recovery-interface "${val// /}")
-    fi
-  fi
-
-  if [[ $RUN_ENCRYPTION -eq 1 ]]; then
-    echo
-    echo "Advanced: Encryption"
-    add_skip_flag ENCRYPTION_EXTRA_ARGS "encryption unit tests" "--no-unit"
-    add_skip_flag ENCRYPTION_EXTRA_ARGS "encryption integration tests" "--no-integration"
-    add_skip_flag ENCRYPTION_EXTRA_ARGS "encryption negative tests" "--no-negative"
-    add_skip_flag ENCRYPTION_EXTRA_ARGS "encryption isolation checks" "--no-isolation"
-    add_skip_flag ENCRYPTION_EXTRA_ARGS "encryption compatibility checks" "--no-compat"
-  fi
-
-  if [[ $RUN_LOOT -eq 1 ]]; then
-    echo
-    echo "Advanced: Loot"
-    add_skip_flag LOOT_EXTRA_ARGS "loot unit tests" "--no-unit"
-    add_skip_flag LOOT_EXTRA_ARGS "loot integration tests" "--no-integration"
-    add_skip_flag LOOT_EXTRA_ARGS "loot negative tests" "--no-negative"
-    add_skip_flag LOOT_EXTRA_ARGS "loot isolation checks" "--no-isolation"
-    add_skip_flag LOOT_EXTRA_ARGS "loot compatibility checks" "--no-compat"
-  fi
-
-  if [[ $RUN_MAC -eq 1 ]]; then
-    echo
-    echo "Advanced: MAC Randomization"
-    add_skip_flag MAC_EXTRA_ARGS "MAC unit tests" "--no-unit"
-    add_skip_flag MAC_EXTRA_ARGS "MAC stress loop" "--no-stress"
-    add_skip_flag MAC_EXTRA_ARGS "MAC negative tests" "--no-negative"
-    add_skip_flag MAC_EXTRA_ARGS "MAC vendor test" "--no-vendor"
-    read -r -p "MAC interface override (blank to keep default): " val
-    if [[ -n "${val// }" ]]; then
-      MAC_EXTRA_ARGS+=(--interface "${val// /}")
-    fi
-    read -r -p "MAC vendor name (blank to keep default): " val
-    if [[ -n "${val// }" ]]; then
-      MAC_EXTRA_ARGS+=(--vendor "$val")
-    fi
-    read -r -p "MAC stress loop count (blank to keep default): " val
-    if [[ -n "${val// }" ]]; then
-      MAC_EXTRA_ARGS+=(--loops "${val// /}")
-    fi
-  fi
-
-  if [[ $RUN_DAEMON -eq 1 ]]; then
-    echo
-    echo "Advanced: Daemon/IPC"
-    add_skip_flag DAEMON_EXTRA_ARGS "daemon auth tests" "--no-auth"
-    add_skip_flag DAEMON_EXTRA_ARGS "daemon protocol tests" "--no-protocol"
-    add_skip_flag DAEMON_EXTRA_ARGS "daemon unit tests" "--no-unit"
-    add_skip_flag DAEMON_EXTRA_ARGS "daemon compatibility checks" "--no-compat"
-    add_skip_flag DAEMON_EXTRA_ARGS "daemon isolation checks" "--no-isolation"
-    if prompt_yes_no "Skip daemon comprehensive sub-suite?" "N"; then
-      DAEMON_EXTRA_ARGS+=("--skip-comprehensive")
-    fi
-    read -r -p "Daemon socket path (blank for default): " val
-    if [[ -n "${val// }" ]]; then
-      DAEMON_EXTRA_ARGS+=(--socket "$val")
-    fi
-    read -r -p "Daemon service unit (blank for default): " val
-    if [[ -n "${val// }" ]]; then
-      DAEMON_EXTRA_ARGS+=(--service "$val")
-    fi
-  fi
-
-  if [[ $RUN_DAEMON_DEEP -eq 1 ]]; then
-    echo
-    echo "Advanced: Daemon Deep Diagnostics"
-    read -r -p "Daemon deep socket path (blank for default): " val
-    if [[ -n "${val// }" ]]; then
-      DAEMON_DEEP_EXTRA_ARGS+=(--socket "$val")
-    fi
-    read -r -p "Daemon deep service unit (blank for default): " val
-    if [[ -n "${val// }" ]]; then
-      DAEMON_DEEP_EXTRA_ARGS+=(--service "$val")
-    fi
-    read -r -p "Daemon deep parallel clients (blank for default): " val
-    if [[ -n "${val// }" ]]; then
-      DAEMON_DEEP_EXTRA_ARGS+=(--parallel "${val// /}")
-    fi
-    read -r -p "Daemon deep stress iterations (blank for default): " val
-    if [[ -n "${val// }" ]]; then
-      DAEMON_DEEP_EXTRA_ARGS+=(--stress "${val// /}")
-    fi
-    if prompt_yes_no "Enable verbose deep daemon output?" "N"; then
-      DAEMON_DEEP_EXTRA_ARGS+=(--verbose)
-    fi
-  fi
-
-  if [[ $RUN_DISCORD -eq 1 ]]; then
-    echo
-    echo "Advanced: Discord Webhook Preflight"
-    read -r -p "Discord runtime root (blank for default: $DISCORD_RUNTIME_ROOT): " val
-    if [[ -n "${val// }" ]]; then
-      DISCORD_RUNTIME_ROOT="${val%/}"
-      DISCORD_WEBHOOK_PATH_DEFAULT="${DISCORD_RUNTIME_ROOT%/}/discord_webhook.txt"
-    fi
-    read -r -p "Discord webhook file override (blank for default: $DISCORD_WEBHOOK_PATH_DEFAULT): " val
-    if [[ -n "${val// }" ]]; then
-      DISCORD_TEST_EXTRA_ARGS+=(--webhook-file "$val")
-    fi
-  fi
-
-  if [[ $RUN_INSTALLERS -eq 1 ]]; then
-    echo
-    echo "Advanced: Installers"
-    add_skip_flag INSTALLERS_EXTRA_ARGS "shellcheck checks" "--no-shellcheck"
-    add_skip_flag INSTALLERS_EXTRA_ARGS "syntax checks" "--no-syntax"
-    add_skip_flag INSTALLERS_EXTRA_ARGS "pattern checks" "--no-patterns"
-    add_skip_flag INSTALLERS_EXTRA_ARGS "installer isolation checks" "--no-isolation"
-  fi
-
-  if [[ $RUN_USB -eq 1 ]]; then
-    echo
-    echo "Advanced: USB"
-    add_skip_flag USB_EXTRA_ARGS "USB compatibility checks" "--no-compat"
-    add_skip_flag USB_EXTRA_ARGS "USB integration checks" "--no-integration"
-    add_skip_flag USB_EXTRA_ARGS "USB negative checks" "--no-negative"
-    add_skip_flag USB_EXTRA_ARGS "USB isolation checks" "--no-isolation"
-    read -r -p "USB device path override (blank for auto-detect): " val
-    if [[ -n "${val// }" ]]; then
-      USB_EXTRA_ARGS+=(--device "${val// /}")
-    fi
-  fi
-
-  if [[ $RUN_THEME -eq 1 ]]; then
-    echo
-    echo "Advanced: Theme"
-    add_skip_flag THEME_EXTRA_ARGS "theme unit tests" "--no-unit"
-    add_skip_flag THEME_EXTRA_ARGS "theme integration checks" "--no-integration"
-    add_skip_flag THEME_EXTRA_ARGS "theme source checks" "--no-source"
-    add_skip_flag THEME_EXTRA_ARGS "theme compatibility checks" "--no-compat"
-    add_skip_flag THEME_EXTRA_ARGS "theme isolation checks" "--no-isolation"
-  fi
 }
 
 interactive_collect_flags() {
@@ -765,42 +676,42 @@ interactive_collect_flags() {
   if [[ -n "${choice_list// }" ]]; then
     OUTROOT="${choice_list%/}"
   fi
-
-  interactive_collect_advanced_options
 }
+
+# --- Interactive menu (ordered 1..13, 0=All last) ---
 
 if [[ $# -eq 0 ]]; then
   echo "Select tests:"
   echo "  1) Wireless"
   echo "  2) Ethernet"
-  echo " 12) Interface Selection"
+  echo "  3) Interface Selection"
+  echo "  4) Encryption"
+  echo "  5) Loot"
+  echo "  6) MAC Randomization"
+  echo "  7) Daemon/IPC"
+  echo "  8) Daemon Deep Diagnostics"
+  echo "  9) Installers"
+  echo " 10) USB Mount"
+  echo " 11) UI Layout/Display"
+  echo " 12) Theme/Palette"
   echo " 13) Discord Webhook Preflight"
-  echo "  3) Encryption"
-  echo "  4) Loot"
-  echo "  5) MAC Randomization"
-  echo "  6) Daemon/IPC"
-  echo " 11) Daemon Deep Diagnostics"
-  echo "  7) Installers"
-  echo "  8) USB Mount"
-  echo "  9) UI Layout/Display"
-  echo " 10) Theme/Palette"
   echo "  0) All"
   read -r choice
   case "$choice" in
     0) RUN_WIRELESS=1; RUN_ETHERNET=1; RUN_IFACE_SELECT=1; RUN_ENCRYPTION=1; RUN_LOOT=1; RUN_MAC=1; RUN_DAEMON=1; RUN_INSTALLERS=1; RUN_USB=1; RUN_UI_LAYOUT=1; RUN_THEME=1 ;;
     1) RUN_WIRELESS=1 ;;
     2) RUN_ETHERNET=1 ;;
-    12) RUN_IFACE_SELECT=1 ;;
+    3) RUN_IFACE_SELECT=1 ;;
+    4) RUN_ENCRYPTION=1 ;;
+    5) RUN_LOOT=1 ;;
+    6) RUN_MAC=1 ;;
+    7) RUN_DAEMON=1 ;;
+    8) RUN_DAEMON_DEEP=1 ;;
+    9) RUN_INSTALLERS=1 ;;
+    10) RUN_USB=1 ;;
+    11) RUN_UI_LAYOUT=1 ;;
+    12) RUN_THEME=1 ;;
     13) RUN_DISCORD=1 ;;
-    3) RUN_ENCRYPTION=1 ;;
-    4) RUN_LOOT=1 ;;
-    5) RUN_MAC=1 ;;
-    6) RUN_DAEMON=1 ;;
-    11) RUN_DAEMON_DEEP=1 ;;
-    7) RUN_INSTALLERS=1 ;;
-    8) RUN_USB=1 ;;
-    9) RUN_UI_LAYOUT=1 ;;
-    10) RUN_THEME=1 ;;
     *) echo "Unknown choice" >&2; exit 2 ;;
   esac
   interactive_collect_flags
@@ -838,19 +749,6 @@ else
       --eth-interface) ETH_IFACE="$2"; ETH_ALL_IFACES=0; shift 2 ;;
       --eth-interfaces) ETH_IFACES="$2"; ETH_ALL_IFACES=0; shift 2 ;;
       --eth-all-interfaces) ETH_ALL_IFACES=1; shift ;;
-      --wireless-arg) WIRELESS_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --ethernet-arg) ETHERNET_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --iface-select-arg) IFACE_SELECT_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --encryption-arg) ENCRYPTION_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --loot-arg) LOOT_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --mac-arg) MAC_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --daemon-arg) DAEMON_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --daemon-deep-arg) DAEMON_DEEP_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --discord-test-arg) DISCORD_TEST_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --installers-arg) INSTALLERS_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --usb-arg) USB_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --ui-layout-arg) UI_LAYOUT_EXTRA_ARGS+=("$2"); shift 2 ;;
-      --theme-arg) THEME_EXTRA_ARGS+=("$2"); shift 2 ;;
       --runtime-root) DISCORD_RUNTIME_ROOT="${2%/}"; DISCORD_WEBHOOK_PATH_DEFAULT="${DISCORD_RUNTIME_ROOT%/}/discord_webhook.txt"; shift 2 ;;
       --outroot) OUTROOT="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
@@ -985,6 +883,7 @@ run_suite() {
 
   if [[ "$suite_id" != "discord_webhook" ]]; then
     send_discord_suite_update "$label" "$status" "$rc" "$(format_duration "$duration")" "$tests" "$pass" "$fail" "$skip" "$report_path"
+    send_discord_suite_artifacts "$suite_id" "$label" "$status" "$rc" "$(format_duration "$duration")" "$suite_dir"
   fi
 }
 
@@ -1009,8 +908,7 @@ fi
 if [[ $RUN_DISCORD -eq 1 ]]; then
   run_suite "discord_webhook" "Discord Webhook" "$ROOT_DIR/rj_test_discord.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    --runtime-root "$DISCORD_RUNTIME_ROOT" \
-    ${DISCORD_TEST_EXTRA_ARGS[@]+"${DISCORD_TEST_EXTRA_ARGS[@]}"}
+    --runtime-root "$DISCORD_RUNTIME_ROOT"
 
   if [[ "$LAST_SUITE_STATUS" != "PASS" ]]; then
     webhook_file="${RJ_DISCORD_WEBHOOK_FILE:-$DISCORD_WEBHOOK_PATH_DEFAULT}"
@@ -1034,70 +932,58 @@ if [[ $RUN_WIRELESS -eq 1 ]]; then
   run_suite "wireless" "Wireless" "$ROOT_DIR/rj_test_wireless.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
     ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${WIRELESS_ARGS[@]+"${WIRELESS_ARGS[@]}"} \
-    ${WIRELESS_EXTRA_ARGS[@]+"${WIRELESS_EXTRA_ARGS[@]}"}
+    ${WIRELESS_ARGS[@]+"${WIRELESS_ARGS[@]}"}
 fi
 if [[ $RUN_ETHERNET -eq 1 ]]; then
   run_suite "ethernet" "Ethernet" "$ROOT_DIR/rj_test_ethernet.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
     ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${ETHERNET_ARGS[@]+"${ETHERNET_ARGS[@]}"} \
-    ${ETHERNET_EXTRA_ARGS[@]+"${ETHERNET_EXTRA_ARGS[@]}"}
+    ${ETHERNET_ARGS[@]+"${ETHERNET_ARGS[@]}"}
 fi
 if [[ $RUN_IFACE_SELECT -eq 1 ]]; then
   run_suite "interface_selection" "Interface Selection" "$ROOT_DIR/rj_test_interface_selection.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
     ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${IFACE_SELECT_ARGS[@]+"${IFACE_SELECT_ARGS[@]}"} \
-    ${IFACE_SELECT_EXTRA_ARGS[@]+"${IFACE_SELECT_EXTRA_ARGS[@]}"}
+    ${IFACE_SELECT_ARGS[@]+"${IFACE_SELECT_ARGS[@]}"}
 fi
 if [[ $RUN_ENCRYPTION -eq 1 ]]; then
   run_suite "encryption" "Encryption" "$ROOT_DIR/rj_test_encryption.sh" \
-    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${ENCRYPTION_EXTRA_ARGS[@]+"${ENCRYPTION_EXTRA_ARGS[@]}"}
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"}
 fi
 if [[ $RUN_LOOT -eq 1 ]]; then
   run_suite "loot" "Loot" "$ROOT_DIR/rj_test_loot.sh" \
-    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${LOOT_EXTRA_ARGS[@]+"${LOOT_EXTRA_ARGS[@]}"}
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"}
 fi
 if [[ $RUN_MAC -eq 1 ]]; then
   run_suite "mac_randomization" "MAC Randomization" "$ROOT_DIR/rj_test_mac_randomization.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${MAC_EXTRA_ARGS[@]+"${MAC_EXTRA_ARGS[@]}"}
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
 fi
 if [[ $RUN_DAEMON -eq 1 ]]; then
   run_suite "daemon" "Daemon/IPC" "$ROOT_DIR/rj_test_daemon.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${DAEMON_EXTRA_ARGS[@]+"${DAEMON_EXTRA_ARGS[@]}"}
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
 fi
 if [[ $RUN_DAEMON_DEEP -eq 1 ]]; then
   run_suite "daemon_deep" "Daemon Deep Diagnostics" "$ROOT_DIR/rustyjack_comprehensive_test.sh" \
-    --outroot "$OUTROOT/$RUN_ID/deep_daemon" \
-    ${DAEMON_DEEP_EXTRA_ARGS[@]+"${DAEMON_DEEP_EXTRA_ARGS[@]}"}
+    --outroot "$OUTROOT/$RUN_ID/deep_daemon"
 fi
 if [[ $RUN_INSTALLERS -eq 1 ]]; then
-  run_suite "installers" "Installers" "$ROOT_DIR/rj_test_installers.sh" \
-    ${INSTALLERS_EXTRA_ARGS[@]+"${INSTALLERS_EXTRA_ARGS[@]}"}
+  run_suite "installers" "Installers" "$ROOT_DIR/rj_test_installers.sh"
 fi
 if [[ $RUN_USB -eq 1 ]]; then
   run_suite "usb_mount" "USB Mount" "$ROOT_DIR/rj_test_usb.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${USB_EXTRA_ARGS[@]+"${USB_EXTRA_ARGS[@]}"}
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
 fi
 if [[ $RUN_UI_LAYOUT -eq 1 ]]; then
   run_suite "ui_layout" "UI Layout/Display" "$ROOT_DIR/rj_test_ui_layout.sh" \
     ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"} \
-    ${UI_LAYOUT_EXTRA_ARGS[@]+"${UI_LAYOUT_EXTRA_ARGS[@]}"}
+    ${DANGEROUS_ARGS[@]+"${DANGEROUS_ARGS[@]}"}
 fi
 if [[ $RUN_THEME -eq 1 ]]; then
   run_suite "theme" "Theme/Palette" "$ROOT_DIR/rj_test_theme.sh" \
-    ${UI_ARGS[@]+"${UI_ARGS[@]}"} \
-    ${THEME_EXTRA_ARGS[@]+"${THEME_EXTRA_ARGS[@]}"}
+    ${UI_ARGS[@]+"${UI_ARGS[@]}"}
 fi
 
 hr

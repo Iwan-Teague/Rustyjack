@@ -195,6 +195,16 @@ rj_skip() {
   TESTS_SKIP=$((TESTS_SKIP + 1))
 }
 
+rj_json_escape_simple() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
 rj_summary_event() {
   local status="$1" name="$2" detail="${3:-}"
   if command -v python3 >/dev/null 2>&1; then
@@ -203,7 +213,7 @@ import json
 print(json.dumps({"ts": "${RJ_NOW:-$(rj_now)}", "status": "$status", "name": "$name", "detail": "$detail"}))
 PY
   else
-    printf '%s\n' "{\"ts\":\"$(rj_now)\",\"status\":\"$status\",\"name\":\"$name\",\"detail\":\"$detail\"}" >> "$SUMMARY"
+    printf '%s\n' "{\"ts\":\"$(rj_now)\",\"status\":\"$(rj_json_escape_simple "$status")\",\"name\":\"$(rj_json_escape_simple "$name")\",\"detail\":\"$(rj_json_escape_simple "$detail")\"}" >> "$SUMMARY"
   fi
 }
 
