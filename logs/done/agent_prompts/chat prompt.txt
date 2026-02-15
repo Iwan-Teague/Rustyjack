@@ -1,3 +1,5 @@
+Date: 2026-02-15
+
 You are a senior Rust networking engineer. You have full local access to this Rust codebase (Pi Zero 2 W target) and can run tests/builds. Your job is to implement the improvements described below as a clean, reviewable patch series.
 
 NON-NEGOTIABLE CONSTRAINTS

@@ -1,9 +1,11 @@
+Date: 2026-02-15
+
 You are Claude Opus 4.6 running as an autonomous coding agent in a terminal with full repo access.
 
 MISSION
 Implement ALL remaining code/config/test changes from the analysis documents in:
-  ./patched_analysis_docs/
-A prior session completed 13 tasks (T1-T13). Read ./patched_analysis_docs/PROGRESS.md for what was already done. This session handles EVERYTHING ELSE. Do the entire batch in this one continuous run. Do NOT ask me for another prompt.
+  logs/done/patched_analysis_docs
+A prior session completed 13 tasks (T1-T13). Read logs/done/patched_analysis_docs (PROGRESS.md) for what was already done. This session handles EVERYTHING ELSE. Do the entire batch in this one continuous run. Do NOT ask me for another prompt.
 
 ABSOLUTE CONSTRAINTS (MUST FOLLOW)
 1) Read and obey ./CLAUDE.md and ./AGENTS.md as binding constraints.
@@ -17,7 +19,7 @@ ABSOLUTE CONSTRAINTS (MUST FOLLOW)
 
 WORKING MEMORY / PROGRESS FILE (REQUIRED)
 Update the existing file:
-  ./patched_analysis_docs/PROGRESS.md
+  logs/done/patched_analysis_docs (PROGRESS.md)
 Append a new "## Phase 2 Session" section. Use the same ledger format (ID | Source | Finding | Target Files | Risk | Status | Evidence). Number new tasks starting at T14. Update frequently after each milestone.
 
 ────────────────────────────────────────────────────
@@ -526,7 +528,7 @@ PHASE 0 — BOOTSTRAP
 - Read existing PROGRESS.md to understand completed work (T1-T13).
 
 PHASE 1 — READ ALL ANALYSIS DOCS
-- Read every .md file in patched_analysis_docs/.
+- Read every .md file in logs/done/patched_analysis_docs.
 - Cross-reference with the task groups above to understand full context.
 - Note any findings NOT covered in the groups above — add them if they're HIGH+ risk.
 

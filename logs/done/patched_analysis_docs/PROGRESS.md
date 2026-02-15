@@ -1,6 +1,8 @@
 # PROGRESS.md - Patched Analysis Implementation
+Date: 2026-02-15
 
-**Session objective:** Implement all actionable security and robustness fixes from 18 analysis documents in `patched_analysis_docs/`.
+
+**Session objective:** Implement all actionable security and robustness fixes from 18 analysis documents in `logs/done/patched_analysis_docs`.
 
 ## Constraints snapshot
 - No new external binaries (pure Rust preferred)

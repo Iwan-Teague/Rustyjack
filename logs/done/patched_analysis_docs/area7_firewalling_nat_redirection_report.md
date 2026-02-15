@@ -1,4 +1,6 @@
 # Area 7 — Firewalling, NAT, and redirection rules (nftables via netlink)
+Date: 2026-02-15
+
 _Date: 2026-02-14_
 
 This is a **read-only engineering report** focused on:
