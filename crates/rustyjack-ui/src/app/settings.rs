@@ -310,6 +310,14 @@ impl App {
         let (default_left, default_top, default_right, default_bottom) =
             self.display.default_calibration_edges();
 
+        // Allow edges to extend beyond detected display bounds by a margin so
+        // that displays with more visible pixels than reported can be fully
+        // calibrated (e.g. 127x130 instead of the detected 128x128).
+        const EDGE_MARGIN: i32 = 32;
+        let min_edge = default_left - EDGE_MARGIN;
+        let max_right = default_right + EDGE_MARGIN;
+        let max_bottom = default_bottom + EDGE_MARGIN;
+
         let mut left = self.config.display.calibrated_left.unwrap_or(default_left);
         let mut top = self.config.display.calibrated_top.unwrap_or(default_top);
         let mut right = self
@@ -356,30 +364,28 @@ impl App {
                         CalibrationEdge::Bottom => bottom = default_value,
                     },
                     (CalibrationEdge::Left, Button::Left) => {
-                        left = left.saturating_sub(1).max(default_left);
-                        left = left.min(right.saturating_sub(1));
+                        left = (left - 1).max(min_edge).min(right - 1);
                     }
                     (CalibrationEdge::Left, Button::Right) => {
-                        left = (left + 1).min(right.saturating_sub(1));
+                        left = (left + 1).min(right - 1);
                     }
                     (CalibrationEdge::Right, Button::Left) => {
-                        right = right.saturating_sub(1).max(left.saturating_add(1));
+                        right = (right - 1).max(left + 1);
                     }
                     (CalibrationEdge::Right, Button::Right) => {
-                        right = (right + 1).min(default_right);
+                        right = (right + 1).min(max_right);
                     }
                     (CalibrationEdge::Top, Button::Up) => {
-                        top = top.saturating_sub(1).max(default_top);
-                        top = top.min(bottom.saturating_sub(1));
+                        top = (top - 1).max(min_edge).min(bottom - 1);
                     }
                     (CalibrationEdge::Top, Button::Down) => {
-                        top = (top + 1).min(bottom.saturating_sub(1));
+                        top = (top + 1).min(bottom - 1);
                     }
                     (CalibrationEdge::Bottom, Button::Up) => {
-                        bottom = bottom.saturating_sub(1).max(top.saturating_add(1));
+                        bottom = (bottom - 1).max(top + 1);
                     }
                     (CalibrationEdge::Bottom, Button::Down) => {
-                        bottom = (bottom + 1).min(default_bottom);
+                        bottom = (bottom + 1).min(max_bottom);
                     }
                     (_, Button::Select) => break,
                     (_, Button::Left)

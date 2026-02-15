@@ -40,6 +40,9 @@ jobs:
 
       - name: cargo test workspace
         run: cargo test --workspace
+        # Note: Tests for Linux-only crates (rustyjack-daemon socket tests) 
+        # require Unix domain sockets and will only run on Linux/Unix platforms.
+        # On Windows/macOS, the test files are gated with #![cfg(target_os = "linux")].
 
       - name: Guard against lab features in release builds
         run: |
