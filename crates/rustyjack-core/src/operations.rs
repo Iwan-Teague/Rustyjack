@@ -41,7 +41,8 @@ use walkdir::WalkDir;
 use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
 use crate::cli::{
     AntiForensicsCommand, AntiForensicsSecureDeleteArgs, AuditCommand, BridgeCommand,
-    BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs, DnsSpoofCommand,
+    BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
+    DiscordTestArtifactsArgs, DnsSpoofCommand,
     DnsSpoofStartArgs, EthernetCommand, EthernetDiscoverArgs, EthernetInventoryArgs,
     EthernetPortScanArgs, EthernetSiteCredArgs, EvasionCommand, EvasionIfaceArgs,
     ExportLogsToUsbArgs, HardwareCommand, HotspotBlacklistArgs, HotspotCommand,
@@ -206,6 +207,7 @@ pub fn dispatch_command_with_cancel(
         Commands::Scan(ScanCommand::Run(args)) => handle_scan_run(root, args),
         Commands::Notify(NotifyCommand::Discord(sub)) => match sub {
             DiscordCommand::Send(args) => handle_discord_send(root, args),
+            DiscordCommand::SendTestArtifacts(args) => handle_discord_test_artifacts(root, args),
             DiscordCommand::Status => handle_discord_status(root),
         },
         Commands::Mitm(sub) => match sub {
@@ -1868,6 +1870,101 @@ fn handle_discord_status(root: &Path) -> Result<HandlerResult> {
         "Discord webhook missing".to_string()
     };
     Ok((message, data))
+}
+
+fn handle_discord_test_artifacts(root: &Path, args: DiscordTestArtifactsArgs) -> Result<HandlerResult> {
+    use crate::test_artifacts::{build_plaintext_logs, build_results_zip};
+
+    let DiscordTestArtifactsArgs {
+        run_dir,
+        run_id,
+        message,
+        max_file_bytes,
+    } = args;
+
+    if !run_dir.is_dir() {
+        bail!("Run directory does not exist: {}", run_dir.display());
+    }
+
+    let max_bytes = max_file_bytes.unwrap_or(8 * 1024 * 1024);
+    let mut uploaded_files: Vec<String> = Vec::new();
+    let mut skipped_files: Vec<String> = Vec::new();
+    let mut all_files_to_send: Vec<std::path::PathBuf> = Vec::new();
+
+    // Build plaintext logs
+    match build_plaintext_logs(&run_dir, &run_id, Some(max_bytes)) {
+        Ok(parts) => {
+            for part in &parts {
+                let size = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+                if size <= max_bytes {
+                    all_files_to_send.push(part.clone());
+                } else {
+                    skipped_files.push(format!("{} ({} bytes, over limit)", part.display(), size));
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to build plaintext logs: {}", e);
+        }
+    }
+
+    // Build ZIP archive
+    match build_results_zip(&run_dir, &run_id) {
+        Ok(zip_path) => {
+            let size = std::fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
+            if size <= max_bytes {
+                all_files_to_send.push(zip_path);
+            } else {
+                skipped_files.push(format!(
+                    "{} ({} bytes, over {} byte limit)",
+                    zip_path.display(), size, max_bytes
+                ));
+            }
+        }
+        Err(e) => {
+            warn!("Failed to build results ZIP: {}", e);
+        }
+    }
+
+    // Build message content
+    let mut content = message.unwrap_or_else(|| {
+        format!("RustyJack test artifacts (Run ID: {})", run_id)
+    });
+    if !skipped_files.is_empty() {
+        content.push_str("\n\nSkipped (over size limit):");
+        for skipped in &skipped_files {
+            content.push_str(&format!("\n- {}", skipped));
+        }
+    }
+
+    // Send files (or just a message if all were skipped)
+    let file_refs: Vec<&Path> = all_files_to_send.iter().map(|p| p.as_path()).collect();
+
+    let sent = if file_refs.is_empty() {
+        // No files to send; send text-only notification
+        send_discord_files(root, None, &[], Some(&content))?
+    } else {
+        send_discord_files(root, None, &file_refs, Some(&content))?
+    };
+
+    for f in &all_files_to_send {
+        uploaded_files.push(f.to_string_lossy().to_string());
+    }
+
+    let data = json!({
+        "sent": sent,
+        "uploaded": uploaded_files,
+        "skipped": skipped_files,
+    });
+
+    let msg = if sent {
+        format!("Test artifacts sent ({} uploaded, {} skipped)",
+            uploaded_files.len(), skipped_files.len())
+    } else {
+        "Discord webhook not configured".to_string()
+    };
+
+    Ok((msg, data))
 }
 
 fn handle_mitm_start(
