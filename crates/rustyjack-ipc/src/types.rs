@@ -527,7 +527,12 @@ pub struct WifiDisconnectResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WifiScanStartRequest {
     pub interface: String,
+    #[serde(default = "default_scan_timeout_ms")]
     pub timeout_ms: u64,
+}
+
+fn default_scan_timeout_ms() -> u64 {
+    5000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
