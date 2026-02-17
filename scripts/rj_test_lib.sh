@@ -605,3 +605,43 @@ rj_exit_by_fail_count() {
   fi
   exit 0
 }
+
+# --- Daemon test-mode drop-in (disable UI-only gate for testing) ---
+RJ_DAEMON_TESTMODE_ACTIVE=0
+
+rj_daemon_testmode_enable() {
+  local dropin_dir="/run/systemd/system/rustyjackd.service.d"
+  local dropin_file="$dropin_dir/50-tests.conf"
+  mkdir -p "$dropin_dir"
+  cat >"$dropin_file" <<'EOF'
+[Service]
+Environment=RUSTYJACKD_UI_ONLY_OPERATIONS=false
+EOF
+  systemctl daemon-reload
+  systemctl restart rustyjackd.service
+  sleep 1
+  if systemctl is-active --quiet rustyjackd.service; then
+    RJ_DAEMON_TESTMODE_ACTIVE=1
+    rj_log "[INFO] Daemon test mode enabled (UI-only operations disabled)"
+  else
+    rj_log "[WARN] Daemon failed to restart with test mode drop-in"
+    rm -f "$dropin_file"
+    rmdir "$dropin_dir" 2>/dev/null || true
+    systemctl daemon-reload
+    systemctl restart rustyjackd.service
+    return 1
+  fi
+}
+
+rj_daemon_testmode_disable() {
+  if [[ "$RJ_DAEMON_TESTMODE_ACTIVE" -eq 0 ]]; then
+    return 0
+  fi
+  local dropin_dir="/run/systemd/system/rustyjackd.service.d"
+  rm -f "$dropin_dir/50-tests.conf"
+  rmdir "$dropin_dir" 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl restart rustyjackd.service
+  RJ_DAEMON_TESTMODE_ACTIVE=0
+  rj_log "[INFO] Daemon test mode disabled (UI-only operations restored)"
+}
