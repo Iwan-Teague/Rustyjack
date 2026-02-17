@@ -48,6 +48,7 @@ DISCORD_WEBHOOK_MENTION="${RJ_DISCORD_WEBHOOK_MENTION:-}"
 DISCORD_MAX_CONTENT_LEN=2000
 DISCORD_MAX_RETRIES=5
 DISCORD_BUNDLE_MAX_BYTES=$((8 * 1024 * 1024))
+RJ_DISCORD_MAX_FILE_BYTES="${RJ_DISCORD_MAX_FILE_BYTES:-$((8 * 1024 * 1024))}"
 
 MASTER_REPORT_PATH=""
 MASTER_JSON_PATH=""
@@ -281,7 +282,15 @@ discord_build_payload_json() {
   printf '%s' "$pj"
 }
 
-# Curl wrapper with Discord 429 rate-limit retry handling.
+# Redact webhook URL/token from a string before printing.
+redact_webhook_url() {
+  local s="$1"
+  # Redact any discord webhook URLs (token portion)
+  s="$(printf '%s' "$s" | sed -E 's|(https://discord\.com/api/webhooks/)[0-9]+/[A-Za-z0-9_-]+|\1[REDACTED]|g')"
+  printf '%s' "$s"
+}
+
+# Curl wrapper with Discord rate-limit retry handling and diagnostics.
 # Usage: discord_curl_with_retry [curl args...]
 # All args are passed directly to curl after the common flags.
 # Returns 0 on success (HTTP 2xx), 1 on exhausted retries or error.
@@ -289,24 +298,34 @@ discord_curl_with_retry() {
   local max_retries="$DISCORD_MAX_RETRIES"
   local attempt=0
   local http_code
-  local tmpfile
+  local tmpfile header_file
   tmpfile="$(mktemp "${TMPDIR:-/tmp}/rj_discord_XXXXXX")"
+  header_file="$(mktemp "${TMPDIR:-/tmp}/rj_discord_hdr_XXXXXX")"
 
   while [[ $attempt -lt $max_retries ]]; do
     attempt=$((attempt + 1))
-    # Add explicit timeouts: 10s connect, 120s max total (large uploads)
-    http_code="$(curl -sS -o "$tmpfile" -w '%{http_code}' \
+    http_code="$(curl -sS -o "$tmpfile" -D "$header_file" -w '%{http_code}' \
       --connect-timeout 10 --max-time 120 \
       -X POST "$DISCORD_WEBHOOK_URL" "$@" 2>/dev/null)" || http_code="000"
 
+    # Success
+    if [[ "$http_code" =~ ^2 ]]; then
+      rm -f "$tmpfile" "$header_file" 2>/dev/null || true
+      return 0
+    fi
+
+    # Rate limited (429): honor Retry-After header, fallback to JSON body
     if [[ "$http_code" == "429" ]]; then
-      # Parse retry_after from JSON response body
       local retry_after=""
-      retry_after="$(sed -n 's/.*"retry_after" *: *\([0-9.]*\).*/\1/p' "$tmpfile" 2>/dev/null | head -n1)" || true
+      # Try Retry-After header first
+      retry_after="$(grep -i '^Retry-After:' "$header_file" 2>/dev/null | head -n1 | tr -d '\r' | awk '{print $2}')" || true
+      # Fallback: parse retry_after from JSON body
+      if [[ -z "$retry_after" || "$retry_after" == "0" ]]; then
+        retry_after="$(sed -n 's/.*"retry_after" *: *\([0-9.]*\).*/\1/p' "$tmpfile" 2>/dev/null | head -n1)" || true
+      fi
       if [[ -z "$retry_after" || "$retry_after" == "0" ]]; then
         retry_after="5"
       fi
-      # Convert float to integer ceiling and add jitter
       local wait_int
       wait_int="$(printf '%.0f' "$retry_after" 2>/dev/null || echo "${retry_after%%.*}")" || wait_int=5
       wait_int=$((wait_int + 1))
@@ -315,19 +334,55 @@ discord_curl_with_retry() {
       continue
     fi
 
-    if [[ "$http_code" =~ ^2 ]]; then
-      rm -f "$tmpfile" 2>/dev/null || true
-      return 0
+    # Print diagnostics: HTTP status + truncated response body (redacted)
+    echo "[WARN] Discord returned HTTP ${http_code} on attempt ${attempt}/${max_retries}."
+    if [[ -s "$tmpfile" ]]; then
+      local body_snippet
+      body_snippet="$(head -c 8192 "$tmpfile" 2>/dev/null || true)"
+      body_snippet="$(redact_webhook_url "$body_snippet")"
+      echo "[DIAG] Response body: ${body_snippet}"
     fi
 
-    echo "[WARN] Discord returned HTTP ${http_code} on attempt ${attempt}/${max_retries}."
-    if [[ $attempt -lt $max_retries ]]; then
-      sleep 2
+    # Save error response for postmortem (no secrets)
+    if [[ -s "$tmpfile" && -n "${OUTROOT:-}" && -n "${RUN_ID:-}" ]]; then
+      local err_dir="${OUTROOT}/${RUN_ID}"
+      if [[ -d "$err_dir" ]]; then
+        local err_ts
+        err_ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)"
+        local err_file="${err_dir}/discord_error_${err_ts}.json"
+        # Redact before saving
+        redact_webhook_url "$(cat "$tmpfile")" > "$err_file" 2>/dev/null || true
+      fi
     fi
+
+    # Fail fast on non-retryable status codes
+    case "$http_code" in
+      400|401|403|404|413)
+        echo "[ERROR] Discord returned non-retryable HTTP ${http_code}. Aborting."
+        rm -f "$tmpfile" "$header_file" 2>/dev/null || true
+        return 1
+        ;;
+    esac
+
+    # Retryable 5xx: bounded retry with backoff
+    if [[ "$http_code" =~ ^5 ]]; then
+      if [[ $attempt -lt $max_retries ]]; then
+        local backoff=$((attempt * 2))
+        echo "[WARN] Transient server error (${http_code}). Retrying in ${backoff}s..."
+        sleep "$backoff"
+        continue
+      fi
+    fi
+
+    # Other non-retryable or unexpected codes
+    if [[ $attempt -ge $max_retries ]]; then
+      break
+    fi
+    sleep 2
   done
 
   echo "[WARN] Discord upload failed after ${max_retries} attempts (last HTTP ${http_code})."
-  rm -f "$tmpfile" 2>/dev/null || true
+  rm -f "$tmpfile" "$header_file" 2>/dev/null || true
   return 1
 }
 
@@ -487,7 +542,7 @@ send_discord_summary() {
   if [[ "$DISCORD_WEBHOOK_ATTACH_SUMMARY" == "1" && -f "$MASTER_REPORT_PATH" ]]; then
     if ! discord_curl_with_retry \
       -F "payload_json=$payload_json" \
-      -F "file1=@${MASTER_REPORT_PATH};filename=rustyjack_${RUN_ID}_summary.md"; then
+      -F "files[0]=@${MASTER_REPORT_PATH};filename=rustyjack_${RUN_ID}_summary.md"; then
       echo "[WARN] Failed to send Discord webhook with attachment."
       return 0
     fi
@@ -551,7 +606,7 @@ upload_suite_critical_files() {
     payload_json="$(discord_build_payload_json "Suite report: ${suite_label}")"
     if ! discord_curl_with_retry \
       -F "payload_json=$payload_json" \
-      -F "file1=@${report};filename=${suite_id}_report.md"; then
+      -F "files[0]=@${report};filename=${suite_id}_report.md"; then
       echo "[WARN] Failed to upload report for ${suite_label}"
     fi
   fi
@@ -561,7 +616,7 @@ upload_suite_critical_files() {
     payload_json="$(discord_build_payload_json "Suite log: ${suite_label}")"
     if ! discord_curl_with_retry \
       -F "payload_json=$payload_json" \
-      -F "file1=@${log};filename=${suite_id}_run.log"; then
+      -F "files[0]=@${log};filename=${suite_id}_run.log"; then
       echo "[WARN] Failed to upload log for ${suite_label}"
     fi
   fi
@@ -571,7 +626,7 @@ upload_suite_critical_files() {
     payload_json="$(discord_build_payload_json "Suite summary: ${suite_label}")"
     if ! discord_curl_with_retry \
       -F "payload_json=$payload_json" \
-      -F "file1=@${summary};filename=${suite_id}_summary.jsonl"; then
+      -F "files[0]=@${summary};filename=${suite_id}_summary.jsonl"; then
       echo "[WARN] Failed to upload summary for ${suite_label}"
     fi
   fi
@@ -631,7 +686,7 @@ send_discord_suite_artifacts() {
 
     if ! discord_curl_with_retry \
       -F "payload_json=$payload_json" \
-      -F "file1=@${upload_file};filename=${upload_filename}"; then
+      -F "files[0]=@${upload_file};filename=${upload_filename}"; then
       echo "[WARN] Failed to upload suite bundle for ${suite_label} to Discord."
     fi
   fi
@@ -652,27 +707,52 @@ upload_consolidated_results_zip() {
     echo "[WARN] Results directory not found: $run_dir"
     return 1
   fi
-  
+
   local zip_file="${run_dir}/rustyjack_${run_id}_results.zip"
-  local temp_zip="${zip_file}.tmp"
+  # A3: Create temp ZIP OUTSIDE run_dir to prevent self-inclusion
+  local temp_zip
+  temp_zip="$(mktemp "${TMPDIR:-/tmp}/rj_zip_XXXXXX.zip")"
   
   echo "[INFO] Creating consolidated results archive: $zip_file"
 
-  # Create zip with all test results (from parent directory to avoid recursion issues)
-  if ! zip -r "$temp_zip" "$run_dir" -q 2>&1 | head -20; then
+  # Zip from parent directory using relative basename, excluding the zip itself,
+  # FIFOs, cores, and existing archives. Self-inclusion is impossible because
+  # temp_zip lives under /tmp, not under run_dir.
+  local parent_dir base_name
+  parent_dir="$(dirname "$run_dir")"
+  base_name="$(basename "$run_dir")"
+  if ! (cd "$parent_dir" && zip -r "$temp_zip" "$base_name" \
+    -x '*.core' '*.fifo' '*ui_input.fifo' '*.zip' '*.tmp' -q 2>&1 | head -20); then
     local zip_err=$?
     echo "[WARN] Failed to create results zip (exit code: $zip_err)"
     rm -f "$temp_zip" 2>/dev/null || true
     return 1
   fi
 
-  # Verify temp zip was created before attempting rename
-  if [ ! -f "$temp_zip" ]; then
+  if [[ ! -f "$temp_zip" ]]; then
     echo "[WARN] Zip file was not created: $temp_zip"
     return 1
   fi
 
-  if ! mv "$temp_zip" "$zip_file"; then
+  # A4: Size preflight before uploading
+  local zip_size_bytes=0
+  zip_size_bytes="$(stat -c%s "$temp_zip" 2>/dev/null || stat -f%z "$temp_zip" 2>/dev/null || echo 0)"
+
+  if [[ "$zip_size_bytes" -gt "$RJ_DISCORD_MAX_FILE_BYTES" ]]; then
+    echo "[WARN] Consolidated ZIP too large (${zip_size_bytes} bytes > ${RJ_DISCORD_MAX_FILE_BYTES} limit). Skipping upload."
+    # Move zip into run_dir for local retention
+    mv -f "$temp_zip" "$zip_file" 2>/dev/null || true
+    echo "[INFO] Archive retained locally: $zip_file"
+    # Notify Discord that the archive was skipped
+    send_discord_text_message \
+      "Consolidated ZIP skipped: file too large (${zip_size_bytes} bytes, limit ${RJ_DISCORD_MAX_FILE_BYTES}).
+Run ID: ${run_id}
+Retained locally: ${zip_file}" \
+      0
+    return 0
+  fi
+
+  if ! mv -f "$temp_zip" "$zip_file"; then
     echo "[WARN] Failed to finalize zip file (check permissions and disk space)"
     rm -f "$temp_zip" 2>/dev/null || true
     return 1
@@ -689,8 +769,15 @@ upload_consolidated_results_zip() {
   
   if ! discord_curl_with_retry \
     -F "payload_json=$payload_json" \
-    -F "file1=@${zip_file};filename=rustyjack_${run_id}_results.zip"; then
+    -F "files[0]=@${zip_file};filename=rustyjack_${run_id}_results.zip"; then
     echo "[WARN] Failed to upload consolidated results zip to Discord"
+    echo "[INFO] Archive retained locally: $zip_file"
+    # Send fallback notification
+    send_discord_text_message \
+      "Consolidated ZIP upload failed.
+Run ID: ${run_id}
+Retained locally: ${zip_file}" \
+      0
     return 1
   fi
   
@@ -1208,17 +1295,49 @@ Status: $([[ $SUITES_FAIL -eq 0 ]] && echo PASS || echo FAIL)
 Creating consolidated results archive..." \
   1
 
-# Create and upload consolidated zip of all test results
+# Create and upload consolidated artifacts (ZIP + all-logs plaintext)
+# Prefer Rust CLI for uploads (correct multipart, retry, chunking).
+# Fall back to bash upload_consolidated_results_zip if Rust CLI unavailable.
 run_dir="$OUTROOT/$RUN_ID"
-if [[ -d "$run_dir" ]]; then
-  if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
-    echo "[INFO] Consolidated results archive uploaded to Discord successfully"
-    send_discord_text_message \
-      "Consolidated results archive uploaded.
+if [[ -d "$run_dir" ]] && discord_can_send; then
+  local_status="$([[ $SUITES_FAIL -eq 0 ]] && echo PASS || echo FAIL)"
+  artifact_msg="RustyJack test run [${local_status}] (Run ID: ${RUN_ID}, Host: $(hostname 2>/dev/null || echo unknown))"
+
+  if command -v rustyjack >/dev/null 2>&1; then
+    echo "[INFO] Using Rust CLI to build and send test artifacts..."
+    if rustyjack notify discord send-test-artifacts \
+      --run-dir "$run_dir" \
+      --run-id "$RUN_ID" \
+      --message "$artifact_msg" \
+      --max-file-bytes "$RJ_DISCORD_MAX_FILE_BYTES" 2>&1; then
+      echo "[INFO] Rust CLI: test artifacts sent to Discord"
+    else
+      echo "[WARN] Rust CLI artifact upload failed; falling back to bash upload"
+      # Fallback: try bash ZIP upload
+      if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
+        echo "[INFO] Fallback: consolidated ZIP uploaded via bash"
+      else
+        # Last resort: send text-only notification
+        send_discord_text_message \
+          "Artifact upload failed for run ${RUN_ID}.
+Artifacts retained locally: ${run_dir}
+Status: ${local_status}" \
+          0
+      fi
+    fi
+  else
+    # Rust CLI not available; use bash upload
+    if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
+      echo "[INFO] Consolidated results archive uploaded to Discord successfully"
+      send_discord_text_message \
+        "Consolidated results archive uploaded.
 Run ID: ${RUN_ID}
 Archive: rustyjack_${RUN_ID}_results.zip" \
-      0
+        0
+    fi
   fi
+
+  echo "[INFO] Artifacts retained locally: $run_dir"
 fi
 
 send_discord_summary

