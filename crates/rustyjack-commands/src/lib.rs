@@ -313,6 +313,8 @@ pub enum NotifyCommand {
 pub enum DiscordCommand {
     /// Send a manual Discord notification
     Send(DiscordSendArgs),
+    /// Build and send test artifacts (ZIP + all-logs) to Discord
+    SendTestArtifacts(DiscordTestArtifactsArgs),
     /// Check whether a webhook is configured
     Status,
 }
@@ -338,6 +340,25 @@ pub struct DiscordSendArgs {
     /// Optional interface context for embed description
     #[arg(long)]
     pub interface: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscordTestArtifactsArgs {
+    /// Path to the test run directory
+    #[arg(long)]
+    pub run_dir: PathBuf,
+
+    /// Run ID for naming artifacts
+    #[arg(long)]
+    pub run_id: String,
+
+    /// Optional message to include with the upload
+    #[arg(long)]
+    pub message: Option<String>,
+
+    /// Maximum file size in bytes (default: 8 MiB)
+    #[arg(long)]
+    pub max_file_bytes: Option<u64>,
 }
 
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

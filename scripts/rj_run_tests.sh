@@ -1295,17 +1295,49 @@ Status: $([[ $SUITES_FAIL -eq 0 ]] && echo PASS || echo FAIL)
 Creating consolidated results archive..." \
   1
 
-# Create and upload consolidated zip of all test results
+# Create and upload consolidated artifacts (ZIP + all-logs plaintext)
+# Prefer Rust CLI for uploads (correct multipart, retry, chunking).
+# Fall back to bash upload_consolidated_results_zip if Rust CLI unavailable.
 run_dir="$OUTROOT/$RUN_ID"
-if [[ -d "$run_dir" ]]; then
-  if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
-    echo "[INFO] Consolidated results archive uploaded to Discord successfully"
-    send_discord_text_message \
-      "Consolidated results archive uploaded.
+if [[ -d "$run_dir" ]] && discord_can_send; then
+  local_status="$([[ $SUITES_FAIL -eq 0 ]] && echo PASS || echo FAIL)"
+  artifact_msg="RustyJack test run [${local_status}] (Run ID: ${RUN_ID}, Host: $(hostname 2>/dev/null || echo unknown))"
+
+  if command -v rustyjack >/dev/null 2>&1; then
+    echo "[INFO] Using Rust CLI to build and send test artifacts..."
+    if rustyjack notify discord send-test-artifacts \
+      --run-dir "$run_dir" \
+      --run-id "$RUN_ID" \
+      --message "$artifact_msg" \
+      --max-file-bytes "$RJ_DISCORD_MAX_FILE_BYTES" 2>&1; then
+      echo "[INFO] Rust CLI: test artifacts sent to Discord"
+    else
+      echo "[WARN] Rust CLI artifact upload failed; falling back to bash upload"
+      # Fallback: try bash ZIP upload
+      if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
+        echo "[INFO] Fallback: consolidated ZIP uploaded via bash"
+      else
+        # Last resort: send text-only notification
+        send_discord_text_message \
+          "Artifact upload failed for run ${RUN_ID}.
+Artifacts retained locally: ${run_dir}
+Status: ${local_status}" \
+          0
+      fi
+    fi
+  else
+    # Rust CLI not available; use bash upload
+    if upload_consolidated_results_zip "$run_dir" "$RUN_ID"; then
+      echo "[INFO] Consolidated results archive uploaded to Discord successfully"
+      send_discord_text_message \
+        "Consolidated results archive uploaded.
 Run ID: ${RUN_ID}
 Archive: rustyjack_${RUN_ID}_results.zip" \
-      0
+        0
+    fi
   fi
+
+  echo "[INFO] Artifacts retained locally: $run_dir"
 fi
 
 send_discord_summary
