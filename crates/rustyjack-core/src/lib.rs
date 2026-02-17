@@ -37,6 +37,7 @@ pub mod redact;
 pub mod runtime;
 pub mod services;
 pub mod system;
+pub mod test_artifacts;
 pub mod wireless_native;
 
 #[cfg(feature = "external_tools")]

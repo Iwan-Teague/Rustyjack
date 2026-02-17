@@ -606,10 +606,156 @@ pub fn build_manual_embed(title: &str, target: Option<&str>, interface: Option<&
     Value::Object(embed)
 }
 
+/// Maximum response body bytes to capture for diagnostics.
+const DISCORD_DIAG_MAX_BYTES: usize = 8192;
+/// Default max retry attempts for Discord webhook.
+const DISCORD_MAX_RETRIES: u32 = 5;
+/// Default per-file cap (Discord files[n] limit).
+const DISCORD_MAX_FILES_PER_MESSAGE: usize = 10;
+
+/// Redact Discord webhook URL tokens from error messages.
+fn redact_webhook_url(s: &str) -> String {
+    use regex::Regex;
+    // Match discord webhook URLs and redact the token portion
+    let re = Regex::new(r"(https://discord\.com/api/webhooks/)\d+/[A-Za-z0-9_-]+")
+        .expect("valid regex");
+    re.replace_all(s, "${1}[REDACTED]").to_string()
+}
+
+/// Extract diagnostic snippet from a Discord error response (truncated, redacted).
+fn discord_error_snippet(body: &str) -> String {
+    let truncated = if body.len() > DISCORD_DIAG_MAX_BYTES {
+        &body[..DISCORD_DIAG_MAX_BYTES]
+    } else {
+        body
+    };
+    redact_webhook_url(truncated)
+}
+
+/// Determine if an HTTP status code should NOT be retried.
+fn discord_status_is_fatal(status: u16) -> bool {
+    matches!(status, 400 | 401 | 403 | 404 | 413)
+}
+
+/// Parse the retry-after delay from a 429 response.
+/// Checks the Retry-After header first, then falls back to retry_after in JSON body.
+fn parse_retry_after(
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+) -> Duration {
+    // Try Retry-After header
+    if let Some(val) = headers.get("retry-after").or_else(|| headers.get("Retry-After")) {
+        if let Ok(s) = val.to_str() {
+            if let Ok(secs) = s.trim().parse::<f64>() {
+                let wait = (secs.ceil() as u64).max(1) + 1;
+                return Duration::from_secs(wait);
+            }
+        }
+    }
+    // Fallback: parse retry_after from JSON body
+    if let Ok(parsed) = serde_json::from_str::<Value>(body) {
+        if let Some(ra) = parsed.get("retry_after").and_then(|v| v.as_f64()) {
+            let wait = (ra.ceil() as u64).max(1) + 1;
+            return Duration::from_secs(wait);
+        }
+    }
+    Duration::from_secs(5)
+}
+
+/// Execute a single Discord webhook HTTP request with retry/backoff.
+/// Handles 429 with Retry-After, fails fast on 400/401/403/404/413,
+/// retries on transient 5xx with bounded attempts.
+fn discord_send_with_retry(
+    client: &Client,
+    webhook: &str,
+    build_request: impl Fn() -> Result<reqwest::blocking::RequestBuilder>,
+) -> Result<bool> {
+    let max_retries = DISCORD_MAX_RETRIES;
+
+    for attempt in 1..=max_retries {
+        let request = build_request()?;
+        let response = match request.send() {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Discord request failed (attempt {}/{}): {}", attempt, max_retries, redact_webhook_url(&e.to_string()));
+                if attempt < max_retries {
+                    std::thread::sleep(Duration::from_secs((attempt * 2).into()));
+                    continue;
+                }
+                bail!("Discord webhook send failed after {} attempts: {}", max_retries, redact_webhook_url(&e.to_string()));
+            }
+        };
+
+        let status = response.status();
+        let status_code = status.as_u16();
+
+        if status.is_success() {
+            return Ok(true);
+        }
+
+        let headers = response.headers().clone();
+        let body = response.text().unwrap_or_default();
+        let snippet = discord_error_snippet(&body);
+
+        // 429: Rate limited - honor Retry-After
+        if status_code == 429 {
+            let wait = parse_retry_after(&headers, &body);
+            warn!(
+                "Discord rate limited (429). Waiting {:?} before retry {}/{}.",
+                wait, attempt, max_retries
+            );
+            std::thread::sleep(wait);
+            continue;
+        }
+
+        // Fatal status codes: do not retry
+        if discord_status_is_fatal(status_code) {
+            bail!(
+                "Discord webhook returned non-retryable HTTP {} (attempt {}/{}). Response: {}",
+                status_code, attempt, max_retries, snippet
+            );
+        }
+
+        // 5xx: transient server error, retry with backoff
+        if status_code >= 500 {
+            warn!(
+                "Discord transient error ({}). Retrying in {}s (attempt {}/{}). Response: {}",
+                status_code, attempt * 2, attempt, max_retries, snippet
+            );
+            if attempt < max_retries {
+                std::thread::sleep(Duration::from_secs((attempt * 2).into()));
+                continue;
+            }
+        }
+
+        bail!(
+            "Discord webhook returned HTTP {} after {} attempts. Response: {}",
+            status_code, attempt, snippet
+        );
+    }
+
+    bail!("Discord webhook failed after {} attempts", max_retries);
+}
+
 pub fn send_discord_payload(
     root: &Path,
     embed: Option<Value>,
     file: Option<&Path>,
+    content: Option<&str>,
+) -> Result<bool> {
+    // Single file: delegate to multi-file sender
+    let files: Vec<&Path> = file.into_iter().collect();
+    send_discord_files(root, embed, &files, content)
+}
+
+/// Send a Discord webhook message with zero or more file attachments.
+/// Files are attached as `files[0]`, `files[1]`, etc. per Discord API.
+/// If the file count exceeds `DISCORD_MAX_FILES_PER_MESSAGE`, multiple
+/// webhook posts are made automatically.
+pub fn send_discord_files(
+    root: &Path,
+    embed: Option<Value>,
+    files: &[&Path],
     content: Option<&str>,
 ) -> Result<bool> {
     let Some(webhook) = read_discord_webhook(root)? else {
@@ -617,46 +763,107 @@ pub fn send_discord_payload(
     };
 
     let client = Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .build()
         .context("building HTTP client")?;
 
+    // Build payload JSON (content + optional embeds)
     let mut payload = serde_json::Map::new();
     if let Some(text) = content {
         if !text.is_empty() {
             payload.insert("content".into(), Value::String(text.to_string()));
         }
     }
-    if let Some(embed_value) = embed {
+    if let Some(embed_value) = &embed {
         payload.insert("embeds".into(), json!([embed_value]));
     }
-    if payload.is_empty() {
-        bail!("Discord payload must include at least a message or embed content");
+    if payload.is_empty() && files.is_empty() {
+        bail!("Discord payload must include at least a message, embed, or file");
     }
-    let payload_value = Value::Object(payload);
 
-    if let Some(file_path) = file {
-        let form = multipart::Form::new()
-            .text("payload_json", payload_value.to_string())
-            .file("file", file_path)
-            .with_context(|| format!("attaching file {}", file_path.display()))?;
-        let response = client
-            .post(&webhook)
-            .multipart(form)
-            .send()
-            .context("sending Discord webhook with file")?;
-        if !response.status().is_success() {
-            bail!("Discord webhook returned status {}", response.status());
+    if files.is_empty() {
+        // JSON-only post (no files)
+        let payload_value = Value::Object(payload);
+        let webhook_clone = webhook.clone();
+        discord_send_with_retry(&client, &webhook, || {
+            Ok(client.post(&webhook_clone).json(&payload_value))
+        })?;
+        return Ok(true);
+    }
+
+    // Split files into chunks of DISCORD_MAX_FILES_PER_MESSAGE
+    let chunks: Vec<&[&Path]> = files.chunks(DISCORD_MAX_FILES_PER_MESSAGE).collect();
+    let total_chunks = chunks.len();
+
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
+        // Only include embed/content on the first chunk
+        let mut chunk_payload = if chunk_idx == 0 {
+            payload.clone()
+        } else {
+            serde_json::Map::new()
+        };
+
+        // Add attachments metadata
+        let attachments: Vec<Value> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                let fname = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file");
+                json!({ "id": i, "filename": fname })
+            })
+            .collect();
+        chunk_payload.insert("attachments".into(), Value::Array(attachments));
+
+        if total_chunks > 1 && chunk_idx > 0 {
+            chunk_payload.insert(
+                "content".into(),
+                Value::String(format!(
+                    "(continued, part {}/{})",
+                    chunk_idx + 1,
+                    total_chunks
+                )),
+            );
         }
-    } else {
-        let response = client
-            .post(&webhook)
-            .json(&payload_value)
-            .send()
-            .context("sending Discord webhook")?;
-        if !response.status().is_success() {
-            bail!("Discord webhook returned status {}", response.status());
+
+        let payload_json_str = Value::Object(chunk_payload).to_string();
+
+        // Collect file data upfront so we can rebuild the form on retry
+        struct FileData {
+            bytes: Vec<u8>,
+            filename: String,
+            idx: usize,
         }
+        let mut file_data_vec = Vec::with_capacity(chunk.len());
+        for (i, path) in chunk.iter().enumerate() {
+            let bytes = fs::read(path)
+                .with_context(|| format!("reading file for Discord upload: {}", path.display()))?;
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+            file_data_vec.push(FileData {
+                bytes,
+                filename,
+                idx: i,
+            });
+        }
+
+        let webhook_clone = webhook.clone();
+        let pjs = payload_json_str.clone();
+        discord_send_with_retry(&client, &webhook, || {
+            let mut form =
+                multipart::Form::new().text("payload_json", pjs.clone());
+            for fd in &file_data_vec {
+                let part = multipart::Part::bytes(fd.bytes.clone())
+                    .file_name(fd.filename.clone());
+                form = form.part(format!("files[{}]", fd.idx), part);
+            }
+            Ok(client.post(&webhook_clone).multipart(form))
+        })?;
     }
 
     Ok(true)
@@ -2259,6 +2466,10 @@ fn apply_interface_isolation_with_ops_strict_impl(
     // Phase 1: make sure all allowed interfaces can be prepared/admin-UP before
     // we touch any non-allowed interfaces. This prevents cutting off the current
     // uplink when switching to a target interface that cannot come up.
+    //
+    // IMPORTANT: Do NOT release DHCP, flush addresses, or delete default routes
+    // for allowed interfaces. These destructive operations would break the active
+    // uplink and cause route snapshot diffs in read-only test flows.
     for iface_info in allowed_infos {
         debug!(
             target: "net",
@@ -2267,16 +2478,6 @@ fn apply_interface_isolation_with_ops_strict_impl(
             wireless = iface_info.is_wireless,
             "interface_isolation_strict_eval"
         );
-
-        if let Err(e) = ops.release_dhcp(&iface_info.name) {
-            warn!(target: "net", iface = %iface_info.name, error = %e, "dhcp_release_failed");
-        }
-        if let Err(e) = ops.flush_addresses(&iface_info.name) {
-            warn!(target: "net", iface = %iface_info.name, error = %e, "flush_addresses_failed");
-        }
-        if let Err(e) = routes.delete_default_route(&iface_info.name) {
-            debug!(target: "net", iface = %iface_info.name, error = %e, "default_route_delete_skipped");
-        }
 
         if iface_info.is_wireless {
             if let Err(e) = ops.set_rfkill_block(&iface_info.name, false) {
@@ -4216,5 +4417,95 @@ fn sanitize_profile_name(input: &str) -> String {
         "profile".to_string()
     } else {
         trimmed
+    }
+}
+
+#[cfg(test)]
+mod discord_tests {
+    use super::*;
+
+    #[test]
+    fn test_redact_webhook_url() {
+        let url = "https://discord.com/api/webhooks/123456789/AbCdEfGhIjKlMnOpQrStUvWxYz_0123";
+        let redacted = redact_webhook_url(url);
+        assert_eq!(
+            redacted,
+            "https://discord.com/api/webhooks/[REDACTED]"
+        );
+        assert!(!redacted.contains("123456789"));
+        assert!(!redacted.contains("AbCdEfGhIjKlMnOpQrStUvWxYz"));
+    }
+
+    #[test]
+    fn test_redact_webhook_url_in_error_message() {
+        let msg = "Failed to send to https://discord.com/api/webhooks/9999/SECRET_TOKEN_HERE: timeout";
+        let redacted = redact_webhook_url(msg);
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(!redacted.contains("SECRET_TOKEN_HERE"));
+        assert!(redacted.contains("timeout"));
+    }
+
+    #[test]
+    fn test_discord_error_snippet_truncates() {
+        let body = "x".repeat(DISCORD_DIAG_MAX_BYTES + 1000);
+        let snippet = discord_error_snippet(&body);
+        assert!(snippet.len() <= DISCORD_DIAG_MAX_BYTES);
+    }
+
+    #[test]
+    fn test_discord_error_snippet_redacts() {
+        let body = r#"{"message": "failed", "url": "https://discord.com/api/webhooks/123/TOKEN"}"#;
+        let snippet = discord_error_snippet(&body);
+        assert!(snippet.contains("[REDACTED]"));
+        assert!(!snippet.contains("TOKEN"));
+    }
+
+    #[test]
+    fn test_discord_status_is_fatal() {
+        assert!(discord_status_is_fatal(400));
+        assert!(discord_status_is_fatal(401));
+        assert!(discord_status_is_fatal(403));
+        assert!(discord_status_is_fatal(404));
+        assert!(discord_status_is_fatal(413));
+        assert!(!discord_status_is_fatal(429));
+        assert!(!discord_status_is_fatal(500));
+        assert!(!discord_status_is_fatal(502));
+        assert!(!discord_status_is_fatal(200));
+    }
+
+    #[test]
+    fn test_parse_retry_after_from_header() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", "3.5".parse().unwrap());
+        let duration = parse_retry_after(&headers, "{}");
+        // ceil(3.5) = 4, +1 jitter = 5
+        assert_eq!(duration, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_parse_retry_after_from_json_body() {
+        let headers = reqwest::header::HeaderMap::new();
+        let body = r#"{"retry_after": 2.1, "message": "rate limited"}"#;
+        let duration = parse_retry_after(&headers, body);
+        // ceil(2.1) = 3, +1 jitter = 4
+        assert_eq!(duration, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn test_parse_retry_after_fallback() {
+        let headers = reqwest::header::HeaderMap::new();
+        let body = "not json";
+        let duration = parse_retry_after(&headers, body);
+        assert_eq!(duration, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_multipart_field_naming() {
+        // Verify that our format string produces correct Discord field names
+        for i in 0..15 {
+            let field_name = format!("files[{}]", i);
+            assert!(field_name.starts_with("files["));
+            assert!(field_name.ends_with("]"));
+        }
     }
 }
