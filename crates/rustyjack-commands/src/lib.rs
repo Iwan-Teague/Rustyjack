@@ -70,6 +70,19 @@ pub enum Commands {
     Ethernet(EthernetCommand),
     #[command(subcommand)]
     Hotspot(HotspotCommand),
+
+    /// Evasion controls: MAC randomization, hostname, TX power, mode
+    #[command(subcommand)]
+    Evasion(EvasionCommand),
+    /// Physical access: router fingerprinting, credential extraction
+    #[command(subcommand, name = "physical-access")]
+    PhysicalAccess(PhysicalAccessCommand),
+    /// Anti-forensics: secure delete, log purge, evidence removal
+    #[command(subcommand, name = "anti-forensics")]
+    AntiForensics(AntiForensicsCommand),
+    /// Audit trail and logging inspection
+    #[command(subcommand)]
+    Audit(AuditCommand),
 }
 
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -314,9 +327,9 @@ pub struct DiscordSendArgs {
     #[arg(long)]
     pub message: Option<String>,
 
-    /// Optional file to upload with the notification
+    /// File(s) to upload with the notification (repeatable)
     #[arg(long)]
-    pub file: Option<PathBuf>,
+    pub file: Vec<PathBuf>,
 
     /// Optional target/host context for embed description
     #[arg(long)]
@@ -794,6 +807,9 @@ pub enum LootCommand {
     List(LootListArgs),
     /// Read a specific loot file
     Read(LootReadArgs),
+    /// Sweep for loot artifacts across known directories
+    #[command(name = "artifact-sweep")]
+    ArtifactSweep(LootArtifactSweepArgs),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
@@ -1011,4 +1027,97 @@ pub struct BridgeStopArgs {
     pub interface_a: String,
     #[arg(long = "interface-b", default_value = "eth1")]
     pub interface_b: String,
+}
+
+// --- Evasion commands ---
+
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EvasionCommand {
+    /// Show current MAC address and randomization state
+    #[command(name = "mac-status")]
+    MacStatus(EvasionIfaceArgs),
+    /// Show current hostname and randomization state
+    #[command(name = "hostname-status")]
+    HostnameStatus,
+    /// Show current TX power configuration
+    #[command(name = "tx-power-status")]
+    TxPowerStatus(EvasionIfaceArgs),
+    /// Show current evasion mode
+    #[command(name = "mode-status")]
+    ModeStatus,
+    /// Randomize the MAC address on an interface
+    #[command(name = "randomize-mac")]
+    RandomizeMac(EvasionIfaceArgs),
+    /// Randomize the system hostname
+    #[command(name = "randomize-hostname")]
+    RandomizeHostname,
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvasionIfaceArgs {
+    /// Network interface name
+    #[arg(long, short, default_value = "wlan0")]
+    pub interface: String,
+}
+
+// --- Physical access commands ---
+
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PhysicalAccessCommand {
+    /// Fingerprint a connected router
+    #[command(name = "router-fingerprint")]
+    RouterFingerprint(PhysicalAccessTargetArgs),
+    /// Extract WiFi credentials from a connected router
+    #[command(name = "extract-credentials")]
+    ExtractCredentials(PhysicalAccessTargetArgs),
+    /// List default credential databases
+    #[command(name = "list-default-credentials")]
+    ListDefaultCredentials,
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhysicalAccessTargetArgs {
+    /// Target IP address (e.g., the router gateway)
+    #[arg(long, default_value = "192.168.1.1")]
+    pub target: String,
+    /// Network interface to use
+    #[arg(long, short, default_value = "eth0")]
+    pub interface: String,
+}
+
+// --- Anti-forensics commands ---
+
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AntiForensicsCommand {
+    /// Securely delete a file (DoD 5220.22-M overwrite)
+    #[command(name = "secure-delete")]
+    SecureDelete(AntiForensicsSecureDeleteArgs),
+    /// Show anti-forensics log status
+    #[command(name = "log-status")]
+    LogStatus,
+}
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AntiForensicsSecureDeleteArgs {
+    /// Path to the file to securely delete
+    #[arg(long)]
+    pub target: PathBuf,
+}
+
+// --- Audit commands ---
+
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AuditCommand {
+    /// Show audit log status and summary
+    #[command(name = "log-status")]
+    LogStatus,
+}
+
+// --- Loot artifact-sweep args ---
+
+#[derive(Args, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LootArtifactSweepArgs {
+    /// Only list artifacts without collecting them
+    #[arg(long, default_value_t = false)]
+    pub list_only: bool,
 }

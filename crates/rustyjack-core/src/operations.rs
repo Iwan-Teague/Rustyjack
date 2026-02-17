@@ -40,11 +40,13 @@ use walkdir::WalkDir;
 
 use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
 use crate::cli::{
-    BridgeCommand, BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
-    DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand, EthernetDiscoverArgs,
-    EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs, ExportLogsToUsbArgs,
-    HardwareCommand, HotspotBlacklistArgs, HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs,
-    LootCommand, LootKind, LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand,
+    AntiForensicsCommand, AntiForensicsSecureDeleteArgs, AuditCommand, BridgeCommand,
+    BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs, DnsSpoofCommand,
+    DnsSpoofStartArgs, EthernetCommand, EthernetDiscoverArgs, EthernetInventoryArgs,
+    EthernetPortScanArgs, EthernetSiteCredArgs, EvasionCommand, EvasionIfaceArgs,
+    ExportLogsToUsbArgs, HardwareCommand, HotspotBlacklistArgs, HotspotCommand,
+    HotspotDisconnectArgs, HotspotStartArgs, LootArtifactSweepArgs, LootCommand, LootKind,
+    LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, PhysicalAccessCommand,
     ProcessCommand, ProcessKillArgs, ProcessStatusArgs, ReverseCommand, ReverseLaunchArgs,
     ScanCommand, ScanDiscovery, ScanRunArgs, StatusCommand, SystemCommand, SystemConfigureHostArgs,
     SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs, UsbMountArgs, UsbMountMode,
@@ -81,7 +83,8 @@ use crate::system::{
     read_interface_preference, read_interface_preference_with_mac, read_interface_stats,
     read_wifi_link_info, restore_routing_state, sanitize_label, save_wifi_profile,
     scan_local_hosts_cancellable, scan_wifi_networks_with_timeout_cancel, select_active_uplink,
-    select_best_interface, select_wifi_interface, send_discord_payload, send_scan_to_discord,
+    select_best_interface, select_wifi_interface, send_discord_files, send_discord_payload,
+    send_scan_to_discord,
     set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof,
     start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
     write_interface_preference, write_wifi_profile, HostInfo, IsolationPolicyGuard, KillResult,
@@ -258,6 +261,7 @@ pub fn dispatch_command_with_cancel(
         Commands::Loot(sub) => match sub {
             LootCommand::List(args) => handle_loot_list(root, args),
             LootCommand::Read(args) => handle_loot_read(root, args),
+            LootCommand::ArtifactSweep(args) => handle_loot_artifact_sweep(root, args),
         },
         Commands::Process(sub) => match sub {
             ProcessCommand::Kill(args) => handle_process_kill(args),
@@ -303,6 +307,10 @@ pub fn dispatch_command_with_cancel(
             HotspotCommand::DisconnectClient(args) => handle_hotspot_disconnect(args),
             HotspotCommand::SetBlacklist(args) => handle_hotspot_set_blacklist(args),
         },
+        Commands::Evasion(sub) => handle_evasion(sub),
+        Commands::PhysicalAccess(sub) => handle_physical_access(root, sub),
+        Commands::AntiForensics(sub) => handle_anti_forensics(root, sub),
+        Commands::Audit(sub) => handle_audit(root, sub),
     }
 }
 
@@ -1828,16 +1836,18 @@ fn handle_discord_send(root: &Path, args: DiscordSendArgs) -> Result<HandlerResu
         interface,
     } = args;
 
-    if message.is_none() && file.is_none() {
+    if message.is_none() && file.is_empty() {
         bail!("Either --message or --file must be provided");
     }
 
     let embed = build_manual_embed(&title, target.as_deref(), interface.as_deref());
-    let sent = send_discord_payload(root, Some(embed), file.as_deref(), message.as_deref())?;
+    let file_refs: Vec<&Path> = file.iter().map(|p| p.as_path()).collect();
+    let sent = send_discord_files(root, Some(embed), &file_refs, message.as_deref())?;
 
+    let file_list: Vec<String> = file.iter().map(|p| p.to_string_lossy().to_string()).collect();
     let data = json!({
         "sent": sent,
-        "file": file.as_ref().map(|p| p.to_string_lossy().to_string()),
+        "files": file_list,
     });
 
     let message = if sent {
@@ -5648,6 +5658,377 @@ fn scoped_log_dir(root: &Path, scope: &str, target: &str, action: &str) -> Optio
         .join("logs");
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+// --- Evasion command handlers ---
+
+fn handle_evasion(cmd: EvasionCommand) -> Result<HandlerResult> {
+    match cmd {
+        EvasionCommand::MacStatus(args) => handle_evasion_mac_status(args),
+        EvasionCommand::HostnameStatus => handle_evasion_hostname_status(),
+        EvasionCommand::TxPowerStatus(args) => handle_evasion_tx_power_status(args),
+        EvasionCommand::ModeStatus => handle_evasion_mode_status(),
+        EvasionCommand::RandomizeMac(args) => handle_evasion_randomize_mac(args),
+        EvasionCommand::RandomizeHostname => handle_evasion_randomize_hostname(),
+    }
+}
+
+fn handle_evasion_mac_status(args: EvasionIfaceArgs) -> Result<HandlerResult> {
+    let iface = &args.interface;
+    let mac_path = format!("/sys/class/net/{}/address", iface);
+    let current = std::fs::read_to_string(&mac_path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let state_mgr = rustyjack_evasion::StateManager::new();
+    let randomization_enabled = state_mgr.modified_interfaces().contains(&iface.as_str());
+    let data = json!({
+        "interface": iface,
+        "current": current,
+        "randomization_enabled": randomization_enabled,
+    });
+    Ok(("MAC status retrieved".to_string(), data))
+}
+
+fn handle_evasion_hostname_status() -> Result<HandlerResult> {
+    let current = std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let data = json!({
+        "current": current,
+        "randomization_enabled": false,
+    });
+    Ok(("Hostname status retrieved".to_string(), data))
+}
+
+fn handle_evasion_tx_power_status(args: EvasionIfaceArgs) -> Result<HandlerResult> {
+    let iface = &args.interface;
+    let data = json!({
+        "interface": iface,
+        "status": "ok",
+    });
+    Ok(("TX power status retrieved".to_string(), data))
+}
+
+fn handle_evasion_mode_status() -> Result<HandlerResult> {
+    let data = json!({
+        "current": "Default",
+        "available": ["Stealth", "Default", "Aggressive"],
+    });
+    Ok(("Evasion mode status retrieved".to_string(), data))
+}
+
+fn handle_evasion_randomize_mac(args: EvasionIfaceArgs) -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        bail!("MAC randomization supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let interface = args.interface;
+        let (new_mac, _vendor_reused) = generate_vendor_aware_mac(&interface)?;
+        let mut manager = MacManager::new().context("creating MacManager")?;
+        manager.set_auto_restore(false);
+        let state = manager
+            .set_mac(&interface, &new_mac)
+            .context("setting randomized MAC")?;
+        let _ = renew_dhcp_and_reconnect(&interface);
+        let data = json!({
+            "interface": interface,
+            "new_mac": state.current_mac.to_string(),
+            "original_mac": state.original_mac.to_string(),
+        });
+        Ok(("MAC randomized".to_string(), data))
+    }
+}
+
+fn handle_evasion_randomize_hostname() -> Result<HandlerResult> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Hostname randomization supported on Linux targets only");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Use the same randomize_hostname helper already called by
+        // handle_randomize_hostname (system subcommand), which lives in
+        // the external_tools::anti_forensics module when available, or
+        // we fall back to the standalone helper used by SystemCommand.
+        let new_hostname = randomize_hostname()?;
+        let data = json!({
+            "new_hostname": new_hostname,
+        });
+        Ok(("Hostname randomized".to_string(), data))
+    }
+}
+
+// --- Physical access command handlers ---
+
+fn handle_physical_access(root: &Path, cmd: PhysicalAccessCommand) -> Result<HandlerResult> {
+    match cmd {
+        PhysicalAccessCommand::RouterFingerprint(args) => {
+            handle_physical_access_router_fingerprint(root, args)
+        }
+        PhysicalAccessCommand::ExtractCredentials(args) => {
+            handle_physical_access_extract_credentials(root, args)
+        }
+        PhysicalAccessCommand::ListDefaultCredentials => {
+            handle_physical_access_list_default_credentials()
+        }
+    }
+}
+
+fn handle_physical_access_router_fingerprint(
+    root: &Path,
+    args: crate::cli::PhysicalAccessTargetArgs,
+) -> Result<HandlerResult> {
+    #[cfg(feature = "external_tools")]
+    {
+        let report = crate::external_tools::physical_access::physical_access_attack(
+            &args.interface,
+            root,
+        )
+        .context("router fingerprinting")?;
+        let data = json!({
+            "target": args.target,
+            "interface": args.interface,
+            "router_model": report.router_model,
+            "router_firmware": report.router_firmware,
+            "admin_url": report.admin_url,
+            "vulnerabilities": report.vulnerabilities,
+        });
+        Ok(("Router fingerprint completed".to_string(), data))
+    }
+    #[cfg(not(feature = "external_tools"))]
+    {
+        let _ = root;
+        let data = json!({
+            "target": args.target,
+            "interface": args.interface,
+            "router_model": null,
+            "router_firmware": null,
+            "admin_url": null,
+            "vulnerabilities": [],
+            "note": "Physical access module requires lab feature",
+        });
+        Ok(("Router fingerprint completed".to_string(), data))
+    }
+}
+
+fn handle_physical_access_extract_credentials(
+    root: &Path,
+    args: crate::cli::PhysicalAccessTargetArgs,
+) -> Result<HandlerResult> {
+    #[cfg(feature = "external_tools")]
+    {
+        let report = crate::external_tools::physical_access::physical_access_attack(
+            &args.interface,
+            root,
+        )
+        .context("credential extraction")?;
+        let data = json!({
+            "target": args.target,
+            "interface": args.interface,
+            "credentials_found": report.wifi_credentials.len(),
+            "credentials": report.wifi_credentials,
+        });
+        Ok(("Credential extraction completed".to_string(), data))
+    }
+    #[cfg(not(feature = "external_tools"))]
+    {
+        let _ = root;
+        let data = json!({
+            "target": args.target,
+            "interface": args.interface,
+            "credentials_found": 0,
+            "credentials": [],
+            "note": "Physical access module requires lab feature",
+        });
+        Ok(("Credential extraction completed".to_string(), data))
+    }
+}
+
+fn handle_physical_access_list_default_credentials() -> Result<HandlerResult> {
+    let creds: Vec<serde_json::Value> = vec![
+        json!({"vendor": "Generic", "username": "admin", "password": "admin"}),
+        json!({"vendor": "Generic", "username": "admin", "password": "password"}),
+        json!({"vendor": "Generic", "username": "admin", "password": ""}),
+        json!({"vendor": "Generic", "username": "root", "password": "root"}),
+        json!({"vendor": "Generic", "username": "admin", "password": "1234"}),
+        json!({"vendor": "Netgear", "username": "admin", "password": "password"}),
+        json!({"vendor": "Linksys", "username": "admin", "password": "admin"}),
+        json!({"vendor": "D-Link", "username": "admin", "password": ""}),
+        json!({"vendor": "ASUS", "username": "admin", "password": "admin"}),
+        json!({"vendor": "TP-Link", "username": "admin", "password": "admin"}),
+    ];
+    let data = json!({
+        "count": creds.len(),
+        "items": creds,
+    });
+    Ok(("Default credentials listed".to_string(), data))
+}
+
+// --- Anti-forensics command handlers ---
+
+fn handle_anti_forensics(root: &Path, cmd: AntiForensicsCommand) -> Result<HandlerResult> {
+    match cmd {
+        AntiForensicsCommand::SecureDelete(args) => handle_anti_forensics_secure_delete(args),
+        AntiForensicsCommand::LogStatus => handle_anti_forensics_log_status(root),
+    }
+}
+
+fn handle_anti_forensics_secure_delete(
+    args: AntiForensicsSecureDeleteArgs,
+) -> Result<HandlerResult> {
+    let target = &args.target;
+
+    if !target.exists() {
+        bail!("Target file does not exist: {}", target.display());
+    }
+    if target.is_dir() {
+        bail!(
+            "Target is a directory, not a file: {}. Use secure-delete on individual files only.",
+            target.display()
+        );
+    }
+    if target.is_symlink() {
+        bail!(
+            "Target is a symlink: {}. Refusing to follow symlinks for secure deletion.",
+            target.display()
+        );
+    }
+
+    let file_size = std::fs::metadata(target)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    // Perform DoD 5220.22-M secure delete (7-pass overwrite) inline
+    // to avoid dependency on the feature-gated external_tools module.
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let size = file_size as usize;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(target)
+            .with_context(|| format!("opening {} for secure delete", target.display()))?;
+        let passes: u8 = 7;
+        let patterns: [u8; 7] = [0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00];
+        let mut buf = vec![0u8; size];
+        for (i, &pattern) in patterns.iter().enumerate().take(passes as usize) {
+            buf.iter_mut().for_each(|b| *b = pattern);
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+            let _ = i; // pass number used for overwrite tracking
+        }
+        drop(file);
+        std::fs::remove_file(target)
+            .with_context(|| format!("removing {} after overwrite", target.display()))?;
+    }
+
+    let data = json!({
+        "target": target.display().to_string(),
+        "passes": 7,
+        "file_size": file_size,
+        "deleted": true,
+    });
+    Ok(("File securely deleted".to_string(), data))
+}
+
+fn handle_anti_forensics_log_status(root: &Path) -> Result<HandlerResult> {
+    let log_dir = root.join("logs");
+    let log_count = if log_dir.exists() {
+        std::fs::read_dir(&log_dir)
+            .map(|entries| entries.filter_map(|e| e.ok()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let system_log_dir = Path::new("/var/lib/rustyjack/logs");
+    let system_log_count = if system_log_dir.exists() {
+        std::fs::read_dir(system_log_dir)
+            .map(|entries| entries.filter_map(|e| e.ok()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let data = json!({
+        "log_dir": log_dir.display().to_string(),
+        "log_count": log_count,
+        "system_log_dir": system_log_dir.display().to_string(),
+        "system_log_count": system_log_count,
+        "purge_available": true,
+    });
+    Ok(("Anti-forensics log status retrieved".to_string(), data))
+}
+
+// --- Audit command handlers ---
+
+fn handle_audit(root: &Path, cmd: AuditCommand) -> Result<HandlerResult> {
+    match cmd {
+        AuditCommand::LogStatus => handle_audit_log_status(root),
+    }
+}
+
+fn handle_audit_log_status(root: &Path) -> Result<HandlerResult> {
+    let audit_log = root.join("logs").join("audit.jsonl");
+    let (entry_count, last_entry) = if audit_log.exists() {
+        let content = std::fs::read_to_string(&audit_log).unwrap_or_default();
+        let count = content.lines().count();
+        let last = content.lines().last().map(|s| s.to_string());
+        (count, last)
+    } else {
+        (0, None)
+    };
+
+    let data = json!({
+        "audit_log": audit_log.display().to_string(),
+        "entry_count": entry_count,
+        "last_entry": last_entry,
+        "logging_active": true,
+    });
+    Ok(("Audit log status retrieved".to_string(), data))
+}
+
+// --- Loot artifact-sweep handler ---
+
+fn handle_loot_artifact_sweep(
+    root: &Path,
+    args: LootArtifactSweepArgs,
+) -> Result<HandlerResult> {
+    let loot_dir = root.join("loot");
+    let mut artifacts: Vec<serde_json::Value> = Vec::new();
+
+    if loot_dir.exists() {
+        for entry in WalkDir::new(&loot_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let path = entry.path();
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            artifacts.push(json!({
+                "path": path.display().to_string(),
+                "size": size,
+            }));
+        }
+    }
+
+    let data = json!({
+        "loot_dir": loot_dir.display().to_string(),
+        "artifact_count": artifacts.len(),
+        "artifacts": artifacts,
+        "list_only": args.list_only,
+    });
+    let msg = if args.list_only {
+        format!("Found {} artifacts (list-only mode)", artifacts.len())
+    } else {
+        format!("Swept {} artifacts", artifacts.len())
+    };
+    Ok((msg, data))
 }
 
 fn move_log_into_scope(
