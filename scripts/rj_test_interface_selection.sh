@@ -21,6 +21,7 @@ ETH_IFACE="${RJ_ETH_INTERFACE:-}"
 ETH_IFACES_RAW="${RJ_ETH_INTERFACES:-}"
 ETH_ALL_IFACES=0
 RECOVERY_IFACE="${RJ_TEST_RECOVERY_IFACE:-}"
+RPC_USER="${RJ_TEST_INTERFACE_RPC_USER:-}"
 
 WIFI_IFACES=()
 ETH_IFACES=()
@@ -150,10 +151,55 @@ resolve_interface_targets() {
 rj_init "interface_selection"
 rj_require_root
 
+run_as_user() {
+  local user="$1"
+  shift
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$user" -- "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$user" -- "$@"
+  else
+    su -s /bin/sh -c "$(printf '%q ' "$@")" "$user"
+  fi
+}
+
+resolve_rpc_user() {
+  if [[ -n "$RPC_USER" ]]; then
+    return 0
+  fi
+  if [[ -n "${RUSTYJACKD_UI_CLIENT_USER:-}" ]]; then
+    RPC_USER="${RUSTYJACKD_UI_CLIENT_USER}"
+  fi
+  if [[ -z "$RPC_USER" ]] && command -v systemctl >/dev/null 2>&1; then
+    local svc_env token
+    svc_env="$(systemctl show -p Environment rustyjackd.service 2>/dev/null | sed 's/^Environment=//' || true)"
+    if [[ -n "$svc_env" ]]; then
+      for token in $svc_env; do
+        case "$token" in
+          RUSTYJACKD_UI_CLIENT_USER=*)
+            RPC_USER="${token#RUSTYJACKD_UI_CLIENT_USER=}"
+            break
+            ;;
+        esac
+      done
+    fi
+  fi
+  if [[ -z "$RPC_USER" ]]; then
+    RPC_USER="rustyjack-ui"
+  fi
+  if ! id "$RPC_USER" >/dev/null 2>&1; then
+    rj_log "[WARN] RPC user '$RPC_USER' not found; falling back to root"
+    RPC_USER="root"
+  fi
+}
+
 if ! rj_require_cmd rustyjack; then
   rj_write_report
   exit 0
 fi
+
+resolve_rpc_user
+rj_log "[INFO] Interface-selection RPC user: $RPC_USER"
 
 if [[ ! -S "$SOCKET" ]]; then
   rj_fail "Daemon socket not found: $SOCKET"
@@ -373,7 +419,7 @@ rpc_call_capture() {
   printf '%s\n' "$data_json" >"$req"
   rj_log "[RPC] $name :: $body_type (socket=$SOCKET)"
 
-  if python3 "$PY_HELPER" "$SOCKET" "$body_type" "$req" >"$resp" 2>>"$LOG"; then
+  if run_as_user "$RPC_USER" python3 "$PY_HELPER" "$SOCKET" "$body_type" "$req" >"$resp" 2>>"$LOG"; then
     if [[ "$allow_fail" == "1" ]]; then
       rj_fail "$name succeeded but failure was expected"
       rj_summary_event "fail" "$name" "unexpected success"
