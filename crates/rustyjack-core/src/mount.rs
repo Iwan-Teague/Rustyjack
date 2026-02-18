@@ -671,12 +671,59 @@ fn is_exfat(buf: &[u8]) -> bool {
 }
 
 fn is_vfat(buf: &[u8]) -> bool {
-    if buf.len() < 90 {
+    if buf.len() < 512 {
         return false;
     }
-    let fat16 = &buf[54..62];
-    let fat32 = &buf[82..90];
-    fat16 == b"FAT16   " || fat16 == b"FAT12   " || fat32 == b"FAT32   "
+
+    // Check boot sector signature at offsets 510-511
+    if buf[510] != 0x55 || buf[511] != 0xAA {
+        return false;
+    }
+
+    // Check FAT type strings at standard offsets (fast path)
+    let fat16_str = &buf[54..62];
+    let fat32_str = &buf[82..90];
+    if fat16_str == b"FAT16   " || fat16_str == b"FAT12   " || fat32_str == b"FAT32   " {
+        return true;
+    }
+
+    // BPB plausibility check for volumes without type strings:
+    // bytes_per_sector: u16 at offset 11 - must be 512, 1024, 2048, or 4096
+    let bps = u16::from_le_bytes([buf[11], buf[12]]);
+    if !matches!(bps, 512 | 1024 | 2048 | 4096) {
+        return false;
+    }
+
+    // sectors_per_cluster: u8 at offset 13 - must be a power of 2 (1..128)
+    let spc = buf[13];
+    if spc == 0 || !spc.is_power_of_two() {
+        return false;
+    }
+
+    // reserved_sectors: u16 at offset 14 - must be > 0
+    let reserved = u16::from_le_bytes([buf[14], buf[15]]);
+    if reserved == 0 {
+        return false;
+    }
+
+    // num_fats: u8 at offset 16 - typically 1 or 2
+    let num_fats = buf[16];
+    if num_fats == 0 || num_fats > 2 {
+        return false;
+    }
+
+    // media_descriptor: u8 at offset 21 - must be 0xF0 or >= 0xF8
+    let media = buf[21];
+    if media != 0xF0 && media < 0xF8 {
+        return false;
+    }
+
+    // Jump instruction at offset 0: must be 0xEB (short jmp) or 0xE9 (near jmp)
+    if buf[0] != 0xEB && buf[0] != 0xE9 {
+        return false;
+    }
+
+    true
 }
 
 fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Result<()> {

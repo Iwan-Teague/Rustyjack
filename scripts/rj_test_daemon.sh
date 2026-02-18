@@ -352,6 +352,10 @@ rpc_expect_err() {
   fi
 }
 
+# Enable daemon test mode to allow RPC commands that require UI-only operations
+rj_daemon_testmode_enable || rj_log "[WARN] Failed to enable daemon test mode; some RPC tests may fail"
+trap 'rj_daemon_testmode_disable' EXIT
+
 # Capture current logging config to avoid config drift during tests
 LOGCFG_ENABLED="true"
 LOGCFG_LEVEL="Info"

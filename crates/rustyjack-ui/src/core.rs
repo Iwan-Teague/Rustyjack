@@ -110,6 +110,10 @@ impl CoreBridge {
                 Commands::Scan(cmd) => client.scan_command(cmd).await?,
                 Commands::Bridge(cmd) => client.bridge_command(cmd).await?,
                 Commands::Process(cmd) => client.process_command(cmd).await?,
+                Commands::Evasion(cmd) => client.evasion_command(cmd).await?,
+                Commands::PhysicalAccess(cmd) => client.physical_access_command(cmd).await?,
+                Commands::AntiForensics(cmd) => client.anti_forensics_command(cmd).await?,
+                Commands::Audit(cmd) => client.audit_command(cmd).await?,
             };
             Ok((response.message, response.data))
         })
