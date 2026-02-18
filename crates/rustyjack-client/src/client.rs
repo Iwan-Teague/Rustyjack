@@ -5,17 +5,18 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use rustyjack_ipc::{
     endpoint_for_body, ActiveInterfaceClearResponse, ActiveInterfaceResponse, BlockDevicesResponse,
-    BridgeCommand, ClientHello, CoreDispatchRequest, CoreDispatchResponse, DaemonError,
-    DiskUsageRequest, DiskUsageResponse, DnsSpoofCommand, EthernetCommand, FeatureFlag,
-    GpioDiagnosticsResponse, HardwareCommand, HealthResponse, HelloAck, HostnameResponse,
-    HotspotClientsResponse, HotspotCommand, HotspotDiagnosticsRequest, HotspotDiagnosticsResponse,
-    HotspotWarningsResponse, InterfaceStatusRequest, InterfaceStatusResponse,
-    InterfacesListResponse, JobCancelRequest, JobCancelResponse, JobKind, JobSpec, JobStartRequest,
-    JobStarted, JobStatusRequest, JobStatusResponse, LootCommand, MitmCommand, NotifyCommand,
-    OpsConfig, ProcessCommand, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope,
-    ResponseOk, ReverseCommand, ScanCommand, StatusCommand, StatusResponse, SystemActionResponse,
-    SystemCommand, SystemLogsResponse, SystemStatusResponse, VersionResponse,
-    WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
+    AntiForensicsCommand, AuditCommand, BridgeCommand, ClientHello, CoreDispatchRequest,
+    CoreDispatchResponse, DaemonError, DiskUsageRequest, DiskUsageResponse, DnsSpoofCommand,
+    EthernetCommand, EvasionCommand, FeatureFlag, GpioDiagnosticsResponse, HardwareCommand,
+    HealthResponse, HelloAck, HostnameResponse, HotspotClientsResponse, HotspotCommand,
+    HotspotDiagnosticsRequest, HotspotDiagnosticsResponse, HotspotWarningsResponse,
+    InterfaceStatusRequest, InterfaceStatusResponse, InterfacesListResponse, JobCancelRequest,
+    JobCancelResponse, JobKind, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,
+    JobStatusResponse, LootCommand, MitmCommand, NotifyCommand, OpsConfig, PhysicalAccessCommand,
+    ProcessCommand, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk,
+    ReverseCommand, ScanCommand, StatusCommand, StatusResponse, SystemActionResponse, SystemCommand,
+    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
+    WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -809,6 +810,54 @@ impl DaemonClient {
         let body = RequestBody::ProcessCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::ProcessCommand(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn evasion_command(
+        &mut self,
+        command: EvasionCommand,
+    ) -> Result<CoreDispatchResponse> {
+        let body = RequestBody::EvasionCommand(command);
+        match self.request_long(body).await? {
+            ResponseBody::Ok(ResponseOk::EvasionCommand(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn physical_access_command(
+        &mut self,
+        command: PhysicalAccessCommand,
+    ) -> Result<CoreDispatchResponse> {
+        let body = RequestBody::PhysicalAccessCommand(command);
+        match self.request_long(body).await? {
+            ResponseBody::Ok(ResponseOk::PhysicalAccessCommand(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn anti_forensics_command(
+        &mut self,
+        command: AntiForensicsCommand,
+    ) -> Result<CoreDispatchResponse> {
+        let body = RequestBody::AntiForensicsCommand(command);
+        match self.request_long(body).await? {
+            ResponseBody::Ok(ResponseOk::AntiForensicsCommand(resp)) => Ok(resp),
+            ResponseBody::Err(err) => Err(daemon_error(err)),
+            _ => Err(anyhow!("unexpected response body")),
+        }
+    }
+
+    pub async fn audit_command(
+        &mut self,
+        command: AuditCommand,
+    ) -> Result<CoreDispatchResponse> {
+        let body = RequestBody::AuditCommand(command);
+        match self.request_long(body).await? {
+            ResponseBody::Ok(ResponseOk::AuditCommand(resp)) => Ok(resp),
             ResponseBody::Err(err) => Err(daemon_error(err)),
             _ => Err(anyhow!("unexpected response body")),
         }
