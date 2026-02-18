@@ -565,6 +565,58 @@ pub async fn handle_request(
             "Process command disabled in this build",
             false,
         )),
+        RequestBody::EvasionCommand(command) => {
+            let root = state.config.root_path.clone();
+            match dispatch_core_command(
+                "evasion_command",
+                root,
+                rustyjack_core::Commands::Evasion(command),
+            )
+            .await
+            {
+                Ok(resp) => ResponseBody::Ok(ResponseOk::EvasionCommand(resp)),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::PhysicalAccessCommand(command) => {
+            let root = state.config.root_path.clone();
+            match dispatch_core_command(
+                "physical_access_command",
+                root,
+                rustyjack_core::Commands::PhysicalAccess(command),
+            )
+            .await
+            {
+                Ok(resp) => ResponseBody::Ok(ResponseOk::PhysicalAccessCommand(resp)),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::AntiForensicsCommand(command) => {
+            let root = state.config.root_path.clone();
+            match dispatch_core_command(
+                "anti_forensics_command",
+                root,
+                rustyjack_core::Commands::AntiForensics(command),
+            )
+            .await
+            {
+                Ok(resp) => ResponseBody::Ok(ResponseOk::AntiForensicsCommand(resp)),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
+        RequestBody::AuditCommand(command) => {
+            let root = state.config.root_path.clone();
+            match dispatch_core_command(
+                "audit_command",
+                root,
+                rustyjack_core::Commands::Audit(command),
+            )
+            .await
+            {
+                Ok(resp) => ResponseBody::Ok(ResponseOk::AuditCommand(resp)),
+                Err(err) => ResponseBody::Err(err),
+            }
+        }
         RequestBody::SystemStatusGet => {
             let result = run_blocking("system_status_get", || {
                 let hostname = std::fs::read_to_string("/etc/hostname")
