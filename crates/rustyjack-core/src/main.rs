@@ -27,6 +27,11 @@ fn main() {
 }
 
 fn run(cli: Cli, output_format: OutputFormat) -> Result<()> {
+    // Enter the shared Tokio runtime context so that netlink-sys and other
+    // Tokio-backed I/O works without converting the entire CLI to async.
+    let rt = rustyjack_core::runtime::shared_runtime()?;
+    let _guard = rt.enter();
+
     let root = resolve_root(cli.root)?;
     let (message, data) = dispatch_command(&root, cli.command)?;
     emit_success(output_format, message, data)

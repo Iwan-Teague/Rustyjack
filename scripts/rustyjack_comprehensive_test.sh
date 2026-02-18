@@ -201,6 +201,15 @@ cleanup_users() {
       log "  - Removed user: $u"
     fi
   done
+  # Remove daemon test-mode drop-in if active
+  local dropin="/run/systemd/system/rustyjackd.service.d/50-tests.conf"
+  if [[ -f "$dropin" ]]; then
+    rm -f "$dropin"
+    rmdir "/run/systemd/system/rustyjackd.service.d" 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl restart rustyjackd.service 2>/dev/null || true
+    log "  - Removed daemon test-mode drop-in"
+  fi
 }
 trap cleanup_users EXIT
 
@@ -1161,7 +1170,7 @@ suite_G_logging() {
     local perms
     local others
     perms=$(stat -c %a /var/lib/rustyjack/logs 2>/dev/null || echo "000")
-    others="${perms:2:1}"
+    others="${perms: -1}"
     if [[ "$others" =~ ^[0-7]$ ]] && (( (10#$others & 2) == 0 )); then
       ok "G4_log_dir_secure (perms=$perms)"
     else
@@ -1473,7 +1482,7 @@ suite_J_dangerous() {
   log "[WARN] Running disruptive tests - network state may change!"
 
   # J1: WiFi scan (safe-ish but requires hardware)
-  rj_rpc "J1" "WifiScanStart" '{"interface":"wlan0"}' "root" || {
+  rj_rpc "J1" "WifiScanStart" '{"interface":"wlan0","timeout_ms":5000}' "root" || {
     skip "J1_wifi_scan (no wlan0 or failed)"
   }
 
@@ -1598,6 +1607,18 @@ main() {
 
   # Generate RPC helper
   generate_rpc_helper
+
+  # Enable daemon test mode to allow operations that are UI-only gated
+  local dropin_dir="/run/systemd/system/rustyjackd.service.d"
+  mkdir -p "$dropin_dir"
+  cat >"$dropin_dir/50-tests.conf" <<'DROPIN'
+[Service]
+Environment=RUSTYJACKD_UI_ONLY_OPERATIONS=false
+DROPIN
+  systemctl daemon-reload
+  systemctl restart "$SERVICE"
+  sleep 1
+  log "Daemon test mode enabled (UI-only operations disabled)"
 
   # Run test suites
   suite_A_sanity || true

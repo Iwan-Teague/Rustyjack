@@ -18,9 +18,10 @@ pub use job::{
     WifiConnectRequestIpc, WifiScanRequestIpc,
 };
 pub use rustyjack_commands::{
-    BridgeCommand, Commands, DnsSpoofCommand, EthernetCommand, HardwareCommand, HotspotCommand,
-    LootCommand, MitmCommand, NotifyCommand, ProcessCommand, ReverseCommand, ScanCommand,
-    StatusCommand, SystemCommand, WifiCommand,
+    AntiForensicsCommand, AuditCommand, BridgeCommand, Commands, DnsSpoofCommand, EthernetCommand,
+    EvasionCommand, HardwareCommand, HotspotCommand, LootCommand, MitmCommand, NotifyCommand,
+    PhysicalAccessCommand, ProcessCommand, ReverseCommand, ScanCommand, StatusCommand,
+    SystemCommand, WifiCommand,
 };
 pub use types::{
     endpoint_for_body, is_dangerous_job, ActiveInterfaceClearResponse, ActiveInterfaceResponse,

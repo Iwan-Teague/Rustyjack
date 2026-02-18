@@ -451,6 +451,10 @@ else
   rj_skip "Compatibility checks disabled"
 fi
 
+# Enable daemon test mode to allow RPC commands that require UI-only operations
+rj_daemon_testmode_enable || rj_log "[WARN] Failed to enable daemon test mode; RPC tests may fail"
+trap 'rj_daemon_testmode_disable; rj_ui_disable 2>/dev/null || true' EXIT
+
 rpc_call_capture "active_before" "ActiveInterfaceGet" "null"
 
 ACTIVE_BEFORE="$(rpc_payload_field "$OUT/artifacts/active_before.resp.json" "interface")"
@@ -568,7 +572,7 @@ fi
 if [[ $RUN_UI -eq 1 ]]; then
   if command -v systemctl >/dev/null 2>&1; then
     if [[ -f "$UI_SCENARIO" ]]; then
-      trap rj_ui_disable EXIT
+      trap 'rj_ui_disable; rj_daemon_testmode_disable' EXIT
       if rj_ui_enable; then
         rj_ui_run_scenario "$UI_SCENARIO"
         rj_capture_journal "rustyjack-ui.service" "$OUT/journal/rustyjack-ui.log"

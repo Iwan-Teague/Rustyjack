@@ -31,6 +31,7 @@ use rustyjack_wireless::{
 };
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use tracing::warn;
 
 use crate::audit::{AuditEvent, AuditResult};
 
