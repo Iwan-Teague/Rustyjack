@@ -671,12 +671,73 @@ fn is_exfat(buf: &[u8]) -> bool {
 }
 
 fn is_vfat(buf: &[u8]) -> bool {
-    if buf.len() < 90 {
+    if buf.len() < 512 || is_exfat(buf) {
         return false;
     }
-    let fat16 = &buf[54..62];
-    let fat32 = &buf[82..90];
-    fat16 == b"FAT16   " || fat16 == b"FAT12   " || fat32 == b"FAT32   "
+    if buf[510] != 0x55 || buf[511] != 0xAA {
+        return false;
+    }
+
+    let byts_per_sec = u16::from_le_bytes([buf[11], buf[12]]);
+    if !matches!(byts_per_sec, 512 | 1024 | 2048 | 4096) {
+        return false;
+    }
+
+    let sec_per_clus = buf[13];
+    if sec_per_clus == 0 || sec_per_clus > 128 || !sec_per_clus.is_power_of_two() {
+        return false;
+    }
+
+    let rsvd_sec_cnt = u16::from_le_bytes([buf[14], buf[15]]);
+    if rsvd_sec_cnt == 0 {
+        return false;
+    }
+
+    let num_fats = buf[16];
+    if !(1..=2).contains(&num_fats) {
+        return false;
+    }
+
+    let root_ent_cnt = u16::from_le_bytes([buf[17], buf[18]]);
+    let tot_sec_16 = u16::from_le_bytes([buf[19], buf[20]]) as u32;
+    let fatsz_16 = u16::from_le_bytes([buf[22], buf[23]]) as u32;
+    let tot_sec_32 = u32::from_le_bytes([buf[32], buf[33], buf[34], buf[35]]);
+    let fatsz_32 = u32::from_le_bytes([buf[36], buf[37], buf[38], buf[39]]);
+
+    let tot_sec = if tot_sec_16 != 0 { tot_sec_16 } else { tot_sec_32 };
+    if tot_sec == 0 {
+        return false;
+    }
+    let fatsz = if fatsz_16 != 0 { fatsz_16 } else { fatsz_32 };
+    if fatsz == 0 {
+        return false;
+    }
+
+    let root_dir_sectors = ((root_ent_cnt as u32 * 32) + (byts_per_sec as u32 - 1))
+        / byts_per_sec as u32;
+    let total_non_data = rsvd_sec_cnt as u32 + (num_fats as u32 * fatsz) + root_dir_sectors;
+    if total_non_data >= tot_sec {
+        return false;
+    }
+
+    let data_sec = tot_sec - total_non_data;
+    let count_of_clusters = data_sec / sec_per_clus as u32;
+    if count_of_clusters == 0 {
+        return false;
+    }
+
+    let fat_type = if count_of_clusters < 4085 {
+        12
+    } else if count_of_clusters < 65525 {
+        16
+    } else {
+        32
+    };
+
+    match fat_type {
+        32 => root_ent_cnt == 0 && fatsz_32 != 0,
+        _ => fatsz_16 != 0,
+    }
 }
 
 fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Result<()> {
@@ -957,5 +1018,59 @@ mod tests {
         assert_eq!(actual, expected);
 
         fs::remove_dir(&mountpoint).expect("remove temp mountpoint");
+    }
+
+    #[test]
+    fn test_is_vfat_detects_plausible_fat32_boot_sector() {
+        let mut sector = [0u8; 512];
+        sector[3..11].copy_from_slice(b"MSWIN4.1");
+        sector[11..13].copy_from_slice(&512u16.to_le_bytes()); // bytes/sec
+        sector[13] = 8; // sectors/cluster
+        sector[14..16].copy_from_slice(&32u16.to_le_bytes()); // reserved sectors
+        sector[16] = 2; // FAT count
+        sector[17..19].copy_from_slice(&0u16.to_le_bytes()); // root entries (FAT32)
+        sector[19..21].copy_from_slice(&0u16.to_le_bytes()); // TotSec16
+        sector[32..36].copy_from_slice(&65536u32.to_le_bytes()); // TotSec32
+        sector[22..24].copy_from_slice(&0u16.to_le_bytes()); // FATSz16
+        sector[36..40].copy_from_slice(&256u32.to_le_bytes()); // FATSz32
+        sector[44..48].copy_from_slice(&2u32.to_le_bytes()); // root cluster
+        sector[510] = 0x55;
+        sector[511] = 0xAA;
+
+        assert!(is_vfat(&sector));
+        assert!(!is_exfat(&sector));
+    }
+
+    #[test]
+    fn test_is_vfat_rejects_bogus_boot_sector() {
+        let mut sector = [0u8; 512];
+        sector[3..11].copy_from_slice(b"MSWIN4.1");
+        sector[11..13].copy_from_slice(&512u16.to_le_bytes());
+        sector[13] = 3; // invalid sectors/cluster (not power of two)
+        sector[14..16].copy_from_slice(&1u16.to_le_bytes());
+        sector[16] = 2;
+        sector[19..21].copy_from_slice(&8192u16.to_le_bytes());
+        sector[22..24].copy_from_slice(&128u16.to_le_bytes());
+        sector[510] = 0x55;
+        sector[511] = 0xAA;
+
+        assert!(!is_vfat(&sector));
+    }
+
+    #[test]
+    fn test_is_vfat_rejects_exfat_signature() {
+        let mut sector = [0u8; 512];
+        sector[3..11].copy_from_slice(b"EXFAT   ");
+        sector[11..13].copy_from_slice(&512u16.to_le_bytes());
+        sector[13] = 8;
+        sector[14..16].copy_from_slice(&32u16.to_le_bytes());
+        sector[16] = 2;
+        sector[32..36].copy_from_slice(&65536u32.to_le_bytes());
+        sector[36..40].copy_from_slice(&256u32.to_le_bytes());
+        sector[510] = 0x55;
+        sector[511] = 0xAA;
+
+        assert!(is_exfat(&sector));
+        assert!(!is_vfat(&sector));
     }
 }
