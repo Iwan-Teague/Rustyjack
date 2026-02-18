@@ -529,7 +529,7 @@ fn resolve_runtime_probe(config: &mut DisplayConfig, force_discovery: bool) -> R
         source,
         warnings,
         fingerprint,
-        pending_calibration: calibration_required && !use_cached,
+        pending_calibration: calibration_required,
         probe_dirty,
     }
 }
@@ -565,6 +565,62 @@ mod tests {
         assert!(!probe.probe_dirty);
         assert_eq!(probe.geometry.width(), 128);
         assert_eq!(probe.geometry.height(), 128);
+    }
+
+    #[test]
+    fn calibration_required_even_when_probe_cached() {
+        // Regression: pending_calibration was gated on !use_cached, so after the probe
+        // cache was written on first boot the wizard would never re-launch on subsequent
+        // boots even though display_calibration_completed was still false.
+        let mut cfg = DisplayConfig {
+            display_probe_completed: true,
+            display_calibration_completed: false, // <-- calibration not finished
+            display_tests_version: DISPLAY_TESTS_VERSION,
+            effective_width: Some(128),
+            effective_height: Some(128),
+            effective_offset_x: Some(0),
+            effective_offset_y: Some(0),
+            effective_backend: Some(DisplayBackend::St7735),
+            effective_rotation: Some(DisplayRotation::Landscape),
+            display_profile_fingerprint: Some(build_fingerprint(
+                &DisplayBackend::St7735,
+                &DisplayRotation::Landscape,
+                128,
+                128,
+                0,
+            )),
+            ..DisplayConfig::default()
+        };
+
+        let probe = resolve_runtime_probe(&mut cfg, false);
+        assert_eq!(probe.source, DisplayGeometrySource::Cached);
+        assert!(probe.pending_calibration, "wizard must still launch when calibration is incomplete, even with a warm probe cache");
+    }
+
+    #[test]
+    fn calibration_not_required_when_completed() {
+        let mut cfg = DisplayConfig {
+            display_probe_completed: true,
+            display_calibration_completed: true,
+            display_tests_version: DISPLAY_TESTS_VERSION,
+            effective_width: Some(128),
+            effective_height: Some(128),
+            effective_offset_x: Some(0),
+            effective_offset_y: Some(0),
+            effective_backend: Some(DisplayBackend::St7735),
+            effective_rotation: Some(DisplayRotation::Landscape),
+            display_profile_fingerprint: Some(build_fingerprint(
+                &DisplayBackend::St7735,
+                &DisplayRotation::Landscape,
+                128,
+                128,
+                0,
+            )),
+            ..DisplayConfig::default()
+        };
+
+        let probe = resolve_runtime_probe(&mut cfg, false);
+        assert!(!probe.pending_calibration, "wizard must not launch after calibration is complete");
     }
 
     #[test]
@@ -1255,7 +1311,7 @@ impl Display {
             format!("Default: {defaults}px"),
             help.to_string(),
             "SEL=Confirm K1=Reset".to_string(),
-            "LEFT/K2=Cancel".to_string(),
+            "K2=Cancel".to_string(),
         ];
         let mut y = self.layout.content_top as i32;
         for line in lines.iter() {

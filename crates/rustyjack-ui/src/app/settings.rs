@@ -352,9 +352,7 @@ impl App {
                 let button = self.buttons.wait_for_press()?;
                 match (edge, button) {
                     (_, Button::Key2) => {
-                        if manual {
-                            self.show_message("Display Calibration", ["Cancelled"])?;
-                        }
+                        self.show_message("Display Calibration", ["Cancelled"])?;
                         return Ok(());
                     }
                     (_, Button::Key1) => match edge {

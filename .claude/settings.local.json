@@ -33,7 +33,11 @@
       "Bash(winget install:*)",
       "Bash(git -C C:/Users/Iwan/Desktop/Rusty/Rustyjack commit -m \"Update test suite, UI scenarios, and add critique reports\" -m \"Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\")",
       "Bash(/c/Users/Iwan/AppData/Local/Programs/Python/Python312/python.exe:*)",
-      "Bash(export PATH=\"/c/Users/Iwan/AppData/Local/Programs/Python/Python312:$PATH\")"
+      "Bash(export PATH=\"/c/Users/Iwan/AppData/Local/Programs/Python/Python312:$PATH\")",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git pull:*)",
+      "Bash(git -C \"C:/Users/Iwan/Desktop/Rusty/Rustyjack\" ls-files)"
     ]
   },
   "enableAllProjectMcpServers": true,
