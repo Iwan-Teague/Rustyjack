@@ -186,6 +186,18 @@ require_tool() {
   return 0
 }
 
+run_as_user() {
+  local user="$1"
+  shift
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$user" -- "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$user" -- "$@"
+  else
+    su -s /bin/sh -c "$(printf '%q ' "$@")" "$user"
+  fi
+}
+
 # =============================
 # Test User Management
 # =============================
@@ -1161,11 +1173,11 @@ suite_G_logging() {
     local perms
     local others
     perms=$(stat -c %a /var/lib/rustyjack/logs 2>/dev/null || echo "000")
-    others="${perms:2:1}"
-    if [[ "$others" =~ ^[0-7]$ ]] && (( (10#$others & 2) == 0 )); then
+    others="${perms: -1}"
+    if [[ "$others" =~ ^[0-7]$ ]] && (( 10#$others == 0 )); then
       ok "G4_log_dir_secure (perms=$perms)"
     else
-      bad "G4_log_dir_secure (perms=$perms, world-write bit set)"
+      bad "G4_log_dir_secure (perms=$perms, others=$others; expected 0)"
     fi
   fi
 
@@ -1275,7 +1287,7 @@ suite_I_security() {
   # I1: PID disappears group lookup fallback
   log "I1: Testing PID disappears auth bypass..."
 
-  python3 - "$SOCKET" "$OUT/artifacts" "$RO_USER" <<'PYTEST'
+  run_as_user "$RO_USER" python3 - "$SOCKET" "$OUT/artifacts" "$RO_USER" <<'PYTEST'
 import json, os, socket, struct, sys, time
 sock_path, outdir, test_user = sys.argv[1], sys.argv[2], sys.argv[3]
 
@@ -1473,7 +1485,7 @@ suite_J_dangerous() {
   log "[WARN] Running disruptive tests - network state may change!"
 
   # J1: WiFi scan (safe-ish but requires hardware)
-  rj_rpc "J1" "WifiScanStart" '{"interface":"wlan0"}' "root" || {
+  rj_rpc "J1" "WifiScanStart" '{"interface":"wlan0","timeout_ms":10000}' "root" || {
     skip "J1_wifi_scan (no wlan0 or failed)"
   }
 
