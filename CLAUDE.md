@@ -168,6 +168,8 @@ Outputs to `prebuilt/arm32/`
 ./install_rustyjack_prebuilt.sh  # Use prebuilt binaries (faster)
 ```
 
+`install_rustyjack_prebuilt.sh` is the final provisioning blueprint. Source/dev installers compile locally and then delegate to the prebuilt installer path with `PREBUILT_DIR` override so service/runtime setup remains identical.
+
 ### Binaries
 - `rustyjack-ui` - LCD interface
 - `rustyjackd` - Privileged daemon
@@ -178,6 +180,7 @@ Outputs to `prebuilt/arm32/`
 - `/var/lib/rustyjack/` - State, loot, configs (RUSTYJACK_ROOT)
 - `/run/rustyjack/` - Socket, temporary files
 - `/usr/local/bin/` - Binaries
+- `/var/lib/rustyjack/logs/install/` - Installer transcripts (`install_latest.log` + per-installer latest links)
 
 ---
 
@@ -262,6 +265,7 @@ journalctl -u rustyjackd -f
 - Suite E: Stress testing
 - Suite F: Security adversarial probes
 - Dangerous mode: WiFi, hotspot, USB mount operations
+- `scripts/rj_run_tests.sh` now stages installer logs into each run under `<results_root>/install_logs/` so Discord final artifact uploads and the consolidated ZIP carry install-time diagnostics.
 
 ---
 

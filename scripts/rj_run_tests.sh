@@ -49,6 +49,9 @@ DISCORD_MAX_CONTENT_LEN=2000
 DISCORD_MAX_RETRIES=5
 DISCORD_BUNDLE_MAX_BYTES=$((8 * 1024 * 1024))
 RJ_DISCORD_MAX_FILE_BYTES="${RJ_DISCORD_MAX_FILE_BYTES:-$((8 * 1024 * 1024))}"
+INSTALL_LOG_ROOT_DEFAULT="${DISCORD_RUNTIME_ROOT%/}/logs"
+INSTALL_LOG_DIR_DEFAULT="${INSTALL_LOG_ROOT_DEFAULT}/install"
+INSTALL_LOG_DIR="${RJ_INSTALL_LOG_DIR:-$INSTALL_LOG_DIR_DEFAULT}"
 
 MASTER_REPORT_PATH=""
 MASTER_JSON_PATH=""
@@ -112,6 +115,8 @@ Output and artifacts:
    logs, and reports is automatically created and uploaded at test completion.
    This includes all suite outputs, individual test results, and summary files
    in a single download-friendly archive (rustyjack_<run_id>_results.zip).
+   The latest installer log(s) are copied into each run under
+   <results_root>/install_logs and included in Discord artifacts.
 
 If no options are provided, a menu will be shown.
 UI automation is always enabled by policy.
@@ -165,6 +170,69 @@ trim_whitespace() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+file_mtime_epoch() {
+  local path="$1"
+  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || echo 0
+}
+
+append_install_logs_to_run_dir() {
+  local run_dir="$1"
+  local dest_dir="$run_dir/install_logs"
+  local latest_link="${INSTALL_LOG_DIR}/install_latest.log"
+  local source newest newest_mtime source_mtime had_nullglob count_file
+
+  mkdir -p "$dest_dir"
+  newest=""
+  newest_mtime=0
+  had_nullglob=0
+  if shopt -q nullglob; then
+    had_nullglob=1
+  fi
+  shopt -s nullglob
+
+  if [[ -e "$latest_link" ]]; then
+    cp -Lf "$latest_link" "$dest_dir/install_latest.log" 2>/dev/null || true
+  fi
+
+  for source in "$INSTALL_LOG_DIR"/install_*_latest.log; do
+    cp -Lf "$source" "$dest_dir/$(basename "$source")" 2>/dev/null || true
+  done
+
+  for source in "$INSTALL_LOG_DIR"/install_rustyjack*.log "$INSTALL_LOG_ROOT_DEFAULT"/install_rustyjack*.log; do
+    [[ -f "$source" ]] || continue
+    source_mtime="$(file_mtime_epoch "$source")"
+    if [[ "$source_mtime" =~ ^[0-9]+$ ]] && (( source_mtime >= newest_mtime )); then
+      newest="$source"
+      newest_mtime="$source_mtime"
+    fi
+  done
+
+  if [[ -n "$newest" ]]; then
+    cp -Lf "$newest" "$dest_dir/$(basename "$newest")" 2>/dev/null || true
+  fi
+
+  if [[ "$had_nullglob" -eq 0 ]]; then
+    shopt -u nullglob
+  fi
+
+  count_file="$(find "$dest_dir" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$count_file" == "0" ]]; then
+    cat >"$dest_dir/INSTALL_LOG_MISSING.txt" <<EOF
+No installer log was found to attach for this run.
+Timestamp: $(date -Is)
+Looked in:
+- ${INSTALL_LOG_DIR}
+- ${INSTALL_LOG_ROOT_DEFAULT}
+You can override the search path with RJ_INSTALL_LOG_DIR.
+EOF
+    echo "[WARN] No installer logs found; wrote marker: $dest_dir/INSTALL_LOG_MISSING.txt"
+    return 0
+  fi
+
+  echo "[INFO] Added installer log artifacts ($count_file file(s)): $dest_dir"
+  return 0
 }
 
 normalize_discord_webhook_url() {
@@ -451,6 +519,9 @@ write_master_summary() {
     echo "- Run ID: $RUN_ID"
     echo "- Host: $(hostname 2>/dev/null || echo unknown)"
     echo "- Results Root: $run_dir"
+    if [[ -d "$run_dir/install_logs" ]]; then
+      echo "- Installer Logs: $run_dir/install_logs"
+    fi
     echo "- Suites Run: $SUITES_RUN"
     echo "- Suites Passed: $SUITES_PASS"
     echo "- Suites Failed: $SUITES_FAIL"
@@ -1249,6 +1320,9 @@ for row in "${SUITE_TABLE[@]}"; do
 done
 
 calculate_totals
+run_dir="$OUTROOT/$RUN_ID"
+mkdir -p "$run_dir"
+append_install_logs_to_run_dir "$run_dir"
 write_master_summary
 
 if [[ "${#SUITE_FAILURE_SNIPPETS[@]}" -gt 0 ]]; then

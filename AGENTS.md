@@ -16,6 +16,7 @@ Hardware specifics drawn from waveshare_gpio_pin_mapping.md and waveshare_button
 Software/runtime expectations:
 - Built and run on Linux (Pi OS) with root privileges via systemd service, so `CAP_NET_ADMIN` is available.
 - Dependencies are installed by `install_rustyjack.sh`, `install_rustyjack_dev.sh`, and `install_rustyjack_prebuilt.sh`: `wpasupplicant` (for WPA auth + `wpa_cli` fallback), `isc-dhcp-client`, `hostapd`, `dnsmasq`, `rfkill`, `i2c-tools`, `git`, `curl`, plus build/firmware packages (dev/build includes `build-essential`, `pkg-config`, `libssl-dev`, `dkms`, `bc`, `libelf-dev`). When adding features that call new system binaries, update all installers accordingly.
+- `install_rustyjack_prebuilt.sh` is the installer source of truth for final system provisioning. `install_rustyjack.sh` and `install_rustyjack_dev.sh` compile binaries on-device and then hand off to the prebuilt installer flow via `PREBUILT_DIR` so post-build behavior stays aligned.
 - **IMPORTANT: NetworkManager is REMOVED, not just disabled.** Installers run `apt-get purge network-manager` to completely remove NetworkManager from the system. Do NOT assume `nmcli` is available. All network management is done through pure Rust netlink operations.
 - Installers now:
   - Remount `/` read-write if needed (fresh Pi images can boot `ro`).
@@ -23,6 +24,8 @@ Software/runtime expectations:
   - Claim `/etc/resolv.conf` for Rustyjack (symlink to `/var/lib/rustyjack/resolv.conf`, root-owned) and reclaim it after apt installs so route/DNS enforcement can write reliably.
   - Disable competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). This ensures Rustyjack has sole control of DNS on the dedicated device.
   - Ensure `/var/lib/rustyjack/logs` exists and is owned by `rustyjack-ui:rustyjack` so the UI can write logs.
+  - Persist full installer transcripts under `/var/lib/rustyjack/logs/install/` with `install_latest.log` and per-installer `*_latest.log` symlinks for diagnostics.
+  - `scripts/rj_run_tests.sh` must copy installer logs into each run (`<results_root>/install_logs/`) so Discord test-artifact uploads and consolidated ZIPs include installation context.
 
 Network interface isolation policy (non-negotiable):
 - Exactly one non-loopback uplink may be active at a time (wired or wireless).
