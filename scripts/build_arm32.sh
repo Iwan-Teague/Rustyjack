@@ -25,6 +25,7 @@ BUILD_INFO_ENV=""
 # USB export: set by prompt_usb_export_early; empty means skip
 USB_EXPORT_DEST=""
 USB_AUTO_EJECT=0
+USB_SELECTED_MOUNT=""
 
 # Ensure target directory exists on host (for docker volume mount)
 mkdir -p "$HOST_TARGET_DIR"
@@ -111,6 +112,71 @@ get_usb_mounts() {
     fi
 }
 
+is_mount_writable() {
+    local mp="$1"
+    local probe="$mp/.rj_write_test.$$"
+    if touch "$probe" >/dev/null 2>&1; then
+        rm -f "$probe" >/dev/null 2>&1 || true
+        return 0
+    fi
+    return 1
+}
+
+mount_flags_for_path() {
+    local mp="$1"
+    mount | awk -v mp="$mp" '$3 == mp {print; exit}'
+}
+
+mount_fstype_for_path() {
+    local mp="$1"
+    local record
+    record="$(mount_flags_for_path "$mp" || true)"
+    [ -n "$record" ] || return 1
+
+    local fstype=""
+    fstype="$(printf '%s\n' "$record" | awk '{for(i=1;i<=NF;i++) if($i=="type"){print $(i+1); exit}}')"
+    if [ -n "$fstype" ]; then
+        printf '%s\n' "$fstype"
+        return 0
+    fi
+
+    if [[ "$record" == *"("*")"* ]]; then
+        printf '%s\n' "$record" | awk -F'[()]' '{split($2, a, ","); gsub(/^[[:space:]]+|[[:space:]]+$/, "", a[1]); print a[1]; exit}'
+        return 0
+    fi
+    return 1
+}
+
+format_ntfs_mount_exfat_macos() {
+    local mp="$1"
+    local label="$2"
+
+    if ! command -v diskutil >/dev/null 2>&1; then
+        echo "diskutil not found; cannot format USB on macOS." >&2
+        return 1
+    fi
+
+    local device
+    device="$(df -P "$mp" 2>/dev/null | awk 'NR==2 {print $1}')"
+    if [ -z "$device" ]; then
+        echo "Could not determine device for mount point: $mp" >&2
+        return 1
+    fi
+
+    echo "Formatting $device as exFAT (label: $label)..." >&2
+    if ! diskutil eraseVolume ExFAT "$label" "$device" >&2; then
+        echo "Failed to format $device as exFAT." >&2
+        return 1
+    fi
+
+    local new_mp
+    new_mp="$(diskutil info "$device" 2>/dev/null | awk -F': *' '/Mount Point/ {print $2; exit}')"
+    if [ -z "$new_mp" ] || [ "$new_mp" = "Not mounted" ]; then
+        new_mp="/Volumes/$label"
+    fi
+    printf '%s\n' "$new_mp"
+}
+
 prompt_usb_export_early() {
     local arch="$1"
     local variant="$2"
@@ -122,10 +188,18 @@ prompt_usb_export_early() {
     fi
     case "$reply" in
         y|Y|yes|YES) ;;
-        *) echo "USB export skipped."; USB_EXPORT_DEST=""; return 0 ;;
+        *)
+            echo "USB export skipped."
+            USB_EXPORT_DEST=""
+            USB_SELECTED_MOUNT=""
+            return 0
+            ;;
     esac
 
     local usb_mounts=()
+    local writable_mounts=()
+    local readonly_mounts=()
+    local writable_mounts_printed=0
     while IFS= read -r mp; do
         [ -n "$mp" ] && usb_mounts+=("$mp")
     done < <(get_usb_mounts)
@@ -133,42 +207,211 @@ prompt_usb_export_early() {
     if [ "${#usb_mounts[@]}" -eq 0 ]; then
         echo "No USB drives detected. USB export will be skipped."
         USB_EXPORT_DEST=""
+        USB_SELECTED_MOUNT=""
         return 0
     fi
 
     echo ""
     echo "Detected USB drives:"
-    local i=1
     for mp in "${usb_mounts[@]}"; do
         local size_info=""
+        local access_state="read-only"
         if command -v df >/dev/null 2>&1; then
             size_info="$(df -h "$mp" 2>/dev/null | awk 'NR==2 {print $2 " total, " $4 " free"}' || true)"
         fi
-        if [ -n "$size_info" ]; then
-            printf "  [%d] %s  (%s)\n" "$i" "$mp" "$size_info"
+        if is_mount_writable "$mp"; then
+            access_state="writable"
+            writable_mounts+=("$mp")
         else
-            printf "  [%d] %s\n" "$i" "$mp"
+            readonly_mounts+=("$mp")
         fi
-        i=$((i + 1))
+        if [ -n "$size_info" ]; then
+            printf "  - %s  (%s, %s)\n" "$mp" "$size_info" "$access_state"
+        else
+            printf "  - %s  (%s)\n" "$mp" "$access_state"
+        fi
     done
     echo ""
 
+    if [ "${#writable_mounts[@]}" -gt 0 ]; then
+        echo "Writable USB drives (eligible for export):"
+        local i=1
+        for mp in "${writable_mounts[@]}"; do
+            local size_info=""
+            if command -v df >/dev/null 2>&1; then
+                size_info="$(df -h "$mp" 2>/dev/null | awk 'NR==2 {print $2 " total, " $3 " used, " $4 " free"}' || true)"
+            fi
+            if [ -n "$size_info" ]; then
+                printf "  [%d] %s  (%s)\n" "$i" "$mp" "$size_info"
+            else
+                printf "  [%d] %s\n" "$i" "$mp"
+            fi
+            i=$((i + 1))
+        done
+        echo ""
+        writable_mounts_printed=1
+    fi
+
+    if [ "${#readonly_mounts[@]}" -gt 0 ]; then
+        echo "Read-only USB drives (detected, but not writable):"
+        local readonly_ntfs_mounts=()
+        for mp in "${readonly_mounts[@]}"; do
+            local flags
+            flags="$(mount_flags_for_path "$mp" || true)"
+            local fstype
+            fstype="$(mount_fstype_for_path "$mp" || true)"
+            local size_info=""
+            if command -v df >/dev/null 2>&1; then
+                size_info="$(df -h "$mp" 2>/dev/null | awk 'NR==2 {print $2 " total, " $4 " free"}' || true)"
+            fi
+            if [ -n "$fstype" ]; then
+                local fstype_lc
+                fstype_lc="$(printf '%s' "$fstype" | tr '[:upper:]' '[:lower:]')"
+                case "$fstype_lc" in
+                    ntfs|ntfs-3g) readonly_ntfs_mounts+=("$mp") ;;
+                esac
+            fi
+            if [ -n "$size_info" ] && [ -n "$flags" ]; then
+                echo "  - $mp  ($size_info)"
+                echo "    mount: $flags"
+            elif [ -n "$size_info" ]; then
+                echo "  - $mp  ($size_info)"
+            elif [ -n "$flags" ]; then
+                echo "  - $mp"
+                echo "    mount: $flags"
+            else
+                echo "  - $mp"
+            fi
+        done
+        echo ""
+
+        if [ "$(uname -s)" = "Darwin" ] && [ "${#readonly_ntfs_mounts[@]}" -gt 0 ]; then
+            echo "macOS NTFS volumes are read-only without third-party drivers."
+            printf "Format a read-only NTFS USB as exFAT now? This erases all data [y/N]: "
+            if ! read -r reply; then
+                reply=""
+            fi
+            case "$reply" in
+                y|Y|yes|YES)
+                    local i=1
+                    echo "NTFS read-only USB drives:"
+                    for mp in "${readonly_ntfs_mounts[@]}"; do
+                        local size_info=""
+                        if command -v df >/dev/null 2>&1; then
+                            size_info="$(df -h "$mp" 2>/dev/null | awk 'NR==2 {print $2 " total, " $4 " free"}' || true)"
+                        fi
+                        if [ -n "$size_info" ]; then
+                            printf "  [%d] %s  (%s)\n" "$i" "$mp" "$size_info"
+                        else
+                            printf "  [%d] %s\n" "$i" "$mp"
+                        fi
+                        i=$((i + 1))
+                    done
+                    echo ""
+
+                    local format_selection="" format_target=""
+                    while [ -z "$format_target" ]; do
+                        printf "Select a drive to format [1-%d] (Enter to cancel): " "${#readonly_ntfs_mounts[@]}"
+                        if ! read -r format_selection; then
+                            break
+                        fi
+                        if [ -z "$format_selection" ]; then
+                            break
+                        fi
+                        if [[ "$format_selection" =~ ^[0-9]+$ ]] && [ "$format_selection" -ge 1 ] && [ "$format_selection" -le "${#readonly_ntfs_mounts[@]}" ]; then
+                            format_target="${readonly_ntfs_mounts[$((format_selection - 1))]}"
+                        else
+                            echo "Invalid selection. Please enter a number between 1 and ${#readonly_ntfs_mounts[@]}."
+                        fi
+                    done
+
+                    if [ -n "$format_target" ]; then
+                        local confirm_text=""
+                        printf "Type FORMAT to erase %s and create exFAT: " "$format_target"
+                        if ! read -r confirm_text; then
+                            confirm_text=""
+                        fi
+                        if [ "$confirm_text" = "FORMAT" ]; then
+                            local formatted_mp=""
+                            if formatted_mp="$(format_ntfs_mount_exfat_macos "$format_target" "Rustyjack")" && [ -n "$formatted_mp" ]; then
+                                echo "Formatted successfully: $formatted_mp"
+                                usb_mounts=()
+                                writable_mounts=()
+                                readonly_mounts=()
+                                while IFS= read -r mp; do
+                                    [ -n "$mp" ] && usb_mounts+=("$mp")
+                                done < <(get_usb_mounts)
+                                for mp in "${usb_mounts[@]}"; do
+                                    if is_mount_writable "$mp"; then
+                                        writable_mounts+=("$mp")
+                                    else
+                                        readonly_mounts+=("$mp")
+                                    fi
+                                done
+                                writable_mounts_printed=0
+                            else
+                                echo "Failed to format $format_target as exFAT."
+                            fi
+                        else
+                            echo "Format cancelled."
+                        fi
+                    fi
+                    echo ""
+                    ;;
+                *) ;;
+            esac
+        fi
+    fi
+
+    if [ "${#writable_mounts[@]}" -eq 0 ]; then
+        echo "No writable USB drives detected. USB export will be skipped."
+        echo "Tip: On macOS, NTFS volumes are read-only by default."
+        echo "Use an exFAT/FAT32 USB, or format NTFS as exFAT in this prompt."
+        USB_EXPORT_DEST=""
+        USB_SELECTED_MOUNT=""
+        return 0
+    fi
+
+    if [ "$writable_mounts_printed" -eq 0 ]; then
+        echo "Writable USB drives (eligible for export):"
+        local i=1
+        for mp in "${writable_mounts[@]}"; do
+            local size_info=""
+            if command -v df >/dev/null 2>&1; then
+                size_info="$(df -h "$mp" 2>/dev/null | awk 'NR==2 {print $2 " total, " $3 " used, " $4 " free"}' || true)"
+            fi
+            if [ -n "$size_info" ]; then
+                printf "  [%d] %s  (%s)\n" "$i" "$mp" "$size_info"
+            else
+                printf "  [%d] %s\n" "$i" "$mp"
+            fi
+            i=$((i + 1))
+        done
+        echo ""
+    fi
+
     local selection="" chosen_mp=""
     while [ -z "$chosen_mp" ]; do
-        printf "Select a drive [1-%d]: " "${#usb_mounts[@]}"
+        printf "Select a writable drive [1-%d]: " "${#writable_mounts[@]}"
         if ! read -r selection; then
             echo "USB export skipped."
             USB_EXPORT_DEST=""
+            USB_SELECTED_MOUNT=""
             return 0
         fi
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#usb_mounts[@]}" ]; then
-            chosen_mp="${usb_mounts[$((selection - 1))]}"
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#writable_mounts[@]}" ]; then
+            chosen_mp="${writable_mounts[$((selection - 1))]}"
         else
-            echo "Invalid selection. Please enter a number between 1 and ${#usb_mounts[@]}."
+            echo "Invalid selection. Please enter a number between 1 and ${#writable_mounts[@]}."
         fi
     done
 
-    USB_EXPORT_DEST="$chosen_mp/rustyjack/prebuilt/$arch/$variant"
+    local root_dir_name="rustyjack"
+    if [ -d "$chosen_mp/Rustyjack" ] && [ ! -d "$chosen_mp/rustyjack" ]; then
+        root_dir_name="Rustyjack"
+    fi
+    USB_SELECTED_MOUNT="$chosen_mp"
+    USB_EXPORT_DEST="$chosen_mp/$root_dir_name/prebuilt/$arch/$variant"
     echo "Will copy binaries to $USB_EXPORT_DEST after build."
 
     printf "Automatically eject USB after successful copy? [Y/n]: "
@@ -294,6 +537,145 @@ selected_binaries_up_to_date() {
         return 1
     fi
     return 0
+}
+
+# Called after a successful build: performs the actual file copy.
+invoke_usb_export() {
+    local src_dir="$1"
+
+    [ -n "$USB_EXPORT_DEST" ] || return 0
+
+    if [ -n "$USB_SELECTED_MOUNT" ] && ! is_mount_writable "$USB_SELECTED_MOUNT"; then
+        echo "ERROR: Selected USB mount is not writable: $USB_SELECTED_MOUNT" >&2
+        local flags
+        flags="$(mount_flags_for_path "$USB_SELECTED_MOUNT" || true)"
+        if [ -n "$flags" ]; then
+            echo "Mount details: $flags" >&2
+        fi
+        echo "On macOS, NTFS is typically read-only by default." >&2
+        echo "Use exFAT/FAT32 or remount with NTFS write support, then retry." >&2
+        return 1
+    fi
+
+    echo "Copying binaries to $USB_EXPORT_DEST ..."
+
+    if [ -d "$USB_EXPORT_DEST" ]; then
+        echo "Removing existing files in $USB_EXPORT_DEST ..."
+        rm -rf "${USB_EXPORT_DEST:?}"/*
+    fi
+
+    if ! mkdir -p "$USB_EXPORT_DEST"; then
+        echo "ERROR: Failed to create directory $USB_EXPORT_DEST" >&2
+        return 1
+    fi
+
+    local files=("$src_dir"/*)
+    local total_files=0
+    for f in "${files[@]}"; do
+        [ -f "$f" ] && total_files=$((total_files + 1))
+    done
+
+    local current_file=0
+    local failed=0
+
+    for f in "${files[@]}"; do
+        [ -f "$f" ] || continue
+        current_file=$((current_file + 1))
+        local fname
+        fname="$(basename "$f")"
+        local fsize
+        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
+        local fsize_mb
+        fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
+
+        echo "  [$current_file/$total_files] $fname ($fsize_mb MB)"
+
+        local dest_path="$USB_EXPORT_DEST/$fname"
+        if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
+            if pv -p -s "$fsize" "$f" > "$dest_path"; then
+                true
+            else
+                echo "ERROR: Failed to copy $fname" >&2
+                failed=1
+            fi
+        else
+            if cp -f "$f" "$dest_path"; then
+                echo "    [##################################################] 100%"
+            else
+                echo "ERROR: Failed to copy $fname" >&2
+                failed=1
+            fi
+        fi
+    done
+
+    echo ""
+    if [ "$failed" -eq 0 ]; then
+        echo "USB export complete: $USB_EXPORT_DEST"
+        if [ -n "$USB_AUTO_EJECT" ] && [ "$USB_AUTO_EJECT" = "1" ]; then
+            echo "Ejecting USB drive..."
+
+            # Flush all pending writes to disk first
+            sync
+            sleep 1
+
+            # Get the mount point - more robust approach for both Linux and macOS
+            local mount_point
+            # Use df -P for POSIX format (consistent columns across platforms)
+            mount_point=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
+
+            if [ -z "$mount_point" ]; then
+                # Fallback: use last column (works when df output has odd formatting)
+                mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | tail -1 | awk '{print $NF}')
+            fi
+
+            if [ -n "$mount_point" ]; then
+                # Detect OS for appropriate eject command
+                local os_type
+                os_type=$(uname -s)
+
+                case "$os_type" in
+                    Darwin)
+                        # macOS: use diskutil for proper ejection
+                        local device
+                        device=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
+                        if [ -n "$device" ]; then
+                            if diskutil eject "$device" 2>/dev/null; then
+                                echo "USB drive ejected successfully. Safe to remove."
+                            else
+                                echo "Failed to eject USB drive. Please eject manually with: diskutil eject $device"
+                            fi
+                        else
+                            echo "Could not determine USB device. Please eject manually."
+                        fi
+                        ;;
+                    Linux)
+                        # Linux: use umount
+                        if umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully. Safe to remove."
+                        elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully (required sudo). Safe to remove."
+                        else
+                            echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
+                        fi
+                        ;;
+                    *)
+                        # Unknown OS: try umount anyway
+                        if umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully. Safe to remove."
+                        else
+                            echo "Failed to eject USB drive. Please eject manually with: umount $mount_point"
+                        fi
+                        ;;
+                esac
+            else
+                echo "Could not determine USB mount point. Please eject manually."
+            fi
+        else
+            echo "Remember to eject the USB drive before removing it."
+        fi
+    else
+        echo "USB export completed with errors." >&2
+    fi
 }
 
 if [ "$#" -gt 0 ]; then
@@ -468,7 +850,7 @@ if [ "$DEFAULT_BUILD" -eq 0 ]; then
     bash "$DOCKER_RUN_SCRIPT" "${CMD[@]}"
 elif [ "${#CMD[@]}" -gt 0 ]; then
     echo "Running build in Docker container..."
-    echo "Building: ${#BUILD_PARTS[@]} package(s)"
+    echo "Building: ${#BUILD_PARTS[@]} packages"
     BUILD_RAN=1
     # Pass cargo target cache volume to docker run script
     export DOCKER_VOLUMES_EXTRA="$HOST_TARGET_DIR:$TARGET_DIR"
@@ -547,129 +929,3 @@ EOF
     # --- USB export (destination selected at startup) ---
     invoke_usb_export "$DEST_DIR"
 fi
-
-# Called after a successful build: performs the actual file copy.
-invoke_usb_export() {
-    local src_dir="$1"
-
-    [ -n "$USB_EXPORT_DEST" ] || return 0
-
-    echo "Copying binaries to $USB_EXPORT_DEST ..."
-
-    if [ -d "$USB_EXPORT_DEST" ]; then
-        echo "Removing existing files in $USB_EXPORT_DEST ..."
-        rm -rf "${USB_EXPORT_DEST:?}"/*
-    fi
-
-    if ! mkdir -p "$USB_EXPORT_DEST"; then
-        echo "ERROR: Failed to create directory $USB_EXPORT_DEST" >&2
-        return 1
-    fi
-
-    local files=("$src_dir"/*)
-    local total_files=0
-    for f in "${files[@]}"; do
-        [ -f "$f" ] && total_files=$((total_files + 1))
-    done
-
-    local current_file=0
-    local failed=0
-
-    for f in "${files[@]}"; do
-        [ -f "$f" ] || continue
-        current_file=$((current_file + 1))
-        local fname
-        fname="$(basename "$f")"
-        local fsize
-        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
-        local fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
-        
-        echo "  [$current_file/$total_files] $fname ($fsize_mb MB)"
-        
-        local dest_path="$USB_EXPORT_DEST/$fname"
-        if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
-            if pv -p -s "$fsize" "$f" > "$dest_path"; then
-                true
-            else
-                echo "ERROR: Failed to copy $fname" >&2
-                failed=1
-            fi
-        else
-            if cp -f "$f" "$dest_path"; then
-                echo "    [##################################################] 100%"
-            else
-                echo "ERROR: Failed to copy $fname" >&2
-                failed=1
-            fi
-        fi
-    done
-
-    echo ""
-    if [ "$failed" -eq 0 ]; then
-        echo "USB export complete: $USB_EXPORT_DEST"
-        if [ -n "$USB_AUTO_EJECT" ] && [ "$USB_AUTO_EJECT" = "1" ]; then
-            echo "Ejecting USB drive..."
-            
-            # Flush all pending writes to disk first
-            sync
-            sleep 1
-            
-            # Get the mount point - more robust approach for both Linux and macOS
-            local mount_point
-            # Use df -P for POSIX format (consistent columns across platforms)
-            mount_point=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
-            
-            if [ -z "$mount_point" ]; then
-                # Fallback: use last column (works when df output has odd formatting)
-                mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | tail -1 | awk '{print $NF}')
-            fi
-            
-            if [ -n "$mount_point" ]; then
-                # Detect OS for appropriate eject command
-                local os_type
-                os_type=$(uname -s)
-                
-                case "$os_type" in
-                    Darwin)
-                        # macOS: use diskutil for proper ejection
-                        local device
-                        device=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
-                        if [ -n "$device" ]; then
-                            if diskutil eject "$device" 2>/dev/null; then
-                                echo "USB drive ejected successfully. Safe to remove."
-                            else
-                                echo "Failed to eject USB drive. Please eject manually with: diskutil eject $device"
-                            fi
-                        else
-                            echo "Could not determine USB device. Please eject manually."
-                        fi
-                        ;;
-                    Linux)
-                        # Linux: use umount
-                        if umount "$mount_point" 2>/dev/null; then
-                            echo "USB drive ejected successfully. Safe to remove."
-                        elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
-                            echo "USB drive ejected successfully (required sudo). Safe to remove."
-                        else
-                            echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
-                        fi
-                        ;;
-                    *)
-                        # Unknown OS: try umount anyway
-                        if umount "$mount_point" 2>/dev/null; then
-                            echo "USB drive ejected successfully. Safe to remove."
-                        else
-                            echo "Failed to eject USB drive. Please eject manually with: umount $mount_point"
-                        fi
-                        ;;
-                esac
-            else
-                echo "Could not determine USB mount point. Please eject manually."
-            fi
-        else
-            echo "Remember to eject the USB drive before removing it."
-        fi
-    else
-        echo "USB export completed with errors." >&2
-    fi
-}
