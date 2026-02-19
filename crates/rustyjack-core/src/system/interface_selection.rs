@@ -1,6 +1,6 @@
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -18,6 +18,8 @@ use crate::system::{
     RealNetOps,
 };
 use rustyjack_netlink::{station_disconnect_with_backend, StationBackendKind};
+
+static INTERFACE_SWITCH_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionDhcpInfo {
@@ -82,6 +84,9 @@ pub fn select_interface_with_ops<F>(
 where
     F: FnMut(&str, u8, &str),
 {
+    let lock = INTERFACE_SWITCH_LOCK.get_or_init(|| StdMutex::new(()));
+    let _switch_guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+
     check_cancel(cancel)?;
 
     let prefs = PreferenceManager::new(root.clone());
@@ -194,19 +199,25 @@ where
         );
         check_cancel(cancel)?;
 
-        if !is_wireless {
-            maybe_configure_wired_target(&*ops, &routes, &dns, iface, cancel, &mut outcome)?;
-        }
+        configure_target_connectivity(
+            &*ops,
+            &routes,
+            &dns,
+            iface,
+            is_wireless,
+            cancel,
+            &mut outcome,
+        )?;
 
         emit_progress(
             &mut progress,
             "verify",
             86,
-            "Verifying single-uplink invariant",
+            "Verifying exclusive network state",
         );
         check_cancel(cancel)?;
 
-        verify_single_admin_up(&*ops, iface, &other_ifaces)?;
+        verify_exclusive_network_state(&*ops, iface, &other_ifaces)?;
         outcome.blocked = other_ifaces.clone();
 
         emit_progress(
@@ -228,29 +239,47 @@ where
     })();
 
     if let Err(err) = commit_result {
-        emit_progress(
-            &mut progress,
-            "rollback",
-            92,
-            "Rollback: restoring previous interface",
-        );
+        let err_text = err.to_string();
+        let verification_failed = err_text
+            .to_ascii_lowercase()
+            .contains("verification failed");
 
-        let rollback = rollback_after_commit_failure(
-            &ops,
-            &prefs,
-            &routes,
-            &dns,
-            &root,
-            iface,
-            previous_active.as_deref(),
-            previous_preference.as_deref(),
-            previous_system_preference.as_deref(),
-            cancel,
-            &mut outcome,
-        );
+        let rollback = if verification_failed {
+            emit_progress(
+                &mut progress,
+                "rollback",
+                92,
+                "Rollback: forcing safe all-down state",
+            );
+            rollback_to_safe_all_down(&ops, &uplinks, cancel, &mut outcome)
+        } else {
+            emit_progress(
+                &mut progress,
+                "rollback",
+                92,
+                "Rollback: restoring previous interface",
+            );
+            rollback_after_commit_failure(
+                &ops,
+                &prefs,
+                &routes,
+                &dns,
+                &root,
+                iface,
+                previous_active.as_deref(),
+                previous_preference.as_deref(),
+                previous_system_preference.as_deref(),
+                cancel,
+                &mut outcome,
+            )
+        };
         outcome.rollback = rollback.clone();
 
-        let mut message = format!("Interface switch failed after isolation: {}", err);
+        let mut message = if verification_failed {
+            format!("Interface switch verification failed: {}", err)
+        } else {
+            format!("Interface switch failed after isolation: {}", err)
+        };
         if rollback.restored_previous {
             if let Some(previous) = rollback.previous_interface.as_deref() {
                 message.push_str(&format!(
@@ -260,6 +289,8 @@ where
             } else {
                 message.push_str("; rollback restored previous interface");
             }
+        } else if verification_failed {
+            message.push_str("; rollback moved system to safe all-down state");
         } else if rollback.attempted {
             let reason = rollback
                 .message
@@ -385,10 +416,25 @@ fn prepare_target_interface(
         debug!(target: "net", iface = %iface, error = %err, "default_route_delete_skipped");
     }
 
-    ops.bring_up(iface)
-        .with_context(|| format!("failed to bring {} UP", iface))?;
-    wait_for_admin_state(ops, iface, true, Duration::from_secs(10), cancel)
-        .with_context(|| format!("timeout waiting for {} to become admin-UP", iface))?;
+    // Keep target down until all non-target uplinks are isolated.
+    if let Err(err) = ops.bring_down(iface) {
+        push_warning(
+            outcome,
+            format!(
+                "failed to bring {} DOWN during pre-isolation (continuing): {}",
+                iface, err
+            ),
+        );
+    } else if let Err(err) = wait_for_admin_state(ops, iface, false, Duration::from_secs(5), cancel)
+    {
+        push_warning(
+            outcome,
+            format!(
+                "timeout waiting for {} to become DOWN during pre-isolation: {}",
+                iface, err
+            ),
+        );
+    }
 
     Ok(())
 }
@@ -400,10 +446,21 @@ fn deactivate_non_target_uplinks(
     cancel: Option<&CancelFlag>,
     outcome: &mut InterfaceSelectionOutcome,
 ) -> Result<()> {
+    let mut hard_failures = 0usize;
+
     for other in other_ifaces {
         check_cancel(cancel)?;
 
         if ops.is_wireless(other) {
+            if let Err(err) = stop_wpa_service(other) {
+                push_warning(
+                    outcome,
+                    format!(
+                        "failed to stop wpa_supplicant for {} (continuing): {}",
+                        other, err
+                    ),
+                );
+            }
             if let Err(err) = disconnect_station_backend(other) {
                 push_warning(
                     outcome,
@@ -436,6 +493,7 @@ fn deactivate_non_target_uplinks(
                 other,
                 format!("failed to bring DOWN during isolation: {}", err),
             );
+            hard_failures += 1;
             continue;
         }
 
@@ -445,6 +503,7 @@ fn deactivate_non_target_uplinks(
                 other,
                 format!("timeout waiting for DOWN state: {}", err),
             );
+            hard_failures += 1;
         }
 
         if ops.is_wireless(other) {
@@ -457,10 +516,33 @@ fn deactivate_non_target_uplinks(
         }
     }
 
+    if hard_failures > 0 {
+        bail!(
+            "isolation failed on {} non-target interface(s)",
+            hard_failures
+        );
+    }
+
     Ok(())
 }
 
-fn maybe_configure_wired_target(
+fn configure_target_connectivity(
+    ops: &dyn NetOps,
+    routes: &RouteManager,
+    dns: &DnsManager,
+    iface: &str,
+    is_wireless: bool,
+    cancel: Option<&CancelFlag>,
+    outcome: &mut InterfaceSelectionOutcome,
+) -> Result<()> {
+    if is_wireless {
+        configure_wireless_target(ops, routes, dns, iface, cancel, outcome)
+    } else {
+        configure_wired_target(ops, routes, dns, iface, cancel, outcome)
+    }
+}
+
+fn configure_wireless_target(
     ops: &dyn NetOps,
     routes: &RouteManager,
     dns: &DnsManager,
@@ -470,63 +552,173 @@ fn maybe_configure_wired_target(
 ) -> Result<()> {
     check_cancel(cancel)?;
 
-    match ops.has_carrier(iface) {
-        Ok(carrier) => outcome.carrier = carrier,
-        Err(err) => {
-            push_warning(
-                outcome,
-                format!("carrier check failed for {} (continuing): {}", iface, err),
-            );
-        }
+    ops.set_rfkill_block(iface, false)
+        .with_context(|| format!("failed to clear rfkill block on {}", iface))?;
+    ops.bring_up(iface)
+        .with_context(|| format!("failed to bring {} UP", iface))?;
+    wait_for_admin_state(ops, iface, true, Duration::from_secs(10), cancel)
+        .with_context(|| format!("timeout waiting for {} to become admin-UP", iface))?;
+
+    start_wpa_service(iface)?;
+    outcome
+        .notes
+        .push(format!("Started wpa_supplicant for {}", iface));
+
+    let lease = ops
+        .acquire_dhcp(iface, Duration::from_secs(45))
+        .with_context(|| format!("DHCP timed out for Wi-Fi interface {}", iface))?;
+
+    let gateway = lease
+        .gateway
+        .ok_or_else(|| anyhow!("DHCP lease for {} has no gateway", iface))?;
+    routes
+        .set_default_route(iface, gateway, 100)
+        .with_context(|| format!("failed to set default route for {}", iface))?;
+
+    if !lease.dns_servers.is_empty() {
+        dns.set_dns(&lease.dns_servers)
+            .context("failed to write DNS servers")?;
+    } else {
+        push_warning(
+            outcome,
+            format!("DHCP lease for {} did not include DNS servers", iface),
+        );
     }
+
+    outcome.carrier = ops.has_carrier(iface).ok().flatten();
+    outcome.dhcp = Some(SelectionDhcpInfo {
+        ip: Some(lease.ip),
+        gateway: Some(gateway),
+        dns_servers: lease.dns_servers.clone(),
+    });
+    Ok(())
+}
+
+fn configure_wired_target(
+    ops: &dyn NetOps,
+    routes: &RouteManager,
+    dns: &DnsManager,
+    iface: &str,
+    cancel: Option<&CancelFlag>,
+    outcome: &mut InterfaceSelectionOutcome,
+) -> Result<()> {
+    check_cancel(cancel)?;
+
+    ops.bring_up(iface)
+        .with_context(|| format!("failed to bring {} UP", iface))?;
+    wait_for_admin_state(ops, iface, true, Duration::from_secs(10), cancel)
+        .with_context(|| format!("timeout waiting for {} to become admin-UP", iface))?;
+
+    outcome.carrier = ops
+        .has_carrier(iface)
+        .with_context(|| format!("failed to read carrier state for {}", iface))?;
 
     if outcome.carrier == Some(false) {
-        outcome
-            .notes
-            .push("No ethernet carrier; skipping DHCP".to_string());
-        return Ok(());
+        bail!("No ethernet carrier on {}", iface);
     }
 
-    match ops.acquire_dhcp(iface, Duration::from_secs(30)) {
-        Ok(lease) => {
-            if let Some(gateway) = lease.gateway {
-                if let Err(err) = routes.set_default_route(iface, gateway, 100) {
-                    push_warning(
-                        outcome,
-                        format!(
-                            "failed to set default route for {} (continuing): {}",
-                            iface, err
-                        ),
-                    );
-                }
-            } else {
-                push_warning(outcome, format!("DHCP lease for {} has no gateway", iface));
-            }
+    let lease = ops
+        .acquire_dhcp(iface, Duration::from_secs(30))
+        .with_context(|| format!("DHCP failed for {}", iface))?;
+    let gateway = lease
+        .gateway
+        .ok_or_else(|| anyhow!("DHCP lease for {} has no gateway", iface))?;
+    routes
+        .set_default_route(iface, gateway, 100)
+        .with_context(|| format!("failed to set default route for {}", iface))?;
 
-            if !lease.dns_servers.is_empty() {
-                if let Err(err) = dns.set_dns(&lease.dns_servers) {
-                    push_warning(
-                        outcome,
-                        format!("failed to write DNS servers (continuing): {}", err),
-                    );
-                }
-            }
-
-            outcome.dhcp = Some(SelectionDhcpInfo {
-                ip: Some(lease.ip),
-                gateway: lease.gateway,
-                dns_servers: lease.dns_servers.clone(),
-            });
-        }
-        Err(err) => {
-            push_warning(
-                outcome,
-                format!("DHCP failed for {} (continuing): {}", iface, err),
-            );
-        }
+    if !lease.dns_servers.is_empty() {
+        dns.set_dns(&lease.dns_servers)
+            .context("failed to write DNS servers")?;
+    } else {
+        push_warning(
+            outcome,
+            format!("DHCP lease for {} did not include DNS servers", iface),
+        );
     }
+
+    outcome.dhcp = Some(SelectionDhcpInfo {
+        ip: Some(lease.ip),
+        gateway: Some(gateway),
+        dns_servers: lease.dns_servers.clone(),
+    });
 
     Ok(())
+}
+
+fn rollback_to_safe_all_down(
+    ops: &Arc<dyn NetOps>,
+    uplinks: &[crate::system::ops::InterfaceSummary],
+    cancel: Option<&CancelFlag>,
+    outcome: &mut InterfaceSelectionOutcome,
+) -> SelectionRollbackInfo {
+    let mut issues = Vec::new();
+
+    for iface in uplinks {
+        if let Err(err) = check_cancel(cancel) {
+            issues.push(format!(
+                "rollback cancelled while handling {}: {}",
+                iface.name, err
+            ));
+            break;
+        }
+
+        if iface.is_wireless {
+            if let Err(err) = stop_wpa_service(&iface.name) {
+                issues.push(format!(
+                    "failed to stop wpa service for {}: {}",
+                    iface.name, err
+                ));
+            }
+        }
+
+        if let Err(err) = ops.release_dhcp(&iface.name) {
+            issues.push(format!("failed DHCP release for {}: {}", iface.name, err));
+        }
+        if let Err(err) = ops.flush_addresses(&iface.name) {
+            issues.push(format!("failed address flush for {}: {}", iface.name, err));
+        }
+        if let Err(err) = ops.delete_default_route(&iface.name) {
+            issues.push(format!(
+                "failed default-route flush for {}: {}",
+                iface.name, err
+            ));
+        }
+        if let Err(err) = ops.bring_down(&iface.name) {
+            issues.push(format!("failed bring-down for {}: {}", iface.name, err));
+        } else if let Err(err) =
+            wait_for_admin_state(&**ops, &iface.name, false, Duration::from_secs(5), cancel)
+        {
+            issues.push(format!("timeout waiting {} DOWN: {}", iface.name, err));
+        }
+
+        if iface.is_wireless {
+            if let Err(err) = ops.set_rfkill_block(&iface.name, true) {
+                issues.push(format!("failed rfkill block for {}: {}", iface.name, err));
+            }
+        }
+    }
+
+    if !issues.is_empty() {
+        let msg = issues.join("; ");
+        push_warning(
+            outcome,
+            format!("safe all-down rollback encountered issues: {}", msg),
+        );
+        SelectionRollbackInfo {
+            attempted: true,
+            restored_previous: false,
+            previous_interface: None,
+            message: Some(msg),
+        }
+    } else {
+        SelectionRollbackInfo {
+            attempted: true,
+            restored_previous: false,
+            previous_interface: None,
+            message: Some("safe all-down rollback completed".to_string()),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -677,6 +869,15 @@ fn restore_previous_interface(
                 ),
             );
         }
+        if let Err(err) = start_wpa_service(previous_iface) {
+            push_warning(
+                outcome,
+                format!(
+                    "could not start wpa_supplicant for rollback on {}: {}",
+                    previous_iface, err
+                ),
+            );
+        }
     }
 
     ops.bring_up(previous_iface)
@@ -738,6 +939,15 @@ fn restore_previous_interface(
         }
 
         if ops.is_wireless(target_iface) {
+            if let Err(err) = stop_wpa_service(target_iface) {
+                push_warning(
+                    outcome,
+                    format!(
+                        "rollback failed to stop wpa_supplicant on {}: {}",
+                        target_iface, err
+                    ),
+                );
+            }
             if let Err(err) = ops.set_rfkill_block(target_iface, true) {
                 push_warning(
                     outcome,
@@ -799,6 +1009,40 @@ fn disconnect_station_backend(interface: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+fn start_wpa_service(_interface: &str) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn start_wpa_service(interface: &str) -> Result<()> {
+    let unit = format!("rustyjack-wpa_supplicant@{}.service", interface);
+    crate::system::start_system_service(&unit).with_context(|| format!("failed to start {}", unit))
+}
+
+#[cfg(test)]
+fn stop_wpa_service(_interface: &str) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn stop_wpa_service(interface: &str) -> Result<()> {
+    let unit = format!("rustyjack-wpa_supplicant@{}.service", interface);
+    match crate::system::stop_system_service(&unit) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let detail = err.to_string().to_ascii_lowercase();
+            if detail.contains("not loaded")
+                || detail.contains("no such unit")
+                || detail.contains("unknown object")
+            {
+                return Ok(());
+            }
+            Err(err).with_context(|| format!("failed to stop {}", unit))
+        }
+    }
+}
+
 fn emit_progress<F>(progress: &mut Option<&mut F>, phase: &str, percent: u8, message: &str)
 where
     F: FnMut(&str, u8, &str),
@@ -821,21 +1065,62 @@ fn push_error(outcome: &mut InterfaceSelectionOutcome, iface: &str, message: Str
     push_warning(outcome, format!("{}: {}", iface, message));
 }
 
-fn verify_single_admin_up(ops: &dyn NetOps, selected: &str, others: &[String]) -> Result<()> {
-    let mut up_interfaces = Vec::new();
-    for name in std::iter::once(selected.to_string()).chain(others.to_owned()) {
-        if ops.admin_is_up(&name)? {
-            up_interfaces.push(name);
+fn verify_exclusive_network_state(
+    ops: &dyn NetOps,
+    selected: &str,
+    others: &[String],
+) -> Result<()> {
+    if !ops.admin_is_up(selected)? {
+        bail!(
+            "verification failed: selected interface {} is not admin-UP",
+            selected
+        );
+    }
+
+    let selected_ip = ops.get_ipv4_address(selected)?;
+    if selected_ip.is_none() {
+        bail!(
+            "verification failed: selected interface {} has no IPv4 address",
+            selected
+        );
+    }
+
+    for other in others {
+        if ops.admin_is_up(other)? {
+            bail!(
+                "verification failed: non-selected interface {} is still admin-UP",
+                other
+            );
+        }
+        if ops.is_wireless(other) && !ops.is_rfkill_blocked(other)? {
+            bail!(
+                "verification failed: non-selected Wi-Fi interface {} is not rfkill-blocked",
+                other
+            );
         }
     }
 
-    if up_interfaces.len() != 1 || up_interfaces[0] != selected {
+    let routes = ops.list_routes()?;
+    let default_routes: Vec<_> = routes
+        .iter()
+        .filter(|route| route.destination.is_none())
+        .collect();
+
+    if default_routes.len() != 1 {
         bail!(
-            "Invariant violated: expected only {} admin-UP, found {:?}",
-            selected,
-            up_interfaces
+            "verification failed: expected exactly one default route, found {}",
+            default_routes.len()
         );
     }
+
+    if default_routes[0].interface != selected {
+        bail!(
+            "verification failed: default route is via {}, expected {}",
+            default_routes[0].interface,
+            selected
+        );
+    }
+
     Ok(())
 }
 
@@ -1116,6 +1401,7 @@ mod tests {
         admin_state: Arc<Mutex<HashMap<String, bool>>>,
         carrier_state: Arc<Mutex<HashMap<String, Option<bool>>>>,
         ip_state: Arc<Mutex<HashMap<String, Option<Ipv4Addr>>>>,
+        rfkill_state: Arc<Mutex<HashMap<String, bool>>>,
         routes: Arc<Mutex<Vec<RouteEntry>>>,
         calls: Arc<Mutex<Vec<String>>>,
         fail_bring_down: Arc<Mutex<HashSet<String>>>,
@@ -1177,6 +1463,10 @@ mod tests {
                 .unwrap()
                 .insert(name.to_string(), carrier);
             self.ip_state.lock().unwrap().insert(name.to_string(), ip);
+            self.rfkill_state
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), false);
         }
 
         fn fail_bring_down_for(&self, iface: &str) {
@@ -1241,6 +1531,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("rfkill:{}:{}", interface, blocked));
+            self.rfkill_state
+                .lock()
+                .unwrap()
+                .insert(interface.to_string(), blocked);
             Ok(())
         }
 
@@ -1351,8 +1645,13 @@ mod tests {
                 .unwrap_or(None))
         }
 
-        fn is_rfkill_blocked(&self, _interface: &str) -> Result<bool> {
-            Ok(false)
+        fn is_rfkill_blocked(&self, interface: &str) -> Result<bool> {
+            Ok(*self
+                .rfkill_state
+                .lock()
+                .unwrap()
+                .get(interface)
+                .unwrap_or(&false))
         }
 
         fn is_rfkill_hard_blocked(&self, _interface: &str) -> Result<bool> {
@@ -1361,7 +1660,7 @@ mod tests {
     }
 
     #[test]
-    fn two_phase_orders_target_preflight_before_disabling_others() {
+    fn two_phase_disables_other_uplinks_before_target_bring_up() {
         let ops = MockNetOps::new();
         ops.add_interface(
             "eth0",
@@ -1386,8 +1685,8 @@ mod tests {
         let bring_up_target = calls.iter().position(|c| c == "bring_up:wlan0").unwrap();
         let bring_down_other = calls.iter().position(|c| c == "bring_down:eth0").unwrap();
         assert!(
-            bring_up_target < bring_down_other,
-            "target must be brought up before other uplinks are disabled"
+            bring_down_other < bring_up_target,
+            "non-target uplinks must be disabled before target is brought up"
         );
     }
 
@@ -1463,5 +1762,52 @@ mod tests {
         let up = ops.admin_up_interfaces();
         assert_eq!(up.len(), 1);
         assert_eq!(up[0], "wlan0");
+    }
+
+    #[test]
+    fn success_blocks_non_target_wifi_and_sets_single_default_route() {
+        let ops = MockNetOps::new();
+        ops.add_interface(
+            "eth0",
+            false,
+            false,
+            Some(true),
+            Some(Ipv4Addr::new(10, 0, 0, 20)),
+        );
+        ops.add_interface(
+            "wlan0",
+            true,
+            true,
+            None,
+            Some(Ipv4Addr::new(192, 168, 1, 50)),
+        );
+        ops.routes.lock().unwrap().push(RouteEntry {
+            interface: "wlan0".to_string(),
+            gateway: Ipv4Addr::new(192, 168, 1, 1),
+            metric: 100,
+            destination: None,
+        });
+
+        let root = TempDir::new().unwrap();
+        let outcome = select_interface_with_ops(
+            Arc::new(ops.clone()),
+            root.path().to_path_buf(),
+            "eth0",
+            None::<&mut fn(&str, u8, &str)>,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.allowed, vec!["eth0".to_string()]);
+        assert_eq!(outcome.blocked, vec!["wlan0".to_string()]);
+        assert!(ops.is_rfkill_blocked("wlan0").unwrap());
+
+        let routes = ops.list_routes().unwrap();
+        let defaults: Vec<_> = routes
+            .into_iter()
+            .filter(|route| route.destination.is_none())
+            .collect();
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].interface, "eth0");
     }
 }

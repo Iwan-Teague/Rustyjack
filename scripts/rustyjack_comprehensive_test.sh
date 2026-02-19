@@ -567,6 +567,16 @@ suite_A_sanity() {
     bad "A6_socket_exists (not found: $SOCKET)"
   fi
 
+  if systemctl is-active --quiet "$SERVICE"; then
+    if [[ -S "$SOCKET" ]]; then
+      ok "A6b_active_has_socket"
+    else
+      bad "A6b_active_has_socket (service active but socket missing: $SOCKET)"
+    fi
+  else
+    skip "A6b_active_has_socket (service not active)"
+  fi
+
   # Journal tail
   journalctl -u "$SERVICE" -b --no-pager | tail -n 200 > "$OUT/systemd/journal_tail.txt" 2>&1
   if grep -q "ready\|listening\|started" "$OUT/systemd/journal_tail.txt" 2>/dev/null; then

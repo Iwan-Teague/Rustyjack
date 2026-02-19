@@ -272,7 +272,7 @@ impl App {
                                 [
                                     "No interfaces detected",
                                     "",
-                                    "Run Hardware Sanity Check and",
+                                    "Run Network Interfaces and",
                                     "ensure adapters are up.",
                                 ],
                             );

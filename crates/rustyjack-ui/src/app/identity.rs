@@ -578,7 +578,7 @@ impl App {
                 [
                     "No interface selected",
                     "",
-                    "Run Hardware Sanity Check",
+                    "Run Network Interfaces",
                     "to select an interface.",
                 ],
             );

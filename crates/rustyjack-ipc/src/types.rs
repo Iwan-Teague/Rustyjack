@@ -424,12 +424,20 @@ pub struct InterfaceCapabilities {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceStatusResponse {
     pub interface: String,
+    #[serde(default)]
+    pub kind: String,
     pub exists: bool,
     pub is_wireless: bool,
     pub oper_state: String,
     pub is_up: bool,
     pub carrier: Option<bool>,
     pub ip: Option<String>,
+    #[serde(default)]
+    pub mac: Option<String>,
+    #[serde(default)]
+    pub rfkill_blocked: Option<bool>,
+    #[serde(default)]
+    pub eligible: bool,
     pub capabilities: Option<InterfaceCapabilities>,
 }
 

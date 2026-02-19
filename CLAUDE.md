@@ -44,6 +44,8 @@ MIT
 - All privileged operations go through daemon IPC
 - Job-based architecture for long-running operations with cancellation
 - Hardened systemd units with strict sandboxing
+- Network isolation is enforced in the daemon: only one active uplink is allowed, and transitions must pass exclusivity verification.
+- `Settings -> Network Interfaces` is a blocking UI workflow: user cannot leave while a switch is in progress, and cannot exit on error unless the system is in a safe all-down state.
 - Display startup flow is backend-aware: detect backend, query mode, calibrate if needed, cache effective geometry
 - UI layout metrics are runtime-derived (no fixed menu/dialog visible constants in core flow)
 
@@ -281,7 +283,8 @@ journalctl -u rustyjackd -f
 
 ### No network after interface change
 - RustyJack enforces single active interface
-- Check interface isolation in Settings → Hardware
+- Check interface isolation in `Settings -> Network Interfaces`
+- If UI remains blocked on this screen, resolve the reported isolation error (rfkill hard block, missing DHCP/gateway, or route verification failure) and retry
 
 ### DNS resolution issues
 - Check that `/etc/resolv.conf` is a symlink to `/var/lib/rustyjack/resolv.conf` and is writable by root

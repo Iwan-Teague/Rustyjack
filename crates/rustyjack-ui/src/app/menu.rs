@@ -413,7 +413,7 @@ impl App {
         if iface.is_empty() {
             self.show_message(
                 title,
-                ["No active interface set", "Run Hardware Sanity Check first"],
+                ["No active interface set", "Run Network Interfaces first"],
             )?;
             return Ok(None);
         }

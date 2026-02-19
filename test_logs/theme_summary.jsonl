@@ -1,2 +1,0 @@
-{"ts": "2026-02-15T20:55:25+00:00", "status": "pass", "name": "theme_write_invalid_config", "detail": ""}
-{"ts": "2026-02-15T20:55:25+00:00", "status": "pass", "name": "theme_restart_repair_invalid_config", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/theme/artifacts/theme_restart_repair_invalid_config.log"}

@@ -74,7 +74,7 @@ impl App {
                 [
                     "No WiFi interface set",
                     "",
-                    "Run Hardware Sanity Check",
+                    "Run Network Interfaces",
                     "to configure interface",
                 ],
             );

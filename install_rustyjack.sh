@@ -814,16 +814,30 @@ DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
 step "Installing rustyjackd socket/service..."
 
-# Socket activation is not used on dedicated devices; ensure any existing socket unit is disabled/masked
-sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
-sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+rj_sudo_tee "$DAEMON_SOCKET" >/dev/null <<UNIT
+[Unit]
+Description=Rustyjack daemon socket
+PartOf=rustyjackd.service
+
+[Socket]
+ListenStream=/run/rustyjack/rustyjackd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=rustyjack
+DirectoryMode=0770
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
+UNIT
 
 
 rj_sudo_tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack Daemon (Hardened)
 Documentation=https://github.com/yourusername/rustyjack
-After=local-fs.target network.target
+Requires=rustyjackd.socket
+After=local-fs.target network.target rustyjackd.socket
 Wants=network.target
 
 [Service]
@@ -831,10 +845,17 @@ Type=notify
 ExecStart=/usr/local/bin/rustyjackd
 Restart=on-failure
 RestartSec=5
+RuntimeDirectory=rustyjack
+RuntimeDirectoryMode=0770
+StateDirectory=rustyjack
+StateDirectoryMode=0770
+ConfigurationDirectory=rustyjack
+ConfigurationDirectoryMode=0770
 
 # Environment
 Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+Environment=RUSTYJACKD_SOCKET_GROUP=rustyjack
 Environment=RUSTYJACK_WIFI_BACKEND=dbus
 Environment=RUSTYJACKD_OPS_PROFILE=appliance
 Environment=RUSTYJACKD_OPS_WIFI=true
@@ -1065,9 +1086,14 @@ if command -v systemd-analyze >/dev/null 2>&1; then
     warn "systemd-analyze verify reported issues for rustyjackd.service; check 'systemctl status' and 'journalctl -u rustyjackd'"
   fi
 fi
-# Disable socket activation and prefer always-on service on dedicated devices
-sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
-sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+# Ensure socket path exists before daemon startup and keep socket activation available.
+sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
+sudo systemctl unmask rustyjackd.socket 2>/dev/null || true
+sudo systemctl enable rustyjackd.socket
+if ! sudo systemctl start rustyjackd.socket 2>/dev/null; then
+  warn "Failed to start rustyjackd.socket"
+  show_service_logs rustyjackd.socket
+fi
 if ! sudo systemctl enable --now rustyjackd.service 2>/dev/null; then
   warn "Failed to enable/start rustyjackd.service"
   show_service_logs rustyjackd.service

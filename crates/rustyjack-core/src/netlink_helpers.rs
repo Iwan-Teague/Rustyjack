@@ -476,11 +476,6 @@ pub fn process_running(pattern: &str) -> Result<bool> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn rfkill_find_index(_interface: &str) -> Result<Option<u32>> {
-    anyhow::bail!("rfkill operations only supported on Linux")
-}
-
-#[cfg(not(target_os = "linux"))]
 pub fn netlink_bridge_create(_name: &str) -> Result<()> {
     anyhow::bail!("bridge operations only supported on Linux")
 }

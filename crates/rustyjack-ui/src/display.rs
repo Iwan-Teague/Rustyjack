@@ -479,11 +479,11 @@ fn resolve_runtime_probe(config: &mut DisplayConfig, force_discovery: bool) -> R
 
     let calibration_required = matches!(backend, DisplayBackend::St7735)
         && !has_override
-        && !config.display_calibration_completed;
+        && (!config.display_calibration_completed || config.display_wizard_incomplete);
 
     let geometry_verified = !matches!(backend, DisplayBackend::St7735)
         || has_override
-        || config.display_calibration_completed;
+        || (config.display_calibration_completed && !config.display_wizard_incomplete);
     if !geometry_verified {
         warnings.push(DisplayWarning::DisplayUnverifiedGeometry);
     }
@@ -621,6 +621,36 @@ mod tests {
 
         let probe = resolve_runtime_probe(&mut cfg, false);
         assert!(!probe.pending_calibration, "wizard must not launch after calibration is complete");
+    }
+
+    #[test]
+    fn calibration_required_when_wizard_marked_incomplete() {
+        let mut cfg = DisplayConfig {
+            display_probe_completed: true,
+            display_calibration_completed: true,
+            display_wizard_incomplete: true,
+            display_tests_version: DISPLAY_TESTS_VERSION,
+            effective_width: Some(128),
+            effective_height: Some(128),
+            effective_offset_x: Some(0),
+            effective_offset_y: Some(0),
+            effective_backend: Some(DisplayBackend::St7735),
+            effective_rotation: Some(DisplayRotation::Landscape),
+            display_profile_fingerprint: Some(build_fingerprint(
+                &DisplayBackend::St7735,
+                &DisplayRotation::Landscape,
+                128,
+                128,
+                0,
+            )),
+            ..DisplayConfig::default()
+        };
+
+        let probe = resolve_runtime_probe(&mut cfg, false);
+        assert!(
+            probe.pending_calibration,
+            "wizard must relaunch when calibration was staged but not finalized"
+        );
     }
 
     #[test]
@@ -1198,7 +1228,8 @@ impl Display {
         config.calibrated_right = Some(right);
         config.calibrated_bottom = Some(bottom);
         config.last_calibrated_at = Some(Utc::now().to_rfc3339());
-        config.display_calibration_completed = true;
+        config.display_wizard_incomplete = true;
+        config.display_calibration_completed = false;
         config.display_geometry_source = Some(DisplayGeometrySource::Calibrated);
         config.effective_width = Some(width);
         config.effective_height = Some(height);
@@ -1206,6 +1237,17 @@ impl Display {
         config.effective_offset_y = Some(self.diagnostics.effective_offset_y + top);
         config.calibration_version = config.calibration_version.max(1);
 
+        self.pending_calibration = true;
+        self.probe_dirty = true;
+        Ok(())
+    }
+
+    pub fn finalize_calibration(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        if !config.has_calibration_edges() {
+            anyhow::bail!("cannot finalize display calibration without all calibration edges");
+        }
+        config.display_wizard_incomplete = false;
+        config.display_calibration_completed = true;
         self.pending_calibration = false;
         self.probe_dirty = true;
         self.run_display_discovery(config)?;
@@ -2299,7 +2341,20 @@ impl Display {
         config.calibrated_top = Some(top);
         config.calibrated_right = Some(right);
         config.calibrated_bottom = Some(bottom);
+        config.display_wizard_incomplete = true;
+        config.display_calibration_completed = false;
+        self.pending_calibration = true;
+        self.probe_dirty = true;
+        Ok(())
+    }
+
+    pub fn finalize_calibration(&mut self, config: &mut DisplayConfig) -> Result<()> {
+        if !config.has_calibration_edges() {
+            anyhow::bail!("cannot finalize display calibration without all calibration edges");
+        }
+        config.display_wizard_incomplete = false;
         config.display_calibration_completed = true;
+        self.pending_calibration = false;
         self.probe_dirty = true;
         Ok(())
     }

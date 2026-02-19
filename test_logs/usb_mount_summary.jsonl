@@ -1,3 +1,0 @@
-{"ts": "2026-02-15T20:55:02+00:00", "status": "pass", "name": "usb_detect_preflight", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/usb_detect_preflight.json"}
-{"ts": "2026-02-15T20:55:04+00:00", "status": "fail", "name": "usb_mount_read_write", "detail": "rc=1; saved=/var/tmp/rustyjack-tests/20260215-204314/usb_mount/artifacts/usb_mount_rw.json"}
-{"ts": "2026-02-15T20:55:06+00:00", "status": "info", "name": "usb_mount_invalid_device", "detail": "rc=1"}
