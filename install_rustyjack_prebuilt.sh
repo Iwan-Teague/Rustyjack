@@ -231,6 +231,35 @@ verify_usb_filesystem_support() {
 if [ "$(id -u)" -ne 0 ]; then
   fail "This installer must run as root."
 fi
+
+setup_install_logging() {
+  if [ "${RJ_INSTALL_LOG_DISABLE:-0}" = "1" ]; then
+    return 0
+  fi
+
+  local script_name log_root log_dir ts log_path latest_any latest_script
+  script_name="$(basename "$0" .sh)"
+  log_root="${RUNTIME_ROOT:-/var/lib/rustyjack}"
+  log_dir="${RJ_INSTALL_LOG_DIR:-${log_root%/}/logs/install}"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  log_path="${log_dir}/${script_name}_${ts}.log"
+  latest_any="${log_dir}/install_latest.log"
+  latest_script="${log_dir}/${script_name}_latest.log"
+
+  mkdir -p "$log_dir" || fail "Unable to create installer log directory: $log_dir"
+  chmod 750 "$log_dir" 2>/dev/null || true
+  touch "$log_path" || fail "Unable to create installer log file: $log_path"
+  chmod 640 "$log_path" 2>/dev/null || true
+
+  exec > >(tee -a "$log_path") 2>&1
+  export RUSTYJACK_INSTALL_LOG_PATH="$log_path"
+
+  ln -sfn "$log_path" "$latest_any" 2>/dev/null || true
+  ln -sfn "$log_path" "$latest_script" 2>/dev/null || true
+  info "Installer log: $log_path"
+}
+
+setup_install_logging
 export DEBIAN_FRONTEND=noninteractive
 if [ -r /etc/os-release ]; then
   . /etc/os-release

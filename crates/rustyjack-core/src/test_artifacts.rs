@@ -23,6 +23,8 @@ const LOG_TAIL_LINES: usize = 400;
 const LOG_TRUNCATE_THRESHOLD: u64 = 64 * 1024;
 /// Section delimiter for plaintext log.
 const SECTION_DELIM: &str = "================================================================";
+/// Optional subdirectory in run_dir where installer logs are copied.
+const INSTALL_LOGS_DIR_NAME: &str = "install_logs";
 
 /// Build a plaintext "all logs" file from the test run directory.
 ///
@@ -70,7 +72,9 @@ pub fn build_plaintext_logs(
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     if let Some(name) = entry.file_name().to_str() {
-                        suites.push(name.to_string());
+                        if name != INSTALL_LOGS_DIR_NAME {
+                            suites.push(name.to_string());
+                        }
                     }
                 }
             }
@@ -88,6 +92,9 @@ pub fn build_plaintext_logs(
             append_file_streaming(&summary_path, &mut writer, None)?;
             writeln!(writer)?;
         }
+
+        // Optional installer logs collected under run_dir/install_logs
+        append_install_logs_section(run_dir, &mut writer)?;
 
         // Per-suite sections
         for suite_name in &suites {
@@ -298,6 +305,48 @@ fn append_file_head_tail(
     Ok(())
 }
 
+fn append_install_logs_section(run_dir: &Path, writer: &mut impl Write) -> Result<()> {
+    let install_dir = run_dir.join(INSTALL_LOGS_DIR_NAME);
+    if !install_dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&install_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+
+    if files.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(writer, "{}", SECTION_DELIM)?;
+    writeln!(writer, "INSTALLER LOGS")?;
+    writeln!(writer, "{}", SECTION_DELIM)?;
+    for file in files {
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        writeln!(writer, "--- {}/{} ---", INSTALL_LOGS_DIR_NAME, name)?;
+        let size = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+        if size > LOG_TRUNCATE_THRESHOLD {
+            append_file_head_tail(&file, writer, LOG_HEAD_LINES, LOG_TAIL_LINES)?;
+        } else {
+            append_file_streaming(&file, writer, None)?;
+        }
+        writeln!(writer)?;
+    }
+
+    Ok(())
+}
+
 /// Build a ZIP archive of the run directory using the `zip` crate.
 /// - Archive is created outside run_dir (in temp), then moved in.
 /// - Uses relative paths inside the archive.
@@ -439,6 +488,29 @@ mod tests {
         assert!(content.contains("SUITE: suite_b"));
         assert!(content.contains("# Suite A Report"));
         assert!(content.contains("b_line 1"));
+    }
+
+    #[test]
+    fn test_plaintext_logs_include_install_logs() {
+        let tmp = TempDir::new().unwrap();
+        let run_dir = tmp.path().join("run_install");
+        fs::create_dir_all(&run_dir).unwrap();
+        setup_run_dir(&run_dir, "install");
+
+        let install_dir = run_dir.join(INSTALL_LOGS_DIR_NAME);
+        fs::create_dir_all(&install_dir).unwrap();
+        fs::write(
+            install_dir.join("install_latest.log"),
+            "[INFO] installer start\n[INFO] installer done\n",
+        )
+        .unwrap();
+
+        let parts = build_plaintext_logs(&run_dir, "install", None).unwrap();
+        assert_eq!(parts.len(), 1);
+        let content = fs::read_to_string(&parts[0]).unwrap();
+        assert!(content.contains("INSTALLER LOGS"));
+        assert!(content.contains("install_logs/install_latest.log"));
+        assert!(content.contains("[INFO] installer done"));
     }
 
     #[test]

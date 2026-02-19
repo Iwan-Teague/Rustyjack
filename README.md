@@ -285,6 +285,7 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 3. Clone the project: `git clone https://github.com/Iwan-Teague/Rusty-Jack.git Rustyjack && cd Rustyjack`.
 4. Run the installer: `chmod +x install_rustyjack.sh && ./install_rustyjack.sh`
    - Installs packages: base runtime (`wpa_supplicant`, git, i2c-tools, curl; firmware for Realtek/Atheros/Ralink as available). Prebuilt/USB installs also include `hostapd`, `dnsmasq`, `isc-dhcp-client`, `rfkill`. Source builds add build toolchain (`build-essential`, `pkg-config`, `libssl-dev`, DKMS toolchain) and kernel headers when available.
+   - Writes a full installer transcript to `/var/lib/rustyjack/logs/install/<installer>_<timestamp>.log` and updates `/var/lib/rustyjack/logs/install/install_latest.log`.
    - **Removes NetworkManager**: Runs `apt-get purge network-manager` to completely remove NetworkManager from the system (not just disabled).
    - Enables I2C/SPI overlays, `dtoverlay=spi0-2cs`, and GPIO pull-ups for all buttons.
    - Ensures ~2 GB swap for compilation, builds `rustyjack-ui` (release), installs to `/usr/local/bin/`.
@@ -292,9 +293,11 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
    - Installs Wi-Fi driver helper scripts + udev rule, sets `RUSTYJACK_ROOT=/var/lib/rustyjack`, installs/enables systemd units (typically `rustyjackd.service` + `rustyjack-ui.service`; prebuilt may use `rustyjackd.socket`), starts services, and reboots unless `SKIP_REBOOT=1` or `NO_REBOOT=1`.
    - **Claims `/etc/resolv.conf`**: Symlinks to `/var/lib/rustyjack/resolv.conf` and disables competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). NetworkManager is completely removed to prevent DNS conflicts.
    - Remounts `/` read-write if needed on fresh images to allow installs/edits.
+   - `scripts/rj_run_tests.sh` copies installer logs into each run under `<results_root>/install_logs/`; those files are included in Discord artifact uploads and the consolidated `rustyjack_<run_id>_results.zip`.
 5. After reboot, the LCD shows the menu. Service status: `systemctl status rustyjack-ui`.
 
 `install_rustyjack_dev.sh` is available for development setups and follows the same dependency/build steps.
+`install_rustyjack.sh` and `install_rustyjack_dev.sh` now compile on-device, then hand off to `install_rustyjack_prebuilt.sh` for final provisioning so service setup/runtime layout remain identical across installers (USB prebuilt discovery is bypassed when `PREBUILT_DIR` is injected by source/dev installers).
 
 ## Configuration & Paths
 
