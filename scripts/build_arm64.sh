@@ -296,6 +296,132 @@ selected_binaries_up_to_date() {
     return 0
 }
 
+# Called after a successful build: performs the actual file copy.
+invoke_usb_export() {
+    local src_dir="$1"
+
+    [ -n "$USB_EXPORT_DEST" ] || return 0
+
+    echo "Copying binaries to $USB_EXPORT_DEST ..."
+
+    if [ -d "$USB_EXPORT_DEST" ]; then
+        echo "Removing existing files in $USB_EXPORT_DEST ..."
+        rm -rf "${USB_EXPORT_DEST:?}"/*
+    fi
+
+    if ! mkdir -p "$USB_EXPORT_DEST"; then
+        echo "ERROR: Failed to create directory $USB_EXPORT_DEST" >&2
+        return 1
+    fi
+
+    local files=("$src_dir"/*)
+    local total_files=0
+    for f in "${files[@]}"; do
+        [ -f "$f" ] && total_files=$((total_files + 1))
+    done
+
+    local current_file=0
+    local failed=0
+
+    for f in "${files[@]}"; do
+        [ -f "$f" ] || continue
+        current_file=$((current_file + 1))
+        local fname
+        fname="$(basename "$f")"
+        local fsize
+        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
+        local fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
+
+        echo "  [$current_file/$total_files] $fname ($fsize_mb MB)"
+
+        local dest_path="$USB_EXPORT_DEST/$fname"
+        if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
+            if pv -p -s "$fsize" "$f" > "$dest_path"; then
+                true
+            else
+                echo "ERROR: Failed to copy $fname" >&2
+                failed=1
+            fi
+        else
+            if cp -f "$f" "$dest_path"; then
+                echo "    [##################################################] 100%"
+            else
+                echo "ERROR: Failed to copy $fname" >&2
+                failed=1
+            fi
+        fi
+    done
+
+    echo ""
+    if [ "$failed" -eq 0 ]; then
+        echo "USB export complete: $USB_EXPORT_DEST"
+        if [ -n "$USB_AUTO_EJECT" ] && [ "$USB_AUTO_EJECT" = "1" ]; then
+            echo "Ejecting USB drive..."
+
+            # Flush all pending writes to disk first
+            sync
+            sleep 1
+
+            # Get the mount point - more robust approach for both Linux and macOS
+            local mount_point
+            # Use df -P for POSIX format (consistent columns across platforms)
+            mount_point=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
+
+            if [ -z "$mount_point" ]; then
+                # Fallback: use last column (works when df output has odd formatting)
+                mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | tail -1 | awk '{print $NF}')
+            fi
+
+            if [ -n "$mount_point" ]; then
+                # Detect OS for appropriate eject command
+                local os_type
+                os_type=$(uname -s)
+
+                case "$os_type" in
+                    Darwin)
+                        # macOS: use diskutil for proper ejection
+                        local device
+                        device=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
+                        if [ -n "$device" ]; then
+                            if diskutil eject "$device" 2>/dev/null; then
+                                echo "USB drive ejected successfully. Safe to remove."
+                            else
+                                echo "Failed to eject USB drive. Please eject manually with: diskutil eject $device"
+                            fi
+                        else
+                            echo "Could not determine USB device. Please eject manually."
+                        fi
+                        ;;
+                    Linux)
+                        # Linux: use umount
+                        if umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully. Safe to remove."
+                        elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully (required sudo). Safe to remove."
+                        else
+                            echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
+                        fi
+                        ;;
+                    *)
+                        # Unknown OS: try umount anyway
+                        if umount "$mount_point" 2>/dev/null; then
+                            echo "USB drive ejected successfully. Safe to remove."
+                        else
+                            echo "Failed to eject USB drive. Please eject manually with: umount $mount_point"
+                        fi
+                        ;;
+                esac
+            else
+                echo "Could not determine USB mount point. Please eject manually."
+            fi
+        else
+            echo "Remember to eject the USB drive before removing it."
+        fi
+    else
+        echo "USB export completed with errors." >&2
+    fi
+}
+
 if [ "$#" -gt 0 ]; then
     CMD=("$@")
 else
@@ -547,129 +673,3 @@ EOF
     # --- USB export (destination selected at startup) ---
     invoke_usb_export "$DEST_DIR"
 fi
-
-# Called after a successful build: performs the actual file copy.
-invoke_usb_export() {
-    local src_dir="$1"
-
-    [ -n "$USB_EXPORT_DEST" ] || return 0
-
-    echo "Copying binaries to $USB_EXPORT_DEST ..."
-
-    if [ -d "$USB_EXPORT_DEST" ]; then
-        echo "Removing existing files in $USB_EXPORT_DEST ..."
-        rm -rf "${USB_EXPORT_DEST:?}"/*
-    fi
-
-    if ! mkdir -p "$USB_EXPORT_DEST"; then
-        echo "ERROR: Failed to create directory $USB_EXPORT_DEST" >&2
-        return 1
-    fi
-
-    local files=("$src_dir"/*)
-    local total_files=0
-    for f in "${files[@]}"; do
-        [ -f "$f" ] && total_files=$((total_files + 1))
-    done
-
-    local current_file=0
-    local failed=0
-
-    for f in "${files[@]}"; do
-        [ -f "$f" ] || continue
-        current_file=$((current_file + 1))
-        local fname
-        fname="$(basename "$f")"
-        local fsize
-        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "0")
-        local fsize_mb=$(awk "BEGIN {printf \"%.2f\", $fsize/1024/1024}")
-        
-        echo "  [$current_file/$total_files] $fname ($fsize_mb MB)"
-        
-        local dest_path="$USB_EXPORT_DEST/$fname"
-        if command -v pv >/dev/null 2>&1 && [ "$fsize" -gt 1048576 ]; then
-            if pv -p -s "$fsize" "$f" > "$dest_path"; then
-                true
-            else
-                echo "ERROR: Failed to copy $fname" >&2
-                failed=1
-            fi
-        else
-            if cp -f "$f" "$dest_path"; then
-                echo "    [##################################################] 100%"
-            else
-                echo "ERROR: Failed to copy $fname" >&2
-                failed=1
-            fi
-        fi
-    done
-
-    echo ""
-    if [ "$failed" -eq 0 ]; then
-        echo "USB export complete: $USB_EXPORT_DEST"
-        if [ -n "$USB_AUTO_EJECT" ] && [ "$USB_AUTO_EJECT" = "1" ]; then
-            echo "Ejecting USB drive..."
-            
-            # Flush all pending writes to disk first
-            sync
-            sleep 1
-            
-            # Get the mount point - more robust approach for both Linux and macOS
-            local mount_point
-            # Use df -P for POSIX format (consistent columns across platforms)
-            mount_point=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $6}')
-            
-            if [ -z "$mount_point" ]; then
-                # Fallback: use last column (works when df output has odd formatting)
-                mount_point=$(df "$USB_EXPORT_DEST" 2>/dev/null | tail -1 | awk '{print $NF}')
-            fi
-            
-            if [ -n "$mount_point" ]; then
-                # Detect OS for appropriate eject command
-                local os_type
-                os_type=$(uname -s)
-                
-                case "$os_type" in
-                    Darwin)
-                        # macOS: use diskutil for proper ejection
-                        local device
-                        device=$(df -P "$USB_EXPORT_DEST" 2>/dev/null | awk 'NR==2 {print $1}')
-                        if [ -n "$device" ]; then
-                            if diskutil eject "$device" 2>/dev/null; then
-                                echo "USB drive ejected successfully. Safe to remove."
-                            else
-                                echo "Failed to eject USB drive. Please eject manually with: diskutil eject $device"
-                            fi
-                        else
-                            echo "Could not determine USB device. Please eject manually."
-                        fi
-                        ;;
-                    Linux)
-                        # Linux: use umount
-                        if umount "$mount_point" 2>/dev/null; then
-                            echo "USB drive ejected successfully. Safe to remove."
-                        elif command -v sudo >/dev/null 2>&1 && sudo umount "$mount_point" 2>/dev/null; then
-                            echo "USB drive ejected successfully (required sudo). Safe to remove."
-                        else
-                            echo "Failed to eject USB drive. Please eject manually with: sudo umount $mount_point"
-                        fi
-                        ;;
-                    *)
-                        # Unknown OS: try umount anyway
-                        if umount "$mount_point" 2>/dev/null; then
-                            echo "USB drive ejected successfully. Safe to remove."
-                        else
-                            echo "Failed to eject USB drive. Please eject manually with: umount $mount_point"
-                        fi
-                        ;;
-                esac
-            else
-                echo "Could not determine USB mount point. Please eject manually."
-            fi
-        else
-            echo "Remember to eject the USB drive before removing it."
-        fi
-    else
-        echo "USB export completed with errors." >&2
-    fi
-}
