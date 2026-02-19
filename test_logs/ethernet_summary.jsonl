@@ -1,8 +1,0 @@
-{"ts": "2026-02-15T20:43:57+00:00", "status": "pass", "name": "ip_link", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/ip_link.txt"}
-{"ts": "2026-02-15T20:43:58+00:00", "status": "pass", "name": "ip_addr", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/ip_addr.txt"}
-{"ts": "2026-02-15T20:43:58+00:00", "status": "pass", "name": "ss_tunap", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/ss_tunap.txt"}
-{"ts": "2026-02-15T20:43:59+00:00", "status": "fail", "name": "eth_discover_eth0", "detail": "rc=101; saved=/var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_discover_eth0.json"}
-{"ts": "2026-02-15T20:44:00+00:00", "status": "pass", "name": "eth_portscan_eth0", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_portscan_eth0.json"}
-{"ts": "2026-02-15T20:44:22+00:00", "status": "pass", "name": "eth_inventory_eth0", "detail": "saved=/var/tmp/rustyjack-tests/20260215-204314/ethernet/artifacts/eth_inventory_eth0.json"}
-{"ts": "2026-02-15T20:44:23+00:00", "status": "info", "name": "eth_discover_bad_iface", "detail": "rc=1"}
-{"ts": "2026-02-15T20:44:23+00:00", "status": "info", "name": "eth_portscan_bad_target", "detail": "rc=1"}

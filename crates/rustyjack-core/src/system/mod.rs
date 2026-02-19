@@ -3020,6 +3020,42 @@ pub fn restart_system_service(service: &str) -> Result<()> {
         })
 }
 
+pub fn start_system_service(service: &str) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::systemd_start_unit(service)
+                    .await
+                    .map_err(|e| anyhow!("Failed to start {service}: {e}"))
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::systemd_start_unit(service)
+                    .await
+                    .map_err(|e| anyhow!("Failed to start {service}: {e}"))
+            })
+        })
+}
+
+pub fn stop_system_service(service: &str) -> Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::systemd_stop_unit(service)
+                    .await
+                    .map_err(|e| anyhow!("Failed to stop {service}: {e}"))
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::systemd_stop_unit(service)
+                    .await
+                    .map_err(|e| anyhow!("Failed to stop {service}: {e}"))
+            })
+        })
+}
+
 pub fn start_bridge_pair(interface_a: &str, interface_b: &str) -> Result<()> {
     let _ = netlink_set_interface_down("br0");
     let _ = netlink_bridge_delete("br0");

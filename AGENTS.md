@@ -24,6 +24,14 @@ Software/runtime expectations:
   - Disable competing DNS managers (systemd-resolved, dhcpcd, resolvconf if present). This ensures Rustyjack has sole control of DNS on the dedicated device.
   - Ensure `/var/lib/rustyjack/logs` exists and is owned by `rustyjack-ui:rustyjack` so the UI can write logs.
 
+Network interface isolation policy (non-negotiable):
+- Exactly one non-loopback uplink may be active at a time (wired or wireless).
+- All non-selected interfaces must be forced DOWN and made non-interactable.
+- Non-selected Wi-Fi must be rfkill-blocked, link-down, and have no active wpa_supplicant/DHCP activity.
+- Non-selected wired interfaces must be link-down with addresses/routes flushed.
+- The `Network Interfaces` UI screen is blocking: user cannot exit until exclusivity verification passes.
+- On isolation error, UI remains blocked with retry/reboot controls; back navigation is only allowed when the system is in a safe all-down state.
+
 MAC randomization flow:
 - UI uses `rustyjack-evasion::MacManager` with vendor-aware policy engine for secure, locally administered MACs. Prefers vendor-matched OUIs based on the current interface's OUI. After changing MAC it triggers DHCP renewal via netlink; reconnect is best-effort and does not rely on `nmcli`.
 
@@ -74,6 +82,7 @@ Systemd services (5 + socket):
 
 Important implementation notes:
 - MAC randomization: `rustyjack-evasion::MacManager` sets locally administered, unicast MACs with CSPRNG; vendor-match OUI from the current interface when available.
+- Daemon IPC socket reliability is required: when `rustyjackd.service` is active, `/run/rustyjack/rustyjackd.sock` must exist and be reachable.
 - Display runtime: effective geometry is cached in `gui_conf.json` (`display` block). Manual reruns/reset are under `Settings -> Display`.
 - Display warnings emitted when applicable: `DISPLAY_MODE_MISMATCH`, `DISPLAY_UNVERIFIED_GEOMETRY`, `UNSUPPORTED_DISPLAY_SIZE`.
 - UI dialogs/windows must require explicit user confirmation before advancing; do not auto-dismiss after a timeout or hide errors without acknowledgment.

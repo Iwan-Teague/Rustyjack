@@ -537,6 +537,8 @@ pub struct DisplayConfig {
     #[serde(default)]
     pub display_calibration_completed: bool,
     #[serde(default)]
+    pub display_wizard_incomplete: bool,
+    #[serde(default)]
     pub display_geometry_source: Option<DisplayGeometrySource>,
     #[serde(default)]
     pub effective_width: Option<u32>,
@@ -574,6 +576,7 @@ impl Default for DisplayConfig {
             last_calibrated_at: None,
             display_probe_completed: false,
             display_calibration_completed: false,
+            display_wizard_incomplete: false,
             display_geometry_source: None,
             effective_width: None,
             effective_height: None,
@@ -626,7 +629,15 @@ impl DisplayConfig {
             changed = true;
         }
 
-        if self.has_calibration_edges() && !self.display_calibration_completed {
+        if self.display_wizard_incomplete && self.display_calibration_completed {
+            self.display_calibration_completed = false;
+            changed = true;
+        }
+
+        if self.has_calibration_edges()
+            && !self.display_calibration_completed
+            && !self.display_wizard_incomplete
+        {
             self.display_calibration_completed = true;
             changed = true;
         }
@@ -648,12 +659,14 @@ impl DisplayConfig {
         self.calibrated_bottom = None;
         self.last_calibrated_at = None;
         self.display_calibration_completed = false;
+        self.display_wizard_incomplete = false;
         self.display_geometry_source = None;
     }
 
     pub fn clear_cache(&mut self) {
         self.display_probe_completed = false;
         self.display_calibration_completed = false;
+        self.display_wizard_incomplete = false;
         self.display_geometry_source = None;
         self.effective_width = None;
         self.effective_height = None;

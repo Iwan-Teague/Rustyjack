@@ -22,7 +22,7 @@ impl App {
         if active_interface.is_empty() {
             return self.show_message(
                 "WiFi Scan",
-                ["No active interface", "", "Run Hardware Sanity Check first"],
+                ["No active interface", "", "Run Network Interfaces first"],
             );
         }
 
@@ -217,7 +217,7 @@ impl App {
         let active_iface = if self.config.settings.active_network_interface.is_empty() {
             self.show_message(
                 "Wi-Fi",
-                ["No active interface", "", "Run Hardware Sanity Check first"],
+                ["No active interface", "", "Run Network Interfaces first"],
             )?;
             return Ok(());
         } else {

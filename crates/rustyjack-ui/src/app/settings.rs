@@ -1,9 +1,9 @@
 use std::{env, fs};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use rustyjack_commands::{
-    Commands, DiscordCommand, DiscordSendArgs, HardwareCommand, NotifyCommand,
+    Commands, DiscordCommand, DiscordSendArgs, NotifyCommand,
 };
 use rustyjack_encryption::clear_encryption_key;
 use zeroize::Zeroize;
@@ -423,6 +423,14 @@ impl App {
         self.display
             .apply_calibration(&mut self.config.display, left, top, right, bottom)?;
         let path = self.root.join("gui_conf.json");
+        // Stage calibration as incomplete and fsync it first. If the UI crashes
+        // before finalize, startup will resume the wizard instead of skipping it.
+        self.save_config_file(&path)?;
+        if let Err(err) = self.display.finalize_calibration(&mut self.config.display) {
+            self.config.display.display_wizard_incomplete = true;
+            self.config.display.display_calibration_completed = false;
+            return Err(err).context("failed to finalize display calibration");
+        }
         self.save_config_file(&path)?;
         self.display.reset_probe_dirty();
 
@@ -704,158 +712,6 @@ impl App {
     }
 
     pub(crate) fn show_hardware_detect(&mut self) -> Result<()> {
-        self.show_progress(
-            "Hardware Sanity Check",
-            ["Detecting interfaces...", "Please wait"],
-        )?;
-
-        match self
-            .core
-            .dispatch(Commands::Hardware(HardwareCommand::Detect))
-        {
-            Ok((_, data)) => {
-                let eth_count = data
-                    .get("ethernet_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let wifi_count = data.get("wifi_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                let other_count = data
-                    .get("other_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let sanity_overall = data
-                    .get("sanity")
-                    .and_then(|v| v.get("overall"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("UNKNOWN");
-
-                let ethernet_ports = data
-                    .get("ethernet_ports")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                let wifi_modules = data
-                    .get("wifi_modules")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-
-                // Build list of detected interfaces (clickable)
-                let mut all_interfaces = Vec::new();
-                let mut labels = Vec::new();
-
-                let active_interface = self.config.settings.active_network_interface.clone();
-
-                for port in &ethernet_ports {
-                    if let Some(name) = port.get("name").and_then(|v| v.as_str()) {
-                        let label = if name == active_interface {
-                            format!("* {}", name)
-                        } else {
-                            name.to_string()
-                        };
-                        labels.push(label);
-                        all_interfaces.push(port.clone());
-                    }
-                }
-                for module in &wifi_modules {
-                    if let Some(name) = module.get("name").and_then(|v| v.as_str()) {
-                        let label = if name == active_interface {
-                            format!("* {}", name)
-                        } else {
-                            name.to_string()
-                        };
-                        labels.push(label);
-                        all_interfaces.push(module.clone());
-                    }
-                }
-
-                // If nothing to show, just present summary
-                if labels.is_empty() {
-                    return self.show_message(
-                        "Hardware Sanity Check",
-                        [
-                            format!("Ethernet: {}", eth_count),
-                            format!("WiFi: {}", wifi_count),
-                            format!("Other: {}", other_count),
-                            "".to_string(),
-                            "No interfaces detected".to_string(),
-                        ],
-                    );
-                }
-
-                // Add summary at top
-                let mut summary_lines = vec![
-                    format!("Sanity: {}", sanity_overall),
-                    format!("Ethernet: {}", eth_count),
-                    format!("WiFi: {}", wifi_count),
-                    format!("Other: {}", other_count),
-                ];
-                summary_lines.push("".to_string());
-                summary_lines.push("Select to set active".to_string());
-
-                self.show_message(
-                    "Hardware Sanity Check",
-                    summary_lines.iter().map(|s| s.as_str()),
-                )?;
-
-                if sanity_overall != "OK" {
-                    let mut issue_lines = vec!["Hardware Sanity".to_string()];
-                    if let Some(checks) = data
-                        .get("sanity")
-                        .and_then(|v| v.get("checks"))
-                        .and_then(|v| v.as_array())
-                    {
-                        for check in checks {
-                            let status = check
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("UNKNOWN");
-                            if status == "OK" {
-                                continue;
-                            }
-                            let name = check
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("check");
-                            issue_lines.push(format!(
-                                "{}: {}",
-                                status,
-                                shorten_for_display(name, 16)
-                            ));
-                            if let Some(path) = check
-                                .get("missing_paths")
-                                .and_then(|v| v.as_array())
-                                .and_then(|arr| arr.first())
-                                .and_then(|v| v.as_str())
-                            {
-                                issue_lines.push(shorten_for_display(path, 18));
-                            }
-                            if issue_lines.len()
-                                >= self.display.dialog_visible_lines().saturating_sub(1)
-                            {
-                                issue_lines.push("More...".to_string());
-                                break;
-                            }
-                        }
-                    }
-                    self.show_message("Hardware Sanity", issue_lines.iter().map(|s| s.as_str()))?;
-                }
-
-                // Let user select interface
-                if let Some(idx) = self.choose_from_menu("Set Active Interface", &labels)? {
-                    if let Some(selected) = all_interfaces.get(idx) {
-                        if let Some(name) = selected.get("name").and_then(|v| v.as_str()) {
-                            self.config.settings.active_network_interface = name.to_string();
-                            self.save_config()?;
-                            return self
-                                .show_message("Active Interface", [format!("Set to: {}", name)]);
-                        }
-                    }
-                }
-
-                Ok(())
-            }
-            Err(e) => self.show_message("Hardware Sanity Check", [format!("Error: {}", e)]),
-        }
+        self.select_active_interface()
     }
 }

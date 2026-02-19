@@ -128,7 +128,10 @@ pub use station::backend::StationBackendKind;
 #[cfg(target_os = "linux")]
 pub use supplicant::{StationConfig, StationManager, StationOutcome, StationState};
 #[cfg(target_os = "linux")]
-pub use systemd::restart_unit as systemd_restart_unit;
+pub use systemd::{
+    restart_unit as systemd_restart_unit, start_unit as systemd_start_unit,
+    stop_unit as systemd_stop_unit,
+};
 #[cfg(target_os = "linux")]
 pub use wireless::{
     ChannelWidth, InterfaceMode, PhyCapabilities, TxPowerSetting, WifiScanResult, WirelessInfo,

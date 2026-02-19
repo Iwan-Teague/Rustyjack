@@ -7,6 +7,7 @@ compile_error!(
 );
 use anyhow::Result;
 use std::panic;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
@@ -40,6 +41,7 @@ use state::DaemonState;
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     let config = DaemonConfig::from_env();
+    ensure_socket_parent(&config.socket_path);
     let log_cfg = rustyjack_logging::fs::read_config(&config.root_path);
     let _logging_guards = rustyjack_logging::init("rustyjackd", &config.root_path, &log_cfg)?;
 
@@ -155,6 +157,29 @@ async fn main() -> Result<()> {
 
     info!("rustyjackd stopped");
     Ok(())
+}
+
+fn ensure_socket_parent(path: &Path) {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Some(parent) = path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            warn!(
+                "failed to create socket parent directory {}: {}",
+                parent.display(),
+                err
+            );
+            return;
+        }
+        if let Err(err) = fs::set_permissions(parent, fs::Permissions::from_mode(0o770)) {
+            warn!(
+                "failed to set socket directory permissions on {}: {}",
+                parent.display(),
+                err
+            );
+        }
+    }
 }
 
 fn spawn_retention_task(root: std::path::PathBuf, cancel: CancellationToken) {

@@ -26,6 +26,7 @@ Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joys
 - Status overlay shows CPU temp/load, memory, disk, uptime, target SSID/BSSID/channel, active interface, current/original MAC, and autopilot status if the CLI autopilot is running.
 - Firewall/NAT rules are applied via Rust nf_tables netlink (no `iptables` binary dependency).
 - Built-in Cypress/Infineon radio cannot monitor/inject; all wireless attacks require an external adapter that supports monitor + injection.
+- Network isolation is strict: exactly one uplink interface may be active at a time, and interface switches are validated before the UI unlocks.
 
 ## Architecture
 
@@ -175,12 +176,18 @@ Deep-dive reference: `docs/display_dynamic_resolution.md`.
 - **System**: Restart, Secure Shutdown (best-effort RAM wipe then poweroff), Complete Purge (removes binaries, services, loot, udev helpers; exits UI), FDE Prepare/Migrate (full-disk encryption setup), USB Mount/Unmount (with read-only/read-write mode selection).
 - **Wi-Fi driver installer**: Runs `scripts/wifi_driver_installer.sh`, detecting USB chipsets and installing/compiling drivers; progress is shown in the UI (`/var/log/rustyjack_wifi_driver.log`).
 - **Autopilot (main menu)**: Start Standard/Aggressive/Stealth/Harvest runs or stop/view status. Requires an active wired interface with link; blocked when Operation Mode is Stealth unless you choose the Stealth autopilot. Optional DNS spoof site selection when starting. Toolbar shows `AP:<mode>` while running.
-- **Wireless menus split**: Main menu → Wireless. Inside: Get Connected (Scan + Recon/Offence folders plus Connect), Post Connection (Recon + Offence items like DNS spoof/reverse shell), and Hotspot. Selecting an active interface in Hardware Detect enforces the default route and brings other interfaces down; non-selected Wi-Fi adapters are rfkill-blocked. Hotspot temporarily unblocks/uses its AP + upstream interfaces while running.
+- **Wireless menus split**: Main menu → Wireless. Inside: Get Connected (Scan + Recon/Offence folders plus Connect), Post Connection (Recon + Offence items like DNS spoof/reverse shell), and Hotspot. Selecting an active interface in Network Interfaces runs a blocking isolation flow; the user cannot leave until exclusivity is verified or a hard error is acknowledged. Non-selected Wi-Fi adapters are rfkill-blocked and forced down; non-selected wired adapters are forced down with addresses/routes flushed. Hotspot temporarily unblocks/uses its AP + upstream interfaces while running.
 
-### Hardware Detect
+### Network Interfaces (blocking)
 
-- Calls `HardwareCommand::Detect` to list wired and wireless interfaces with state and IP.
-- Lets you set the active interface used by Wi-Fi/Ethernet features (saved to `gui_conf.json`).
+- Enumerates detected interfaces (`eth*`, `wlan*`, `usb*`, etc.) with type, state, IP, and rfkill status.
+- On selection, prompts for confirmation (`Are you sure?`) and then runs a blocking progress screen.
+- The user cannot leave this screen until exclusivity is achieved:
+  - exactly one selected interface is admin-UP and routed,
+  - all non-selected interfaces are DOWN,
+  - non-selected Wi-Fi interfaces are rfkill-blocked.
+- On failure, the UI remains blocked and shows Retry/Reboot actions; Back is allowed only in a safe all-down state.
+- The selected interface is persisted to `gui_conf.json` only after successful transition.
 
 ### Wireless Access (external monitor/injection adapter required)
 
@@ -330,7 +337,7 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 
 ## Usage Tips
 
-- Run **Hardware Detect** first and set the active interface (needed for Wi-Fi and Ethernet menus).
+- Run **Network Interfaces** first and set the active interface (needed for Wi-Fi and Ethernet menus). This flow is intentionally blocking and cannot be bypassed until isolation succeeds.
 - Set a target via **Scan Networks** before deauth/evil twin/PMKID/pipelines; BSSID and channel are required for deauth/evil twin.
 - Use an external Wi-Fi adapter with monitor/injection for all wireless attacks; the built-in Zero 2 W radio is managed/AP only.
 - For Ethernet features, ensure the active interface is wired and has carrier; the UI refuses to run if the link is down.

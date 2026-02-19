@@ -808,14 +808,28 @@ DAEMON_SOCKET=/etc/systemd/system/rustyjackd.socket
 DAEMON_SERVICE=/etc/systemd/system/rustyjackd.service
 step "Installing rustyjackd socket/service..."
 
-# Socket activation is not used on dedicated devices; ensure any existing socket unit is disabled/masked
-sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
-sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+rj_sudo_tee "$DAEMON_SOCKET" >/dev/null <<UNIT
+[Unit]
+Description=Rustyjack daemon socket
+PartOf=rustyjackd.service
+
+[Socket]
+ListenStream=/run/rustyjack/rustyjackd.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=rustyjack
+DirectoryMode=0770
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
+UNIT
 
 rj_sudo_tee "$DAEMON_SERVICE" >/dev/null <<UNIT
 [Unit]
 Description=Rustyjack privileged daemon
-After=local-fs.target network.target
+Requires=rustyjackd.socket
+After=local-fs.target network.target rustyjackd.socket
 Wants=network.target
 
 [Service]
@@ -832,6 +846,7 @@ ConfigurationDirectoryMode=0770
 Group=rustyjack
 UMask=0007
 Environment=RUSTYJACK_ROOT=$RUNTIME_ROOT
+Environment=RUSTYJACKD_SOCKET=/run/rustyjack/rustyjackd.sock
 Environment=RUSTYJACK_WIFI_BACKEND=dbus
 Environment=RUSTYJACKD_OPS_PROFILE=appliance
 Environment=RUSTYJACKD_OPS_WIFI=true
@@ -853,7 +868,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$RUNTIME_ROOT /etc/resolv.conf
+ReadWritePaths=$RUNTIME_ROOT /run/rustyjack /etc/resolv.conf
 RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
@@ -1009,9 +1024,14 @@ WantedBy=multi-user.target
 UNIT
 
 sudo systemctl daemon-reload
-# Disable socket activation and prefer always-on service
-sudo systemctl disable --now rustyjackd.socket 2>/dev/null || true
-sudo systemctl mask rustyjackd.socket 2>/dev/null || true
+# Ensure socket path exists before daemon startup and keep socket activation available.
+sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
+sudo systemctl unmask rustyjackd.socket 2>/dev/null || true
+sudo systemctl enable rustyjackd.socket
+if ! sudo systemctl start rustyjackd.socket 2>/dev/null; then
+  warn "Failed to start rustyjackd.socket"
+  show_service_logs rustyjackd.socket
+fi
 if ! sudo systemctl enable --now rustyjackd.service 2>/dev/null; then
   warn "Failed to enable/start rustyjackd.service"
   show_service_logs rustyjackd.service

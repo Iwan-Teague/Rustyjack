@@ -152,12 +152,16 @@ fn build_interface_status_with_ops(
     if !exists {
         return InterfaceStatusResponse {
             interface: iface.to_string(),
+            kind: "missing".to_string(),
             exists,
             is_wireless: false,
             oper_state: "missing".to_string(),
             is_up: false,
             carrier: None,
             ip: None,
+            mac: None,
+            rfkill_blocked: None,
+            eligible: false,
             capabilities: None,
         };
     }
@@ -191,20 +195,48 @@ fn build_interface_status_with_ops(
         .ok()
         .flatten()
         .map(|addr| addr.to_string());
+    let mac = fs::read_to_string(sys_path.join("address"))
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let rfkill_blocked = if is_wireless {
+        ops.is_rfkill_blocked(iface).ok()
+    } else {
+        None
+    };
 
     let capabilities = ops
         .get_interface_capabilities(iface)
         .ok()
         .map(convert_interface_capabilities);
 
+    let kind = if is_wireless {
+        "wifi".to_string()
+    } else if capabilities
+        .as_ref()
+        .map(|caps| caps.is_physical)
+        .unwrap_or(true)
+    {
+        "ethernet".to_string()
+    } else {
+        "other".to_string()
+    };
+    let eligible = capabilities
+        .as_ref()
+        .map(|caps| caps.is_physical)
+        .unwrap_or(true);
+
     InterfaceStatusResponse {
         interface: iface.to_string(),
+        kind,
         exists,
         is_wireless,
         oper_state,
         is_up,
         carrier,
         ip,
+        mac,
+        rfkill_blocked,
+        eligible,
         capabilities,
     }
 }
@@ -855,7 +887,7 @@ pub async fn handle_request(
         }
         RequestBody::InterfacesListGet => {
             let result =
-                run_blocking("interfaces_list_get", || list_interface_statuses(true)).await;
+                run_blocking("interfaces_list_get", || list_interface_statuses(false)).await;
 
             match result {
                 Ok(interfaces) => {

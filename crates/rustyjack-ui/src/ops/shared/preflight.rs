@@ -17,7 +17,7 @@ pub fn require_not_stealth(config: &GuiConfig, context: &str) -> Result<()> {
 
 pub fn require_active_interface(config: &GuiConfig) -> Result<()> {
     if config.settings.active_network_interface.is_empty() {
-        bail!("No Wi-Fi interface set. Run Hardware Sanity Check first.");
+        bail!("No Wi-Fi interface set. Run Network Interfaces first.");
     }
     Ok(())
 }

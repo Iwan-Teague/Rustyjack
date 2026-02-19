@@ -330,7 +330,7 @@ fn main_menu() -> Vec<MenuEntry> {
         MenuEntry::new("Dashboards", MenuAction::ViewDashboards),
         MenuEntry::new("Operation Mode", MenuAction::Submenu("aops")),
         MenuEntry::new("Operations", MenuAction::Submenu("aopst")),
-        MenuEntry::new("Hardware Sanity Check", MenuAction::HardwareDetect),
+        MenuEntry::new("Network Interfaces", MenuAction::HardwareDetect),
         MenuEntry::new("Wireless", MenuAction::Submenu("aw")),
         MenuEntry::new("Ethernet", MenuAction::Submenu("aeth")),
         MenuEntry::new("Obfuscation", MenuAction::Submenu("ao")),

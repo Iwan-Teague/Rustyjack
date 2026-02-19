@@ -3,24 +3,34 @@ use std::ffi::CString;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::os::unix::net::UnixDatagram;
+use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
 use tokio::net::UnixListener;
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::config::DaemonConfig;
 
 pub fn listener_or_bind(config: &DaemonConfig) -> io::Result<UnixListener> {
     if let Some(listener) = systemd_listener()? {
+        info!(
+            "listening on unix socket: {} (systemd activation)",
+            config.socket_path.display()
+        );
         return Ok(listener);
     }
-    bind_socket(&config.socket_path, config.socket_group.as_deref())
+
+    let listener = bind_socket(&config.socket_path, config.socket_group.as_deref())?;
+    info!(
+        "listening on unix socket: {}",
+        config.socket_path.display()
+    );
+    Ok(listener)
 }
 
 fn systemd_listener() -> io::Result<Option<UnixListener>> {
@@ -53,9 +63,10 @@ fn systemd_listener() -> io::Result<Option<UnixListener>> {
 fn bind_socket(path: &Path, group: Option<&str>) -> io::Result<UnixListener> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o770));
     }
     if path.exists() {
-        fs::remove_file(path)?;
+        cleanup_stale_socket(path)?;
     }
 
     let listener = std::os::unix::net::UnixListener::bind(path)?;
@@ -69,6 +80,43 @@ fn bind_socket(path: &Path, group: Option<&str>) -> io::Result<UnixListener> {
 
     listener.set_nonblocking(true)?;
     UnixListener::from_std(listener)
+}
+
+fn cleanup_stale_socket(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "refusing to overwrite non-socket path at {}",
+                path.display()
+            ),
+        ));
+    }
+
+    match UnixStream::connect(path) {
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!("socket {} is already active", path.display()),
+        )),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            fs::remove_file(path)?;
+            Ok(())
+        }
+        Err(err) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!(
+                "socket {} exists and could not be validated as stale: {}",
+                path.display(),
+                err
+            ),
+        )),
+    }
 }
 
 fn apply_socket_group(path: &Path, group: &str) -> io::Result<()> {
@@ -188,4 +236,55 @@ fn watchdog_interval() -> Option<Duration> {
 
     let interval = Duration::from_micros(usec / 2).max(Duration::from_secs(1));
     Some(interval)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_socket_path() -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "rustyjackd-socket-test-{}-{}",
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    #[test]
+    fn bind_socket_replaces_stale_socket_file() {
+        let dir = unique_socket_path();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rustyjackd.sock");
+
+        {
+            let _stale = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        }
+
+        assert!(path.exists(), "stale socket path should remain after listener drop");
+
+        let _listener = bind_socket(&path, None).expect("bind should replace stale socket");
+        assert!(path.exists(), "socket path should exist after successful bind");
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bind_socket_refuses_active_socket() {
+        let dir = unique_socket_path();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rustyjackd.sock");
+
+        let _active = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let err = bind_socket(&path, None).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
