@@ -560,6 +560,54 @@ function Get-UsbVolumes {
     return $usbs
 }
 
+function Test-UsbDriveWritable {
+    param([string]$DriveLetter)
+
+    if (-not $DriveLetter) { return $false }
+    $drivePath = "$DriveLetter\"
+    $probePath = Join-Path $drivePath ".rj_write_test_$PID.tmp"
+    try {
+        Set-Content -Path $probePath -Value "" -NoNewline -ErrorAction Stop
+        Remove-Item -Path $probePath -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-IsAdministrator {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Try-FormatUsbDriveExFat {
+    param(
+        [string]$DriveLetter,
+        [string]$Label = "Rustyjack"
+    )
+
+    if (-not (Test-IsAdministrator)) {
+        Write-Host "  Administrator privileges are required to format $DriveLetter as exFAT." -ForegroundColor Yellow
+        return $false
+    }
+
+    $letter = $DriveLetter.TrimEnd(':')
+    try {
+        Format-Volume -DriveLetter $letter -FileSystem exFAT -NewFileSystemLabel $Label -Force -Confirm:$false -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "  Failed to format $DriveLetter as exFAT: $_" -ForegroundColor Yellow
+        return $false
+    }
+
+    Start-Sleep -Milliseconds 1000
+    return (Test-UsbDriveWritable -DriveLetter "$letter:")
+}
+
 # Called at startup: ask the user upfront and store the chosen drive letter.
 # Sets $script:UsbExportDrive to the chosen drive (e.g. "E:") or "" to skip.
 function Prompt-UsbExportEarly {
@@ -579,22 +627,101 @@ function Prompt-UsbExportEarly {
         return
     }
 
+    $writableUsbs = @()
+    $readOnlyUsbs = @()
+    foreach ($u in $usbs) {
+        if (Test-UsbDriveWritable -DriveLetter $u.DriveLetter) {
+            $writableUsbs += $u
+        } else {
+            $readOnlyUsbs += $u
+        }
+    }
+
     Write-Host ""
     Write-Host "Detected USB drives:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $usbs.Count; $i++) {
         $u = $usbs[$i]
-        Write-Host "  [$($i + 1)] $($u.DriveLetter)  $($u.Label)  ($($u.SizeMB) MB, $($u.FileSystem))" -ForegroundColor White
+        $status = if ($writableUsbs.DriveLetter -contains $u.DriveLetter) { "writable" } else { "read-only" }
+        Write-Host "  - $($u.DriveLetter)  $($u.Label)  ($($u.SizeMB) MB, $($u.FileSystem), $status)" -ForegroundColor White
     }
     Write-Host ""
 
+    if ($writableUsbs.Count -gt 0) {
+        Write-Host "Writable USB drives (eligible for export):" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $writableUsbs.Count; $i++) {
+            $u = $writableUsbs[$i]
+            Write-Host "  [$($i + 1)] $($u.DriveLetter)  $($u.Label)  ($($u.SizeMB) MB, $($u.FileSystem))" -ForegroundColor White
+        }
+        Write-Host ""
+    }
+
+    if ($readOnlyUsbs.Count -gt 0) {
+        Write-Host "Read-only USB drives (detected, but not writable):" -ForegroundColor Yellow
+        foreach ($u in $readOnlyUsbs) {
+            Write-Host "  - $($u.DriveLetter)  $($u.Label)  ($($u.SizeMB) MB, $($u.FileSystem))" -ForegroundColor White
+        }
+        Write-Host ""
+
+        $readOnlyNtfsUsbs = @($readOnlyUsbs | Where-Object {
+            $_.FileSystem -and $_.FileSystem.ToString().Trim().ToUpperInvariant() -eq "NTFS"
+        })
+        if ($readOnlyNtfsUsbs.Count -gt 0) {
+            Write-Host "NTFS is often read-only on hosts without NTFS write support." -ForegroundColor Yellow
+            $formatReply = Read-Host "Format a read-only NTFS USB as exFAT now? This erases all data [y/N]"
+            if ($formatReply -match "^(y|Y|yes|YES)$") {
+                Write-Host "NTFS read-only USB drives:" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $readOnlyNtfsUsbs.Count; $i++) {
+                    $u = $readOnlyNtfsUsbs[$i]
+                    Write-Host "  [$($i + 1)] $($u.DriveLetter)  $($u.Label)  ($($u.SizeMB) MB)" -ForegroundColor White
+                }
+                $formatSelection = Read-Host "Select a drive to format [1-$($readOnlyNtfsUsbs.Count)] (Enter to cancel)"
+                $parsedSelection = 0
+                if ([int]::TryParse($formatSelection, [ref]$parsedSelection) -and $parsedSelection -ge 1 -and $parsedSelection -le $readOnlyNtfsUsbs.Count) {
+                    $selectedFormat = $readOnlyNtfsUsbs[$parsedSelection - 1]
+                    $confirmFormat = Read-Host "Type FORMAT to erase $($selectedFormat.DriveLetter) and create exFAT"
+                    if ($confirmFormat -eq "FORMAT") {
+                        Write-Host "Formatting $($selectedFormat.DriveLetter) as exFAT..." -ForegroundColor Yellow
+                        if (Try-FormatUsbDriveExFat -DriveLetter $selectedFormat.DriveLetter -Label "Rustyjack") {
+                            Write-Host "Format complete. Re-scanning USB drives..." -ForegroundColor Green
+                            $usbs = Get-UsbVolumes
+                            $writableUsbs = @()
+                            $readOnlyUsbs = @()
+                            foreach ($u in $usbs) {
+                                if (Test-UsbDriveWritable -DriveLetter $u.DriveLetter) {
+                                    $writableUsbs += $u
+                                } else {
+                                    $readOnlyUsbs += $u
+                                }
+                            }
+                        } else {
+                            Write-Host "Format failed or drive is still read-only." -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Host "Format cancelled." -ForegroundColor Gray
+                    }
+                } else {
+                    Write-Host "Format cancelled." -ForegroundColor Gray
+                }
+            }
+        }
+        Write-Host ""
+    }
+
+    if ($writableUsbs.Count -eq 0) {
+        Write-Host "No writable USB drives detected. USB export will be skipped." -ForegroundColor Yellow
+        Write-Host "Tip: Use an exFAT/FAT32 USB, or format NTFS as exFAT in this prompt." -ForegroundColor Gray
+        $script:UsbExportDrive = ""
+        return
+    }
+
     $selection = $null
     while ($null -eq $selection) {
-        $input = Read-Host "Select a drive [1-$($usbs.Count)]"
+        $input = Read-Host "Select a writable drive [1-$($writableUsbs.Count)]"
         $parsed = 0
-        if ([int]::TryParse($input, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le $usbs.Count) {
-            $selection = $usbs[$parsed - 1]
+        if ([int]::TryParse($input, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le $writableUsbs.Count) {
+            $selection = $writableUsbs[$parsed - 1]
         } else {
-            Write-Host "Invalid selection. Please enter a number between 1 and $($usbs.Count)." -ForegroundColor Yellow
+            Write-Host "Invalid selection. Please enter a number between 1 and $($writableUsbs.Count)." -ForegroundColor Yellow
         }
     }
 
@@ -614,6 +741,11 @@ function Invoke-UsbExport {
     param([string]$Arch, [string]$Variant, [string]$SourceDir)
 
     if (-not $script:UsbExportDrive) { return }
+    if (-not (Test-UsbDriveWritable -DriveLetter $script:UsbExportDrive)) {
+        Write-Host "ERROR: Selected USB drive is not writable: $($script:UsbExportDrive)" -ForegroundColor Red
+        Write-Host "Tip: format as exFAT/FAT32 and retry." -ForegroundColor Yellow
+        return
+    }
 
     $UsbDest = Join-Path $script:UsbExportDrive "rustyjack\prebuilt\$Arch\$Variant"
     Write-Host "Copying binaries to $UsbDest ..." -ForegroundColor Cyan
