@@ -8,6 +8,7 @@
 #   PREBUILT_DIR=prebuilt/arm64/release   # relative to project root or absolute path
 #   USB_MOUNT_POINT=/mnt/usb      # where to mount removable media
 #   USB_DEVICE=/dev/sda1          # explicit USB block device to mount
+#   RUSTYJACK_INSTALL_DEFER_SERVICE_START=true  # defer daemon/UI start + isolation until reboot
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +18,7 @@ WARN_COUNT=0
 SKIP_HASH_CHECKS=0
 USB_COPY_TO_PREBUILT=0
 SPI_REBOOT_REQUIRED=0
+DEFER_SERVICE_START=0
 
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
@@ -116,6 +118,44 @@ prompt_install_options() {
     fi
   else
     info "Non-interactive shell detected; using defaults (hash checks enabled, USB copy disabled)."
+  fi
+}
+
+configure_service_start_mode() {
+  local override="${RUSTYJACK_INSTALL_DEFER_SERVICE_START:-}"
+
+  if [ -n "$override" ]; then
+    case "$override" in
+      1|true|TRUE|yes|YES|y|Y) DEFER_SERVICE_START=1 ;;
+      0|false|FALSE|no|NO|n|N) DEFER_SERVICE_START=0 ;;
+      *)
+        warn "Invalid RUSTYJACK_INSTALL_DEFER_SERVICE_START='$override' (expected true/false)."
+        warn "Falling back to auto-detection."
+        override=""
+        ;;
+    esac
+  fi
+
+  if [ -z "$override" ]; then
+    if is_remote_ssh_session; then
+      if [ -t 0 ]; then
+        if prompt_yes_no "SSH session detected. Defer daemon/UI start and isolation until reboot?" "y"; then
+          DEFER_SERVICE_START=1
+        else
+          DEFER_SERVICE_START=0
+        fi
+      else
+        DEFER_SERVICE_START=1
+      fi
+    else
+      DEFER_SERVICE_START=0
+    fi
+  fi
+
+  if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+    warn "SSH-safe mode enabled: startup/isolation deferred until reboot."
+  else
+    info "Immediate service startup enabled (install may impact active network links)."
   fi
 }
 
@@ -370,8 +410,10 @@ preserve_default_route_interface() {
     return 0
   fi
 
-  local pref_dir="$RUNTIME_ROOT/wifi"
-  local pref_path="$pref_dir/interface_preferences.json"
+  local pref_wifi_dir="$RUNTIME_ROOT/wifi"
+  local pref_wifi_path="$pref_wifi_dir/interface_preferences.json"
+  local pref_net_dir="$RUNTIME_ROOT/network"
+  local pref_net_path="$pref_net_dir/preferred_interface"
   local mac=""
   if [ -r "/sys/class/net/$iface/address" ]; then
     mac=$(cat "/sys/class/net/$iface/address" 2>/dev/null || true)
@@ -381,8 +423,8 @@ preserve_default_route_interface() {
   ts=$(date -Iseconds 2>/dev/null || date)
 
   info "Preserving default route interface: $iface"
-  mkdir -p "$pref_dir"
-  cat > "$pref_path" <<EOF
+  mkdir -p "$pref_wifi_dir" "$pref_net_dir"
+  cat > "$pref_wifi_path" <<EOF
 {
   "system_preferred": {
     "interface": "$iface",
@@ -391,6 +433,12 @@ preserve_default_route_interface() {
   }
 }
 EOF
+  printf "%s\n" "$iface" > "$pref_net_path"
+  chmod 600 "$pref_net_path" 2>/dev/null || true
+}
+
+is_remote_ssh_session() {
+  [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]
 }
 
 claim_resolv_conf() {
@@ -444,36 +492,66 @@ purge_network_manager() {
 }
 
 disable_conflicting_services() {
+  local stop_now=1
+  if is_remote_ssh_session; then
+    stop_now=0
+    warn "SSH session detected; deferring disruptive service stops until reboot to preserve connectivity"
+  fi
+
   if systemctl list-unit-files | grep -q '^systemd-resolved'; then
     warn "Disabling systemd-resolved to prevent resolv.conf rewrites"
-    sudo systemctl disable --now systemd-resolved.service 2>/dev/null || true
+    if [ "$stop_now" -eq 1 ]; then
+      sudo systemctl disable --now systemd-resolved.service 2>/dev/null || true
+    else
+      sudo systemctl disable systemd-resolved.service 2>/dev/null || true
+    fi
     sudo systemctl mask systemd-resolved.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^dhcpcd'; then
     warn "Disabling dhcpcd (Rustyjack owns DHCP)"
-    sudo systemctl disable --now dhcpcd.service 2>/dev/null || true
+    if [ "$stop_now" -eq 1 ]; then
+      sudo systemctl disable --now dhcpcd.service 2>/dev/null || true
+    else
+      sudo systemctl disable dhcpcd.service 2>/dev/null || true
+    fi
     sudo systemctl mask dhcpcd.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^resolvconf'; then
     warn "Disabling resolvconf to avoid resolv.conf churn"
-    sudo systemctl disable --now resolvconf.service 2>/dev/null || true
+    if [ "$stop_now" -eq 1 ]; then
+      sudo systemctl disable --now resolvconf.service 2>/dev/null || true
+    else
+      sudo systemctl disable resolvconf.service 2>/dev/null || true
+    fi
     sudo systemctl mask resolvconf.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^wpa_supplicant@'; then
     warn "Disabling wpa_supplicant@*.service to avoid competing WiFi ownership"
     for unit in $(systemctl list-units 'wpa_supplicant@*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}'); do
-      sudo systemctl disable --now "$unit" 2>/dev/null || true
+      if [ "$stop_now" -eq 1 ]; then
+        sudo systemctl disable --now "$unit" 2>/dev/null || true
+      else
+        sudo systemctl disable "$unit" 2>/dev/null || true
+      fi
     done
     sudo systemctl mask wpa_supplicant@.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^wpa_supplicant'; then
     warn "Disabling wpa_supplicant.service to avoid competing WiFi ownership"
-    sudo systemctl disable --now wpa_supplicant.service 2>/dev/null || true
+    if [ "$stop_now" -eq 1 ]; then
+      sudo systemctl disable --now wpa_supplicant.service 2>/dev/null || true
+    else
+      sudo systemctl disable wpa_supplicant.service 2>/dev/null || true
+    fi
     sudo systemctl mask wpa_supplicant.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^systemd-networkd'; then
     warn "Disabling systemd-networkd to avoid competing network ownership"
-    sudo systemctl disable --now systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
+    if [ "$stop_now" -eq 1 ]; then
+      sudo systemctl disable --now systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
+    else
+      sudo systemctl disable systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
+    fi
     sudo systemctl mask systemd-networkd.service systemd-networkd-wait-online.service 2>/dev/null || true
   fi
   if systemctl list-unit-files | grep -q '^systemd-rfkill'; then
@@ -833,6 +911,7 @@ copy_prebuilt_from_usb() {
 
 # Prompt for install speed options before making changes.
 prompt_install_options
+configure_service_start_mode
 
 # ---- 1: locate active config.txt ----------------------------
 CFG=/boot/firmware/config.txt; [[ -f $CFG ]] || CFG=/boot/config.txt
@@ -1925,69 +2004,84 @@ else
   done
 fi
 
+# Ensure daemon startup sees the currently routed interface as preferred.
+preserve_default_route_interface
+
 # Enable socket activation for the daemon.
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl reset-failed rustyjackd.socket rustyjackd.service 2>/dev/null || true
 sudo systemctl enable rustyjackd.socket
-if sudo systemctl start rustyjackd.socket 2>/dev/null; then
-  info "Daemon socket started successfully"
+if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+  info "Deferred starting rustyjackd.socket until reboot"
 else
-  warn "Failed to start rustyjackd.socket"
-  show_service_logs rustyjackd.socket
-  warn "Socket status:"
-  systemctl status rustyjackd.socket 2>&1 | head -n 10 | while IFS= read -r line; do
-    warn "  $line"
-  done
-fi
-
-sudo systemctl enable rustyjackd.service
-if sudo systemctl start rustyjackd.service 2>/dev/null; then
-  info "Daemon service started successfully"
-else
-  warn "Failed to start rustyjackd.service"
-  warn "Service status:"
-  systemctl status rustyjackd.service 2>&1 | head -n 10 | while IFS= read -r line; do
-    warn "  $line"
-  done
-  if cmd journalctl; then
-    warn "Recent daemon logs:"
-    journalctl -u rustyjackd.service -n 30 --no-pager 2>/dev/null | while IFS= read -r line; do
+  if sudo systemctl start rustyjackd.socket 2>/dev/null; then
+    info "Daemon socket started successfully"
+  else
+    warn "Failed to start rustyjackd.socket"
+    show_service_logs rustyjackd.socket
+    warn "Socket status:"
+    systemctl status rustyjackd.socket 2>&1 | head -n 10 | while IFS= read -r line; do
       warn "  $line"
     done
   fi
+fi
 
-  warn "Attempting manual daemon test with environment:"
-  warn "  RUSTYJACK_ROOT=$RUNTIME_ROOT"
-  warn "  (testing for 2 seconds...)"
-  timeout 5 sudo RUST_BACKTRACE=1 RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 40 | while IFS= read -r line; do
-    warn "  $line"
-  done || warn "  (manual test timed out or exited)"
+sudo systemctl enable rustyjackd.service
+if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+  info "Deferred starting rustyjackd.service until reboot"
+else
+  if sudo systemctl start rustyjackd.service 2>/dev/null; then
+    info "Daemon service started successfully"
+  else
+    warn "Failed to start rustyjackd.service"
+    warn "Service status:"
+    systemctl status rustyjackd.service 2>&1 | head -n 10 | while IFS= read -r line; do
+      warn "  $line"
+    done
+    if cmd journalctl; then
+      warn "Recent daemon logs:"
+      journalctl -u rustyjackd.service -n 30 --no-pager 2>/dev/null | while IFS= read -r line; do
+        warn "  $line"
+      done
+    fi
 
-  # Fallback: if the prebuilt daemon still panics (common for mismatched prebuilt), try rebuilding from source
-  if command -v cargo >/dev/null 2>&1; then
-    warn "Prebuilt daemon failed; attempting to rebuild rustyjackd from source as a fallback (this may take a while)..."
-    if (cd "$PROJECT_ROOT" && cargo build --release -p rustyjack-daemon); then
-      warn "Build succeeded - installing rebuilt daemon binary"
-      sudo install -Dm755 "$PROJECT_ROOT/target/release/rustyjackd" /usr/local/bin/rustyjackd || warn "Failed to install rebuilt binary"
-      sudo systemctl daemon-reload || true
-      if sudo systemctl restart rustyjackd.service 2>/dev/null; then
-        info "Rebuilt rustyjackd and restarted service successfully"
+    warn "Attempting manual daemon test with environment:"
+    warn "  RUSTYJACK_ROOT=$RUNTIME_ROOT"
+    warn "  (testing for 2 seconds...)"
+    timeout 5 sudo RUST_BACKTRACE=1 RUSTYJACK_ROOT="$RUNTIME_ROOT" /usr/local/bin/rustyjackd 2>&1 | head -n 40 | while IFS= read -r line; do
+      warn "  $line"
+    done || warn "  (manual test timed out or exited)"
+
+    # Fallback: if the prebuilt daemon still panics (common for mismatched prebuilt), try rebuilding from source
+    if command -v cargo >/dev/null 2>&1; then
+      warn "Prebuilt daemon failed; attempting to rebuild rustyjackd from source as a fallback (this may take a while)..."
+      if (cd "$PROJECT_ROOT" && cargo build --release -p rustyjack-daemon); then
+        warn "Build succeeded - installing rebuilt daemon binary"
+        sudo install -Dm755 "$PROJECT_ROOT/target/release/rustyjackd" /usr/local/bin/rustyjackd || warn "Failed to install rebuilt binary"
+        sudo systemctl daemon-reload || true
+        if sudo systemctl restart rustyjackd.service 2>/dev/null; then
+          info "Rebuilt rustyjackd and restarted service successfully"
+        else
+          warn "Rebuilt daemon installed but failed to start via systemd; start manually to inspect errors"
+        fi
       else
-        warn "Rebuilt daemon installed but failed to start via systemd; start manually to inspect errors"
+        warn "Rebuild failed - check cargo output above for details"
       fi
     else
-      warn "Rebuild failed - check cargo output above for details"
+      warn "cargo not available; cannot rebuild daemon on-device"
     fi
-  else
-    warn "cargo not available; cannot rebuild daemon on-device"
   fi
 fi
 sudo systemctl enable rustyjack-wpa_supplicant@wlan0.service
-if sudo systemctl start rustyjack-wpa_supplicant@wlan0.service 2>/dev/null; then
-  info "wpa_supplicant service started successfully"
+if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+  info "Deferred starting rustyjack-wpa_supplicant@wlan0.service until reboot"
 else
-  warn "Failed to start rustyjack-wpa_supplicant@wlan0.service"
-  show_service_logs rustyjack-wpa_supplicant@wlan0.service
+  if sudo systemctl start rustyjack-wpa_supplicant@wlan0.service 2>/dev/null; then
+    info "wpa_supplicant service started successfully"
+  else
+    warn "Failed to start rustyjack-wpa_supplicant@wlan0.service"
+    show_service_logs rustyjack-wpa_supplicant@wlan0.service
+  fi
 fi
 sudo systemctl enable rustyjack-ui.service
 sudo systemctl enable rustyjack-portal.service
@@ -1999,46 +2093,54 @@ preserve_default_route_interface
 purge_network_manager
 disable_conflicting_services
 
-# Start the services now
-info "Waiting for daemon socket before starting UI..."
-for _ in $(seq 1 10); do
-  if systemctl is-active --quiet rustyjackd.service && [ -S /run/rustyjack/rustyjackd.sock ]; then
-    break
-  fi
-  sleep 1
-done
+# Start services now unless deferred.
+if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+  info "Service startup deferred; isolation will be enforced on reboot."
+else
+  info "Waiting for daemon socket before starting UI..."
+  for _ in $(seq 1 10); do
+    if systemctl is-active --quiet rustyjackd.service && [ -S /run/rustyjack/rustyjackd.sock ]; then
+      break
+    fi
+    sleep 1
+  done
 
-if sudo systemctl start rustyjack-ui.service; then
-  info "Rustyjack UI service started successfully"
-else
-  warn "Failed to start UI service - check 'systemctl status rustyjack-ui'"
-  show_service_logs rustyjack-ui.service
-fi
-if sudo systemctl start rustyjack-portal.service; then
-  info "Rustyjack Portal service started successfully"
-else
-  warn "Failed to start Portal service - check 'systemctl status rustyjack-portal'"
-  show_service_logs rustyjack-portal.service
+  if sudo systemctl start rustyjack-ui.service; then
+    info "Rustyjack UI service started successfully"
+  else
+    warn "Failed to start UI service - check 'systemctl status rustyjack-ui'"
+    show_service_logs rustyjack-ui.service
+  fi
+  if sudo systemctl start rustyjack-portal.service; then
+    info "Rustyjack Portal service started successfully"
+  else
+    warn "Failed to start Portal service - check 'systemctl status rustyjack-portal'"
+    show_service_logs rustyjack-portal.service
+  fi
 fi
 
 # Final adjustments
 claim_resolv_conf
 check_resolv_conf
 
-step "Validating network status..."
-if cmd rustyjack; then
-  route_iface=$(default_route_interface)
-  if [ -n "$route_iface" ]; then
-    info "Ensuring active uplink via rustyjack wifi route ensure --interface $route_iface"
-  else
-    route_iface="eth0"
-    warn "Unable to detect default interface; falling back to $route_iface for ensure-route"
-  fi
-  RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack wifi route ensure --interface "$route_iface" >/dev/null 2>&1 || warn "ensure-route failed; continuing to validation"
+if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+  info "Skipping live network validation in deferred mode."
 else
-  warn "rustyjack CLI not found; skipping ensure-route"
+  step "Validating network status..."
+  if cmd rustyjack; then
+    route_iface=$(default_route_interface)
+    if [ -n "$route_iface" ]; then
+      info "Ensuring active uplink via rustyjack wifi route ensure --interface $route_iface"
+    else
+      route_iface="eth0"
+      warn "Unable to detect default interface; falling back to $route_iface for ensure-route"
+    fi
+    RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack wifi route ensure --interface "$route_iface" >/dev/null 2>&1 || warn "ensure-route failed; continuing to validation"
+  else
+    warn "rustyjack CLI not found; skipping ensure-route"
+  fi
+  validate_network_status || fail "Network validation failed"
 fi
-validate_network_status || fail "Network validation failed"
 
 # Health-check: binary
 if [ -x /usr/local/bin/$BINARY_NAME ]; then
@@ -2161,43 +2263,50 @@ info "     DHCP + DNS services (native Rust)"
 info "     ARP operations (raw sockets)"
 
 # Health-check: service status
-if systemctl is-active --quiet rustyjackd.socket; then
-  info "[OK] Daemon socket is active"
-  if [ -S /run/rustyjack/rustyjackd.sock ]; then
-    info "[OK] Socket file exists: /run/rustyjack/rustyjackd.sock"
+if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+  info "[OK] Deferred-start mode: services are enabled and will start on reboot"
+else
+  if systemctl is-active --quiet rustyjackd.socket; then
+    info "[OK] Daemon socket is active"
+    if [ -S /run/rustyjack/rustyjackd.sock ]; then
+      info "[OK] Socket file exists: /run/rustyjack/rustyjackd.sock"
+    else
+      warn "[X] Socket file missing at /run/rustyjack/rustyjackd.sock"
+    fi
   else
-    warn "[X] Socket file missing at /run/rustyjack/rustyjackd.sock"
+    warn "[X] Daemon socket is not active - run: systemctl status rustyjackd.socket"
+    show_service_logs rustyjackd.socket 50
   fi
-else
-  warn "[X] Daemon socket is not active - run: systemctl status rustyjackd.socket"
-  show_service_logs rustyjackd.socket 50
-fi
 
-if systemctl is-active --quiet rustyjackd.service; then
-  info "[OK] Daemon service is running"
-else
-  warn "[X] Daemon service is not running - run: systemctl status rustyjackd.service"
-  warn "    Check logs with: journalctl -u rustyjackd.service -n 50"
-  show_service_logs rustyjackd.service 50
-fi
+  if systemctl is-active --quiet rustyjackd.service; then
+    info "[OK] Daemon service is running"
+  else
+    warn "[X] Daemon service is not running - run: systemctl status rustyjackd.service"
+    warn "    Check logs with: journalctl -u rustyjackd.service -n 50"
+    show_service_logs rustyjackd.service 50
+  fi
 
-if systemctl is-active --quiet rustyjack-ui.service; then
-  info "[OK] UI service is running"
-else
-  warn "[X] UI service is not running - run: systemctl status rustyjack-ui.service"
-  show_service_logs rustyjack-ui.service 50
-fi
+  if systemctl is-active --quiet rustyjack-ui.service; then
+    info "[OK] UI service is running"
+  else
+    warn "[X] UI service is not running - run: systemctl status rustyjack-ui.service"
+    show_service_logs rustyjack-ui.service 50
+  fi
 
-if systemctl is-active --quiet rustyjack-portal.service; then
-  info "[OK] Portal service is running"
-else
-  warn "[NOTE] Portal service is not running (may be optional depending on configuration)"
-  show_service_logs rustyjack-portal.service 50
+  if systemctl is-active --quiet rustyjack-portal.service; then
+    info "[OK] Portal service is running"
+  else
+    warn "[NOTE] Portal service is not running (may be optional depending on configuration)"
+    show_service_logs rustyjack-portal.service 50
+  fi
 fi
 
 info "Prebuilt installation finished."
 if [ "${NO_REBOOT:-0}" = "1" ]; then
   info "NO_REBOOT=1 set - installer finished without reboot."
+  if [ "$DEFER_SERVICE_START" -eq 1 ]; then
+    warn "Deferred mode is active; reboot is required before services/isolation start."
+  fi
   if [ "$SPI_REBOOT_REQUIRED" -eq 1 ]; then
     warn "Manual reboot required for SPI device availability."
   fi

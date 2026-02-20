@@ -2,9 +2,7 @@ use std::{env, fs};
 
 use anyhow::{bail, Context, Result};
 
-use rustyjack_commands::{
-    Commands, DiscordCommand, DiscordSendArgs, NotifyCommand,
-};
+use rustyjack_commands::{Commands, DiscordCommand, DiscordSendArgs, NotifyCommand};
 use rustyjack_encryption::clear_encryption_key;
 use zeroize::Zeroize;
 
@@ -310,13 +308,11 @@ impl App {
         let (default_left, default_top, default_right, default_bottom) =
             self.display.default_calibration_edges();
 
-        // Allow edges to extend beyond detected display bounds by a margin so
-        // that displays with more visible pixels than reported can be fully
-        // calibrated (e.g. 127x130 instead of the detected 128x128).
-        const EDGE_MARGIN: i32 = 32;
-        let min_edge = default_left - EDGE_MARGIN;
-        let max_right = default_right + EDGE_MARGIN;
-        let max_bottom = default_bottom + EDGE_MARGIN;
+        // Keep calibration in hardware pixel coordinates so the guide line
+        // always maps to a drawable position on screen.
+        let min_edge = default_left;
+        let max_right = default_right;
+        let max_bottom = default_bottom;
 
         let mut left = self.config.display.calibrated_left.unwrap_or(default_left);
         let mut top = self.config.display.calibrated_top.unwrap_or(default_top);
@@ -330,6 +326,10 @@ impl App {
             .display
             .calibrated_bottom
             .unwrap_or(default_bottom);
+        left = left.clamp(min_edge, max_right.saturating_sub(1));
+        right = right.clamp(left.saturating_add(1), max_right);
+        top = top.clamp(min_edge, max_bottom.saturating_sub(1));
+        bottom = bottom.clamp(top.saturating_add(1), max_bottom);
 
         for edge in CalibrationEdge::ALL {
             let default_value = match edge {

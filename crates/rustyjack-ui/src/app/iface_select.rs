@@ -123,30 +123,48 @@ impl App {
                         return Ok(Some(parsed));
                     }
                     JobState::Failed | JobState::Cancelled => {
-                        let mut lines = vec![format!("Interface: {}", selected_name)];
+                        let mut base_lines = vec![format!("Interface: {}", selected_name)];
                         if let Some(err) = status.error {
-                            lines.push(shorten_for_display(&err.message, 120));
+                            base_lines.push(shorten_for_display(&err.message, 120));
                             if let Some(detail) = err.detail {
-                                lines.push(shorten_for_display(&detail, 120));
+                                base_lines.push(shorten_for_display(&detail, 120));
                             }
                         } else {
-                            lines.push("Interface switch failed".to_string());
-                        }
-                        let safe_state = self.interfaces_all_down_safe()?;
-                        lines.push("".to_string());
-                        lines.push("SELECT: Retry".to_string());
-                        lines.push("KEY3: Reboot".to_string());
-                        if safe_state {
-                            lines.push("LEFT: Back to list".to_string());
-                        } else {
-                            lines.push("LEFT locked until safe".to_string());
+                            base_lines.push("Interface switch failed".to_string());
                         }
 
                         loop {
+                            let interfaces = self.core.interfaces_list()?.interfaces;
+                            let safe_state = interfaces
+                                .iter()
+                                .filter(|iface| iface.eligible)
+                                .all(|iface| !iface.is_up);
+                            let recovered_state = Self::exclusivity_achieved(&interfaces);
+
+                            let mut lines = base_lines.clone();
+                            lines.push(String::new());
+                            if recovered_state {
+                                lines.push("SELECT/RIGHT: Back to menu".to_string());
+                                lines.push("Recovered: previous interface active".to_string());
+                            } else {
+                                lines.push("SELECT/RIGHT: Retry switch".to_string());
+                            }
+                            lines.push("KEY3: Reboot".to_string());
+                            if safe_state {
+                                lines.push("LEFT: Back to list".to_string());
+                            } else {
+                                lines.push("LEFT locked until safe".to_string());
+                            }
+
                             self.show_message("Interface Error", lines.iter().map(|s| s.as_str()))?;
                             let button = self.buttons.wait_for_press()?;
                             match self.map_button(button) {
-                                ButtonAction::Select => break,
+                                ButtonAction::Select => {
+                                    if recovered_state {
+                                        return Ok(None);
+                                    }
+                                    break;
+                                }
                                 ButtonAction::Back => {
                                     if safe_state {
                                         return Ok(None);
@@ -349,14 +367,6 @@ impl App {
         status_lines.push("be active at a time.".to_string());
 
         self.show_message("Interface Status", status_lines)
-    }
-
-    fn interfaces_all_down_safe(&self) -> Result<bool> {
-        let interfaces = self.core.interfaces_list()?.interfaces;
-        Ok(interfaces
-            .iter()
-            .filter(|iface| iface.eligible)
-            .all(|iface| !iface.is_up))
     }
 
     fn exclusivity_achieved(interfaces: &[InterfaceStatusResponse]) -> bool {

@@ -45,7 +45,7 @@ MIT
 - Job-based architecture for long-running operations with cancellation
 - Hardened systemd units with strict sandboxing
 - Network isolation is enforced in the daemon: only one active uplink is allowed, and transitions must pass exclusivity verification.
-- `Settings -> Network Interfaces` is a blocking UI workflow: user cannot leave while a switch is in progress, and cannot exit on error unless the system is in a safe all-down state.
+- `Settings -> Network Interfaces` is a blocking UI workflow: user cannot leave while a switch is in progress. On error, if rollback restores a valid exclusive state, `Select/Right` exits back to menu; otherwise the screen stays blocked until retry/reboot or a safe all-down state allows Back.
 - Display startup flow is backend-aware: detect backend, query mode, calibrate if needed, cache effective geometry
 - UI layout metrics are runtime-derived (no fixed menu/dialog visible constants in core flow)
 

@@ -8,8 +8,13 @@
 /target-64/
 target-check/
 prebuilt/
+*.zip
 .DS_Store
 
 # Claude Code - local settings (personal, not shared)
 .claude/settings.local.json
 nul
+
+# PCB workspace artifacts/reference docs (keep only generator script)
+pcb/**
+!pcb/get_refs.sh

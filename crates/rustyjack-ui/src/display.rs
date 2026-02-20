@@ -594,7 +594,10 @@ mod tests {
 
         let probe = resolve_runtime_probe(&mut cfg, false);
         assert_eq!(probe.source, DisplayGeometrySource::Cached);
-        assert!(probe.pending_calibration, "wizard must still launch when calibration is incomplete, even with a warm probe cache");
+        assert!(
+            probe.pending_calibration,
+            "wizard must still launch when calibration is incomplete, even with a warm probe cache"
+        );
     }
 
     #[test]
@@ -620,7 +623,10 @@ mod tests {
         };
 
         let probe = resolve_runtime_probe(&mut cfg, false);
-        assert!(!probe.pending_calibration, "wizard must not launch after calibration is complete");
+        assert!(
+            !probe.pending_calibration,
+            "wizard must not launch after calibration is complete"
+        );
     }
 
     #[test]
@@ -1280,74 +1286,88 @@ impl Display {
         edge: CalibrationEdge,
         candidate: i32,
         defaults: i32,
-        status: &StatusOverlay,
+        _status: &StatusOverlay,
     ) -> Result<()> {
         self.clear()?;
-        self.draw_toolbar_with_title(Some("Display Calib"), status)?;
+        let panel_x = 0i32;
+        let panel_y = 0i32;
+        let panel_w = self.capabilities.width_px.max(1) as i32;
+        let panel_h = self.capabilities.height_px.max(1) as i32;
+        let panel_max_x = panel_x + panel_w.saturating_sub(1);
+        let panel_max_y = panel_y + panel_h.saturating_sub(1);
 
-        let content_x = self.layout.safe_padding_px as i32;
-        let content_w = self.layout.content_width() as i32;
-        let content_y = self.layout.content_top as i32;
-        let content_h = self.layout.content_height() as i32;
         let guide = PrimitiveStyle::with_stroke(Rgb565::WHITE, 1);
         let shade = PrimitiveStyle::with_fill(Rgb565::new(3, 3, 3));
+        let panel_border = PrimitiveStyle::with_stroke(self.palette.border, 1);
 
-        match edge {
+        Rectangle::new(
+            Point::new(panel_x, panel_y),
+            Size::new(panel_w as u32, panel_h as u32),
+        )
+        .into_styled(panel_border)
+        .draw(&mut self.lcd)
+        .map_err(|_| anyhow::anyhow!("Draw error"))?;
+
+        let offscreen_delta = match edge {
             CalibrationEdge::Left | CalibrationEdge::Right => {
-                let x = candidate.clamp(content_x, content_x + content_w.saturating_sub(1));
-                if edge == CalibrationEdge::Left && x > content_x {
+                let x = candidate.clamp(panel_x, panel_max_x);
+                let delta = candidate.saturating_sub(x);
+                if edge == CalibrationEdge::Left && x > panel_x {
                     Rectangle::new(
-                        Point::new(content_x, content_y),
-                        Size::new((x - content_x) as u32, content_h as u32),
+                        Point::new(panel_x, panel_y),
+                        Size::new((x - panel_x) as u32, panel_h as u32),
                     )
                     .into_styled(shade)
                     .draw(&mut self.lcd)
                     .map_err(|_| anyhow::anyhow!("Draw error"))?;
                 }
-                if edge == CalibrationEdge::Right && x < content_x + content_w - 1 {
+                if edge == CalibrationEdge::Right && x < panel_max_x {
                     Rectangle::new(
-                        Point::new(x + 1, content_y),
-                        Size::new((content_x + content_w - x - 1) as u32, content_h as u32),
+                        Point::new(x + 1, panel_y),
+                        Size::new((panel_max_x - x) as u32, panel_h as u32),
                     )
                     .into_styled(shade)
                     .draw(&mut self.lcd)
                     .map_err(|_| anyhow::anyhow!("Draw error"))?;
                 }
-                Rectangle::new(Point::new(x, content_y), Size::new(1, content_h as u32))
+                Rectangle::new(Point::new(x, panel_y), Size::new(1, panel_h as u32))
                     .into_styled(guide)
                     .draw(&mut self.lcd)
                     .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                delta
             }
             CalibrationEdge::Top | CalibrationEdge::Bottom => {
-                let y = candidate.clamp(content_y, content_y + content_h.saturating_sub(1));
-                if edge == CalibrationEdge::Top && y > content_y {
+                let y = candidate.clamp(panel_y, panel_max_y);
+                let delta = candidate.saturating_sub(y);
+                if edge == CalibrationEdge::Top && y > panel_y {
                     Rectangle::new(
-                        Point::new(content_x, content_y),
-                        Size::new(content_w as u32, (y - content_y) as u32),
+                        Point::new(panel_x, panel_y),
+                        Size::new(panel_w as u32, (y - panel_y) as u32),
                     )
                     .into_styled(shade)
                     .draw(&mut self.lcd)
                     .map_err(|_| anyhow::anyhow!("Draw error"))?;
                 }
-                if edge == CalibrationEdge::Bottom && y < content_y + content_h - 1 {
+                if edge == CalibrationEdge::Bottom && y < panel_max_y {
                     Rectangle::new(
-                        Point::new(content_x, y + 1),
-                        Size::new(content_w as u32, (content_y + content_h - y - 1) as u32),
+                        Point::new(panel_x, y + 1),
+                        Size::new(panel_w as u32, (panel_max_y - y) as u32),
                     )
                     .into_styled(shade)
                     .draw(&mut self.lcd)
                     .map_err(|_| anyhow::anyhow!("Draw error"))?;
                 }
-                Rectangle::new(Point::new(content_x, y), Size::new(content_w as u32, 1))
+                Rectangle::new(Point::new(panel_x, y), Size::new(panel_w as u32, 1))
                     .into_styled(guide)
                     .draw(&mut self.lcd)
                     .map_err(|_| anyhow::anyhow!("Draw error"))?;
+                delta
             }
-        }
+        };
 
         let edge_label = edge.label();
         let help = edge.help_text();
-        let lines = [
+        let mut lines = vec![
             format!("Edge: {edge_label}"),
             format!("Value: {candidate}px"),
             format!("Default: {defaults}px"),
@@ -1355,19 +1375,50 @@ impl Display {
             "SEL=Confirm K1=Reset".to_string(),
             "K2=Cancel".to_string(),
         ];
-        let mut y = self.layout.content_top as i32;
-        for line in lines.iter() {
+        if offscreen_delta != 0 {
+            if offscreen_delta > 0 {
+                lines.insert(3, format!("Out of view: +{}px", offscreen_delta));
+            } else {
+                lines.insert(3, format!("Out of view: -{}px", offscreen_delta.abs()));
+            }
+        }
+
+        let line_height = self.layout.line_height_px as i32;
+        let legend_height = ((lines.len() as i32 * line_height) + 4).clamp(1, panel_h);
+        let legend_y = match edge {
+            CalibrationEdge::Bottom => panel_y,
+            _ => panel_h.saturating_sub(legend_height),
+        };
+
+        Rectangle::new(
+            Point::new(panel_x, legend_y),
+            Size::new(panel_w as u32, legend_height as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(self.palette.background))
+        .draw(&mut self.lcd)
+        .map_err(|_| anyhow::anyhow!("Draw error"))?;
+
+        Rectangle::new(
+            Point::new(panel_x, legend_y),
+            Size::new(panel_w as u32, legend_height as u32),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(self.palette.border, 1))
+        .draw(&mut self.lcd)
+        .map_err(|_| anyhow::anyhow!("Draw error"))?;
+
+        let mut y = legend_y + 2;
+        for line in &lines {
             let clipped = ellipsize(line, self.layout.chars_per_line);
             Text::with_baseline(
                 &clipped,
-                Point::new(content_x + 2, y),
+                Point::new(panel_x + 2, y),
                 self.text_style_small,
                 Baseline::Top,
             )
             .draw(&mut self.lcd)
             .map_err(|_| anyhow::anyhow!("Draw error"))?;
-            y += self.layout.line_height_px as i32;
-            if y > self.layout.content_bottom as i32 {
+            y += line_height;
+            if y > legend_y + legend_height - line_height {
                 break;
             }
         }
