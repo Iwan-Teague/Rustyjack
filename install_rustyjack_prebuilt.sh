@@ -19,6 +19,8 @@ SKIP_HASH_CHECKS=0
 USB_COPY_TO_PREBUILT=0
 SPI_REBOOT_REQUIRED=0
 DEFER_SERVICE_START=0
+PRESERVED_ROUTE_IFACE=""
+PRESERVED_ROUTE_SOURCE=""
 
 step()  { printf "\e[1;34m[STEP]\e[0m %s\n"  "$*"; }
 info()  { printf "\e[1;32m[INFO]\e[0m %s\n"  "$*"; }
@@ -398,17 +400,83 @@ validate_network_status() {
   return 1
 }
 
-preserve_default_route_interface() {
-  local iface
+interface_exists_local() {
+  local iface="${1:-}"
+  [ -n "$iface" ] && [ "$iface" != "lo" ] && [ -d "/sys/class/net/$iface" ]
+}
+
+detect_ssh_peer_ip() {
+  local peer=""
+
+  # Typical direct SSH shells.
+  peer=$(printf "%s\n" "${SSH_CONNECTION:-${SSH_CLIENT:-}}" | awk '{print $1}')
+  if [ -n "$peer" ]; then
+    printf "%s\n" "$peer"
+    return 0
+  fi
+
+  # sudo/su shells often drop SSH_* env vars; recover from utmp.
+  peer=$(who -m 2>/dev/null | sed -n 's/.*(\([^)]*\)).*/\1/p' | head -n 1 || true)
+  case "$peer" in
+    ""|localhost|":0"|":0.0")
+      return 1
+      ;;
+  esac
+  printf "%s\n" "$peer"
+  return 0
+}
+
+detect_routed_interface() {
+  local iface=""
+  local source=""
+  local ssh_peer=""
+
+  # Most reliable during SSH installs: route to the SSH peer IP.
+  if is_remote_ssh_session && cmd ip; then
+    ssh_peer=$(detect_ssh_peer_ip || true)
+    if [ -n "$ssh_peer" ]; then
+      iface=$(ip route get "$ssh_peer" 2>/dev/null | awk '{for (i=1; i<=NF; ++i) if ($i=="dev") {print $(i+1); exit}}' || true)
+      if interface_exists_local "$iface"; then
+        source="ssh-peer:$ssh_peer"
+        printf "%s|%s\n" "$iface" "$source"
+        return 0
+      fi
+    fi
+  fi
+
+  # Fallback: current default route.
+  if cmd ip; then
+    iface=$(ip route show default 2>/dev/null | awk '/^default/ {for (i=1; i<=NF; ++i) if ($i=="dev") {print $(i+1); exit}}' || true)
+    if interface_exists_local "$iface"; then
+      source="default-route"
+      printf "%s|%s\n" "$iface" "$source"
+      return 0
+    fi
+  fi
+
+  # Final fallback: kernel route table.
   iface=$(awk '$2=="00000000" {print $1; exit}' /proc/net/route 2>/dev/null || true)
-  if [ -z "$iface" ]; then
-    warn "No default route interface detected; skipping preferred interface update"
+  if interface_exists_local "$iface"; then
+    source="proc-net-route"
+    printf "%s|%s\n" "$iface" "$source"
     return 0
   fi
-  if [ ! -d "/sys/class/net/$iface" ]; then
-    warn "Default route interface $iface not found; skipping preferred interface update"
+
+  return 1
+}
+
+preserve_default_route_interface() {
+  local detected iface source
+  detected=$(detect_routed_interface || true)
+  if [ -z "$detected" ]; then
+    warn "No routed interface detected; skipping preferred interface update"
     return 0
   fi
+  iface="${detected%%|*}"
+  source="${detected#*|}"
+
+  PRESERVED_ROUTE_IFACE="$iface"
+  PRESERVED_ROUTE_SOURCE="$source"
 
   local pref_wifi_dir="$RUNTIME_ROOT/wifi"
   local pref_wifi_path="$pref_wifi_dir/interface_preferences.json"
@@ -422,7 +490,7 @@ preserve_default_route_interface() {
   local ts
   ts=$(date -Iseconds 2>/dev/null || date)
 
-  info "Preserving default route interface: $iface"
+  info "Preserving routed interface: $iface (${source})"
   mkdir -p "$pref_wifi_dir" "$pref_net_dir"
   cat > "$pref_wifi_path" <<EOF
 {
@@ -438,7 +506,13 @@ EOF
 }
 
 is_remote_ssh_session() {
-  [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]
+  if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]; then
+    return 0
+  fi
+  if detect_ssh_peer_ip >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
 }
 
 claim_resolv_conf() {
@@ -702,12 +776,10 @@ find_prebuilt_dir_on_mounts() {
 }
 
 default_route_interface() {
-  if ! cmd ip; then
-    return 1
-  fi
-  local dev
-  dev=$(ip route show default 2>/dev/null | awk '/default/ {for (i=1; i<=NF; ++i) if ($i=="dev") print $(i+1); exit}')
-  if [ -n "$dev" ]; then
+  local detected dev
+  detected=$(detect_routed_interface || true)
+  if [ -n "$detected" ]; then
+    dev="${detected%%|*}"
     printf "%s" "$dev"
     return 0
   fi
@@ -2076,11 +2148,18 @@ sudo systemctl enable rustyjack-wpa_supplicant@wlan0.service
 if [ "$DEFER_SERVICE_START" -eq 1 ]; then
   info "Deferred starting rustyjack-wpa_supplicant@wlan0.service until reboot"
 else
-  if sudo systemctl start rustyjack-wpa_supplicant@wlan0.service 2>/dev/null; then
-    info "wpa_supplicant service started successfully"
+  # Starting a new wpa_supplicant instance on the currently-routed Wi-Fi
+  # interface can flap the link and kill SSH mid-install.
+  if is_remote_ssh_session && [[ "${PRESERVED_ROUTE_IFACE:-}" == wlan* ]]; then
+    warn "SSH session is using ${PRESERVED_ROUTE_IFACE}; skipping immediate start of rustyjack-wpa_supplicant@wlan0.service to avoid link flap"
+    info "wpa_supplicant service remains enabled and will start on reboot"
   else
-    warn "Failed to start rustyjack-wpa_supplicant@wlan0.service"
-    show_service_logs rustyjack-wpa_supplicant@wlan0.service
+    if sudo systemctl start rustyjack-wpa_supplicant@wlan0.service 2>/dev/null; then
+      info "wpa_supplicant service started successfully"
+    else
+      warn "Failed to start rustyjack-wpa_supplicant@wlan0.service"
+      show_service_logs rustyjack-wpa_supplicant@wlan0.service
+    fi
   fi
 fi
 sudo systemctl enable rustyjack-ui.service
@@ -2128,14 +2207,19 @@ if [ "$DEFER_SERVICE_START" -eq 1 ]; then
 else
   step "Validating network status..."
   if cmd rustyjack; then
-    route_iface=$(default_route_interface)
+    route_iface="${PRESERVED_ROUTE_IFACE:-}"
+    if ! interface_exists_local "$route_iface"; then
+      route_iface=$(default_route_interface || true)
+    fi
     if [ -n "$route_iface" ]; then
       info "Ensuring active uplink via rustyjack wifi route ensure --interface $route_iface"
+      if [ -n "${PRESERVED_ROUTE_SOURCE:-}" ]; then
+        info "Installer interface source: ${PRESERVED_ROUTE_SOURCE}"
+      fi
+      RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack wifi route ensure --interface "$route_iface" >/dev/null 2>&1 || warn "ensure-route failed; continuing to validation"
     else
-      route_iface="eth0"
-      warn "Unable to detect default interface; falling back to $route_iface for ensure-route"
+      warn "Unable to detect active interface; skipping ensure-route to avoid forcing the wrong uplink"
     fi
-    RUSTYJACK_ROOT="$RUNTIME_ROOT" rustyjack wifi route ensure --interface "$route_iface" >/dev/null 2>&1 || warn "ensure-route failed; continuing to validation"
   else
     warn "rustyjack CLI not found; skipping ensure-route"
   fi
