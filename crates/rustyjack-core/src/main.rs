@@ -5,21 +5,33 @@ use rustyjack_core::{dispatch_command, logs_enabled, resolve_root, Cli, OutputFo
 use serde_json::{json, Value};
 
 fn main() {
-    if logs_enabled() {
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-        // Avoid panic if a global subscriber is already set (e.g., accidental double-start).
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .try_init()
-            .ok();
-    }
+    // Determine output format BEFORE initializing tracing so JSON mode
+    // never emits log lines on stdout (tests capture stdout as JSON).
     let cli = Cli::parse();
     let format = if cli.json {
         OutputFormat::Json
     } else {
         cli.output_format
     };
+
+    if logs_enabled() && format != OutputFormat::Json {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .try_init()
+            .ok();
+    } else if logs_enabled() {
+        // JSON output mode: send logs to stderr so stdout stays clean.
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .try_init()
+            .ok();
+    }
     if let Err(err) = run(cli, format) {
         emit_error(format, &err);
         std::process::exit(1);
