@@ -50,6 +50,8 @@ rsync -a \
   --exclude='build' \
   --exclude='build-*' \
   --exclude='prebuilt' \
+  --exclude='pcb' \
+  --exclude='pcb/' \
   --exclude='bin' \
   --exclude='*.o' \
   --exclude='*.obj' \
