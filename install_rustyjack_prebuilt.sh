@@ -140,22 +140,19 @@ configure_service_start_mode() {
 
   if [ -z "$override" ]; then
     if is_remote_ssh_session; then
-      if [ -t 0 ]; then
-        if prompt_yes_no "SSH session detected. Defer daemon/UI start and isolation until reboot?" "y"; then
-          DEFER_SERVICE_START=1
-        else
-          DEFER_SERVICE_START=0
-        fi
-      else
-        DEFER_SERVICE_START=1
-      fi
+      # Remote installs should always preserve transport connectivity.
+      DEFER_SERVICE_START=1
     else
       DEFER_SERVICE_START=0
     fi
   fi
 
   if [ "$DEFER_SERVICE_START" -eq 1 ]; then
-    warn "SSH-safe mode enabled: startup/isolation deferred until reboot."
+    if is_remote_ssh_session; then
+      warn "SSH session detected; startup/isolation automatically deferred until reboot."
+    else
+      warn "Startup/isolation deferred until reboot."
+    fi
   else
     info "Immediate service startup enabled (install may impact active network links)."
   fi
@@ -467,13 +464,20 @@ detect_routed_interface() {
 
 preserve_default_route_interface() {
   local detected iface source
-  detected=$(detect_routed_interface || true)
-  if [ -z "$detected" ]; then
-    warn "No routed interface detected; skipping preferred interface update"
-    return 0
+
+  if interface_exists_local "${PRESERVED_ROUTE_IFACE:-}"; then
+    iface="$PRESERVED_ROUTE_IFACE"
+    source="${PRESERVED_ROUTE_SOURCE:-cached}"
+    info "Using preserved routed interface: $iface (${source})"
+  else
+    detected=$(detect_routed_interface || true)
+    if [ -z "$detected" ]; then
+      warn "No routed interface detected; skipping preferred interface update"
+      return 0
+    fi
+    iface="${detected%%|*}"
+    source="${detected#*|}"
   fi
-  iface="${detected%%|*}"
-  source="${detected#*|}"
 
   PRESERVED_ROUTE_IFACE="$iface"
   PRESERVED_ROUTE_SOURCE="$source"
@@ -490,7 +494,7 @@ preserve_default_route_interface() {
   local ts
   ts=$(date -Iseconds 2>/dev/null || date)
 
-  info "Preserving routed interface: $iface (${source})"
+  info "Preserving routed interface preference: $iface (${source})"
   mkdir -p "$pref_wifi_dir" "$pref_net_dir"
   cat > "$pref_wifi_path" <<EOF
 {
@@ -503,6 +507,322 @@ preserve_default_route_interface() {
 EOF
   printf "%s\n" "$iface" > "$pref_net_path"
   chmod 600 "$pref_net_path" 2>/dev/null || true
+}
+
+is_wireless_interface() {
+  local iface="${1:-}"
+  [ -n "$iface" ] || return 1
+  [ -d "/sys/class/net/$iface" ] || return 1
+  [ -d "/sys/class/net/$iface/wireless" ] && return 0
+  grep -qE "^[[:space:]]*$iface:" /proc/net/wireless 2>/dev/null
+}
+
+trim_spaces() {
+  printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+strip_wrapping_quotes() {
+  local value="${1:-}"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  fi
+  printf '%s' "$value"
+}
+
+json_escape_string() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+sanitize_wifi_profile_name() {
+  local ssid="${1:-}"
+  local safe
+  safe=$(printf '%s' "$ssid" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '_')
+  safe=$(printf '%s' "$safe" | sed -e 's/^_//' -e 's/_$//')
+  [ -n "$safe" ] || safe="imported_wifi"
+  printf '%s' "$safe"
+}
+
+find_existing_profile_for_ssid() {
+  local ssid="${1:-}"
+  local escaped_ssid profile existing_ssid
+  escaped_ssid=$(json_escape_string "$ssid")
+  for profile in "$RUNTIME_ROOT"/wifi/profiles/*.json; do
+    [ -f "$profile" ] || continue
+    existing_ssid=$(sed -n 's/^[[:space:]]*"ssid"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,\?[[:space:]]*$/\1/p' "$profile" | head -n 1)
+    if [ "$existing_ssid" = "$escaped_ssid" ]; then
+      printf '%s\n' "$profile"
+      return 0
+    fi
+  done
+  return 1
+}
+
+next_profile_path_for_ssid() {
+  local ssid="${1:-}"
+  local base candidate idx
+  base=$(sanitize_wifi_profile_name "$ssid")
+  candidate="$RUNTIME_ROOT/wifi/profiles/${base}.json"
+  if [ ! -e "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  idx=1
+  while [ "$idx" -le 99 ]; do
+    candidate="$RUNTIME_ROOT/wifi/profiles/${base}_${idx}.json"
+    if [ ! -e "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    idx=$((idx + 1))
+  done
+  printf '%s\n' "$RUNTIME_ROOT/wifi/profiles/${base}_$(date +%s).json"
+}
+
+wpa_cli_status_field() {
+  local iface="${1:-}"
+  local field="${2:-}"
+  cmd wpa_cli || return 1
+  wpa_cli -i "$iface" status 2>/dev/null | sed -n "s/^${field}=//p" | head -n 1
+}
+
+wpa_cli_network_field() {
+  local iface="${1:-}"
+  local net_id="${2:-}"
+  local field="${3:-}"
+  local raw=""
+  cmd wpa_cli || return 1
+  raw=$(wpa_cli -i "$iface" get_network "$net_id" "$field" 2>/dev/null | head -n 1 || true)
+  raw=$(trim_spaces "$raw")
+  case "$raw" in
+    ""|FAIL|UNKNOWN*|INTERFACE*) return 1 ;;
+  esac
+  strip_wrapping_quotes "$raw"
+}
+
+wpa_network_id_for_ssid() {
+  local iface="${1:-}"
+  local ssid="${2:-}"
+  cmd wpa_cli || return 1
+  wpa_cli -i "$iface" list_networks 2>/dev/null | awk -F'\t' -v target="$ssid" 'NR > 1 && $2 == target {print $1; exit}'
+}
+
+wpa_conf_secret_for_ssid() {
+  local conf="${1:-}"
+  local ssid="${2:-}"
+  [ -r "$conf" ] || return 1
+  awk -v target_ssid="$ssid" '
+    function trim(v) { sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); return v }
+    function unquote(v) {
+      v = trim(v)
+      if (v ~ /^".*"$/) {
+        v = substr(v, 2, length(v) - 2)
+      }
+      return v
+    }
+    /^[[:space:]]*network=\{/ {
+      in_network = 1
+      matched = 0
+      psk = ""
+      sae = ""
+      keymgmt = ""
+      next
+    }
+    in_network && /^[[:space:]]*}/ {
+      if (matched) {
+        if (sae != "") {
+          print "sae_password=" sae
+          exit
+        }
+        if (psk != "") {
+          print "psk=" psk
+          exit
+        }
+        if (keymgmt == "NONE") {
+          print "open=1"
+          exit
+        }
+      }
+      in_network = 0
+      next
+    }
+    in_network {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ /^ssid=/) {
+        val = line
+        sub(/^ssid=/, "", val)
+        val = unquote(val)
+        if (val == target_ssid) {
+          matched = 1
+        }
+      } else if (line ~ /^psk=/) {
+        val = line
+        sub(/^psk=/, "", val)
+        psk = trim(val)
+      } else if (line ~ /^sae_password=/) {
+        val = line
+        sub(/^sae_password=/, "", val)
+        sae = trim(val)
+      } else if (line ~ /^key_mgmt=/) {
+        val = line
+        sub(/^key_mgmt=/, "", val)
+        keymgmt = trim(val)
+      }
+    }
+  ' "$conf" | head -n 1
+}
+
+detect_active_wifi_interface_for_import() {
+  local iface="" detected=""
+
+  if is_wireless_interface "${PRESERVED_ROUTE_IFACE:-}"; then
+    printf '%s\n' "${PRESERVED_ROUTE_IFACE}"
+    return 0
+  fi
+
+  detected=$(detect_routed_interface || true)
+  iface="${detected%%|*}"
+  if is_wireless_interface "$iface"; then
+    printf '%s\n' "$iface"
+    return 0
+  fi
+
+  if cmd ip; then
+    while IFS= read -r iface; do
+      iface="${iface%%@*}"
+      [ -n "$iface" ] || continue
+      if ! is_wireless_interface "$iface"; then
+        continue
+      fi
+      if ip -o link show dev "$iface" 2>/dev/null | grep -q "state UP"; then
+        printf '%s\n' "$iface"
+        return 0
+      fi
+    done < <(ip -o link show | awk -F': ' '{print $2}')
+  fi
+
+  for iface_path in /sys/class/net/*/wireless; do
+    [ -d "$iface_path" ] || continue
+    iface=$(basename "$(dirname "$iface_path")")
+    printf '%s\n' "$iface"
+    return 0
+  done
+
+  return 1
+}
+
+import_active_wifi_profile() {
+  local iface="" ssid="" state="" net_id="" key_mgmt="" secret=""
+  local conf="" parsed="" profile_path="" existing=""
+  local ts="" escaped_ssid="" escaped_iface="" escaped_notes="" escaped_secret=""
+
+  iface=$(detect_active_wifi_interface_for_import || true)
+  if [ -z "$iface" ]; then
+    info "No active Wi-Fi uplink detected; skipping connected Wi-Fi profile import."
+    return 0
+  fi
+
+  state=$(wpa_cli_status_field "$iface" "wpa_state" || true)
+  ssid=$(wpa_cli_status_field "$iface" "ssid" || true)
+  if [ -z "$ssid" ] && cmd iwgetid; then
+    ssid=$(iwgetid "$iface" -r 2>/dev/null || true)
+  fi
+  ssid=$(trim_spaces "$ssid")
+
+  if [ -z "$ssid" ]; then
+    info "Wi-Fi interface $iface has no connected SSID; skipping Wi-Fi profile import."
+    return 0
+  fi
+
+  info "Detected active Wi-Fi connection: interface=$iface ssid=$ssid"
+  if [ -n "$state" ] && [ "$state" != "COMPLETED" ]; then
+    warn "wpa_state for $iface is '$state' (not COMPLETED); attempting profile import anyway."
+  fi
+
+  existing=$(find_existing_profile_for_ssid "$ssid" || true)
+  if [ -n "$existing" ]; then
+    info "Wi-Fi profile already exists for SSID '$ssid': $existing"
+    return 0
+  fi
+
+  net_id=$(wpa_cli_status_field "$iface" "id" || true)
+  if [ -z "$net_id" ]; then
+    net_id=$(wpa_network_id_for_ssid "$iface" "$ssid" || true)
+  fi
+
+  if [ -n "$net_id" ]; then
+    key_mgmt=$(wpa_cli_network_field "$iface" "$net_id" "key_mgmt" || true)
+    secret=$(wpa_cli_network_field "$iface" "$net_id" "sae_password" || true)
+    if [ -z "$secret" ]; then
+      secret=$(wpa_cli_network_field "$iface" "$net_id" "psk" || true)
+    fi
+  fi
+
+  if [ -z "$secret" ] && [ "$key_mgmt" != "NONE" ]; then
+    for conf in /etc/wpa_supplicant/wpa_supplicant.conf /etc/rustyjack/wpa_supplicant.conf; do
+      parsed=$(wpa_conf_secret_for_ssid "$conf" "$ssid" || true)
+      if [ -z "$parsed" ]; then
+        continue
+      fi
+      case "$parsed" in
+        sae_password=*)
+          secret=$(strip_wrapping_quotes "${parsed#sae_password=}")
+          ;;
+        psk=*)
+          secret=$(strip_wrapping_quotes "${parsed#psk=}")
+          ;;
+        open=1)
+          key_mgmt="NONE"
+          ;;
+      esac
+      [ -n "$secret" ] && break
+    done
+  fi
+
+  profile_path=$(next_profile_path_for_ssid "$ssid")
+  ts=$(date -Iseconds 2>/dev/null || date)
+  escaped_ssid=$(json_escape_string "$ssid")
+  escaped_iface=$(json_escape_string "$iface")
+  escaped_notes=$(json_escape_string "Imported by installer from active connection (${iface}${state:+, state ${state}})")
+
+  if [ -n "$secret" ]; then
+    escaped_secret=$(json_escape_string "$secret")
+    rj_sudo_tee "$profile_path" >/dev/null <<PROFILE
+{
+  "ssid": "$escaped_ssid",
+  "password": "$escaped_secret",
+  "interface": "$escaped_iface",
+  "priority": 100,
+  "auto_connect": true,
+  "created": "$ts",
+  "last_used": null,
+  "notes": "$escaped_notes"
+}
+PROFILE
+    info "Imported active Wi-Fi profile with credentials: $profile_path"
+  else
+    rj_sudo_tee "$profile_path" >/dev/null <<PROFILE
+{
+  "ssid": "$escaped_ssid",
+  "password": null,
+  "interface": "$escaped_iface",
+  "priority": 100,
+  "auto_connect": true,
+  "created": "$ts",
+  "last_used": null,
+  "notes": "$escaped_notes"
+}
+PROFILE
+    warn "Imported Wi-Fi profile for SSID '$ssid' without password (open network or credential unavailable)."
+  fi
+  sudo chmod 600 "$profile_path" 2>/dev/null || true
 }
 
 is_remote_ssh_session() {
@@ -1119,6 +1439,10 @@ fi
 info "Using project root: $PROJECT_ROOT"
 RUNTIME_ROOT="${RUNTIME_ROOT:-/var/lib/rustyjack}"
 info "Using runtime root: $RUNTIME_ROOT"
+
+# Capture and persist the current transport interface early so subsequent
+# install steps do not accidentally pivot to a different uplink.
+preserve_default_route_interface
 
 PREBUILT_DIR_OVERRIDE=0
 if [ -n "${PREBUILT_DIR:-}" ]; then
@@ -1797,6 +2121,10 @@ PROFILE
   sudo chmod 600 "$RUNTIME_ROOT/wifi/profiles/skyhn7xm.json" 2>/dev/null || true
   info "Created default WiFi profile: SKYHN7XM"
 fi
+
+# Import the currently connected Wi-Fi profile so Rustyjack can
+# reconnect to the same network after ownership transitions.
+import_active_wifi_profile
 
 # systemd service
 step "Ensuring rustyjack system users/groups exist..."

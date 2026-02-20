@@ -335,12 +335,9 @@ fn append_install_logs_section(run_dir: &Path, writer: &mut impl Write) -> Resul
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
         writeln!(writer, "--- {}/{} ---", INSTALL_LOGS_DIR_NAME, name)?;
-        let size = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
-        if size > LOG_TRUNCATE_THRESHOLD {
-            append_file_head_tail(&file, writer, LOG_HEAD_LINES, LOG_TAIL_LINES)?;
-        } else {
-            append_file_streaming(&file, writer, None)?;
-        }
+        // Installer logs are source-of-truth diagnostics; keep full content here.
+        // If the combined plaintext artifact is too large, it is chunked by build_plaintext_logs.
+        append_file_streaming(&file, writer, None)?;
         writeln!(writer)?;
     }
 
@@ -511,6 +508,30 @@ mod tests {
         assert!(content.contains("INSTALLER LOGS"));
         assert!(content.contains("install_logs/install_latest.log"));
         assert!(content.contains("[INFO] installer done"));
+    }
+
+    #[test]
+    fn test_plaintext_logs_do_not_truncate_large_install_logs() {
+        let tmp = TempDir::new().unwrap();
+        let run_dir = tmp.path().join("run_install_large");
+        fs::create_dir_all(&run_dir).unwrap();
+        setup_run_dir(&run_dir, "install-large");
+
+        let install_dir = run_dir.join(INSTALL_LOGS_DIR_NAME);
+        fs::create_dir_all(&install_dir).unwrap();
+        let mut big = String::new();
+        for i in 0..5000 {
+            big.push_str(&format!("[INFO] installer line {}\n", i));
+        }
+        fs::write(install_dir.join("install_latest.log"), big).unwrap();
+
+        let parts = build_plaintext_logs(&run_dir, "install-large", None).unwrap();
+        assert_eq!(parts.len(), 1);
+        let content = fs::read_to_string(&parts[0]).unwrap();
+        assert!(content.contains("install_logs/install_latest.log"));
+        assert!(content.contains("[INFO] installer line 0"));
+        assert!(content.contains("[INFO] installer line 4999"));
+        assert!(!content.contains("[TRUNCATED:"));
     }
 
     #[test]
