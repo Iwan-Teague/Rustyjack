@@ -215,6 +215,40 @@ pub fn netlink_delete_default_route() -> Result<()> {
         })
 }
 
+/// Delete default routes only for the specified interface (by name).
+/// Other interfaces' default routes are left untouched.
+#[cfg(target_os = "linux")]
+pub fn netlink_delete_default_routes_on_interface(interface: &str) -> Result<()> {
+    let iface = interface.to_string();
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                rustyjack_netlink::delete_default_routes_on_interface(&iface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to delete default routes on {}: {}",
+                            iface,
+                            e
+                        )
+                    })
+            })
+        })
+        .unwrap_or_else(|_| {
+            crate::runtime::shared_runtime()?.block_on(async {
+                rustyjack_netlink::delete_default_routes_on_interface(&iface)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to delete default routes on {}: {}",
+                            iface,
+                            e
+                        )
+                    })
+            })
+        })
+}
+
 #[cfg(target_os = "linux")]
 pub fn netlink_add_default_route(
     gateway: IpAddr,
@@ -552,6 +586,11 @@ pub fn netlink_list_routes() -> Result<Vec<RouteInfo>> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn netlink_delete_default_route() -> Result<()> {
+    anyhow::bail!("netlink operations only supported on Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn netlink_delete_default_routes_on_interface(_interface: &str) -> Result<()> {
     anyhow::bail!("netlink operations only supported on Linux")
 }
 

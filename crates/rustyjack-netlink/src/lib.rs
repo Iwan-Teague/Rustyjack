@@ -220,6 +220,12 @@ pub async fn delete_default_route() -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+pub async fn delete_default_routes_on_interface(interface: &str) -> Result<()> {
+    let mgr = RouteManager::new()?;
+    mgr.delete_default_routes_on_interface(interface).await
+}
+
+#[cfg(target_os = "linux")]
 pub async fn list_routes() -> Result<Vec<RouteInfo>> {
     let mgr = RouteManager::new()?;
     mgr.list_routes().await
