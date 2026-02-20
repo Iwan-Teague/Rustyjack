@@ -22,18 +22,40 @@ impl RouteManager {
 
         let existing = self.ops.list_routes().context("failed to list routes")?;
 
-        for route in existing {
-            if route.destination.is_none() {
-                debug!("Removing existing default route via {}", route.interface);
-                self.ops
-                    .delete_default_route(&route.interface)
-                    .context("failed to delete existing default route")?;
+        // Check if the desired default route is already in place (idempotent).
+        let already_correct = existing.iter().any(|r| {
+            r.destination.is_none()
+                && r.interface == iface
+                && r.gateway == gateway
+                && r.metric == metric
+        });
+        if already_correct {
+            // Also clean up stale defaults from other interfaces.
+            for route in &existing {
+                if route.destination.is_none() && route.interface != iface {
+                    debug!("Removing stale default route via {}", route.interface);
+                    self.ops.delete_default_route(&route.interface).ok();
+                }
             }
+            info!("Default route already matches; no change needed");
+            return Ok(());
         }
 
+        // Add the new route first, then remove conflicting defaults from
+        // other interfaces. This avoids the transient "no default route"
+        // window that occurs with delete-then-add ordering.
         self.ops
             .add_default_route(iface, gateway, metric)
             .context("failed to add default route")?;
+
+        for route in &existing {
+            if route.destination.is_none() && route.interface != iface {
+                debug!("Removing old default route via {}", route.interface);
+                self.ops
+                    .delete_default_route(&route.interface)
+                    .context("failed to delete old default route")?;
+            }
+        }
 
         let verification = self.get_default_route()?;
         match verification {

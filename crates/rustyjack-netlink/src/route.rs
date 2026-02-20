@@ -245,6 +245,66 @@ impl RouteManager {
         Ok(())
     }
 
+    /// Delete default routes that belong to a specific interface.
+    ///
+    /// Only removes IPv4 default routes (0.0.0.0/0) whose RTA_OIF matches
+    /// the given interface index. Other interfaces' default routes are untouched.
+    pub async fn delete_default_routes_on_interface(&self, interface: &str) -> Result<()> {
+        let ifindex = self.get_interface_index(interface).await?;
+        let mut routes = self.handle.route().get(rtnetlink::IpVersion::V4).execute();
+
+        while let Some(route) =
+            routes
+                .try_next()
+                .await
+                .map_err(|e| NetlinkError::ListRoutesError {
+                    reason: e.to_string(),
+                })?
+        {
+            let prefix_len = route.header.destination_prefix_length;
+            let mut gateway = None;
+            let mut oif = None;
+            let mut destination = None;
+
+            for nla in &route.attributes {
+                match nla {
+                    RouteAttribute::Destination(dst) => {
+                        destination = route_address_to_ipaddr(dst);
+                    }
+                    RouteAttribute::Gateway(gw) => {
+                        gateway = route_address_to_ipaddr(gw);
+                    }
+                    RouteAttribute::Oif(idx) => {
+                        oif = Some(*idx);
+                    }
+                    _ => {}
+                }
+            }
+
+            if is_default_route(prefix_len, destination) && oif == Some(ifindex) {
+                let mut del = self.handle.route().del(route.clone());
+                del.message_mut().header = route.header;
+
+                del.execute()
+                    .await
+                    .map_err(|e| NetlinkError::DeleteRouteError {
+                        destination: "default".to_string(),
+                        interface: interface.to_string(),
+                        reason: e.to_string(),
+                    })?;
+
+                tracing::info!(
+                    "Deleted default route via {:?} on interface {} (idx={})",
+                    gateway,
+                    interface,
+                    ifindex
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// List all IPv4 routes in the routing table.
     ///
     /// Returns detailed route information including destination, gateway, and output interface.

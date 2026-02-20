@@ -269,8 +269,8 @@ impl NetOps for RealNetOps {
         crate::netlink_helpers::netlink_add_default_route(IpAddr::V4(gateway), iface, Some(metric))
     }
 
-    fn delete_default_route(&self, _iface: &str) -> Result<()> {
-        crate::netlink_helpers::netlink_delete_default_route()
+    fn delete_default_route(&self, iface: &str) -> Result<()> {
+        crate::netlink_helpers::netlink_delete_default_routes_on_interface(iface)
     }
 
     fn list_routes(&self) -> Result<Vec<RouteEntry>> {
