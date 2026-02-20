@@ -1,0 +1,145 @@
+You are an autonomous software engineer with commit access to this repository. Your job is to apply ALL fixes required by the attached documents and deliver a working patch set so the entire test suite passes on a Raspberry Pi Zero 2 W (tests run via SSH over Ethernet). You MUST complete everything in one run: implement fixes, run tests, iterate until green, then output final diffs and a concise verification report.
+
+INPUTS YOU MUST USE
+- Read these documents fully and treat them as the authoritative spec for failures + required fixes:
+  1) RUSTYJACK_TEST_FAILURE_ANALYSIS.md
+  2) test_result_finding_rustyjack.md
+  3) test_result_finding_rustyjack.txt
+- You have the full project source tree available locally.
+
+NON-NEGOTIABLE CONSTRAINTS
+- Rust-first: all logic fixes must be in Rust unless the issue is explicitly a Bash/script/systemd unit issue.
+- Do NOT introduce new third-party SYSTEM binaries/packages. You may only rely on system tools already assumed by the project/tests.
+- Avoid adding new Rust crate dependencies unless absolutely necessary; if you do, justify why and keep it minimal.
+- Preserve security and long-term maintainability: no brittle hacks that “just satisfy the test”. Fix the underlying semantics.
+- Keep behavior stable for real deployments (Pi appliance constraints, power loss, partial connectivity, etc.).
+
+GLOBAL ACCEPTANCE CRITERIA (must all be true)
+1) Full test suite passes on the Pi Zero 2 W scenario described in docs.
+2) JSON output mode is machine-parseable: when CLI says JSON output, no log lines corrupt JSON artifacts.
+3) “Read-only” commands do not mutate network routes/DNS/interface state (unless explicitly opted-in).
+4) Daemon socket is always present at expected path when socket unit is active; all RPC tests can connect.
+5) Routing/default-route operations are interface-scoped and idempotent; no transient “no default route” window.
+6) Bash test helper scripts are complete (no undefined functions) and UI navigation indices match current UI.
+7) Installer scripts satisfy pattern checks AND do the right thing operationally.
+
+WORK PLAN YOU MUST FOLLOW (do not skip steps)
+
+PHASE 0 — Reproduce and map failures
+- Run the full test suite in the same style as the provided run (SSH, Ethernet up).
+- Capture failing tests list and correlate with the docs. Confirm you can reproduce at least the major failing classes.
+- Create a branch for changes.
+
+PHASE 1 — Fix JSON output contamination (highest priority, biggest cascade)
+Goal: When output is JSON, JSON must be clean and parseable. Do not mix logs with JSON.
+Implement BOTH:
+A) Route all tracing/log output away from JSON data stream (stdout). Preferred: logs to stderr, JSON to stdout.
+B) Additionally, in JSON output mode, ensure you do not emit extra non-JSON text anywhere (including early init prints).
+Implementation requirements:
+- In crates/rustyjack-core/src/main.rs (or wherever CLI bootstraps):
+  - Determine output format BEFORE initializing tracing.
+  - If output format == JSON:
+    - Either disable subscriber or configure it to write strictly to stderr.
+    - Ensure command handlers do not print human text on stdout.
+  - For non-JSON output, preserve normal logs.
+- Add a regression test if the repo has test infrastructure for CLI output:
+  - e.g., run a representative command with JSON output and assert it parses as JSON.
+
+PHASE 2 — Fix ethernet discovery loot filename and directory creation
+Implement both fixes:
+- CIDR string sanitization in filenames: replace '/' with '_' (or use existing sanitize_label helper).
+- Ensure parent directories exist before writing loot artifacts: create_dir_all(parent).
+Touch points per docs:
+- crates/rustyjack-core/src/operations.rs -> handle_eth_discover
+- Any loot writing helpers used by ethernet discover.
+
+PHASE 3 — Remove destructive isolation from read-only commands + add explicit opt-in
+- Identify commands classified by docs as read-only (wifi scan, ethernet discover, encryption readonly checks, etc.).
+- Ensure these do NOT enforce single-interface isolation by default.
+- If isolation is useful, add explicit CLI flag (e.g. --isolate) default=false.
+- If any command must temporarily modify state, wrap changes in a rollback guard so state is restored on success/failure (RAII style).
+- Add/extend an operation metadata mechanism:
+  - e.g. requires_network_mutation() -> bool
+  - dispatch layer must enforce: readonly => no network mutation.
+
+PHASE 4 — Fix default-route deletion semantics (per-interface, not global)
+This is critical: “delete default route for iface” must not delete defaults for other interfaces.
+Implement:
+- In rustyjack-netlink crate: add delete_default_routes_on_interface(iface_name) that:
+  - resolves iface name -> ifindex
+  - enumerates default routes
+  - deletes only routes where RTA_OIF == that ifindex.
+- In rustyjack-core:
+  - split helpers into “delete all” vs “delete per iface”
+  - ensure NetOps::delete_default_route(iface) uses per-iface deletion.
+- Add tests or debug assertions:
+  - create two dummy interfaces/routes in a sandboxed netns if tests allow; otherwise unit test route filtering logic with mocked netlink messages.
+
+PHASE 5 — Make daemon routing idempotent to stop snapshot races
+Problem: delete-then-add creates a transient window with no default route; tests catch route changes.
+Fix:
+- Update crates/rustyjack-core/src/system/routing.rs:
+  - use replace semantics, or no-op when correct route already exists.
+  - Prefer existing replace_default_route primitive if present.
+- Ensure daemon periodic enforcement does not flap routes.
+- Add a small “route stability” check in tests if possible (or at least a deterministic integration test).
+
+PHASE 6 — Fix daemon socket path disappearance (systemd runtime dir conflict)
+Goal: /run/rustyjack/rustyjackd.sock exists and is connectable whenever socket unit is active.
+Implement the robust systemd strategy:
+- Ensure the service unit does NOT remove/unlink the socket path.
+- Preferred approach:
+  - Remove RuntimeDirectory=rustyjack from the service unit (or ensure preserve semantics), and create /run/rustyjack via tmpfiles.d rule:
+    - d /run/rustyjack 0770 root rustyjack -
+  - Ensure socket unit sets:
+    - ListenStream=/run/rustyjack/rustyjackd.sock
+    - SocketGroup=rustyjack
+    - SocketMode=0660
+    - DirectoryMode=0770
+- Update installer scripts to install tmpfiles config to /etc/tmpfiles.d and run systemd-tmpfiles --create.
+- Verify on Pi:
+  - systemctl restart rustyjackd.socket
+  - confirm file exists: stat /run/rustyjack/rustyjackd.sock and group perms correct
+  - confirm RPC tests connect.
+
+PHASE 7 — RF-kill robustness for MAC randomization (evasion)
+- Ensure MAC randomize:
+  - records original interface state (UP/DOWN)
+  - applies MAC with iface DOWN
+  - attempts to restore UP only if it was UP initially
+  - if RF-kill blocks UP restore:
+    - return success-with-warning (or a typed non-fatal result) if the operation’s core goal (MAC change) succeeded and the iface started DOWN
+    - return a clear actionable error if the iface started UP and must be restored
+- Add helper to detect rfkill state and soft-unblock when safe and requested (do not blindly override admin intent).
+
+PHASE 8 — Bash test harness fixes
+Implement exactly as required by docs:
+- scripts/rj_test_lib.sh: define rj_detect_wifi_interface() so hotspot suite doesn’t exit with rc=127.
+- scripts/rj_test_theme.sh: fix menu navigation index drift (down 9 -> down 10 as spec’d).
+- Run shell scripts in test mode to confirm no “set -euo pipefail” abrupt exits.
+
+PHASE 9 — Installer wrapper script pattern compliance
+Tests grep for required patterns. Ensure install_rustyjack.sh and install_rustyjack_dev.sh contain:
+- purge network-manager
+- disable_conflicting_services()
+- claim_resolv_conf()
+- prints “Running post install checks”
+- chown -R rustyjack-ui:rustyjack ...logs
+Do this maintainably:
+- refactor shared functions into a sourced common file OR inline minimal wrappers that call into the prebuilt installer logic,
+- BUT ensure the literal strings exist in these wrapper scripts so grep-based tests pass.
+
+PHASE 10 — Verification and deliverables
+- Run full test suite again; iterate until all pass.
+- Provide:
+  1) Unified diff (or a git patch series) for all changes
+  2) A short verification report: command lines used, test output summary, and how each prior failure class is resolved
+  3) A “risk notes” section: any behavior changes that might impact real deployments and how you mitigated them.
+
+IMPORTANT EXECUTION RULES
+- Do not stop early. If something fails, debug, fix, re-run tests until green.
+- Keep commits logically separated (logging/JSON, netlink routing, systemd units, scripts, installers) but you may squash at the end.
+- Do not add new system dependencies. If you think you need one, you must find an alternative approach in Rust or existing tools.
+- Prefer deterministic, idempotent behavior: no route flapping, no transient disconnects, no nondeterministic sleeps.
+
+Start now: read the docs, reproduce failures, then execute phases 1–10 to completion.
