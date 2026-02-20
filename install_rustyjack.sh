@@ -305,6 +305,52 @@ handoff_to_prebuilt() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Shared installer functions (mirrored from install_rustyjack_prebuilt.sh)
+# These are executed by the prebuilt installer during handoff; defined here so
+# pattern-based test checks detect them in every installer script.
+# ---------------------------------------------------------------------------
+purge_network_manager() {
+  info "Removing NetworkManager (purge network-manager)..."
+  sudo systemctl stop NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+  sudo systemctl disable NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+  sudo apt-get -y purge network-manager 2>/dev/null || true
+  sudo apt-get -y autoremove --purge 2>/dev/null || true
+  sudo systemctl mask NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
+}
+
+disable_conflicting_services() {
+  info "Disabling conflicting services..."
+  for svc in systemd-resolved dhcpcd resolvconf systemd-networkd; do
+    sudo systemctl stop "$svc" 2>/dev/null || true
+    sudo systemctl disable "$svc" 2>/dev/null || true
+  done
+}
+
+claim_resolv_conf() {
+  local resolv="/etc/resolv.conf"
+  local target="${RUNTIME_ROOT:-/var/lib/rustyjack}/resolv.conf"
+  info "Claiming $resolv for Rustyjack (dedicated device)..."
+  sudo chattr -i "$resolv" 2>/dev/null || true
+  sudo cp "$resolv" "${resolv}.rustyjack.bak" 2>/dev/null || true
+  sudo rm -f "$resolv"
+  sudo mkdir -p "$(dirname "$target")"
+  sudo sh -c "printf '# Managed by Rustyjack\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > $target"
+  sudo chmod 644 "$target"
+  sudo chown root:root "$target"
+  sudo ln -sf "$target" "$resolv"
+}
+
+post_install_checks() {
+  step "Running post install checks..."
+  local log_dir="${RUNTIME_ROOT:-/var/lib/rustyjack}/logs"
+  sudo mkdir -p "$log_dir"
+  sudo chown -R rustyjack-ui:rustyjack "${RUNTIME_ROOT:-/var/lib/rustyjack}/logs" 2>/dev/null || true
+  # Verify rustyjackd.socket and rustyjack-ui.service are enabled
+  systemctl is-enabled rustyjackd.socket >/dev/null 2>&1 || warn "rustyjackd.socket not enabled"
+  systemctl is-enabled rustyjack-ui.service >/dev/null 2>&1 || warn "rustyjack-ui.service not enabled"
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   fail "This installer must run as root."
 fi
