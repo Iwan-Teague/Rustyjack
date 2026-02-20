@@ -411,7 +411,8 @@ fn handle_eth_discover(
 ) -> Result<HandlerResult> {
     let interface = detect_ethernet_interface(args.interface.clone())?;
 
-    enforce_single_interface(&interface.name)?;
+    // Ethernet discover is a read-only operation: do not enforce
+    // interface isolation which would mutate routes/DNS on other links.
     check_cancel(cancel)?;
 
     let cidr = args
@@ -452,10 +453,11 @@ fn handle_eth_discover(
     }
     let hosts: Vec<Ipv4Addr> = deduped.iter().map(|h| h.ip).collect();
 
+    let safe_net = sanitize_label(&net.to_string());
     let loot_dir = root.join("loot").join("Ethernet");
     fs::create_dir_all(&loot_dir).context("creating loot/Ethernet")?;
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let file = loot_dir.join(format!("discovery_{}_{}.txt", net, timestamp));
+    let file = loot_dir.join(format!("discovery_{}_{}.txt", safe_net, timestamp));
     let mut out = String::new();
     out.push_str(&format!("LAN Discovery on {}\n", net));
     out.push_str(&format!("Interface: {}\n", interface.name));
@@ -3888,7 +3890,8 @@ fn handle_wifi_scan(
     };
     let interface = select_wifi_interface(Some(interface.trim().to_string()))?;
 
-    enforce_single_interface(&interface)?;
+    // WiFi scan is a read-only operation: do not enforce interface
+    // isolation by default to avoid mutating routes/DNS/rfkill state.
     try_apply_mac_policy(root, MacStage::PreAssoc, &interface, None);
 
     check_cancel(cancel)?;
@@ -5825,6 +5828,24 @@ fn handle_evasion_randomize_mac(args: EvasionIfaceArgs) -> Result<HandlerResult>
     #[cfg(target_os = "linux")]
     {
         let interface = args.interface;
+
+        // Ensure the interface is not rfkill-blocked before attempting
+        // MAC change (which requires toggling link state).
+        if let Ok(Some(idx)) = crate::netlink_helpers::rfkill_find_index(&interface) {
+            if let Ok(true) = crate::netlink_helpers::rfkill_is_hard_blocked(idx) {
+                bail!(
+                    "Interface {} is hard-blocked by rfkill (physical switch); \
+                     cannot change MAC",
+                    interface
+                );
+            }
+            if let Ok(true) = crate::netlink_helpers::rfkill_is_blocked(idx) {
+                tracing::info!("Unblocking rfkill for {} before MAC change", interface);
+                crate::netlink_helpers::rfkill_unblock(idx)
+                    .context("unblocking rfkill for MAC randomization")?;
+            }
+        }
+
         let (new_mac, _vendor_reused) = generate_vendor_aware_mac(&interface)?;
         let mut manager = MacManager::new().context("creating MacManager")?;
         manager.set_auto_restore(false);
