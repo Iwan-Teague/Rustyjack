@@ -246,7 +246,7 @@ restart_ui_service() {
 
 ui_nav_main_to_colors_menu() {
   # Assumes service has just restarted; selection begins at top-level main menu.
-  rj_ui_send down 9
+  rj_ui_send down 10
   rj_ui_send select 1
   rj_ui_send down 3
   rj_ui_send select 1

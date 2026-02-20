@@ -645,3 +645,14 @@ rj_daemon_testmode_disable() {
   RJ_DAEMON_TESTMODE_ACTIVE=0
   rj_log "[INFO] Daemon test mode disabled (UI-only operations restored)"
 }
+
+# Detect the first wireless interface available on the system.
+# Returns the interface name on stdout and 0 on success, 1 if none found.
+rj_detect_wifi_interface() {
+  local d iface
+  for d in /sys/class/net/*; do
+    iface="$(basename "$d")"
+    [[ -d "$d/wireless" ]] && { echo "$iface"; return 0; }
+  done
+  return 1
+}
