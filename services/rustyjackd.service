@@ -13,9 +13,10 @@ ExecStart=/usr/local/bin/rustyjackd
 Restart=on-failure
 RestartSec=5
 
-# Runtime & state dirs (systemd will create /run/rustyjack on start)
-RuntimeDirectory=rustyjack
-RuntimeDirectoryMode=0770
+# Runtime & state dirs
+# NOTE: /run/rustyjack is created by tmpfiles.d/rustyjack.conf (not
+# RuntimeDirectory) to avoid conflicts with the socket unit that owns
+# the socket file under that path.
 StateDirectory=rustyjack
 StateDirectoryMode=0770
 ConfigurationDirectory=rustyjack
