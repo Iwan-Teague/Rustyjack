@@ -2186,6 +2186,7 @@ ListenStream=/run/rustyjack/rustyjackd.sock
 SocketMode=0660
 SocketUser=root
 SocketGroup=rustyjack
+DirectoryMode=0770
 RemoveOnStop=true
 
 [Install]
@@ -2204,8 +2205,6 @@ Type=notify
 ExecStart=/usr/local/bin/rustyjackd
 Restart=on-failure
 RestartSec=2
-RuntimeDirectory=rustyjack
-RuntimeDirectoryMode=0770
 StateDirectory=rustyjack
 StateDirectoryMode=0770
 ConfigurationDirectory=rustyjack
@@ -2406,6 +2405,14 @@ fi
 
 # Ensure daemon startup sees the currently routed interface as preferred.
 preserve_default_route_interface
+
+# Install tmpfiles.d rule so /run/rustyjack exists on boot (and survives
+# service restarts) without RuntimeDirectory= conflicts.
+step "Installing tmpfiles.d/rustyjack.conf..."
+rj_sudo_tee /etc/tmpfiles.d/rustyjack.conf >/dev/null <<'TMPF'
+d /run/rustyjack 0770 root rustyjack -
+TMPF
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/rustyjack.conf 2>/dev/null || true
 
 # Enable socket activation for the daemon.
 sudo systemctl daemon-reload 2>/dev/null || true
