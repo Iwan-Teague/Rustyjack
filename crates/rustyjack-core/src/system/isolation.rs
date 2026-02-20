@@ -377,6 +377,16 @@ impl IsolationEngine {
             warn!("Preferred interface '{}' not found", pref);
         }
 
+        if let Ok(Some(default_route)) = self.routes.get_default_route() {
+            if interfaces.iter().any(|i| i.name == default_route.interface) {
+                info!(
+                    "Auto-selected default-route interface: {}",
+                    default_route.interface
+                );
+                return Ok(Some(default_route.interface));
+            }
+        }
+
         let candidates: Vec<&super::ops::InterfaceSummary> = interfaces
             .iter()
             .filter(|iface| iface.name != "lo")
@@ -1074,5 +1084,20 @@ mod tests {
         assert_eq!(outcome.allowed.len(), 1);
         assert_eq!(outcome.blocked.len(), 2);
         assert!(outcome.allowed.contains(&"eth0".to_string()));
+    }
+
+    #[test]
+    fn test_enforce_prefers_default_route_interface_when_unset() {
+        let mock = Arc::new(MockNetOps::new());
+        mock.add_interface("eth0", false, "up");
+        mock.add_interface("wlan0", true, "up");
+        mock.add_default_route("wlan0", Ipv4Addr::new(192, 168, 1, 1), 100)
+            .unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let engine = IsolationEngine::new(mock, temp_dir.path().to_path_buf());
+
+        let outcome = engine.enforce().unwrap();
+        assert_eq!(outcome.allowed, vec!["wlan0".to_string()]);
     }
 }

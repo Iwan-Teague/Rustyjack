@@ -33,7 +33,7 @@ Network interface isolation policy (non-negotiable):
 - Non-selected Wi-Fi must be rfkill-blocked, link-down, and have no active wpa_supplicant/DHCP activity.
 - Non-selected wired interfaces must be link-down with addresses/routes flushed.
 - The `Network Interfaces` UI screen is blocking: user cannot exit until exclusivity verification passes.
-- On isolation error, UI remains blocked with retry/reboot controls; back navigation is only allowed when the system is in a safe all-down state.
+- On isolation error, UI remains blocked while isolation is unresolved. If rollback restores a valid exclusive state, `Select/Right` exits back to menu; otherwise retry/reboot controls remain and back navigation is only allowed when the system is in a safe all-down state.
 
 MAC randomization flow:
 - UI uses `rustyjack-evasion::MacManager` with vendor-aware policy engine for secure, locally administered MACs. Prefers vendor-matched OUIs based on the current interface's OUI. After changing MAC it triggers DHCP renewal via netlink; reconnect is best-effort and does not rely on `nmcli`.

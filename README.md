@@ -186,7 +186,7 @@ Deep-dive reference: `docs/display_dynamic_resolution.md`.
   - exactly one selected interface is admin-UP and routed,
   - all non-selected interfaces are DOWN,
   - non-selected Wi-Fi interfaces are rfkill-blocked.
-- On failure, the UI remains blocked and shows Retry/Reboot actions; Back is allowed only in a safe all-down state.
+- On failure, the UI stays blocked while isolation is unresolved. If rollback restores a valid exclusive state, `Select/Right` exits back to menu; otherwise use Retry/Reboot, and `Back` is allowed only in a safe all-down state.
 - The selected interface is persisted to `gui_conf.json` only after successful transition.
 
 ### Wireless Access (external monitor/injection adapter required)
