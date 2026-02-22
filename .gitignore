@@ -18,3 +18,13 @@ nul
 # PCB workspace artifacts/reference docs (keep only generator script)
 pcb/**
 !pcb/get_refs.sh
+!pcb/actual pcb design/
+!pcb/actual pcb design/**
+
+# PCB local/editor artifacts
+pcb/actual pcb design/.DS_Store
+pcb/actual pcb design/**/.DS_Store
+pcb/actual pcb design/**/*.lck
+pcb/actual pcb design/**/*.kicad_prl
+pcb/actual pcb design/**/fp-info-cache
+pcb/actual pcb design/**/rustyjack-h616-backups/
