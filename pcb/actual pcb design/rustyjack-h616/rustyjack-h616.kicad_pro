@@ -683,7 +683,7 @@
       },
       {
         "netclass": "DDR3_DATA_HB",
-        "pattern": "/DRAM/DQ[1]|[0-9]"
+        "pattern": "^/DRAM/DQ1[0-5]$"
       },
       {
         "netclass": "DDR3_OTHER",
@@ -719,11 +719,11 @@
       },
       {
         "netclass": "DDR3_DATA_HB",
-        "pattern": "/DRAM/DQ[8-9]"
+        "pattern": "^/DRAM/DQ[8-9]$"
       },
       {
         "netclass": "DDR3_DATA_LB",
-        "pattern": "/DRAM/DQ[0-7]"
+        "pattern": "^/DRAM/DQ[0-7]$"
       },
       {
         "netclass": "USB",
@@ -735,19 +735,19 @@
       },
       {
         "netclass": "EMMC",
-        "pattern": "^EMMC_.*"
+        "pattern": "^/IO1/EMMC_.*$"
       },
       {
         "netclass": "SDIO",
-        "pattern": "^WIFI_SDIO_.*"
+        "pattern": "^/WIFI/WIFI_SDIO_.*$"
       },
       {
         "netclass": "SDIO",
-        "pattern": "^WL_.*"
+        "pattern": "^/WIFI/WL_.*$"
       },
       {
         "netclass": "RMII",
-        "pattern": "^(RMII_|ETH_|MDC$|MDIO$).*"
+        "pattern": "^/IO1/(RXC|RXCTL|RXD[0-3]|TXC|TXCTL|TXD[0-3]|CLK125|MDC|MDIO)$"
       }
     ]
   },

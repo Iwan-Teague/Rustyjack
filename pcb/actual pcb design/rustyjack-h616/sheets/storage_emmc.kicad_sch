@@ -5,7 +5,7 @@
 	(uuid "68663db6-c703-4253-b388-4008f4be15fd")
 	(paper "A4")
 	(title_block
-		(title "Voltlog eMMC to microSD Adapter")
+		(title "H616 eMMC Storage")
 		(date "2021-07-06")
 		(rev "A")
 	)
@@ -574,7 +574,7 @@
 				)
 			)
 		)
-		(symbol "emmc-adapter-rescue:GND-power"
+		(symbol "H616_emmc-rescue:GND-power"
 			(power)
 			(pin_names
 				(offset 0)
@@ -608,7 +608,7 @@
 					(hide yes)
 				)
 			)
-			(property "Datasheet" ""
+			(property "Datasheet" "https://lcsc.com/datasheet/lcsc_datasheet_1912111437_TOSHIBA-THGBMNG5D1LBAIL_C391255.pdf"
 				(at 0 0 0)
 				(effects
 					(font
@@ -661,7 +661,7 @@
 				)
 			)
 		)
-		(symbol "emmc-adapter-rescue:THGBMNG5D1LBAIL-voltlog"
+		(symbol "H616_lib:THGBMNG5D1LBAIL"
 			(pin_names
 				(offset 1.016)
 			)
@@ -676,7 +676,7 @@
 					)
 				)
 			)
-			(property "Value" "voltlog_THGBMNG5D1LBAIL"
+			(property "Value" "THGBMNG5D1LBAIL"
 				(at 7.62 26.67 0)
 				(effects
 					(font
@@ -684,7 +684,7 @@
 					)
 				)
 			)
-			(property "Footprint" "Voltlog:WFBGA153"
+			(property "Footprint" "projectlib:THGBMNG5D1LBAIL_WFBGA153"
 				(at 0 -30.48 0)
 				(effects
 					(font
@@ -711,7 +711,7 @@
 					(hide yes)
 				)
 			)
-			(symbol "THGBMNG5D1LBAIL-voltlog_0_0"
+			(symbol "THGBMNG5D1LBAIL_emmc_0_0"
 				(pin power_in line
 					(at 11.43 -12.7 180)
 					(length 2.54)
@@ -731,7 +731,7 @@
 					)
 				)
 			)
-			(symbol "THGBMNG5D1LBAIL-voltlog_0_1"
+			(symbol "THGBMNG5D1LBAIL_emmc_0_1"
 				(rectangle
 					(start -8.89 25.4)
 					(end 8.89 -27.94)
@@ -744,7 +744,7 @@
 					)
 				)
 			)
-			(symbol "THGBMNG5D1LBAIL-voltlog_1_1"
+			(symbol "THGBMNG5D1LBAIL_emmc_1_1"
 				(pin bidirectional line
 					(at -11.43 6.35 0)
 					(length 2.54)
@@ -1323,7 +1323,7 @@
 				)
 			)
 		)
-		(symbol "emmc-adapter-rescue:VCC-power"
+		(symbol "H616_emmc-rescue:VCC-power"
 			(power)
 			(pin_names
 				(offset 0)
@@ -1434,7 +1434,7 @@
 				)
 			)
 		)
-		(symbol "emmc-adapter-rescue:VOLTLOG_LOGO-voltlog"
+		(symbol "H616_lib:H616_LOGO"
 			(pin_numbers hide)
 			(pin_names
 				(offset 0) hide)
@@ -1450,7 +1450,7 @@
 					(hide yes)
 				)
 			)
-			(property "Value" "voltlog_VOLTLOG_LOGO"
+			(property "Value" "H616_LOGO"
 				(at 0 3.302 0)
 				(effects
 					(font
@@ -1486,7 +1486,7 @@
 					(hide yes)
 				)
 			)
-			(symbol "VOLTLOG_LOGO-voltlog_0_0"
+			(symbol "H616_LOGO_0_0"
 				(polyline
 					(pts
 						(xy -0.4064 -3.0988) (xy -0.4064 -3.0734) (xy -0.2286 -2.8956) (xy -0.1778 -2.8194) (xy -0.0254 -2.667)
@@ -2395,7 +2395,7 @@
 		(uuid "f94c2746-3609-4615-8259-ebaf47a68808")
 	)
 	(symbol
-		(lib_id "emmc-adapter-rescue:THGBMNG5D1LBAIL-voltlog")
+		(lib_id "H616_lib:THGBMNG5D1LBAIL")
 		(at 137.16 72.39 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -2419,7 +2419,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Voltlog:WFBGA153"
+		(property "Footprint" "projectlib:THGBMNG5D1LBAIL_WFBGA153"
 			(at 135.89 93.98 0)
 			(effects
 				(font
@@ -2428,7 +2428,7 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "https://datasheet.lcsc.com/szlcsc/1912111437_KIOXIA-THGBMDG5D1LBAIL_C391254.pdf"
+		(property "Datasheet" "https://lcsc.com/datasheet/lcsc_datasheet_1912111437_TOSHIBA-THGBMNG5D1LBAIL_C391255.pdf"
 			(at 135.89 93.98 0)
 			(effects
 				(font
@@ -2546,7 +2546,7 @@
 			(uuid "72aa4452-90ea-4c5f-9bf9-a11ae3bc745a")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "U1")
 					(unit 1)
@@ -2579,7 +2579,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Voltlog:microSD_card"
+		(property "Footprint" "Connector_Card:microSD_HC_Hirose_DM3AT-SF-PEJM5"
 			(at 237.49 58.42 0)
 			(effects
 				(font
@@ -2634,7 +2634,7 @@
 			(uuid "d3a28a39-5ecf-4cce-8b0f-ba13db9a9734")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "J1")
 					(unit 1)
@@ -2643,12 +2643,12 @@
 		)
 	)
 	(symbol
-		(lib_id "emmc-adapter-rescue:VOLTLOG_LOGO-voltlog")
+		(lib_id "H616_lib:H616_LOGO")
 		(at 182.88 172.72 0)
 		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
+		(exclude_from_sim yes)
+		(in_bom no)
+		(on_board no)
 		(dnp no)
 		(uuid "00000000-0000-0000-0000-00005febb9f7")
 		(property "Reference" "V1"
@@ -2660,7 +2660,7 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "VOLTLOG_LOGO"
+		(property "Value" "H616_LOGO"
 			(at 182.88 169.418 0)
 			(effects
 				(font
@@ -2669,7 +2669,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "Voltlog:voltlog_mask_3mm"
+		(property "Footprint" ""
 			(at 182.88 172.72 0)
 			(effects
 				(font
@@ -2697,7 +2697,7 @@
 			)
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "V1")
 					(unit 1)
@@ -2760,7 +2760,7 @@
 			)
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "FID1")
 					(unit 1)
@@ -2823,7 +2823,7 @@
 			)
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "FID2")
 					(unit 1)
@@ -2886,7 +2886,7 @@
 			)
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "FID3")
 					(unit 1)
@@ -2955,7 +2955,7 @@
 			(uuid "6a1c6503-25df-4727-bcfc-13dba3103978")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "C2")
 					(unit 1)
@@ -2964,7 +2964,7 @@
 		)
 	)
 	(symbol
-		(lib_id "emmc-adapter-rescue:GND-power")
+		(lib_id "H616_emmc-rescue:GND-power")
 		(at 157.48 74.93 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -3020,7 +3020,7 @@
 			(uuid "4cf7b96d-4ab2-45fe-95d0-8c6eeefd1c47")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "#PWR0101")
 					(unit 1)
@@ -3029,7 +3029,7 @@
 		)
 	)
 	(symbol
-		(lib_id "emmc-adapter-rescue:VCC-power")
+		(lib_id "H616_emmc-rescue:VCC-power")
 		(at 157.48 67.31 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -3085,7 +3085,7 @@
 			(uuid "76f3f53f-7245-47ea-b2a3-77f89f09df47")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "#PWR0102")
 					(unit 1)
@@ -3154,7 +3154,7 @@
 			(uuid "2d34df31-b79e-410d-9719-c543300e64bd")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "C1")
 					(unit 1)
@@ -3163,7 +3163,7 @@
 		)
 	)
 	(symbol
-		(lib_id "emmc-adapter-rescue:GND-power")
+		(lib_id "H616_emmc-rescue:GND-power")
 		(at 116.84 102.87 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -3219,7 +3219,7 @@
 			(uuid "5825633e-82a4-4b10-b25c-4aa34745051d")
 		)
 		(instances
-			(project "emmc-adapter"
+			(project "rustyjack-h616"
 				(path "/68663db6-c703-4253-b388-4008f4be15fd"
 					(reference "#PWR0103")
 					(unit 1)
