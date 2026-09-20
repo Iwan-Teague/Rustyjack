@@ -2346,6 +2346,23 @@ fn hmac_sha1(key: &[u8], data: &[u8]) -> Vec<u8> {
     h.finalize().into_bytes().to_vec()
 }
 
+/// Compute the EAPOL-Key MIC over the frame with the MIC field zeroed.
+///
+/// The MIC input is the first `113 + key_data_len` bytes of the frame.
+/// `key_data_len` comes from the wire (bytes 111..113) and is attacker
+/// controlled, so it must be bound-checked against the frame length before
+/// slicing; fail closed with `None` when the declared key data exceeds the
+/// received frame.
+fn eapol_mic_input(ptk_kck: &[u8], frame: &mut [u8], key_data_len: usize) -> Option<Vec<u8>> {
+    if frame.len() < 113 || key_data_len > frame.len() - 113 {
+        return None;
+    }
+    for b in frame[95..111].iter_mut() {
+        *b = 0;
+    }
+    Some(hmac_sha1(ptk_kck, &frame[..(113 + key_data_len)]))
+}
+
 fn build_m3(
     bssid: &[u8; 6],
     sta: &[u8; 6],
@@ -2568,10 +2585,19 @@ fn spawn_eapol_task(
                     }
                     if let Some(ptk) = entry.ptk {
                         let mut frame = buf[..len].to_vec();
-                        for b in frame[95..111].iter_mut() {
-                            *b = 0;
-                        }
-                        let calc_mic = hmac_sha1(&ptk[..16], &frame[..(113 + key_data_len)]);
+                        let calc_mic = match eapol_mic_input(&ptk[..16], &mut frame, key_data_len) {
+                            Some(mic) => mic,
+                            None => {
+                                tracing::debug!(
+                                    "EAPOL M4 with out-of-bounds key_data_len={} (frame len={}) from {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}; ignoring",
+                                    key_data_len,
+                                    len,
+                                    sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]
+                                );
+                                drop(state_guard);
+                                continue;
+                            }
+                        };
                         if calc_mic.len() < 16 {
                             tracing::error!(
                                 "[AP] Calculated MIC too short (len={})",
@@ -2714,10 +2740,18 @@ fn spawn_eapol_task(
 
             // Verify MIC on incoming M2
             let mut frame = buf[..len].to_vec();
-            for b in frame[95..111].iter_mut() {
-                *b = 0;
-            }
-            let calc_mic = hmac_sha1(&ptk[..16], &frame[..(113 + key_data_len)]);
+            let calc_mic = match eapol_mic_input(&ptk[..16], &mut frame, key_data_len) {
+                Some(mic) => mic,
+                None => {
+                    tracing::debug!(
+                        "EAPOL M2 with out-of-bounds key_data_len={} (frame len={}) from {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}; ignoring",
+                        key_data_len,
+                        len,
+                        sta_mac[0], sta_mac[1], sta_mac[2], sta_mac[3], sta_mac[4], sta_mac[5]
+                    );
+                    continue;
+                }
+            };
             if calc_mic.len() < 16 {
                 tracing::error!("[AP] Calculated MIC too short (len={})", calc_mic.len());
                 record_ap_error("Calculated MIC too short".to_string());
@@ -3186,6 +3220,57 @@ mod tests {
 
         let invalid = generate_pmk("short", "TestNetwork");
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn test_eapol_mic_input_rejects_oversized_key_data_len() {
+        // Attacker-controlled key_data_len (wire bytes 111..113) claiming far
+        // more key data than the received frame carries. Before the bounds
+        // check this sliced frame[..113+4096] out of a 113-byte frame and
+        // panicked the AP's EAPOL task (one-packet DoS).
+        let pmk = generate_pmk("password", "IEEE").expect("pmk");
+        let ptk = derive_ptk(&pmk, &[0x02; 6], &[0xaa; 6], &[7u8; 32], &[9u8; 32]);
+        let mut frame = vec![0u8; 113]; // EAPOL-Key header only, no key data
+        frame[111] = 0x10;
+        frame[112] = 0x00;
+        let key_data_len = u16::from_be_bytes([frame[111], frame[112]]) as usize;
+        assert_eq!(key_data_len, 4096);
+        assert!(eapol_mic_input(&ptk[..16], &mut frame, key_data_len).is_none());
+    }
+
+    #[test]
+    fn test_eapol_mic_input_rejects_short_frame() {
+        let pmk = generate_pmk("password", "IEEE").expect("pmk");
+        let ptk = derive_ptk(&pmk, &[0x02; 6], &[0xaa; 6], &[7u8; 32], &[9u8; 32]);
+        let mut frame = vec![0u8; 112]; // even 1 byte short of the header
+        assert!(eapol_mic_input(&ptk[..16], &mut frame, 0).is_none());
+        let mut frame = Vec::new();
+        assert!(eapol_mic_input(&ptk[..16], &mut frame, 0).is_none());
+    }
+
+    #[test]
+    fn test_eapol_mic_input_parses_valid_frame() {
+        // Well-formed M2-shaped frame: 113-byte header + 32 bytes key data.
+        let pmk = generate_pmk("password", "IEEE").expect("pmk");
+        let ptk = derive_ptk(&pmk, &[0x02; 6], &[0xaa; 6], &[7u8; 32], &[9u8; 32]);
+        let mut frame = vec![0u8; 113 + 32];
+        frame[95..111].copy_from_slice(&[0xa5u8; 16]);
+        let key_data_len = 32usize;
+        let mic = eapol_mic_input(&ptk[..16], &mut frame, key_data_len).expect("valid frame");
+        assert_eq!(mic.len(), 20); // HMAC-SHA1
+        assert!(frame[95..111].iter().all(|&b| b == 0)); // MIC field zeroed
+        let mut again = frame.clone();
+        let mic2 = eapol_mic_input(&ptk[..16], &mut again, key_data_len).expect("valid frame");
+        assert_eq!(mic, mic2); // deterministic
+    }
+
+    #[test]
+    fn test_eapol_mic_input_accepts_zero_key_data_at_exact_header_length() {
+        // key_data_len == 0 on an exactly-113-byte frame must still parse.
+        let pmk = generate_pmk("password", "IEEE").expect("pmk");
+        let ptk = derive_ptk(&pmk, &[0x02; 6], &[0xaa; 6], &[7u8; 32], &[9u8; 32]);
+        let mut frame = vec![0u8; 113];
+        assert!(eapol_mic_input(&ptk[..16], &mut frame, 0).is_some());
     }
 
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
