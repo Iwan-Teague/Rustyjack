@@ -2,6 +2,7 @@
 name = "rustyjack-core"
 version = "0.1.17"
 edition = "2021"
+license.workspace = true
 
 [features]
 default = ["appliance"]
