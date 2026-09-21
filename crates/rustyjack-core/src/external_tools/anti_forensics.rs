@@ -9,8 +9,8 @@ use aes::Aes256;
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Context, Result};
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use cbc::{Decryptor, Encryptor};
+use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use cbc::Decryptor;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -24,13 +24,42 @@ use walkdir::WalkDir;
 use zeroize::Zeroize;
 
 const ENC_MAGIC: &[u8; 6] = b"RJENC1";
+const ENC_MAGIC_V2: &[u8; 6] = b"RJENC2";
 const ENC_SALT_LEN_GCM: usize = 16;
 const ENC_NONCE_LEN_GCM: usize = 12;
-const ENC_PBKDF2_ITERS: u32 = 10_000;
+const ENC_PBKDF2_ITERS: u32 = 600_000;
+const ENC_PBKDF2_ITERS_LEGACY: u32 = 10_000;
 const OPENSSL_MAGIC: &[u8; 8] = b"Salted__";
 const OPENSSL_SALT_LEN: usize = 8;
 const OPENSSL_KEY_LEN: usize = 32;
 const OPENSSL_IV_LEN: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptedLootFormat {
+    /// AES-256-GCM with PBKDF2-HMAC-SHA256 (600k iters). Current write format.
+    RjEnc2,
+    /// AES-256-GCM with PBKDF2-HMAC-SHA256 (10k iters). Authenticated legacy.
+    RjEnc1,
+    /// OpenSSL-compatible AES-256-CBC ("Salted__"). Unauthenticated; refused
+    /// by the default read path.
+    LegacyOpensslCbc,
+    /// No recognized header.
+    Unknown,
+}
+
+/// Identify the envelope format of an encrypted loot/backup blob without
+/// decrypting it.
+pub fn detect_encrypted_format(data: &[u8]) -> EncryptedLootFormat {
+    if data.starts_with(ENC_MAGIC_V2) {
+        EncryptedLootFormat::RjEnc2
+    } else if data.starts_with(ENC_MAGIC) {
+        EncryptedLootFormat::RjEnc1
+    } else if data.starts_with(OPENSSL_MAGIC) {
+        EncryptedLootFormat::LegacyOpensslCbc
+    } else {
+        EncryptedLootFormat::Unknown
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AntiForensicsConfig {
@@ -794,36 +823,56 @@ fn archive_root_name(dir: &Path) -> Result<PathBuf> {
 }
 
 fn encrypt_bytes_with_password(password: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
-    // OpenSSL-compatible AES-256-CBC with PBKDF2 and "Salted__" header.
-    let mut salt = [0u8; OPENSSL_SALT_LEN];
+    // Versioned AES-256-GCM envelope (RJENC2): AEAD tag authenticates the
+    // ciphertext, replacing the integrity-less OpenSSL-compatible CBC format.
+    let mut salt = [0u8; ENC_SALT_LEN_GCM];
+    let mut nonce_bytes = [0u8; ENC_NONCE_LEN_GCM];
     let mut rng = OsRng;
     rng.fill_bytes(&mut salt);
-    let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, ENC_PBKDF2_ITERS, &mut key_iv);
-    let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
-    let ciphertext = Encryptor::<Aes256>::new_from_slices(key, iv)
-        .map_err(|_| anyhow!("Invalid encryption key/iv"))?
-        .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
-    key_iv.zeroize();
+    rng.fill_bytes(&mut nonce_bytes);
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, ENC_PBKDF2_ITERS, &mut key);
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
+        .map_err(|e| anyhow!("Encryption failed: {e}"))?;
+    key.zeroize();
 
-    let mut out = Vec::with_capacity(OPENSSL_MAGIC.len() + OPENSSL_SALT_LEN + ciphertext.len());
-    out.extend_from_slice(OPENSSL_MAGIC);
+    let mut out = Vec::with_capacity(
+        ENC_MAGIC_V2.len() + ENC_SALT_LEN_GCM + ENC_NONCE_LEN_GCM + ciphertext.len(),
+    );
+    out.extend_from_slice(ENC_MAGIC_V2);
     out.extend_from_slice(&salt);
+    out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
 fn decrypt_bytes_with_password(password: &str, data: &[u8]) -> Result<Vec<u8>> {
-    if data.starts_with(OPENSSL_MAGIC) {
-        return decrypt_openssl_bytes(password, data);
+    match detect_encrypted_format(data) {
+        EncryptedLootFormat::RjEnc2 => decrypt_rjenc_bytes(password, data, ENC_PBKDF2_ITERS),
+        EncryptedLootFormat::RjEnc1 => {
+            warn!(
+                "Legacy RJENC1 loot envelope detected (PBKDF2 10k iters); re-encrypt when convenient"
+            );
+            decrypt_rjenc_bytes(password, data, ENC_PBKDF2_ITERS_LEGACY)
+        }
+        EncryptedLootFormat::LegacyOpensslCbc => Err(anyhow!(
+            "Refusing legacy integrity-less AES-256-CBC loot archive (\"Salted__\" header, \
+             no AEAD/MAC); use decrypt_bytes_with_password_legacy_cbc explicitly to salvage it"
+        )),
+        EncryptedLootFormat::Unknown => Err(anyhow!("Invalid encrypted data header")),
     }
-    if data.starts_with(ENC_MAGIC) {
-        return decrypt_rjenc_bytes(password, data);
-    }
-    Err(anyhow!("Invalid encrypted data header"))
 }
 
-fn decrypt_openssl_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
+/// Explicit opt-in read path for pre-AEAD OpenSSL-compatible CBC archives.
+/// CBC provides no integrity: callers must treat the output as untrusted.
+pub fn decrypt_bytes_with_password_legacy_cbc(password: &str, data: &[u8]) -> Result<Vec<u8>> {
+    if detect_encrypted_format(data) != EncryptedLootFormat::LegacyOpensslCbc {
+        return Err(anyhow!("Not a legacy OpenSSL CBC archive"));
+    }
+    warn!("Decrypting legacy integrity-less CBC loot archive; content is unauthenticated");
     let header_len = OPENSSL_MAGIC.len() + OPENSSL_SALT_LEN;
     if data.len() < header_len {
         return Err(anyhow!("Encrypted data too short"));
@@ -831,18 +880,24 @@ fn decrypt_openssl_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
     let salt = &data[OPENSSL_MAGIC.len()..header_len];
     let ct = &data[header_len..];
     let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ENC_PBKDF2_ITERS, &mut key_iv);
+    pbkdf2_hmac::<Sha256>(
+        password.as_bytes(),
+        salt,
+        ENC_PBKDF2_ITERS_LEGACY,
+        &mut key_iv,
+    );
     let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
-    let mut buf = ct.to_vec();
+    let mut buf = vec![0u8; ct.len()];
     let plaintext = Decryptor::<Aes256>::new_from_slices(key, iv)
         .map_err(|_| anyhow!("Invalid decryption key/iv"))?
-        .decrypt_padded_vec_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| anyhow!("Decryption failed: wrong password or corrupted data"))?;
+        .decrypt_padded_b2b_mut::<Pkcs7>(ct, &mut buf)
+        .map_err(|_| anyhow!("Decryption failed: wrong password or corrupted data"))?
+        .to_vec();
     key_iv.zeroize();
     Ok(plaintext)
 }
 
-fn decrypt_rjenc_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
+fn decrypt_rjenc_bytes(password: &str, data: &[u8], iterations: u32) -> Result<Vec<u8>> {
     let header_len = ENC_MAGIC.len() + ENC_SALT_LEN_GCM + ENC_NONCE_LEN_GCM;
     if data.len() < header_len {
         return Err(anyhow!("Encrypted data too short"));
@@ -854,7 +909,7 @@ fn decrypt_rjenc_bytes(password: &str, data: &[u8]) -> Result<Vec<u8>> {
     let nonce_bytes = &data[nonce_start..ct_start];
     let ct = &data[ct_start..];
     let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ENC_PBKDF2_ITERS, &mut key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut key);
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
@@ -936,5 +991,121 @@ fn disable_swap_all() {
                 warn!("swapoff {} failed: {}", path, io::Error::last_os_error());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use cbc::Encryptor;
+
+    const TEST_PASSWORD: &str = "correct horse battery staple";
+
+    #[test]
+    fn roundtrip_uses_versioned_aead_envelope() {
+        let plaintext: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let enc = encrypt_bytes_with_password(TEST_PASSWORD, &plaintext).unwrap();
+        assert_eq!(detect_encrypted_format(&enc), EncryptedLootFormat::RjEnc2);
+        assert!(enc.starts_with(ENC_MAGIC_V2));
+        let dec = decrypt_bytes_with_password(TEST_PASSWORD, &enc).unwrap();
+        assert_eq!(dec, plaintext);
+    }
+
+    #[test]
+    fn tampered_ciphertext_and_wrong_password_are_rejected() {
+        let plaintext = b"attack at dawn".to_vec();
+        let enc = encrypt_bytes_with_password(TEST_PASSWORD, &plaintext).unwrap();
+
+        let mut tampered_tag = enc.clone();
+        let last = tampered_tag.len() - 1;
+        tampered_tag[last] ^= 0x01;
+        assert!(decrypt_bytes_with_password(TEST_PASSWORD, &tampered_tag).is_err());
+
+        let mut tampered_body = enc.clone();
+        let mid = ENC_MAGIC_V2.len() + ENC_SALT_LEN_GCM + 2;
+        tampered_body[mid] ^= 0x80;
+        assert!(decrypt_bytes_with_password(TEST_PASSWORD, &tampered_body).is_err());
+
+        assert!(decrypt_bytes_with_password("wrong password", &enc).is_err());
+    }
+
+    #[test]
+    fn legacy_cbc_blob_is_identified_and_refused() {
+        let plaintext = b"old loot".to_vec();
+        let mut salt = [0u8; OPENSSL_SALT_LEN];
+        OsRng.fill_bytes(&mut salt);
+        let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
+        pbkdf2_hmac::<Sha256>(
+            TEST_PASSWORD.as_bytes(),
+            &salt,
+            ENC_PBKDF2_ITERS_LEGACY,
+            &mut key_iv,
+        );
+        let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
+        let mut out = vec![0u8; plaintext.len() + 16];
+        let ct = Encryptor::<Aes256>::new_from_slices(key, iv)
+            .unwrap()
+            .encrypt_padded_b2b_mut::<Pkcs7>(&plaintext, &mut out)
+            .unwrap()
+            .to_vec();
+        key_iv.zeroize();
+
+        let mut blob = Vec::new();
+        blob.extend_from_slice(OPENSSL_MAGIC);
+        blob.extend_from_slice(&salt);
+        blob.extend_from_slice(&ct);
+
+        assert_eq!(
+            detect_encrypted_format(&blob),
+            EncryptedLootFormat::LegacyOpensslCbc
+        );
+        let err = decrypt_bytes_with_password(TEST_PASSWORD, &blob)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("CBC"), "unexpected error: {err}");
+
+        let dec = decrypt_bytes_with_password_legacy_cbc(TEST_PASSWORD, &blob).unwrap();
+        assert_eq!(dec, plaintext);
+    }
+
+    #[test]
+    fn legacy_rjenc1_gcm_blob_still_decrypts() {
+        let plaintext = b"older loot".to_vec();
+        let mut salt = [0u8; ENC_SALT_LEN_GCM];
+        let mut nonce_bytes = [0u8; ENC_NONCE_LEN_GCM];
+        OsRng.fill_bytes(&mut salt);
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let mut key = [0u8; 32];
+        pbkdf2_hmac::<Sha256>(
+            TEST_PASSWORD.as_bytes(),
+            &salt,
+            ENC_PBKDF2_ITERS_LEGACY,
+            &mut key,
+        );
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_slice())
+            .unwrap();
+        key.zeroize();
+
+        let mut blob = Vec::new();
+        blob.extend_from_slice(ENC_MAGIC);
+        blob.extend_from_slice(&salt);
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ct);
+
+        assert_eq!(detect_encrypted_format(&blob), EncryptedLootFormat::RjEnc1);
+        let dec = decrypt_bytes_with_password(TEST_PASSWORD, &blob).unwrap();
+        assert_eq!(dec, plaintext);
+    }
+
+    #[test]
+    fn unknown_header_is_refused() {
+        assert_eq!(
+            detect_encrypted_format(b"NOPE"),
+            EncryptedLootFormat::Unknown
+        );
+        assert!(decrypt_bytes_with_password(TEST_PASSWORD, b"NOPE").is_err());
     }
 }
