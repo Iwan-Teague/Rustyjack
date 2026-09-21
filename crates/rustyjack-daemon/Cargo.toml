@@ -59,3 +59,6 @@ path = "../rustyjack-updater"
 [dev-dependencies]
 rustyjack-client = { path = "../rustyjack-client" }
 rustyjack-commands = { path = "../rustyjack-commands" }
+
+[lints]
+workspace = true

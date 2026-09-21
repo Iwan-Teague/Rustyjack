@@ -51,6 +51,8 @@ pub fn configure_host(country_override: Option<&str>) -> Result<HostSetupOutcome
 fn ensure_root() -> Result<()> {
     #[cfg(target_os = "linux")]
     {
+        #[allow(unsafe_code)]
+        // SAFETY: `geteuid` takes no arguments and cannot cause UB.
         let euid = unsafe { libc::geteuid() };
         if euid != 0 {
             bail!("Rustyjack system setup must run as root (uid 0)");

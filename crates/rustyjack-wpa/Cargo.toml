@@ -15,3 +15,6 @@ thiserror = "1.0"
 hmac = "0.12"
 sha1 = "0.10"
 pbkdf2 = "0.12"
+
+[lints]
+workspace = true

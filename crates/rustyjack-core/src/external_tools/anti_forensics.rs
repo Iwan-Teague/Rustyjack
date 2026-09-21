@@ -323,6 +323,8 @@ pub fn perform_complete_purge(root: &Path) -> PurgeReport {
         }
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `sync` takes no arguments and cannot cause UB.
     unsafe {
         libc::sync();
     }
@@ -358,6 +360,9 @@ pub fn enable_ram_only_mode(_root: &Path) -> Result<()> {
     let target = CString::new(ram_dir_str)?;
     let fstype = CString::new("tmpfs")?;
     let data = CString::new("size=500M,mode=0700")?;
+    #[allow(unsafe_code)]
+    // SAFETY: all four string arguments are NUL-terminated `CString`s valid for the duration of the
+    // SAFETY: call; `flags` is 0 and the result is checked.
     let res = unsafe {
         libc::mount(
             source.as_ptr(),
@@ -392,6 +397,8 @@ pub fn disable_ram_only_mode() -> Result<()> {
             .to_str()
             .ok_or_else(|| anyhow!("ram dir must be valid UTF-8"))?;
         let target = CString::new(ram_dir_str)?;
+        #[allow(unsafe_code)]
+        // SAFETY: `target` is a NUL-terminated `CString` valid for the duration of the `umount2` call.
         let res = unsafe { libc::umount2(target.as_ptr(), 0) };
         if res != 0 {
             return Err(anyhow!(
@@ -455,6 +462,8 @@ pub fn enable_anti_dump_protection() -> Result<()> {
 
     // Prevent core dumps
     #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    // SAFETY: `RLIMIT_CORE` is a scalar constant and `lim` points to a fully initialized `rlimit`.
     unsafe {
         let lim = libc::rlimit {
             rlim_cur: 0,
@@ -468,7 +477,9 @@ pub fn enable_anti_dump_protection() -> Result<()> {
     // Disable ptrace for this process (prevents debugging)
     #[cfg(target_os = "linux")]
     {
+        #[allow(unsafe_code)]
         // PR_SET_DUMPABLE = 4
+        // SAFETY: `PR_SET_DUMPABLE` with scalar arguments only; `prctl` cannot cause UB without pointers.
         unsafe {
             libc::prctl(4, 0, 0, 0, 0);
         }
@@ -494,6 +505,9 @@ pub fn hide_process() -> Result<()> {
         use std::ffi::CString;
 
         let name = CString::new(new_name).unwrap();
+        #[allow(unsafe_code)]
+        // SAFETY: `name` is a NUL-terminated `CString`; `PR_SET_NAME` makes the kernel copy at most 16
+        // SAFETY: bytes from the pointer during the call.
         unsafe {
             // PR_SET_NAME = 15
             libc::prctl(15, name.as_ptr(), 0, 0, 0);
@@ -528,16 +542,26 @@ pub fn clear_arp_cache() -> Result<()> {
         use std::mem;
 
         fn delete_arp_entry(ip: std::net::Ipv4Addr) -> io::Result<()> {
+            #[allow(unsafe_code)]
+            // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
             let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
             if fd < 0 {
                 return Err(io::Error::last_os_error());
             }
 
+            #[allow(unsafe_code)]
+            // SAFETY: `arpreq` is a POD C struct; the all-zero pattern is a valid initial value and the fields
+            // SAFETY: used by `SIOCDARP` are set below.
             let mut req: libc::arpreq = unsafe { mem::zeroed() };
+            #[allow(unsafe_code)]
+            // SAFETY: `sockaddr_in` is a POD C struct; the zeroed value is valid and family/address are set below.
             let mut addr: libc::sockaddr_in = unsafe { mem::zeroed() };
             addr.sin_family = libc::AF_INET as u16;
             addr.sin_addr.s_addr = u32::from_be_bytes(ip.octets());
 
+            #[allow(unsafe_code)]
+            // SAFETY: copies the 16-byte `sockaddr_in` into `req.arp_pa`, whose `sockaddr` field is exactly
+            // SAFETY: 16 bytes on Linux, so the copy is in-bounds and both pointers are valid for their lengths.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &addr as *const _ as *const u8,
@@ -546,8 +570,13 @@ pub fn clear_arp_cache() -> Result<()> {
                 );
             }
 
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is a valid open socket and `req` points to a fully initialized `arpreq`; the ioctl
+            // SAFETY: only accesses the struct during the call.
             let res = unsafe { libc::ioctl(fd, libc::SIOCDARP, &req) };
             let err = io::Error::last_os_error();
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
             unsafe {
                 libc::close(fd);
             }
@@ -919,6 +948,9 @@ fn decrypt_rjenc_bytes(password: &str, data: &[u8], iterations: u32) -> Result<V
 
 fn poweroff_now() {
     #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    // SAFETY: `sync` takes no arguments; `reboot` is called with `LINUX_REBOOT_CMD_POWER_OFF` plus the
+    // SAFETY: two magic scalars — plain integers, no pointers.
     unsafe {
         libc::sync();
         if libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF) != 0 {
@@ -958,6 +990,9 @@ fn process_list_contains(needle: &str) -> Result<bool> {
 
 fn set_hostname(name: &str) -> Result<()> {
     let cname = CString::new(name)?;
+    #[allow(unsafe_code)]
+    // SAFETY: `cname` is the `CString` built from `name`, so `name.len()` equals the string length the
+    // SAFETY: pointer covers (excluding the NUL) and the pointer is valid for the call.
     let res = unsafe { libc::sethostname(cname.as_ptr(), name.len()) };
     if res != 0 {
         return Err(anyhow!(
@@ -983,6 +1018,8 @@ fn disable_swap_all() {
         let Ok(cpath) = CString::new(path) else {
             continue;
         };
+        #[allow(unsafe_code)]
+        // SAFETY: `path` is a NUL-terminated `CString` valid for the duration of the `swapoff` call.
         unsafe {
             if libc::swapoff(cpath.as_ptr()) != 0 {
                 warn!("swapoff {} failed: {}", path, io::Error::last_os_error());

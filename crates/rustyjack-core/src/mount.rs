@@ -451,6 +451,9 @@ impl MountLock {
 
         let start = Instant::now();
         loop {
+            #[allow(unsafe_code)]
+            // SAFETY: the fd comes from an owned `File` kept alive in the lock guard; `flock` takes scalars
+            // SAFETY: only and the result is checked.
             let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
             if rc == 0 {
                 return Ok(Self { _file: file });
@@ -501,10 +504,16 @@ fn canonical_device_path(path: &Path) -> Result<PathBuf> {
 fn ensure_block_device(path: &Path) -> Result<()> {
     let c_path = path_to_cstring(path)?;
     let mut stat_buf = std::mem::MaybeUninit::<libc::stat>::uninit();
+    #[allow(unsafe_code)]
+    // SAFETY: `c_path` is a NUL-terminated `CString` and `stat_buf` is a `MaybeUninit` pointer that
+    // SAFETY: the kernel fully initializes when `stat` returns 0.
     let rc = unsafe { libc::stat(c_path.as_ptr(), stat_buf.as_mut_ptr()) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error()).context("stat device");
     }
+    #[allow(unsafe_code)]
+    // SAFETY: the `stat` call above returned 0 (checked), which guarantees the kernel initialized the
+    // SAFETY: entire struct, so `assume_init` is sound.
     let stat_buf = unsafe { stat_buf.assume_init() };
     let mode = stat_buf.st_mode & libc::S_IFMT;
     if mode != libc::S_IFBLK {
@@ -753,6 +762,9 @@ fn do_mount(device: &Path, target: &Path, fs: &FsType, mode: MountMode) -> Resul
     };
     let data = CString::new(data_str)?;
 
+    #[allow(unsafe_code)]
+    // SAFETY: all string arguments are NUL-terminated `CString`s valid for the call; `flags` is a
+    // SAFETY: caller-provided bit mask and the result is checked.
     let rc = unsafe {
         libc::mount(
             src.as_ptr(),
@@ -785,6 +797,8 @@ fn fat_mount_data(target: &Path) -> Result<String> {
 fn do_unmount(target: &Path, detach: bool) -> Result<()> {
     let tgt = path_to_cstring(target)?;
     let flags = if detach { libc::MNT_DETACH } else { 0 };
+    #[allow(unsafe_code)]
+    // SAFETY: `target` is a NUL-terminated `CString` valid for the duration of the `umount2` call.
     let rc = unsafe { libc::umount2(tgt.as_ptr(), flags) };
     if rc != 0 {
         return Err(anyhow!(

@@ -16,6 +16,8 @@ pub fn shutdown() -> Result<(), ServiceError> {
 
 pub fn sync() -> Result<(), ServiceError> {
     #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    // SAFETY: `sync` takes no arguments and cannot cause UB.
     unsafe {
         libc::sync();
     }

@@ -39,7 +39,9 @@ impl PacketCapture {
 
         let ifindex = get_ifindex(interface)?;
 
+        #[allow(unsafe_code)]
         // Create raw socket
+        // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
         let fd = unsafe {
             libc::socket(
                 AF_PACKET,
@@ -55,12 +57,16 @@ impl PacketCapture {
             )));
         }
 
+        #[allow(unsafe_code)]
         // Bind to interface
+        // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
         let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
         addr.sll_family = AF_PACKET as u16;
         addr.sll_ifindex = ifindex;
         addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
         let bind_result = unsafe {
             libc::bind(
                 fd,
@@ -70,6 +76,8 @@ impl PacketCapture {
         };
 
         if bind_result < 0 {
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
             unsafe { libc::close(fd) };
             return Err(WirelessError::Socket(format!(
                 "Failed to bind capture socket: {}",
@@ -83,6 +91,8 @@ impl PacketCapture {
             tv_usec: 0,
         };
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is valid and owned; the option value points to an initialized `timeval` and `optlen` matches its size. A failure is ignored deliberately (best-effort timeout).
         unsafe {
             libc::setsockopt(
                 fd,
@@ -116,6 +126,9 @@ impl PacketCapture {
 
     /// Read next packet (blocking with timeout)
     pub fn next_packet(&mut self) -> Result<Option<CapturedPacket>> {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; `buffer` is a 64 KiB buffer valid for writes of its length
+        // SAFETY: and the return value is handled.
         let received = unsafe {
             libc::recv(
                 self.fd,
@@ -234,6 +247,8 @@ impl PacketCapture {
 
 impl Drop for PacketCapture {
     fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        // SAFETY: this guard exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
         unsafe { libc::close(self.fd) };
     }
 }

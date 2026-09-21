@@ -61,3 +61,6 @@ tracing = []
 advanced = ["regex"]
 # Enable all features
 full = ["tracing", "advanced"]
+
+[lints]
+workspace = true

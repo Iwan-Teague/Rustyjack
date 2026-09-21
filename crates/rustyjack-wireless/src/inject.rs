@@ -35,7 +35,9 @@ impl InjectionSocket {
 
         let ifindex = get_ifindex(interface)?;
 
+        #[allow(unsafe_code)]
         // Create raw packet socket
+        // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
         let fd = unsafe {
             libc::socket(
                 AF_PACKET,
@@ -51,12 +53,16 @@ impl InjectionSocket {
             )));
         }
 
+        #[allow(unsafe_code)]
         // Bind to interface
+        // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
         let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
         addr.sll_family = AF_PACKET as u16;
         addr.sll_ifindex = ifindex;
         addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
         let bind_result = unsafe {
             libc::bind(
                 fd,
@@ -66,6 +72,8 @@ impl InjectionSocket {
         };
 
         if bind_result < 0 {
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
             unsafe { libc::close(fd) };
             return Err(WirelessError::Socket(format!(
                 "Failed to bind socket to interface: {}",
@@ -85,6 +93,8 @@ impl InjectionSocket {
 
     /// Send raw bytes (must include radiotap header)
     pub fn send_raw(&self, data: &[u8]) -> Result<usize> {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; the data are valid for reads of their full length.
         let sent = unsafe { libc::send(self.fd, data.as_ptr() as *const c_void, data.len(), 0) };
 
         if sent < 0 {
@@ -147,6 +157,8 @@ impl InjectionSocket {
 
 impl Drop for InjectionSocket {
     fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        // SAFETY: this guard exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
         unsafe { libc::close(self.fd) };
     }
 }

@@ -24,6 +24,8 @@ struct IfReqIndex {
 
 #[cfg(target_os = "linux")]
 fn open_ioctl_socket() -> Result<RawFd> {
+    #[allow(unsafe_code)]
+    // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
     if fd < 0 {
         return Err(NetlinkError::OperationFailed(format!(
@@ -36,6 +38,8 @@ fn open_ioctl_socket() -> Result<RawFd> {
 
 #[cfg(target_os = "linux")]
 fn close_ioctl_socket(fd: RawFd) {
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
     unsafe {
         libc::close(fd);
     }
@@ -74,6 +78,9 @@ fn build_ifreq_index(bridge: &str, ifindex: u32) -> Result<IfReqIndex> {
 pub async fn bridge_create(name: &str) -> Result<()> {
     let name_c = validate_ifname(name)?;
     let fd = open_ioctl_socket()?;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open ioctl socket; `name_c` is a NUL-terminated `CString` with length
+    // SAFETY: < IFNAMSIZ (enforced by `validate_ifname`), matching the `ifreq` layout `SIOCBRADDBR` expects.
     let res = unsafe { libc::ioctl(fd, SIOCBRADDBR, name_c.as_ptr()) };
     let err = std::io::Error::last_os_error();
     close_ioctl_socket(fd);
@@ -90,6 +97,9 @@ pub async fn bridge_create(name: &str) -> Result<()> {
 pub async fn bridge_delete(name: &str) -> Result<()> {
     let name_c = validate_ifname(name)?;
     let fd = open_ioctl_socket()?;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open ioctl socket; `name_c` is a NUL-terminated `CString` with length
+    // SAFETY: < IFNAMSIZ (enforced by `validate_ifname`), matching the `ifreq` layout `SIOCBRDELBR` expects.
     let res = unsafe { libc::ioctl(fd, SIOCBRDELBR, name_c.as_ptr()) };
     let err = std::io::Error::last_os_error();
     close_ioctl_socket(fd);
@@ -105,6 +115,8 @@ pub async fn bridge_delete(name: &str) -> Result<()> {
 #[cfg(target_os = "linux")]
 pub async fn bridge_add_interface(bridge: &str, iface: &str) -> Result<()> {
     let iface_c = validate_ifname(iface)?;
+    #[allow(unsafe_code)]
+    // SAFETY: the `CString` is NUL-terminated and lives until the end of the statement, so the pointer is valid for the whole `if_nametoindex` call.
     let ifindex = unsafe { libc::if_nametoindex(iface_c.as_ptr()) };
     if ifindex == 0 {
         return Err(NetlinkError::InterfaceNotFound {
@@ -114,6 +126,9 @@ pub async fn bridge_add_interface(bridge: &str, iface: &str) -> Result<()> {
 
     let ifr = build_ifreq_index(bridge, ifindex)?;
     let fd = open_ioctl_socket()?;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open ioctl socket; `ifr` is a `#[repr(C)]` struct with `ifr_name`
+    // SAFETY: NUL-padded and the interface index set, fully initialized before the call.
     let res = unsafe { libc::ioctl(fd, SIOCBRADDIF, &ifr as *const _ as *const libc::c_void) };
     let err = std::io::Error::last_os_error();
     close_ioctl_socket(fd);
@@ -129,6 +144,8 @@ pub async fn bridge_add_interface(bridge: &str, iface: &str) -> Result<()> {
 #[cfg(target_os = "linux")]
 pub async fn bridge_remove_interface(bridge: &str, iface: &str) -> Result<()> {
     let iface_c = validate_ifname(iface)?;
+    #[allow(unsafe_code)]
+    // SAFETY: the `CString` is NUL-terminated and lives until the end of the statement, so the pointer is valid for the whole `if_nametoindex` call.
     let ifindex = unsafe { libc::if_nametoindex(iface_c.as_ptr()) };
     if ifindex == 0 {
         return Err(NetlinkError::InterfaceNotFound {
@@ -138,6 +155,9 @@ pub async fn bridge_remove_interface(bridge: &str, iface: &str) -> Result<()> {
 
     let ifr = build_ifreq_index(bridge, ifindex)?;
     let fd = open_ioctl_socket()?;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open ioctl socket; `ifr` is a `#[repr(C)]` struct with `ifr_name`
+    // SAFETY: NUL-padded and the interface index set, fully initialized before the call.
     let res = unsafe { libc::ioctl(fd, SIOCBRDELIF, &ifr as *const _ as *const libc::c_void) };
     let err = std::io::Error::last_os_error();
     close_ioctl_socket(fd);

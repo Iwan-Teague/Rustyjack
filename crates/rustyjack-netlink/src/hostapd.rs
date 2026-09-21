@@ -705,6 +705,10 @@ impl AccessPoint {
         }
         self.ifindex = None;
         if let Some(fd) = self.eapol_fd.take() {
+            #[allow(unsafe_code)]
+            // SAFETY: UNJUSTIFIED — the descriptor number is shared with the spawned EAPOL task, which also
+            // SAFETY: closes it (see the unsafe at line 2841); `stop()` can race the task and double-close a
+            // SAFETY: possibly reused fd. Tracked as an AQ-72 finding; no behaviour change made here.
             unsafe {
                 libc::close(fd);
             }
@@ -2425,6 +2429,8 @@ fn build_m3(
 }
 
 fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
+    #[allow(unsafe_code)]
+    // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
     let sock_fd = unsafe {
         libc::socket(
             libc::AF_PACKET,
@@ -2439,11 +2445,15 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
         )));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
     let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
     sll.sll_family = libc::AF_PACKET as u16;
     sll.sll_protocol = (0x888e as u16).to_be();
     sll.sll_ifindex = ifindex as i32;
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
     let bind_res = unsafe {
         libc::bind(
             sock_fd,
@@ -2453,6 +2463,8 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
     };
     if bind_res < 0 {
         let err = std::io::Error::last_os_error();
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(sock_fd);
         }
@@ -2462,9 +2474,13 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
         )));
     }
 
+    #[allow(unsafe_code)]
     // Set non-blocking to allow clean shutdown polling
+    // SAFETY: `fd` is a valid, owned descriptor; `F_GETFL` takes no pointer arguments.
     let flags = unsafe { libc::fcntl(sock_fd, libc::F_GETFL) };
     if flags >= 0 {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is valid and owned; `flags` comes from `F_GETFL` (non-negative), so `flags | O_NONBLOCK` is a valid non-negative argument.
         let _ = unsafe { libc::fcntl(sock_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
 
@@ -2507,7 +2523,10 @@ fn spawn_eapol_task(
             }
             drop(run);
 
+            #[allow(unsafe_code)]
             let res =
+                // SAFETY: `fd` is a valid open socket; `buf` is a 2048-byte buffer valid for writes of its length
+                // SAFETY: and the return value is handled.
                 unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
             if res < 0 {
                 let err = std::io::Error::last_os_error();
@@ -2790,7 +2809,9 @@ fn spawn_eapol_task(
             let m3 = build_m3(&bssid, &sta_mac, &anonce, replay_counter, &ptk, &gtk);
 
             // Send M3 back to station
+            #[allow(unsafe_code)]
             let send_res =
+                // SAFETY: `fd` is the valid EAPOL socket owned by this task; `m3` is valid for reads of its full length.
                 unsafe { libc::send(fd, m3.as_ptr() as *const libc::c_void, m3.len(), 0) };
             if send_res < 0 {
                 let msg = format!(
@@ -2838,6 +2859,10 @@ fn spawn_eapol_task(
                     wpa_state: WpaState::Authenticating,
                 });
         }
+        #[allow(unsafe_code)]
+        // SAFETY: UNJUSTIFIED — the same descriptor may concurrently be closed by `AccessPoint::stop`
+        // SAFETY: (see the unsafe at line 708), so this can double-close an fd that was reused in between.
+        // SAFETY: Tracked as an AQ-72 finding; no behaviour change made here.
         let _ = unsafe { libc::close(fd) };
         tracing::info!("EAPOL listener stopped on {}", interface);
     })

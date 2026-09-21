@@ -437,6 +437,10 @@ fn resolve_hostname(ip: Ipv4Addr) -> Option<String> {
     };
 
     let mut host = [0u8; libc::NI_MAXHOST as usize];
+    #[allow(unsafe_code)]
+    // SAFETY: `addr` points to a fully initialized `sockaddr_in` of the declared length; `host` is a
+    // SAFETY: valid output buffer of `NI_MAXHOST` bytes; the null service pointer and `NI_NAMEREQD`
+    // SAFETY: flags are a valid configuration.
     let res = unsafe {
         libc::getnameinfo(
             &sockaddr as *const _ as *const libc::sockaddr,
@@ -453,6 +457,9 @@ fn resolve_hostname(ip: Ipv4Addr) -> Option<String> {
         return None;
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `getnameinfo` above returned 0 (checked), which guarantees `host` now holds a
+    // SAFETY: NUL-terminated name, so `CStr::from_ptr` stays within the terminated buffer.
     let name = unsafe { CStr::from_ptr(host.as_ptr() as *const libc::c_char) }
         .to_str()
         .ok()?;
@@ -862,6 +869,9 @@ pub fn capture_dns_queries_cancellable(
 
     while start.elapsed() < duration {
         check_cancel(cancel)?;
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; `buf` is a 2048-byte buffer valid for writes of its length
+        // SAFETY: and the return value is handled.
         let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
 
         if n < 0 {
@@ -869,6 +879,8 @@ pub fn capture_dns_queries_cancellable(
             if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::TimedOut {
                 continue;
             }
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
             unsafe {
                 libc::close(fd);
             }
@@ -884,6 +896,8 @@ pub fn capture_dns_queries_cancellable(
         }
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
     unsafe {
         libc::close(fd);
     }
@@ -893,6 +907,8 @@ pub fn capture_dns_queries_cancellable(
 
 fn open_dns_capture_socket(interface: &str) -> Result<RawFd> {
     let ifindex = get_ifindex(interface)?;
+    #[allow(unsafe_code)]
+    // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
     let fd = unsafe {
         libc::socket(
             libc::AF_PACKET,
@@ -908,11 +924,15 @@ fn open_dns_capture_socket(interface: &str) -> Result<RawFd> {
         )));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
     let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
     addr.sll_family = libc::AF_PACKET as u16;
     addr.sll_ifindex = ifindex;
     addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
     let bind_result = unsafe {
         libc::bind(
             fd,
@@ -922,6 +942,8 @@ fn open_dns_capture_socket(interface: &str) -> Result<RawFd> {
     };
 
     if bind_result < 0 {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(fd);
         }
@@ -936,6 +958,8 @@ fn open_dns_capture_socket(interface: &str) -> Result<RawFd> {
         tv_usec: 0,
     };
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is valid and owned; the option value points to an initialized `timeval` and `optlen` matches its size.
     unsafe {
         libc::setsockopt(
             fd,

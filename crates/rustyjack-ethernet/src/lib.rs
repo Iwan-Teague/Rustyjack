@@ -171,7 +171,10 @@ pub fn discover_hosts(network: Ipv4Net, timeout: Duration) -> Result<LanDiscover
                 if n < 28 {
                     continue;
                 }
+                #[allow(unsafe_code)]
                 // Safety: recv_from initialized the first `n` bytes.
+                // SAFETY: `recv_from` returned `n` bytes written by the kernel into this buffer, so the
+                // SAFETY: first `n` bytes are initialized and reading exactly them is in-bounds.
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                 // Parse IHL from IPv4 header (lower nibble of first byte)
                 let ihl = (bytes[0] & 0x0F) as usize * 4;
@@ -286,6 +289,9 @@ pub fn discover_hosts_cancellable(
                 if n < 28 {
                     continue;
                 }
+                #[allow(unsafe_code)]
+                // SAFETY: `recv_from` returned `n` bytes written by the kernel into this buffer, so the
+                // SAFETY: first `n` bytes are initialized and reading exactly them is in-bounds.
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                 let ttl = bytes.get(8).copied();
                 let icmp = &bytes[20..];
@@ -576,11 +582,15 @@ fn discover_hosts_arp_blocking(
     rate_limit_pps: Option<u32>,
     timeout: Duration,
 ) -> Result<LanDiscoveryResult> {
+    #[allow(unsafe_code)]
+    // SAFETY: the `CString` is NUL-terminated and lives until the end of the statement, so the pointer is valid for the whole `if_nametoindex` call.
     let ifindex = unsafe { libc::if_nametoindex(CString::new(interface)?.as_ptr()) };
     if ifindex == 0 {
         return Err(anyhow!("failed to resolve ifindex for {}", interface));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a freshly created, valid descriptor; ownership transfers to the wrapper type, whose `Drop` closes it exactly once.
     let sock = unsafe {
         let fd = libc::socket(
             libc::AF_PACKET,
@@ -604,6 +614,8 @@ fn discover_hosts_arp_blocking(
         sll_addr: [0; 8],
     };
     sll.sll_addr[..6].copy_from_slice(local_mac);
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
     let bind_res = unsafe {
         libc::bind(
             sock.as_raw_fd(),
@@ -622,6 +634,8 @@ fn discover_hosts_arp_blocking(
 
     for ip in &targets {
         let frame = build_arp_request(local_mac, &local_ip, ip);
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; the frame is valid for reads of its full length.
         let sent = unsafe {
             libc::send(
                 sock.as_raw_fd(),
@@ -658,7 +672,10 @@ fn discover_hosts_arp_blocking(
                 if n < 42 {
                     continue;
                 }
+                #[allow(unsafe_code)]
                 // Safety: recv initialized the first `n` bytes.
+                // SAFETY: `recv_from` returned `n` bytes written by the kernel into this buffer, so the
+                // SAFETY: first `n` bytes are initialized and reading exactly them is in-bounds.
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                 if bytes[12] != 0x08 || bytes[13] != 0x06 {
                     continue;
@@ -755,11 +772,15 @@ fn discover_hosts_arp_cancellable_blocking(
         return Err(CancelledError.into());
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: the `CString` is NUL-terminated and lives until the end of the statement, so the pointer is valid for the whole `if_nametoindex` call.
     let ifindex = unsafe { libc::if_nametoindex(CString::new(interface)?.as_ptr()) };
     if ifindex == 0 {
         return Err(anyhow!("failed to resolve ifindex for {}", interface));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a freshly created, valid descriptor; ownership transfers to the wrapper type, whose `Drop` closes it exactly once.
     let sock = unsafe {
         let fd = libc::socket(
             libc::AF_PACKET,
@@ -782,6 +803,8 @@ fn discover_hosts_arp_cancellable_blocking(
         sll_addr: [0; 8],
     };
     sll.sll_addr[..6].copy_from_slice(local_mac);
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
     let bind_res = unsafe {
         libc::bind(
             sock.as_raw_fd(),
@@ -805,6 +828,8 @@ fn discover_hosts_arp_cancellable_blocking(
         }
 
         let frame = build_arp_request(local_mac, &local_ip, ip);
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; the frame is valid for reads of its full length.
         let sent = unsafe {
             libc::send(
                 sock.as_raw_fd(),
@@ -847,6 +872,9 @@ fn discover_hosts_arp_cancellable_blocking(
                 if n < 42 {
                     continue;
                 }
+                #[allow(unsafe_code)]
+                // SAFETY: `recv_from` returned `n` bytes written by the kernel into this buffer, so the
+                // SAFETY: first `n` bytes are initialized and reading exactly them is in-bounds.
                 let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                 if bytes[12] != 0x08 || bytes[13] != 0x06 {
                     continue;

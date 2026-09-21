@@ -36,3 +36,6 @@ rustyjack-wpa = { path = "../rustyjack-wpa" }
 [dependencies.tokio]
 version = "1.0"
 features = ["rt", "macros"]
+
+[lints]
+workspace = true

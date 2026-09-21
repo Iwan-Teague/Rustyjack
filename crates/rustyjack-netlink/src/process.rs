@@ -312,6 +312,8 @@ impl ProcessManager {
 
     /// Send a signal to a specific PID
     pub fn signal_pid(&self, pid: i32, signal: i32) -> Result<()> {
+        #[allow(unsafe_code)]
+        // SAFETY: `pid` and `signal` are plain scalars and the result is checked; `kill(2)` cannot cause UB.
         unsafe {
             if libc::kill(pid, signal) == 0 {
                 Ok(())

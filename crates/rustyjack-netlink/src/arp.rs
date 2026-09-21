@@ -160,6 +160,10 @@ impl ArpPacket {
 
     /// Convert to bytes for transmission
     pub fn as_bytes(&self) -> &[u8] {
+        #[allow(unsafe_code)]
+        // SAFETY: `ArpPacket` is `#[repr(C, packed)]` and `Copy` with only integer/array fields and a
+        // SAFETY: fixed size of 28 bytes; viewing a valid reference as its underlying bytes is in-bounds
+        // SAFETY: and fully initialized.
         unsafe {
             std::slice::from_raw_parts(
                 self as *const _ as *const u8,
@@ -174,6 +178,9 @@ impl ArpPacket {
             return None;
         }
 
+        #[allow(unsafe_code)]
+        // SAFETY: `bytes` is checked above to be at least `size_of::<ArpPacket>()` long; `read_unaligned`
+        // SAFETY: is required for the packed layout and `ArpPacket` is `Copy`, so the value is copied out.
         unsafe { Some(std::ptr::read_unaligned(bytes.as_ptr() as *const ArpPacket)) }
     }
 }

@@ -175,6 +175,8 @@ struct NetfilterSocket {
 
 impl Drop for NetfilterSocket {
     fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        // SAFETY: `NetfilterSocket` exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
         unsafe {
             libc::close(self.fd);
         }
@@ -183,16 +185,24 @@ impl Drop for NetfilterSocket {
 
 impl NetfilterSocket {
     fn new() -> io::Result<Self> {
+        #[allow(unsafe_code)]
+        // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
         let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_NETFILTER) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
 
+        #[allow(unsafe_code)]
+        // SAFETY: `getpid` takes no arguments; the integer cast only narrows the pid value, which is harmless.
         let pid = unsafe { libc::getpid() as u32 };
+        #[allow(unsafe_code)]
+        // SAFETY: `sockaddr_nl` is a POD C struct; the zeroed value is valid and the fields are set below.
         let mut addr: libc::sockaddr_nl = unsafe { mem::zeroed() };
         addr.nl_family = libc::AF_NETLINK as u16;
         addr.nl_pid = pid;
         addr.nl_groups = 0;
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket and `addr` points to the fully initialized `sockaddr_nl`.
         let bind_result = unsafe {
             libc::bind(
                 fd,
@@ -202,6 +212,8 @@ impl NetfilterSocket {
         };
         if bind_result < 0 {
             let err = io::Error::last_os_error();
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
             unsafe {
                 libc::close(fd);
             }
@@ -219,6 +231,8 @@ impl NetfilterSocket {
     fn send(&mut self, msg_type: u16, flags: u16, payload: &[u8]) -> io::Result<u32> {
         let seq = self.next_seq();
         let msg = build_nlmsg(msg_type, flags, seq, self.pid, payload);
+        #[allow(unsafe_code)]
+        // SAFETY: `self.fd` is a valid open netlink socket; `msg` is a `Vec` valid for reads of its full length.
         let ret = unsafe { libc::send(self.fd, msg.as_ptr() as *const libc::c_void, msg.len(), 0) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -228,7 +242,10 @@ impl NetfilterSocket {
 
     fn recv_msgs(&mut self) -> io::Result<Vec<NetlinkMessage>> {
         let mut buf = vec![0u8; 64 * 1024];
+        #[allow(unsafe_code)]
         let len =
+            // SAFETY: `self.fd` is a valid open socket; `buf` is a 64 KiB `Vec` valid for writes of its length
+            // SAFETY: and the return value is checked before truncating the vector to it.
             unsafe { libc::recv(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
         if len < 0 {
             return Err(io::Error::last_os_error());

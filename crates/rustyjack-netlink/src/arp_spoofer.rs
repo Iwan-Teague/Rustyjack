@@ -65,7 +65,9 @@ impl ArpSpoofer {
         // Send the packet
         Self::send_arp_packet(sock_fd, &packet, if_index, target_mac, interface, target_ip)?;
 
+        #[allow(unsafe_code)]
         // Close socket
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(sock_fd);
         }
@@ -214,7 +216,9 @@ impl ArpSpoofer {
     // Private helper methods
 
     fn create_raw_socket(interface: &str) -> Result<i32> {
+        #[allow(unsafe_code)]
         let sock_fd =
+            // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
             unsafe { socket(AF_PACKET, SOCK_RAW, (libc::ETH_P_ARP as u16).to_be() as i32) };
 
         if sock_fd < 0 {
@@ -247,6 +251,8 @@ impl ArpSpoofer {
         frame.extend_from_slice(&0x0806u16.to_be_bytes()); // EtherType: ARP
         frame.extend_from_slice(packet.as_bytes()); // ARP packet
 
+        #[allow(unsafe_code)]
+        // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and family/ifindex/halen and the target MAC are set below.
         let mut sll: sockaddr_ll = unsafe { std::mem::zeroed() };
         sll.sll_family = AF_PACKET as u16;
         sll.sll_protocol = (libc::ETH_P_ARP as u16).to_be();
@@ -254,6 +260,8 @@ impl ArpSpoofer {
         sll.sll_halen = 6;
         sll.sll_addr[..6].copy_from_slice(&target_mac);
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; the frame is valid for reads of its full length and `addr` points to the initialized destination `sockaddr_ll`; the result is checked.
         let result = unsafe {
             libc::sendto(
                 sock_fd,

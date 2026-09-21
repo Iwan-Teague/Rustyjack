@@ -57,6 +57,8 @@ impl ArpScanner {
             match self.receive_arp_reply(sock_fd, target_ip, interface) {
                 Ok(Some(reply_mac)) => {
                     let response_time = start_time.elapsed().as_millis() as u64;
+                    #[allow(unsafe_code)]
+                    // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
                     unsafe {
                         libc::close(sock_fd);
                     }
@@ -70,6 +72,8 @@ impl ArpScanner {
                 }
                 Ok(None) => continue, // Timeout, try again
                 Err(e) => {
+                    #[allow(unsafe_code)]
+                    // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
                     unsafe {
                         libc::close(sock_fd);
                     }
@@ -78,7 +82,9 @@ impl ArpScanner {
             }
         }
 
+        #[allow(unsafe_code)]
         // No response after retries
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(sock_fd);
         }
@@ -130,7 +136,9 @@ impl ArpScanner {
     // Private helper methods
 
     fn create_raw_socket(&self, interface: &str) -> Result<i32> {
+        #[allow(unsafe_code)]
         let sock_fd =
+            // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
             unsafe { socket(AF_PACKET, SOCK_RAW, (libc::ETH_P_ARP as u16).to_be() as i32) };
 
         if sock_fd < 0 {
@@ -149,11 +157,15 @@ impl ArpScanner {
     }
 
     fn bind_to_interface(&self, sock_fd: i32, if_index: u32, interface: &str) -> Result<()> {
+        #[allow(unsafe_code)]
+        // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
         let mut sll: sockaddr_ll = unsafe { std::mem::zeroed() };
         sll.sll_family = AF_PACKET as u16;
         sll.sll_protocol = (libc::ETH_P_ARP as u16).to_be();
         sll.sll_ifindex = if_index as i32;
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
         let result = unsafe {
             libc::bind(
                 sock_fd,
@@ -178,6 +190,8 @@ impl ArpScanner {
             tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t,
         };
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is valid and owned; the option value points to an initialized `timeval` and `optlen` matches its size.
         let result = unsafe {
             libc::setsockopt(
                 sock_fd,
@@ -215,6 +229,8 @@ impl ArpScanner {
         frame.extend_from_slice(&0x0806u16.to_be_bytes()); // EtherType: ARP
         frame.extend_from_slice(packet.as_bytes()); // ARP packet
 
+        #[allow(unsafe_code)]
+        // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and halen and the target hardware address are set below.
         let mut sll: sockaddr_ll = unsafe { std::mem::zeroed() };
         sll.sll_family = AF_PACKET as u16;
         sll.sll_protocol = (libc::ETH_P_ARP as u16).to_be();
@@ -222,6 +238,8 @@ impl ArpScanner {
         sll.sll_halen = 6;
         sll.sll_addr[..6].copy_from_slice(&[0xFF; 6]);
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; the frame is valid for reads of its full length and `addr` points to the initialized destination `sockaddr_ll`; the result is checked.
         let result = unsafe {
             libc::sendto(
                 sock_fd,
@@ -253,6 +271,9 @@ impl ArpScanner {
         let mut buffer = [0u8; 2048];
 
         loop {
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is a valid open socket; `buf` is writable for its full length and passing null
+            // SAFETY: source-address pointers to `recvfrom` is allowed when the peer address is not needed.
             let result = unsafe {
                 libc::recvfrom(
                     sock_fd,

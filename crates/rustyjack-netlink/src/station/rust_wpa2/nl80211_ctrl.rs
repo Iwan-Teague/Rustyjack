@@ -185,6 +185,8 @@ pub fn disconnect(interface: &str) -> Result<()> {
 pub fn interface_index(interface: &str) -> Result<i32> {
     let cstr = CString::new(interface)
         .map_err(|_| NetlinkError::InvalidInput("Invalid interface name".to_string()))?;
+    #[allow(unsafe_code)]
+    // SAFETY: the `CString` is NUL-terminated and lives until the end of the statement, so the pointer is valid for the whole `if_nametoindex` call.
     let idx = unsafe { libc::if_nametoindex(cstr.as_ptr()) };
     if idx == 0 {
         return Err(NetlinkError::InterfaceIndexError {

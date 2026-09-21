@@ -3253,6 +3253,8 @@ fn ensure_route_health_check() -> Result<()> {
     // root permissions
     #[cfg(target_os = "linux")]
     {
+        #[allow(unsafe_code)]
+        // SAFETY: `geteuid` takes no arguments and cannot cause UB.
         let euid = unsafe { libc::geteuid() };
         if euid != 0 {
             bail!("Rustyjack must run as root (uid 0) to manage interfaces and routes");
@@ -3616,8 +3618,13 @@ const LINUX_REBOOT_CMD_POWER_OFF: libc::c_int = 0x4321fedc;
 
 #[cfg(target_os = "linux")]
 fn system_reboot_cmd(cmd: libc::c_int) -> Result<()> {
+    #[allow(unsafe_code)]
+    // SAFETY: `sync` takes no arguments and cannot cause UB.
     unsafe { libc::sync() };
 
+    #[allow(unsafe_code)]
+    // SAFETY: `SYS_reboot` with the two required magic numbers and a scalar command — `reboot(2)`
+    // SAFETY: takes only integer arguments here, no pointers.
     let res = unsafe {
         libc::syscall(
             libc::SYS_reboot as libc::c_long,
@@ -3761,6 +3768,8 @@ fn handle_system_export_logs_to_usb(
 
             let dir = File::open(&mountpoint)
                 .with_context(|| format!("opening {}", mountpoint.display()))?;
+            #[allow(unsafe_code)]
+            // SAFETY: the fd comes from an owned `File` open on the mountpoint; `syncfs` takes only the fd.
             let rc = unsafe { libc::syncfs(dir.as_raw_fd()) };
             if rc != 0 {
                 return Err(anyhow!(

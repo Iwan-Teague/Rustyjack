@@ -55,6 +55,10 @@ fn systemd_listener() -> io::Result<Option<UnixListener>> {
     }
 
     let fd = 3;
+    #[allow(unsafe_code)]
+    // SAFETY: socket activation: the checks above verified `LISTEN_PID` equals this process and
+    // SAFETY: `LISTEN_FDS` >= 1, so fd 3 is a valid open listening socket per the sd_listen_fds
+    // SAFETY: protocol; ownership moves to `UnixListener`, which closes it on drop.
     let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
     std_listener.set_nonblocking(true)?;
     Ok(Some(UnixListener::from_std(std_listener)?))
@@ -123,6 +127,8 @@ fn apply_socket_group(path: &Path, group: &str) -> io::Result<()> {
     let gid = lookup_gid(group)?;
     let c_path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid socket path"))?;
+    #[allow(unsafe_code)]
+    // SAFETY: `c_path` is a NUL-terminated `CString` valid for the duration of the `chown` call;
     let rc = unsafe { libc::chown(c_path.as_ptr(), 0, gid as libc::gid_t) };
     if rc != 0 {
         return Err(io::Error::last_os_error());
@@ -133,6 +139,8 @@ fn apply_socket_group(path: &Path, group: &str) -> io::Result<()> {
 fn lookup_gid(group: &str) -> io::Result<u32> {
     let c_group = CString::new(group)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid group name"))?;
+    #[allow(unsafe_code)]
+    // SAFETY: `c_group` is a NUL-terminated `CString` valid for the duration of the `getgrnam` call.
     let grp = unsafe { libc::getgrnam(c_group.as_ptr()) };
     if grp.is_null() {
         return Err(io::Error::new(
@@ -140,6 +148,8 @@ fn lookup_gid(group: &str) -> io::Result<u32> {
             format!("group {} not found", group),
         ));
     }
+    #[allow(unsafe_code)]
+    // SAFETY: `grp` was checked non-null above, so dereferencing it to read `gr_gid` is sound.
     let gid = unsafe { (*grp).gr_gid } as u32;
     Ok(gid)
 }
@@ -186,6 +196,9 @@ fn send_abstract_notification(message: &[u8], name: &[u8]) -> io::Result<()> {
         ));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `sockaddr_un` is a POD struct; the zeroed value is valid, `sun_family` is set and the
+    // SAFETY: abstract name is copied into `sun_path[1..]` with the length checked against its 108-byte size.
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
 
@@ -204,6 +217,10 @@ fn send_abstract_notification(message: &[u8], name: &[u8]) -> io::Result<()> {
 
     let addr_len = (std::mem::size_of::<libc::sa_family_t>() + 1 + name.len()) as libc::socklen_t;
     let sock = UnixDatagram::unbound()?;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid connected datagram socket; `message` is valid for its full length,
+    // SAFETY: `addr` is the initialized abstract-namespace `sockaddr_un` and `addr_len` covers exactly
+    // SAFETY: family + NUL + name (≤ sizeof(sockaddr_un)).
     let rc = unsafe {
         libc::sendto(
             sock.as_raw_fd(),

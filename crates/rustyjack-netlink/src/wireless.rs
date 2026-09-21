@@ -332,6 +332,9 @@ fn set_recv_timeout(sock: &NlSocketHandle, timeout: Duration) {
             tv_sec: timeout.as_secs() as libc::time_t,
             tv_usec: timeout.subsec_micros() as libc::suseconds_t,
         };
+        #[allow(unsafe_code)]
+        // SAFETY: `handle.as_raw_fd()` is the descriptor of the owned neli netlink handle, valid for the
+        // SAFETY: call; the option value is an initialized `timeval` with a matching length.
         let rc = unsafe {
             libc::setsockopt(
                 fd,

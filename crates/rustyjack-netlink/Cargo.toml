@@ -40,3 +40,6 @@ zbus = "4.0"
 uuid = { version = "1.0", features = ["v4"] }
 neli = "0.6"
 netlink-packet-route = "0.19"
+
+[lints]
+workspace = true

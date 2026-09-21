@@ -66,3 +66,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 default = []
 
 # Build configuration
+
+[lints]
+workspace = true

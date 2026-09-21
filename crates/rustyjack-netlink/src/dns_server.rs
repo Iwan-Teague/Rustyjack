@@ -145,6 +145,8 @@ impl DnsServer {
         use std::os::unix::io::AsRawFd;
         let fd = socket.as_raw_fd();
         let iface_bytes = interface.as_bytes();
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is the descriptor of an owned socket; the interface name bytes are readable for their full length and the kernel copies them during the `setsockopt` call only.
         let result = unsafe {
             libc::setsockopt(
                 fd,

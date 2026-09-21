@@ -30,7 +30,13 @@ pub fn disk_usage(path: &Path) -> Result<(u64, u64), ServiceError> {
         use std::os::unix::ffi::OsStrExt;
         let c_path = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| ServiceError::InvalidInput("invalid path".to_string()))?;
+        #[allow(unsafe_code)]
+        // SAFETY: `statvfs` is a POD C struct used purely as an output buffer; the all-zero pattern is a
+        // SAFETY: valid value before the kernel fills it.
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        #[allow(unsafe_code)]
+        // SAFETY: `c_path` is a NUL-terminated `CString` and `&mut stat` is a valid out-pointer; the
+        // SAFETY: result is checked before the struct is read.
         let rc = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
         if rc != 0 {
             return Err(ServiceError::Io(std::io::Error::last_os_error()));

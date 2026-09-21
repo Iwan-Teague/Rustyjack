@@ -188,6 +188,10 @@ fn build_listener(cfg: &PortalConfig) -> Result<std::net::TcpListener> {
         .context("setting portal socket reuse address")?;
 
     let iface = CString::new(cfg.interface.clone()).context("invalid interface name")?;
+    #[allow(unsafe_code)]
+    // SAFETY: the fd belongs to the owned `socket2::Socket`; the `CString` interface name (including
+    // SAFETY: its NUL, per `as_bytes_with_nul`) is readable for the passed length and the kernel copies
+    // SAFETY: it during the call; the result is checked.
     let result = unsafe {
         libc::setsockopt(
             socket.as_raw_fd(),

@@ -86,6 +86,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[must_use]
 pub fn check_privileges() -> bool {
     #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    // SAFETY: `geteuid` takes no arguments and cannot cause UB.
     unsafe {
         libc::geteuid() == 0
     }

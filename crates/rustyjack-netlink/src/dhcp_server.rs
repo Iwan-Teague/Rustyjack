@@ -208,6 +208,8 @@ impl DhcpServer {
             let fd = socket.as_raw_fd();
             let iface_bytes = self.config.interface.as_bytes();
 
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is the descriptor of an owned socket; the interface name bytes are readable for their full length and the kernel copies them during the `setsockopt` call only.
             unsafe {
                 let ret = libc::setsockopt(
                     fd,

@@ -17,3 +17,6 @@ futures-util = "0.3"
 tar = "0.4"
 zstd = "0.13"
 zbus = "4.0"
+
+[lints]
+workspace = true

@@ -50,6 +50,9 @@ pub fn version_string() -> String {
 }
 
 #[used]
+// SAFETY: `#[no_mangle]` only changes symbol naming of this `&str` static for
+// the build-info lookup; it exports a plain static reference, which is safe.
+#[allow(unsafe_code)]
 #[no_mangle]
 pub static RUSTYJACK_BUILD_INFO: &str = concat!(
     "rustyjack_build_info:",

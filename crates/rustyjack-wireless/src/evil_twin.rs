@@ -168,6 +168,8 @@ impl EvilTwin {
 
         #[cfg(target_os = "linux")]
         {
+            #[allow(unsafe_code)]
+            // SAFETY: `geteuid` takes no arguments and cannot cause UB.
             if unsafe { libc::geteuid() } != 0 {
                 missing.push("root (CAP_NET_ADMIN)".to_string());
             }

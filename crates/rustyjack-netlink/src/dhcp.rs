@@ -587,6 +587,8 @@ impl DhcpClient {
             use std::mem;
             use std::os::unix::io::FromRawFd;
 
+            #[allow(unsafe_code)]
+            // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
             let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, libc::IPPROTO_UDP) };
             if fd < 0 {
                 return Err(NetlinkError::DhcpClient(DhcpClientError::BindFailed {
@@ -596,6 +598,10 @@ impl DhcpClient {
             }
 
             let one: libc::c_int = 1;
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is a valid, owned socket from `socket(2)` above; each option value points to an
+            // SAFETY: initialized `c_int` with a matching `optlen`. Failures are deliberately ignored: the
+            // SAFETY: options are best-effort hardening, not required for correctness.
             unsafe {
                 let _ = libc::setsockopt(
                     fd,
@@ -628,6 +634,9 @@ impl DhcpClient {
                 },
                 sin_zero: [0; 8],
             };
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is a valid open socket; `addr` points to a fully initialized `sockaddr_in`, which
+            // SAFETY: casts to `*const sockaddr` per the POSIX address-family layout guarantee.
             let bind_result = unsafe {
                 libc::bind(
                     fd,
@@ -637,6 +646,8 @@ impl DhcpClient {
             };
             if bind_result < 0 {
                 let err = std::io::Error::last_os_error();
+                #[allow(unsafe_code)]
+                // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
                 unsafe {
                     libc::close(fd);
                 }
@@ -646,8 +657,12 @@ impl DhcpClient {
                 }));
             }
 
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is the freshly created UDP socket descriptor; ownership transfers to the wrapper type, whose `Drop` closes it exactly once.
             let socket = unsafe { UdpSocket::from_raw_fd(fd) };
             let iface_bytes = interface.as_bytes();
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is the descriptor of an owned socket; the interface name bytes are readable for their full length and the kernel copies them during the `setsockopt` call only.
             let result = unsafe {
                 libc::setsockopt(
                     fd,
@@ -707,6 +722,8 @@ impl DhcpClient {
 
             let discover = self.build_discover_packet(mac, xid, hostname);
             if let Err(e) = send_raw_dhcp(fd, ifindex, mac, &discover) {
+                #[allow(unsafe_code)]
+                // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
                 unsafe {
                     libc::close(fd);
                 }
@@ -719,6 +736,8 @@ impl DhcpClient {
 
             match wait_for_offer_raw(fd, interface, xid, &self, deadline) {
                 Ok(offer) => {
+                    #[allow(unsafe_code)]
+                    // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
                     unsafe {
                         libc::close(fd);
                     }
@@ -734,6 +753,8 @@ impl DhcpClient {
                         );
                         std::thread::sleep(Duration::from_secs(1));
                     } else {
+                        #[allow(unsafe_code)]
+                        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
                         unsafe {
                             libc::close(fd);
                         }
@@ -743,6 +764,8 @@ impl DhcpClient {
             }
         }
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(fd);
         }
@@ -774,6 +797,8 @@ impl DhcpClient {
 
         let request = self.build_request_packet(mac, xid, offer, hostname);
         if let Err(e) = send_raw_dhcp(fd, ifindex, mac, &request) {
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
             unsafe {
                 libc::close(fd);
             }
@@ -785,6 +810,8 @@ impl DhcpClient {
         }
 
         let lease = wait_for_ack_raw(fd, interface, xid, offer, self, deadline)?;
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(fd);
         }
@@ -1443,7 +1470,9 @@ fn is_addr_in_use(err: &io::Error) -> bool {
 #[cfg(target_os = "linux")]
 fn open_raw_socket(interface: &str) -> Result<(RawFd, i32)> {
     let ifindex = read_ifindex(interface)?;
+    #[allow(unsafe_code)]
     let sock_fd =
+        // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
         unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, (0x0800u16).to_be() as i32) };
     if sock_fd < 0 {
         return Err(NetlinkError::OperationFailed(format!(
@@ -1452,11 +1481,15 @@ fn open_raw_socket(interface: &str) -> Result<(RawFd, i32)> {
         )));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
     let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
     sll.sll_family = libc::AF_PACKET as u16;
     sll.sll_protocol = (0x0800u16).to_be();
     sll.sll_ifindex = ifindex;
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
     let bind_res = unsafe {
         libc::bind(
             sock_fd,
@@ -1466,6 +1499,8 @@ fn open_raw_socket(interface: &str) -> Result<(RawFd, i32)> {
     };
     if bind_res < 0 {
         let err = io::Error::last_os_error();
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe {
             libc::close(sock_fd);
         }
@@ -1479,6 +1514,8 @@ fn open_raw_socket(interface: &str) -> Result<(RawFd, i32)> {
         tv_sec: 5,
         tv_usec: 0,
     };
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is valid and owned; the option value points to an initialized `timeval` and `optlen` matches its size.
     unsafe {
         let _ = libc::setsockopt(
             sock_fd,
@@ -1627,6 +1664,8 @@ fn set_raw_socket_timeout(fd: RawFd, timeout: Duration) {
         tv_sec: timeout.as_secs() as libc::time_t,
         tv_usec: timeout.subsec_micros() as libc::suseconds_t,
     };
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is valid and owned; the option value points to an initialized `timeval` and `optlen` matches its size.
     unsafe {
         let _ = libc::setsockopt(
             fd,
@@ -1640,6 +1679,9 @@ fn set_raw_socket_timeout(fd: RawFd, timeout: Duration) {
 
 #[cfg(target_os = "linux")]
 fn recv_raw_packet(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket; `buf` is valid for writes of `buf.len()` bytes and the
+    // SAFETY: returned length is checked before the buffer contents are used.
     let ret = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut _, buf.len(), 0) };
     if ret < 0 {
         Err(io::Error::last_os_error())
@@ -1715,6 +1757,9 @@ fn send_raw_dhcp(fd: RawFd, ifindex: i32, src_mac: &[u8; 6], payload: &[u8]) -> 
     frame.extend_from_slice(&udp_header);
     frame.extend_from_slice(payload);
 
+    #[allow(unsafe_code)]
+    // SAFETY: `sockaddr_ll` is a POD C struct; the zeroed value is valid and family/protocol/ifindex/
+    // SAFETY: halen/address are set below for the broadcast destination.
     let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
     sll.sll_family = libc::AF_PACKET as u16;
     sll.sll_protocol = (0x0800u16).to_be();
@@ -1722,6 +1767,8 @@ fn send_raw_dhcp(fd: RawFd, ifindex: i32, src_mac: &[u8; 6], payload: &[u8]) -> 
     sll.sll_halen = 6;
     sll.sll_addr[..6].copy_from_slice(&[0xff; 6]);
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket; the frame is valid for reads of its full length and `addr` points to the initialized destination `sockaddr_ll`; the result is checked.
     let ret = unsafe {
         libc::sendto(
             fd,

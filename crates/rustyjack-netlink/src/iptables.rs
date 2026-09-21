@@ -364,6 +364,8 @@ impl IptablesManager {
     ///
     /// Returns `IptablesError::PermissionDenied` if not running as root
     pub fn new() -> Result<Self> {
+        #[allow(unsafe_code)]
+        // SAFETY: `geteuid` takes no arguments and cannot cause UB.
         let has_privileges = unsafe { libc::geteuid() } == 0;
 
         if !has_privileges {

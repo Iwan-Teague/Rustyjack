@@ -75,6 +75,8 @@ pub struct DeauthConfig {
 /// Check if native wireless library is available (requires root on Linux)
 #[cfg(target_os = "linux")]
 pub fn native_available() -> bool {
+    #[allow(unsafe_code)]
+    // SAFETY: `geteuid` takes no arguments and cannot cause UB.
     unsafe { libc::geteuid() == 0 }
 }
 
@@ -420,6 +422,8 @@ fn interface_wiphy(interface: &str) -> Option<u32> {
 /// Check system wireless capabilities for a given interface
 #[cfg(target_os = "linux")]
 pub fn check_capabilities(interface: &str) -> WirelessCapabilities {
+    #[allow(unsafe_code)]
+    // SAFETY: `geteuid` takes no arguments and cannot cause UB.
     let has_root = unsafe { libc::geteuid() == 0 };
     let interface_exists = std::path::Path::new(&format!("/sys/class/net/{}", interface)).exists();
     let interface_is_wireless = is_wireless_interface(interface);

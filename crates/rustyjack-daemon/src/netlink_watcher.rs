@@ -36,6 +36,8 @@ struct NetlinkSocket {
 #[cfg(target_os = "linux")]
 impl Drop for NetlinkSocket {
     fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        // SAFETY: `NetlinkSocket` exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
         unsafe {
             libc::close(self.fd);
         }
@@ -51,26 +53,43 @@ impl AsRawFd for NetlinkSocket {
 
 #[cfg(target_os = "linux")]
 fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
+    #[allow(unsafe_code)]
+    // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
     let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_ROUTE) };
     if fd < 0 {
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid, owned descriptor; `F_GETFL` takes no pointer arguments.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe { libc::close(fd) };
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is valid and owned; `flags` comes from `F_GETFL` (non-negative), so `flags | O_NONBLOCK` is a valid non-negative argument.
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe { libc::close(fd) };
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
 
     let groups = (libc::RTMGRP_LINK | libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
+    #[allow(unsafe_code)]
+    // SAFETY: `sockaddr_nl` is a POD C struct; the zeroed value is valid and family/groups are set below.
     let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
     addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
-    addr.nl_pid = unsafe { libc::getpid() as u32 };
+    #[allow(unsafe_code)]
+    // SAFETY: `getpid` takes no arguments; the integer cast only narrows the pid value, which is harmless.
+    let nl_pid = unsafe { libc::getpid() as u32 };
+    addr.nl_pid = nl_pid;
     addr.nl_groups = groups;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket and `addr` points to the fully initialized `sockaddr_nl`.
     let rc = unsafe {
         libc::bind(
             fd,
@@ -79,6 +98,8 @@ fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
         )
     };
     if rc < 0 {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe { libc::close(fd) };
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
@@ -141,6 +162,10 @@ async fn watch_netlink_events(
         let mut received = false;
         let mut guard = socket.readable().await?;
         loop {
+            #[allow(unsafe_code)]
+            // SAFETY: the `AsyncFd` readiness guard guarantees the netlink socket is readable and valid;
+            // SAFETY: `buf` is valid for writes of `buf.len()` bytes and the result (0 = drained,
+            // SAFETY: `WouldBlock` = retry) is handled.
             let len = unsafe {
                 libc::recv(
                     socket.as_raw_fd(),

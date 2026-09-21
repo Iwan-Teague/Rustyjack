@@ -138,7 +138,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Check if running with sufficient privileges for raw socket operations
 pub fn check_privileges() -> bool {
+    #[allow(unsafe_code)]
     // Check if we're root or have CAP_NET_RAW
+    // SAFETY: `geteuid` takes no arguments and cannot cause UB.
     unsafe { libc::geteuid() == 0 }
 }
 

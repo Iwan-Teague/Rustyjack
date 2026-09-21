@@ -25,6 +25,9 @@ pub fn peer_credentials(stream: &UnixStream) -> io::Result<PeerCred> {
         gid: 0,
     };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid connected `UnixStream` descriptor; `cred` is an initialized `ucred`
+    // SAFETY: out-struct and `len` is preset to `size_of::<ucred>()` as the in/out length.
     let rc = unsafe {
         libc::getsockopt(
             fd,

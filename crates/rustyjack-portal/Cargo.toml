@@ -27,3 +27,6 @@ rustyjack-logging = { path = "../rustyjack-logging" }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 rustyjack-netlink = { path = "../rustyjack-netlink" }
+
+[lints]
+workspace = true

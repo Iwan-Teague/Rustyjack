@@ -9,3 +9,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_repr = "0.1"
 rustyjack-commands = { path = "../rustyjack-commands" }
+
+[lints]
+workspace = true

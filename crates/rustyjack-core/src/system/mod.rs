@@ -1212,6 +1212,8 @@ struct FdGuard(RawFd);
 
 impl Drop for FdGuard {
     fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        // SAFETY: this guard exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
         unsafe {
             libc::close(self.0);
         }
@@ -1220,11 +1222,15 @@ impl Drop for FdGuard {
 
 fn open_packet_socket(interface: &str) -> Result<RawFd> {
     let ifname = CString::new(interface).context("interface name contains null byte")?;
+    #[allow(unsafe_code)]
+    // SAFETY: the `CString` is NUL-terminated and lives until the end of the statement, so the pointer is valid for the whole `if_nametoindex` call.
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
     if ifindex == 0 {
         return Err(anyhow!("failed to resolve ifindex for {}", interface));
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
     let fd = unsafe {
         libc::socket(
             libc::AF_PACKET,
@@ -1245,6 +1251,9 @@ fn open_packet_socket(interface: &str) -> Result<RawFd> {
         sll_halen: 0,
         sll_addr: [0; 8],
     };
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket; `addr` is a fully initialized `sockaddr_ll` (struct literal
+    // SAFETY: covering every field) cast to `*const sockaddr` with the matching length.
     let bind_res = unsafe {
         libc::bind(
             fd,
@@ -1254,6 +1263,8 @@ fn open_packet_socket(interface: &str) -> Result<RawFd> {
     };
     if bind_res != 0 {
         let err = io::Error::last_os_error();
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
         unsafe { libc::close(fd) };
         return Err(err).context("binding packet socket");
     }
@@ -1266,8 +1277,12 @@ fn open_packet_socket(interface: &str) -> Result<RawFd> {
         );
     }
 
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid, owned descriptor; `F_GETFL` takes no pointer arguments.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags >= 0 {
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is valid and owned; `flags` comes from `F_GETFL` (non-negative), so `flags | O_NONBLOCK` is a valid non-negative argument.
         let _ = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
 
@@ -1281,6 +1296,9 @@ fn set_promiscuous(fd: RawFd, ifindex: i32) -> Result<()> {
         mr_alen: 0,
         mr_address: [0; 8],
     };
+    #[allow(unsafe_code)]
+    // SAFETY: `fd` is a valid open socket; `mreq` is a fully initialized `packet_mreq` and `optlen`
+    // SAFETY: matches its size.
     let res = unsafe {
         libc::setsockopt(
             fd,
@@ -1313,6 +1331,8 @@ fn run_pcap_capture(
     let result = (|| {
         while !stop.load(Ordering::Relaxed) {
             pollfd.revents = 0;
+            #[allow(unsafe_code)]
+            // SAFETY: `fds` points to one fully initialized `pollfd` entry with count 1; the timeout is a scalar.
             let res = unsafe { libc::poll(&mut pollfd, 1, 500) };
             if res < 0 {
                 let err = io::Error::last_os_error();
@@ -1328,6 +1348,9 @@ fn run_pcap_capture(
                 continue;
             }
 
+            #[allow(unsafe_code)]
+            // SAFETY: `fd` is a valid open socket; `buf` is valid for writes of `buf.len()` bytes and the
+            // SAFETY: returned length is checked before the data is used.
             let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
             if n < 0 {
                 let err = io::Error::last_os_error();
@@ -1489,12 +1512,16 @@ pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
         struct FdGuard(RawFd);
         impl Drop for FdGuard {
             fn drop(&mut self) {
+                #[allow(unsafe_code)]
+                // SAFETY: this local guard in `ping_host` exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
                 unsafe {
                     libc::close(self.0);
                 }
             }
         }
 
+        #[allow(unsafe_code)]
+        // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
         let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP) };
         if fd < 0 {
             return Err(anyhow!(
@@ -1508,6 +1535,8 @@ pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
             tv_sec: timeout.as_secs() as libc::time_t,
             tv_usec: timeout.subsec_micros() as libc::suseconds_t,
         };
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is valid and owned; the option value points to an initialized `timeval` and `optlen` matches its size.
         unsafe {
             let _ = libc::setsockopt(
                 fd,
@@ -1518,6 +1547,8 @@ pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
             );
         }
 
+        #[allow(unsafe_code)]
+        // SAFETY: `getpid` takes no arguments; the integer cast only narrows the pid value, which is harmless.
         let ident = unsafe { libc::getpid() as u16 };
         let seq = 1u16;
         let mut packet = [0u8; 8 + 32];
@@ -1540,6 +1571,9 @@ pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
             sin_zero: [0; 8],
         };
 
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open raw ICMP socket; `packet` is valid for reads of its full length and
+        // SAFETY: `dest` points to a fully initialized `sockaddr_in` of the declared length.
         let sent = unsafe {
             libc::sendto(
                 fd,
@@ -1558,8 +1592,15 @@ pub fn ping_host(host: &str, timeout: Duration) -> Result<bool> {
         }
 
         let mut buf = [0u8; 1500];
+        #[allow(unsafe_code)]
+        // SAFETY: `sockaddr_in` is a POD C struct used purely as the output buffer for `recvfrom`; the
+        // SAFETY: all-zero pattern is a valid value and the kernel overwrites it on return.
         let mut from: libc::sockaddr_in = unsafe { mem::zeroed() };
         let mut from_len = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        #[allow(unsafe_code)]
+        // SAFETY: `fd` is a valid open socket; `buf` is writable for its full length, `from` is a valid
+        // SAFETY: `sockaddr_in` out-pointer and `from_len` is preset to `size_of::<sockaddr_in>()` as the
+        // SAFETY: in/out address length.
         let received = unsafe {
             libc::recvfrom(
                 fd,
@@ -1719,6 +1760,10 @@ pub fn randomize_hostname() -> Result<String> {
     {
         let cstr = CString::new(new_hostname.clone())
             .map_err(|_| anyhow!("hostname contains interior null"))?;
+        #[allow(unsafe_code)]
+        // SAFETY: `hostname_c` is a NUL-terminated `CString`; the length passed equals the hostname byte
+        // SAFETY: length (excluding the NUL), exactly what `sethostname(2)` expects, and the pointer is
+        // SAFETY: valid for the duration of the call.
         let rc = unsafe { libc::sethostname(cstr.as_ptr(), cstr.as_bytes().len()) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
@@ -4308,6 +4353,8 @@ fn check_network_permissions() -> Result<()> {
     // this crate can still build on non-Unix hosts (CI, dev machines, editor tooling).
     #[cfg(unix)]
     {
+        #[allow(unsafe_code)]
+        // SAFETY: `geteuid` takes no arguments and cannot cause UB.
         let euid = unsafe { libc::geteuid() };
         if euid != 0 {
             tracing::error!(
