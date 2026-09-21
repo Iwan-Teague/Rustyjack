@@ -514,7 +514,7 @@ impl NetOps for RealNetOps {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -677,14 +677,16 @@ mod tests {
 
         fn acquire_dhcp(&self, iface: &str, _timeout: Duration) -> Result<DhcpLease> {
             let results = self.dhcp_results.lock().unwrap();
-            results.get(iface).cloned().unwrap_or_else(|| {
-                Ok(DhcpLease {
+            match results.get(iface) {
+                Some(Ok(lease)) => Ok(lease.clone()),
+                Some(Err(err)) => Err(anyhow!("{}", err)),
+                None => Ok(DhcpLease {
                     ip: Ipv4Addr::new(192, 168, 1, 100),
                     prefix_len: 24,
                     gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
                     dns_servers: vec![Ipv4Addr::new(8, 8, 8, 8)],
-                })
-            })
+                }),
+            }
         }
 
         fn release_dhcp(&self, _iface: &str) -> Result<()> {
@@ -782,5 +784,23 @@ mod tests {
         assert_eq!(lease.ip, Ipv4Addr::new(192, 168, 1, 100));
         assert_eq!(lease.prefix_len, 24);
         assert_eq!(lease.gateway, Some(Ipv4Addr::new(192, 168, 1, 1)));
+
+        mock.set_dhcp_result(
+            "eth1",
+            Ok(DhcpLease {
+                ip: Ipv4Addr::new(10, 0, 0, 2),
+                prefix_len: 24,
+                gateway: Some(Ipv4Addr::new(10, 0, 0, 1)),
+                dns_servers: vec![],
+            }),
+        );
+        let lease = mock.acquire_dhcp("eth1", Duration::from_secs(1)).unwrap();
+        assert_eq!(lease.ip, Ipv4Addr::new(10, 0, 0, 2));
+
+        mock.set_dhcp_result("eth2", Err(anyhow!("lease denied")));
+        let err = mock
+            .acquire_dhcp("eth2", Duration::from_secs(1))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "lease denied");
     }
 }
