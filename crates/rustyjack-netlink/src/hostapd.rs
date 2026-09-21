@@ -42,7 +42,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::os::unix::io::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -304,7 +304,12 @@ pub struct AccessPoint {
     running: Arc<Mutex<bool>>,
     wireless_mgr: WirelessManager,
     start_time: Option<Instant>,
-    eapol_fd: Option<RawFd>,
+    // The EAPOL raw socket is owned solely by the spawned EAPOL task (see
+    // `spawn_eapol_task`), which moves an `OwnedFd` into its closure and closes
+    // it exactly once on exit via `Drop`. `stop()` cancels the task through the
+    // shared `running` flag and awaits it, so `AccessPoint` never holds a raw
+    // descriptor that a second code path could close. This removes the former
+    // double-close / use-after-close between `stop()` and the task (AQ-92).
     eapol_task: Option<JoinHandle<()>>,
     pmk: Option<[u8; 32]>,
     ifindex: Option<u32>,
@@ -376,7 +381,6 @@ impl AccessPoint {
             running: Arc::new(Mutex::new(false)),
             wireless_mgr,
             start_time: None,
-            eapol_fd: None,
             eapol_task: None,
             pmk: None,
             ifindex: None,
@@ -662,10 +666,12 @@ impl AccessPoint {
                     let iface = self.config.interface.clone();
                     let pmk = self.pmk;
                     let bssid = bssid;
+                    // `fd` (an `OwnedFd`) is moved into the task, which becomes
+                    // its sole owner and closes it on exit. `stop()` cancels the
+                    // task via `running` rather than closing the descriptor.
                     self.eapol_task = Some(spawn_eapol_task(
                         fd, running, stats, clients, iface, pmk, bssid, ifindex,
                     ));
-                    self.eapol_fd = Some(fd);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -704,17 +710,14 @@ impl AccessPoint {
             }
         }
         self.ifindex = None;
-        if let Some(fd) = self.eapol_fd.take() {
-            #[allow(unsafe_code)]
-            // SAFETY: UNJUSTIFIED — the descriptor number is shared with the spawned EAPOL task, which also
-            // SAFETY: closes it (see the unsafe at line 2841); `stop()` can race the task and double-close a
-            // SAFETY: possibly reused fd. Tracked as an AQ-72 finding; no behaviour change made here.
-            unsafe {
-                libc::close(fd);
-            }
-        }
+        // Cancel the EAPOL task and wait for it to finish. `running` was set to
+        // `false` above; the task observes it, breaks its loop, and drops the
+        // `OwnedFd` it exclusively owns — closing the descriptor exactly once.
+        // Awaiting (rather than the former `abort()` + separate `close()`) makes
+        // shutdown deterministic and removes the double-close: `stop()` no longer
+        // holds or closes the descriptor itself (AQ-92).
         if let Some(task) = self.eapol_task.take() {
-            let _ = task.abort();
+            let _ = task.await;
         }
 
         // Disconnect all clients
@@ -2428,7 +2431,7 @@ fn build_m3(
     frame
 }
 
-fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
+fn open_eapol_socket(ifindex: u32) -> Result<OwnedFd> {
     #[allow(unsafe_code)]
     // SAFETY: All arguments are scalar constants; `socket(2)` takes no pointers and cannot cause UB.
     let sock_fd = unsafe {
@@ -2445,6 +2448,15 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
         )));
     }
 
+    // Take ownership immediately: from here on every early return drops `owned`,
+    // which closes the descriptor exactly once. No manual `close()` needed.
+    #[allow(unsafe_code)]
+    // SAFETY: `sock_fd` is a fresh, valid descriptor from `socket(2)` above that
+    // nothing else owns; transferring it into `OwnedFd` gives it a single owner
+    // whose `Drop` closes it exactly once.
+    let owned = unsafe { OwnedFd::from_raw_fd(sock_fd) };
+    let raw = owned.as_raw_fd();
+
     #[allow(unsafe_code)]
     // SAFETY: `sockaddr_ll` is a POD C struct; the all-zero pattern is a valid initial value and the used fields are set below.
     let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
@@ -2453,21 +2465,17 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
     sll.sll_ifindex = ifindex as i32;
 
     #[allow(unsafe_code)]
-    // SAFETY: `fd` is a valid open socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
+    // SAFETY: `raw` is the descriptor of the live `owned` socket and `addr` points to a fully initialized `sockaddr_ll` cast to `*const sockaddr` with the matching length.
     let bind_res = unsafe {
         libc::bind(
-            sock_fd,
+            raw,
             &sll as *const _ as *const libc::sockaddr,
             std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
         )
     };
     if bind_res < 0 {
         let err = std::io::Error::last_os_error();
-        #[allow(unsafe_code)]
-        // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-        unsafe {
-            libc::close(sock_fd);
-        }
+        // `owned` is dropped here, closing the descriptor exactly once.
         return Err(NetlinkError::OperationFailed(format!(
             "Failed to bind EAPOL socket: {}",
             err
@@ -2476,20 +2484,20 @@ fn open_eapol_socket(ifindex: u32) -> Result<RawFd> {
 
     #[allow(unsafe_code)]
     // Set non-blocking to allow clean shutdown polling
-    // SAFETY: `fd` is a valid, owned descriptor; `F_GETFL` takes no pointer arguments.
-    let flags = unsafe { libc::fcntl(sock_fd, libc::F_GETFL) };
+    // SAFETY: `raw` is the descriptor of the live `owned` socket; `F_GETFL` takes no pointer arguments.
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
     if flags >= 0 {
         #[allow(unsafe_code)]
-        // SAFETY: `fd` is valid and owned; `flags` comes from `F_GETFL` (non-negative), so `flags | O_NONBLOCK` is a valid non-negative argument.
-        let _ = unsafe { libc::fcntl(sock_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        // SAFETY: `raw` is valid and owned by `owned`; `flags` comes from `F_GETFL` (non-negative), so `flags | O_NONBLOCK` is a valid non-negative argument.
+        let _ = unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
 
     tracing::info!("EAPOL raw socket opened on ifindex {}", ifindex);
-    Ok(sock_fd)
+    Ok(owned)
 }
 
 fn spawn_eapol_task(
-    fd: RawFd,
+    fd: OwnedFd,
     running: Arc<Mutex<bool>>,
     stats: Arc<Mutex<ApStats>>,
     clients: Arc<RwLock<HashMap<[u8; 6], ApClient>>>,
@@ -2499,6 +2507,11 @@ fn spawn_eapol_task(
     ifindex: u32,
 ) -> JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
+        // The task is the sole owner of the EAPOL socket. `fd` (an `OwnedFd`)
+        // lives for the whole closure and is closed exactly once when it is
+        // dropped as the closure returns; `raw_fd` is only a borrowed view used
+        // for the `recv`/`send` syscalls below.
+        let raw_fd = fd.as_raw_fd();
         let mut buf = [0u8; 2048];
         let gtk: [u8; 16] = rand::random();
         let sta_state: StdMutex<StdHashMap<[u8; 6], StaHandshake>> =
@@ -2525,9 +2538,10 @@ fn spawn_eapol_task(
 
             #[allow(unsafe_code)]
             let res =
-                // SAFETY: `fd` is a valid open socket; `buf` is a 2048-byte buffer valid for writes of its length
-                // SAFETY: and the return value is handled.
-                unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+                // SAFETY: `raw_fd` is the descriptor of the `OwnedFd` this task holds for its whole lifetime,
+                // SAFETY: so it is a valid open socket here; `buf` is a 2048-byte buffer valid for writes of
+                // SAFETY: its length and the return value is handled.
+                unsafe { libc::recv(raw_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
             if res < 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() == std::io::ErrorKind::WouldBlock {
@@ -2811,8 +2825,9 @@ fn spawn_eapol_task(
             // Send M3 back to station
             #[allow(unsafe_code)]
             let send_res =
-                // SAFETY: `fd` is the valid EAPOL socket owned by this task; `m3` is valid for reads of its full length.
-                unsafe { libc::send(fd, m3.as_ptr() as *const libc::c_void, m3.len(), 0) };
+                // SAFETY: `raw_fd` is the descriptor of the EAPOL `OwnedFd` this task holds for its whole
+                // SAFETY: lifetime, so it is a valid open socket here; `m3` is valid for reads of its full length.
+                unsafe { libc::send(raw_fd, m3.as_ptr() as *const libc::c_void, m3.len(), 0) };
             if send_res < 0 {
                 let msg = format!(
                     "Failed to send EAPOL M3 on {}: {}",
@@ -2859,11 +2874,11 @@ fn spawn_eapol_task(
                     wpa_state: WpaState::Authenticating,
                 });
         }
-        #[allow(unsafe_code)]
-        // SAFETY: UNJUSTIFIED — the same descriptor may concurrently be closed by `AccessPoint::stop`
-        // SAFETY: (see the unsafe at line 708), so this can double-close an fd that was reused in between.
-        // SAFETY: Tracked as an AQ-72 finding; no behaviour change made here.
-        let _ = unsafe { libc::close(fd) };
+        // `fd` (the `OwnedFd`) is dropped as this closure returns, closing the
+        // EAPOL socket exactly once. No manual `close()` and no second owner:
+        // `AccessPoint::stop` cancels this task via `running` and never touches
+        // the descriptor, so the former double-close is gone (AQ-92).
+        drop(fd);
         tracing::info!("EAPOL listener stopped on {}", interface);
     })
 }
@@ -3296,6 +3311,117 @@ mod tests {
         let ptk = derive_ptk(&pmk, &[0x02; 6], &[0xaa; 6], &[7u8; 32], &[9u8; 32]);
         let mut frame = vec![0u8; 113];
         assert!(eapol_mic_input(&ptk[..16], &mut frame, 0).is_some());
+    }
+
+    /// Regression test for AQ-92: the spawned EAPOL task must be the sole owner
+    /// of the raw socket and close it exactly once when cancelled mid-read.
+    ///
+    /// Before the fix the descriptor was stored in `AccessPoint::eapol_fd` and
+    /// closed by BOTH `stop()` and the task's tail. `stop()` could close a fd the
+    /// task was still `recv`-ing on, and a second close could land on an
+    /// unrelated descriptor the kernel had reused in between (use-after-close /
+    /// double-close on a privileged network daemon).
+    ///
+    /// This drives the real cancellation path (flip `running`, then await the
+    /// task, exactly as `stop()` now does) while the task is blocked in its recv
+    /// loop, and asserts (a) the fd stays open while the task owns it, (b) it is
+    /// closed exactly once when the task exits, and (c) a second close — the one
+    /// the old `stop()` performed — is now a rejected `EBADF`, never a silent
+    /// close of a reused descriptor.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn eapol_task_owns_and_closes_fd_exactly_once_on_cancel() {
+        // A real, closable socketpair stands in for the AF_PACKET EAPOL socket
+        // (which would need CAP_NET_ADMIN and real hardware). The task end is
+        // handed over as an `OwnedFd`; the peer end stays with the test.
+        let mut fds = [0i32; 2];
+        #[allow(unsafe_code)]
+        // SAFETY: `fds` is a valid 2-element array the kernel writes the pair into; args are scalar constants.
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(
+            rc,
+            0,
+            "socketpair failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let task_raw = fds[0];
+        let peer = fds[1];
+
+        // Non-blocking, exactly as `open_eapol_socket` sets it, so the task truly
+        // spins on WouldBlock (i.e. is "mid-read") when we cancel it.
+        #[allow(unsafe_code)]
+        // SAFETY: `task_raw` is the valid socketpair descriptor just created; fcntl takes no pointers here.
+        unsafe {
+            let flags = libc::fcntl(task_raw, libc::F_GETFL);
+            let _ = libc::fcntl(task_raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
+        #[allow(unsafe_code)]
+        // SAFETY: `task_raw` is a fresh descriptor nothing else owns; moving it into `OwnedFd` gives it a
+        // SAFETY: single owner whose `Drop` closes it exactly once.
+        let owned = unsafe { OwnedFd::from_raw_fd(task_raw) };
+
+        let running = Arc::new(Mutex::new(true));
+        let stats = Arc::new(Mutex::new(ApStats::default()));
+        let clients = Arc::new(RwLock::new(HashMap::new()));
+
+        // pmk = None keeps the task in its recv loop without touching crypto.
+        let handle = spawn_eapol_task(
+            owned,
+            Arc::clone(&running),
+            stats,
+            clients,
+            "test0".to_string(),
+            None,
+            [0x02; 6],
+            1,
+        );
+
+        // Let the task reach and spin in its recv loop (mid-read).
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // While the task owns the fd it must still be open.
+        #[allow(unsafe_code)]
+        // SAFETY: querying flags on a descriptor number is always safe; -1/EBADF means "not open".
+        let alive = unsafe { libc::fcntl(task_raw, libc::F_GETFD) };
+        assert_ne!(alive, -1, "task fd was closed while the task was still running");
+
+        // Cancel exactly as `AccessPoint::stop` now does: flip `running`, await.
+        *running.lock().await = false;
+        handle.await.expect("eapol task join");
+
+        // The task dropped its `OwnedFd`, closing the descriptor exactly once.
+        #[allow(unsafe_code)]
+        // SAFETY: querying flags on a descriptor number is always safe.
+        let after = unsafe { libc::fcntl(task_raw, libc::F_GETFD) };
+        assert_eq!(after, -1, "task fd should be closed after the task exits");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EBADF),
+            "closed fd must report EBADF"
+        );
+
+        // The old `stop()` closed this same descriptor a SECOND time. Emulate
+        // that and prove it is now a rejected no-op (EBADF) rather than a close
+        // of whatever the kernel reused the number for.
+        #[allow(unsafe_code)]
+        // SAFETY: closing a descriptor number is always memory-safe; we assert it is already closed.
+        let second_close = unsafe { libc::close(task_raw) };
+        assert_eq!(
+            second_close, -1,
+            "second close must fail: the fd was already closed exactly once by the task"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EBADF),
+            "second close of an already-closed fd must be EBADF"
+        );
+
+        // Clean up the peer end.
+        #[allow(unsafe_code)]
+        // SAFETY: `peer` is the still-open socketpair end owned by this test; closed exactly once here.
+        unsafe {
+            let _ = libc::close(peer);
+        }
     }
 
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
