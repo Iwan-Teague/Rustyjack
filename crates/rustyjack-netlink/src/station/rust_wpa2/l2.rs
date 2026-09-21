@@ -49,7 +49,9 @@ impl EapolSocket {
             let err = std::io::Error::last_os_error();
             #[allow(unsafe_code)]
             // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-            unsafe { libc::close(fd) };
+            unsafe {
+                libc::close(fd)
+            };
             return Err(NetlinkError::OperationFailed(format!(
                 "Failed to bind EAPOL socket: {}",
                 err

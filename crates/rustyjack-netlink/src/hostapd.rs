@@ -3383,7 +3383,10 @@ mod tests {
         #[allow(unsafe_code)]
         // SAFETY: querying flags on a descriptor number is always safe; -1/EBADF means "not open".
         let alive = unsafe { libc::fcntl(task_raw, libc::F_GETFD) };
-        assert_ne!(alive, -1, "task fd was closed while the task was still running");
+        assert_ne!(
+            alive, -1,
+            "task fd was closed while the task was still running"
+        );
 
         // Cancel exactly as `AccessPoint::stop` now does: flip `running`, await.
         *running.lock().await = false;

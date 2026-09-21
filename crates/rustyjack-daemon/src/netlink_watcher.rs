@@ -66,7 +66,9 @@ fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
     if flags < 0 {
         #[allow(unsafe_code)]
         // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-        unsafe { libc::close(fd) };
+        unsafe {
+            libc::close(fd)
+        };
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
     #[allow(unsafe_code)]
@@ -74,7 +76,9 @@ fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         #[allow(unsafe_code)]
         // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-        unsafe { libc::close(fd) };
+        unsafe {
+            libc::close(fd)
+        };
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
 
@@ -100,7 +104,9 @@ fn open_netlink_socket() -> anyhow::Result<AsyncFd<NetlinkSocket>> {
     if rc < 0 {
         #[allow(unsafe_code)]
         // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-        unsafe { libc::close(fd) };
+        unsafe {
+            libc::close(fd)
+        };
         return Err(anyhow::Error::new(std::io::Error::last_os_error()));
     }
 

@@ -22,9 +22,12 @@ async fn call_unit_method(unit: &str, method: &str) -> Result<()> {
     .await
     .map_err(|e| NetlinkError::OperationFailed(format!("systemd dbus proxy: {}", e)))?;
 
-    proxy.call_method(method, &(unit, "replace")).await.map_err(|e| {
-        NetlinkError::OperationFailed(format!("systemd {} {}: {}", method, unit, e))
-    })?;
+    proxy
+        .call_method(method, &(unit, "replace"))
+        .await
+        .map_err(|e| {
+            NetlinkError::OperationFailed(format!("systemd {} {}: {}", method, unit, e))
+        })?;
 
     Ok(())
 }

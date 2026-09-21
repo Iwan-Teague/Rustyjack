@@ -141,7 +141,9 @@ pub fn check_privileges() -> bool {
     #[allow(unsafe_code)]
     // Check if we're root or have CAP_NET_RAW
     // SAFETY: `geteuid` takes no arguments and cannot cause UB.
-    unsafe { libc::geteuid() == 0 }
+    unsafe {
+        libc::geteuid() == 0
+    }
 }
 
 /// Check if an interface exists and is wireless

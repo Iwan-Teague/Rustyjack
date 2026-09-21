@@ -226,11 +226,7 @@ pub fn netlink_delete_default_routes_on_interface(interface: &str) -> Result<()>
                 rustyjack_netlink::delete_default_routes_on_interface(&iface)
                     .await
                     .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to delete default routes on {}: {}",
-                            iface,
-                            e
-                        )
+                        anyhow::anyhow!("Failed to delete default routes on {}: {}", iface, e)
                     })
             })
         })
@@ -239,11 +235,7 @@ pub fn netlink_delete_default_routes_on_interface(interface: &str) -> Result<()>
                 rustyjack_netlink::delete_default_routes_on_interface(&iface)
                     .await
                     .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to delete default routes on {}: {}",
-                            iface,
-                            e
-                        )
+                        anyhow::anyhow!("Failed to delete default routes on {}: {}", iface, e)
                     })
             })
         })

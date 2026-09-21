@@ -74,7 +74,9 @@ impl InjectionSocket {
         if bind_result < 0 {
             #[allow(unsafe_code)]
             // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-            unsafe { libc::close(fd) };
+            unsafe {
+                libc::close(fd)
+            };
             return Err(WirelessError::Socket(format!(
                 "Failed to bind socket to interface: {}",
                 io::Error::last_os_error()
@@ -159,7 +161,9 @@ impl Drop for InjectionSocket {
     fn drop(&mut self) {
         #[allow(unsafe_code)]
         // SAFETY: this guard exclusively owns the descriptor and `Drop` runs exactly once, so `close` is called on a valid, unclosed fd.
-        unsafe { libc::close(self.fd) };
+        unsafe {
+            libc::close(self.fd)
+        };
     }
 }
 

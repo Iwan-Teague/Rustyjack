@@ -119,15 +119,9 @@ pub fn build_plaintext_logs(
             let log = suite_dir.join("run.log");
             if log.exists() {
                 writeln!(writer, "--- {}/run.log ---", suite_name)?;
-                let log_size =
-                    fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
+                let log_size = fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
                 if log_size > LOG_TRUNCATE_THRESHOLD {
-                    append_file_head_tail(
-                        &log,
-                        &mut writer,
-                        LOG_HEAD_LINES,
-                        LOG_TAIL_LINES,
-                    )?;
+                    append_file_head_tail(&log, &mut writer, LOG_HEAD_LINES, LOG_TAIL_LINES)?;
                 } else {
                     append_file_streaming(&log, &mut writer, None)?;
                 }
@@ -138,15 +132,9 @@ pub fn build_plaintext_logs(
             let summary_jsonl = suite_dir.join("summary.jsonl");
             if summary_jsonl.exists() {
                 writeln!(writer, "--- {}/summary.jsonl ---", suite_name)?;
-                let jsonl_size =
-                    fs::metadata(&summary_jsonl).map(|m| m.len()).unwrap_or(0);
+                let jsonl_size = fs::metadata(&summary_jsonl).map(|m| m.len()).unwrap_or(0);
                 if jsonl_size > LOG_TRUNCATE_THRESHOLD {
-                    append_file_head_tail(
-                        &summary_jsonl,
-                        &mut writer,
-                        50,
-                        100,
-                    )?;
+                    append_file_head_tail(&summary_jsonl, &mut writer, 50, 100)?;
                 } else {
                     append_file_streaming(&summary_jsonl, &mut writer, None)?;
                 }
@@ -158,15 +146,12 @@ pub fn build_plaintext_logs(
     }
 
     // Check if chunking is needed
-    let tmp_size = fs::metadata(&tmp_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let tmp_size = fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
 
     if tmp_size <= effective_max {
         // Single file, rename
         let final_path = run_dir.join(format!("rustyjack_{}_all_logs.txt", run_id));
-        fs::rename(&tmp_path, &final_path)
-            .with_context(|| "renaming all_logs temp file")?;
+        fs::rename(&tmp_path, &final_path).with_context(|| "renaming all_logs temp file")?;
         return Ok(vec![final_path]);
     }
 
@@ -177,12 +162,7 @@ pub fn build_plaintext_logs(
 }
 
 /// Chunk a large file into numbered parts, preferring to split on suite boundaries.
-fn chunk_file(
-    src: &Path,
-    output_dir: &Path,
-    run_id: &str,
-    max_bytes: u64,
-) -> Result<Vec<PathBuf>> {
+fn chunk_file(src: &Path, output_dir: &Path, run_id: &str, max_bytes: u64) -> Result<Vec<PathBuf>> {
     let reader = BufReader::new(File::open(src)?);
     let mut parts: Vec<PathBuf> = Vec::new();
     let mut part_num: u32 = 1;
@@ -215,14 +195,10 @@ fn part_path(dir: &Path, run_id: &str, part: u32) -> PathBuf {
     dir.join(format!("rustyjack_{}_all_logs_part{:02}.txt", run_id, part))
 }
 
-fn create_part_writer(
-    dir: &Path,
-    run_id: &str,
-    part: u32,
-) -> Result<BufWriter<File>> {
+fn create_part_writer(dir: &Path, run_id: &str, part: u32) -> Result<BufWriter<File>> {
     let path = part_path(dir, run_id, part);
-    let file = File::create(&path)
-        .with_context(|| format!("creating part file: {}", path.display()))?;
+    let file =
+        File::create(&path).with_context(|| format!("creating part file: {}", path.display()))?;
     Ok(BufWriter::new(file))
 }
 
@@ -232,8 +208,7 @@ fn append_file_streaming(
     writer: &mut impl Write,
     max_bytes: Option<u64>,
 ) -> Result<()> {
-    let file = File::open(path)
-        .with_context(|| format!("opening file: {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("opening file: {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut written: u64 = 0;
 
@@ -348,10 +323,7 @@ fn append_install_logs_section(run_dir: &Path, writer: &mut impl Write) -> Resul
 /// - Archive is created outside run_dir (in temp), then moved in.
 /// - Uses relative paths inside the archive.
 /// - Skips FIFOs, sockets, the ZIP output itself, and existing archives.
-pub fn build_results_zip(
-    run_dir: &Path,
-    run_id: &str,
-) -> Result<PathBuf> {
+pub fn build_results_zip(run_dir: &Path, run_id: &str) -> Result<PathBuf> {
     let final_path = run_dir.join(format!("rustyjack_{}_results.zip", run_id));
     let tmp_path = std::env::temp_dir().join(format!("rj_zip_{}.zip", run_id));
 
@@ -399,13 +371,15 @@ pub fn build_results_zip(
             }
 
             // Build relative path: base_name/relative_to_run_dir
-            let relative = path
-                .strip_prefix(run_dir)
-                .unwrap_or(path);
+            let relative = path.strip_prefix(run_dir).unwrap_or(path);
             let archive_path = if relative == Path::new("") {
                 base_name.to_string()
             } else {
-                format!("{}/{}", base_name, relative.to_string_lossy().replace('\\', "/"))
+                format!(
+                    "{}/{}",
+                    base_name,
+                    relative.to_string_lossy().replace('\\', "/")
+                )
             };
 
             if path.is_dir() {
@@ -421,12 +395,14 @@ pub fn build_results_zip(
     }
 
     // Move temp ZIP into run_dir
-    fs::rename(&tmp_path, &final_path).or_else(|_| {
-        // rename can fail across filesystems; fallback to copy+delete
-        fs::copy(&tmp_path, &final_path)?;
-        fs::remove_file(&tmp_path).ok();
-        Ok::<(), io::Error>(())
-    }).with_context(|| "moving ZIP to run directory")?;
+    fs::rename(&tmp_path, &final_path)
+        .or_else(|_| {
+            // rename can fail across filesystems; fallback to copy+delete
+            fs::copy(&tmp_path, &final_path)?;
+            fs::remove_file(&tmp_path).ok();
+            Ok::<(), io::Error>(())
+        })
+        .with_context(|| "moving ZIP to run directory")?;
 
     Ok(final_path)
 }
@@ -453,12 +429,12 @@ mod tests {
 
         let suite_b = dir.join("suite_b");
         fs::create_dir_all(&suite_b).unwrap();
-        fs::write(suite_b.join("report.md"), "# Suite B Report\nSome issues.\n").unwrap();
         fs::write(
-            suite_b.join("run.log"),
-            "b_line 1\nb_line 2\nb_line 3\n",
+            suite_b.join("report.md"),
+            "# Suite B Report\nSome issues.\n",
         )
         .unwrap();
+        fs::write(suite_b.join("run.log"), "b_line 1\nb_line 2\nb_line 3\n").unwrap();
         fs::write(
             suite_b.join("summary.jsonl"),
             "{\"test\":\"b1\",\"pass\":true}\n{\"test\":\"b2\",\"pass\":false}\n",
@@ -547,7 +523,11 @@ mod tests {
         // Verify section delimiters appear
         let delim_count = content.matches(SECTION_DELIM).count();
         // Header (1 pair) + master summary (1) + 2 suites (2) = at least 4 pairs of delimiters
-        assert!(delim_count >= 8, "Expected at least 8 delimiters, got {}", delim_count);
+        assert!(
+            delim_count >= 8,
+            "Expected at least 8 delimiters, got {}",
+            delim_count
+        );
     }
 
     #[test]
@@ -568,7 +548,11 @@ mod tests {
 
         // Set max to 2 KiB to force multiple chunks
         let parts = build_plaintext_logs(&run_dir, "003", Some(2 * 1024)).unwrap();
-        assert!(parts.len() > 1, "Expected multiple parts, got {}", parts.len());
+        assert!(
+            parts.len() > 1,
+            "Expected multiple parts, got {}",
+            parts.len()
+        );
 
         // Verify naming pattern
         for (i, part) in parts.iter().enumerate() {
@@ -644,9 +628,7 @@ mod tests {
     fn test_head_tail_truncation() {
         let tmp = TempDir::new().unwrap();
         let log_path = tmp.path().join("big.log");
-        let lines: String = (0..1000)
-            .map(|i| format!("Line {}\n", i))
-            .collect();
+        let lines: String = (0..1000).map(|i| format!("Line {}\n", i)).collect();
         fs::write(&log_path, &lines).unwrap();
 
         let mut output = Vec::new();

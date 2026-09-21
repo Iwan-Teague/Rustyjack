@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use rustyjack_ipc::{
-    endpoint_for_body, ActiveInterfaceClearResponse, ActiveInterfaceResponse, BlockDevicesResponse,
-    AntiForensicsCommand, AuditCommand, BridgeCommand, ClientHello, CoreDispatchRequest,
+    endpoint_for_body, ActiveInterfaceClearResponse, ActiveInterfaceResponse, AntiForensicsCommand,
+    AuditCommand, BlockDevicesResponse, BridgeCommand, ClientHello, CoreDispatchRequest,
     CoreDispatchResponse, DaemonError, DiskUsageRequest, DiskUsageResponse, DnsSpoofCommand,
     EthernetCommand, EvasionCommand, FeatureFlag, GpioDiagnosticsResponse, HardwareCommand,
     HealthResponse, HelloAck, HostnameResponse, HotspotClientsResponse, HotspotCommand,
@@ -14,9 +14,9 @@ use rustyjack_ipc::{
     JobCancelResponse, JobKind, JobSpec, JobStartRequest, JobStarted, JobStatusRequest,
     JobStatusResponse, LootCommand, MitmCommand, NotifyCommand, OpsConfig, PhysicalAccessCommand,
     ProcessCommand, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, ResponseOk,
-    ReverseCommand, ScanCommand, StatusCommand, StatusResponse, SystemActionResponse, SystemCommand,
-    SystemLogsResponse, SystemStatusResponse, VersionResponse, WifiCapabilitiesRequest,
-    WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
+    ReverseCommand, ScanCommand, StatusCommand, StatusResponse, SystemActionResponse,
+    SystemCommand, SystemLogsResponse, SystemStatusResponse, VersionResponse,
+    WifiCapabilitiesRequest, WifiCapabilitiesResponse, WifiCommand, MAX_FRAME, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -851,10 +851,7 @@ impl DaemonClient {
         }
     }
 
-    pub async fn audit_command(
-        &mut self,
-        command: AuditCommand,
-    ) -> Result<CoreDispatchResponse> {
+    pub async fn audit_command(&mut self, command: AuditCommand) -> Result<CoreDispatchResponse> {
         let body = RequestBody::AuditCommand(command);
         match self.request_long(body).await? {
             ResponseBody::Ok(ResponseOk::AuditCommand(resp)) => Ok(resp),

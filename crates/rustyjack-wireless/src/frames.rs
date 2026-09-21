@@ -342,7 +342,9 @@ impl Ieee80211Header {
         // SAFETY: `Ieee80211Header` is `#[repr(C, packed)]` with only `[u8; N]` fields and a fixed size
         // SAFETY: of 24 bytes, equal to `Self::SIZE`; viewing a valid reference as its bytes is in-bounds
         // SAFETY: and fully initialized.
-        unsafe { std::slice::from_raw_parts(self as *const _ as *const u8, Self::SIZE) }
+        unsafe {
+            std::slice::from_raw_parts(self as *const _ as *const u8, Self::SIZE)
+        }
     }
 }
 

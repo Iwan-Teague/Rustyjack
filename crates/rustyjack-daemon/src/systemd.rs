@@ -26,10 +26,7 @@ pub fn listener_or_bind(config: &DaemonConfig) -> io::Result<UnixListener> {
     }
 
     let listener = bind_socket(&config.socket_path, config.socket_group.as_deref())?;
-    info!(
-        "listening on unix socket: {}",
-        config.socket_path.display()
-    );
+    info!("listening on unix socket: {}", config.socket_path.display());
     Ok(listener)
 }
 
@@ -282,10 +279,16 @@ mod tests {
             let _stale = std::os::unix::net::UnixListener::bind(&path).unwrap();
         }
 
-        assert!(path.exists(), "stale socket path should remain after listener drop");
+        assert!(
+            path.exists(),
+            "stale socket path should remain after listener drop"
+        );
 
         let _listener = bind_socket(&path, None).expect("bind should replace stale socket");
-        assert!(path.exists(), "socket path should exist after successful bind");
+        assert!(
+            path.exists(),
+            "socket path should exist after successful bind"
+        );
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&dir);

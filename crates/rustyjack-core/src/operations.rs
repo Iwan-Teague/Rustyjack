@@ -43,23 +43,22 @@ use crate::cancel::{cancel_sleep, check_cancel, CancelFlag, CancelledError};
 use crate::cli::{
     AntiForensicsCommand, AntiForensicsSecureDeleteArgs, AuditCommand, BridgeCommand,
     BridgeStartArgs, BridgeStopArgs, Commands, DiscordCommand, DiscordSendArgs,
-    DiscordTestArtifactsArgs, DnsSpoofCommand,
-    DnsSpoofStartArgs, EthernetCommand, EthernetDiscoverArgs, EthernetInventoryArgs,
-    EthernetPortScanArgs, EthernetSiteCredArgs, EvasionCommand, EvasionIfaceArgs,
-    ExportLogsToUsbArgs, HardwareCommand, HotspotBlacklistArgs, HotspotCommand,
-    HotspotDisconnectArgs, HotspotStartArgs, LootArtifactSweepArgs, LootCommand, LootKind,
-    LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand, PhysicalAccessCommand,
-    ProcessCommand, ProcessKillArgs, ProcessStatusArgs, ReverseCommand, ReverseLaunchArgs,
-    ScanCommand, ScanDiscovery, ScanRunArgs, StatusCommand, SystemCommand, SystemConfigureHostArgs,
-    SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs, UsbMountArgs, UsbMountMode,
-    UsbUnmountArgs, WifiBestArgs, WifiCommand, WifiCrackArgs, WifiDeauthArgs, WifiDisconnectArgs,
-    WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs, WifiMacRestoreArgs, WifiMacSetArgs,
-    WifiMacSetVendorArgs, WifiPipelinePreflightArgs, WifiPmkidArgs, WifiProbeSniffArgs,
-    WifiProfileCommand, WifiProfileConnectArgs, WifiProfileDeleteArgs, WifiProfileSaveArgs,
-    WifiProfileShowArgs, WifiReconArpScanArgs, WifiReconBandwidthArgs, WifiReconCommand,
-    WifiReconDnsCaptureArgs, WifiReconGatewayArgs, WifiReconMdnsScanArgs, WifiReconServiceScanArgs,
-    WifiRouteCommand, WifiRouteEnsureArgs, WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs,
-    WifiSwitchArgs, WifiTxPowerArgs,
+    DiscordTestArtifactsArgs, DnsSpoofCommand, DnsSpoofStartArgs, EthernetCommand,
+    EthernetDiscoverArgs, EthernetInventoryArgs, EthernetPortScanArgs, EthernetSiteCredArgs,
+    EvasionCommand, EvasionIfaceArgs, ExportLogsToUsbArgs, HardwareCommand, HotspotBlacklistArgs,
+    HotspotCommand, HotspotDisconnectArgs, HotspotStartArgs, LootArtifactSweepArgs, LootCommand,
+    LootKind, LootListArgs, LootReadArgs, MitmCommand, MitmStartArgs, NotifyCommand,
+    PhysicalAccessCommand, ProcessCommand, ProcessKillArgs, ProcessStatusArgs, ReverseCommand,
+    ReverseLaunchArgs, ScanCommand, ScanDiscovery, ScanRunArgs, StatusCommand, SystemCommand,
+    SystemConfigureHostArgs, SystemFdeMigrateArgs, SystemFdePrepareArgs, SystemUpdateArgs,
+    UsbMountArgs, UsbMountMode, UsbUnmountArgs, WifiBestArgs, WifiCommand, WifiCrackArgs,
+    WifiDeauthArgs, WifiDisconnectArgs, WifiEvilTwinArgs, WifiKarmaArgs, WifiMacRandomizeArgs,
+    WifiMacRestoreArgs, WifiMacSetArgs, WifiMacSetVendorArgs, WifiPipelinePreflightArgs,
+    WifiPmkidArgs, WifiProbeSniffArgs, WifiProfileCommand, WifiProfileConnectArgs,
+    WifiProfileDeleteArgs, WifiProfileSaveArgs, WifiProfileShowArgs, WifiReconArpScanArgs,
+    WifiReconBandwidthArgs, WifiReconCommand, WifiReconDnsCaptureArgs, WifiReconGatewayArgs,
+    WifiReconMdnsScanArgs, WifiReconServiceScanArgs, WifiRouteCommand, WifiRouteEnsureArgs,
+    WifiRouteMetricArgs, WifiScanArgs, WifiStatusArgs, WifiSwitchArgs, WifiTxPowerArgs,
 };
 use crate::mount::{MountMode, MountPolicy, MountRequest, UnmountRequest};
 
@@ -86,11 +85,10 @@ use crate::system::{
     read_wifi_link_info, restore_routing_state, sanitize_label, save_wifi_profile,
     scan_local_hosts_cancellable, scan_wifi_networks_with_timeout_cancel, select_active_uplink,
     select_best_interface, select_wifi_interface, send_discord_files, send_discord_payload,
-    send_scan_to_discord,
-    set_interface_metric, spawn_arpspoof_pair, start_bridge_pair, start_dns_spoof,
-    start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof, stop_pcap_capture,
-    write_interface_preference, write_wifi_profile, HostInfo, IsolationPolicyGuard, KillResult,
-    LootSession, WifiProfile,
+    send_scan_to_discord, set_interface_metric, spawn_arpspoof_pair, start_bridge_pair,
+    start_dns_spoof, start_pcap_capture, stop_arp_spoof, stop_bridge_pair, stop_dns_spoof,
+    stop_pcap_capture, write_interface_preference, write_wifi_profile, HostInfo,
+    IsolationPolicyGuard, KillResult, LootSession, WifiProfile,
 };
 
 pub type HandlerResult = (String, Value);
@@ -1849,7 +1847,10 @@ fn handle_discord_send(root: &Path, args: DiscordSendArgs) -> Result<HandlerResu
     let file_refs: Vec<&Path> = file.iter().map(|p| p.as_path()).collect();
     let sent = send_discord_files(root, Some(embed), &file_refs, message.as_deref())?;
 
-    let file_list: Vec<String> = file.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let file_list: Vec<String> = file
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
     let data = json!({
         "sent": sent,
         "files": file_list,
@@ -1875,7 +1876,10 @@ fn handle_discord_status(root: &Path) -> Result<HandlerResult> {
     Ok((message, data))
 }
 
-fn handle_discord_test_artifacts(root: &Path, args: DiscordTestArtifactsArgs) -> Result<HandlerResult> {
+fn handle_discord_test_artifacts(
+    root: &Path,
+    args: DiscordTestArtifactsArgs,
+) -> Result<HandlerResult> {
     use crate::test_artifacts::{build_plaintext_logs, build_results_zip};
 
     let DiscordTestArtifactsArgs {
@@ -1920,7 +1924,9 @@ fn handle_discord_test_artifacts(root: &Path, args: DiscordTestArtifactsArgs) ->
             } else {
                 skipped_files.push(format!(
                     "{} ({} bytes, over {} byte limit)",
-                    zip_path.display(), size, max_bytes
+                    zip_path.display(),
+                    size,
+                    max_bytes
                 ));
             }
         }
@@ -1930,9 +1936,8 @@ fn handle_discord_test_artifacts(root: &Path, args: DiscordTestArtifactsArgs) ->
     }
 
     // Build message content
-    let mut content = message.unwrap_or_else(|| {
-        format!("RustyJack test artifacts (Run ID: {})", run_id)
-    });
+    let mut content =
+        message.unwrap_or_else(|| format!("RustyJack test artifacts (Run ID: {})", run_id));
     if !skipped_files.is_empty() {
         content.push_str("\n\nSkipped (over size limit):");
         for skipped in &skipped_files {
@@ -1961,8 +1966,11 @@ fn handle_discord_test_artifacts(root: &Path, args: DiscordTestArtifactsArgs) ->
     });
 
     let msg = if sent {
-        format!("Test artifacts sent ({} uploaded, {} skipped)",
-            uploaded_files.len(), skipped_files.len())
+        format!(
+            "Test artifacts sent ({} uploaded, {} skipped)",
+            uploaded_files.len(),
+            skipped_files.len()
+        )
     } else {
         "Discord webhook not configured".to_string()
     };
@@ -3620,7 +3628,9 @@ const LINUX_REBOOT_CMD_POWER_OFF: libc::c_int = 0x4321fedc;
 fn system_reboot_cmd(cmd: libc::c_int) -> Result<()> {
     #[allow(unsafe_code)]
     // SAFETY: `sync` takes no arguments and cannot cause UB.
-    unsafe { libc::sync() };
+    unsafe {
+        libc::sync()
+    };
 
     #[allow(unsafe_code)]
     // SAFETY: `SYS_reboot` with the two required magic numbers and a scalar command — `reboot(2)`
@@ -5913,11 +5923,9 @@ fn handle_physical_access_router_fingerprint(
 ) -> Result<HandlerResult> {
     #[cfg(feature = "external_tools")]
     {
-        let report = crate::external_tools::physical_access::physical_access_attack(
-            &args.interface,
-            root,
-        )
-        .context("router fingerprinting")?;
+        let report =
+            crate::external_tools::physical_access::physical_access_attack(&args.interface, root)
+                .context("router fingerprinting")?;
         let data = json!({
             "target": args.target,
             "interface": args.interface,
@@ -5950,11 +5958,9 @@ fn handle_physical_access_extract_credentials(
 ) -> Result<HandlerResult> {
     #[cfg(feature = "external_tools")]
     {
-        let report = crate::external_tools::physical_access::physical_access_attack(
-            &args.interface,
-            root,
-        )
-        .context("credential extraction")?;
+        let report =
+            crate::external_tools::physical_access::physical_access_attack(&args.interface, root)
+                .context("credential extraction")?;
         let data = json!({
             "target": args.target,
             "interface": args.interface,
@@ -6027,9 +6033,7 @@ fn handle_anti_forensics_secure_delete(
         );
     }
 
-    let file_size = std::fs::metadata(target)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = std::fs::metadata(target).map(|m| m.len()).unwrap_or(0);
 
     // Perform DoD 5220.22-M secure delete (7-pass overwrite) inline
     // to avoid dependency on the feature-gated external_tools module.
@@ -6123,10 +6127,7 @@ fn handle_audit_log_status(root: &Path) -> Result<HandlerResult> {
 
 // --- Loot artifact-sweep handler ---
 
-fn handle_loot_artifact_sweep(
-    root: &Path,
-    args: LootArtifactSweepArgs,
-) -> Result<HandlerResult> {
+fn handle_loot_artifact_sweep(root: &Path, args: LootArtifactSweepArgs) -> Result<HandlerResult> {
     let loot_dir = root.join("loot");
     let mut artifacts: Vec<serde_json::Value> = Vec::new();
 

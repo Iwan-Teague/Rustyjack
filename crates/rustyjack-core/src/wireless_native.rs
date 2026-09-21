@@ -77,7 +77,9 @@ pub struct DeauthConfig {
 pub fn native_available() -> bool {
     #[allow(unsafe_code)]
     // SAFETY: `geteuid` takes no arguments and cannot cause UB.
-    unsafe { libc::geteuid() == 0 }
+    unsafe {
+        libc::geteuid() == 0
+    }
 }
 
 #[cfg(not(target_os = "linux"))]

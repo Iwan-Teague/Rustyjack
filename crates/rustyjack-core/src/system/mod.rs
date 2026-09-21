@@ -617,8 +617,8 @@ const DISCORD_MAX_FILES_PER_MESSAGE: usize = 10;
 fn redact_webhook_url(s: &str) -> String {
     use regex::Regex;
     // Match discord webhook URLs and redact the token portion
-    let re = Regex::new(r"(https://discord\.com/api/webhooks/)\d+/[A-Za-z0-9_-]+")
-        .expect("valid regex");
+    let re =
+        Regex::new(r"(https://discord\.com/api/webhooks/)\d+/[A-Za-z0-9_-]+").expect("valid regex");
     re.replace_all(s, "${1}[REDACTED]").to_string()
 }
 
@@ -639,12 +639,12 @@ fn discord_status_is_fatal(status: u16) -> bool {
 
 /// Parse the retry-after delay from a 429 response.
 /// Checks the Retry-After header first, then falls back to retry_after in JSON body.
-fn parse_retry_after(
-    headers: &reqwest::header::HeaderMap,
-    body: &str,
-) -> Duration {
+fn parse_retry_after(headers: &reqwest::header::HeaderMap, body: &str) -> Duration {
     // Try Retry-After header
-    if let Some(val) = headers.get("retry-after").or_else(|| headers.get("Retry-After")) {
+    if let Some(val) = headers
+        .get("retry-after")
+        .or_else(|| headers.get("Retry-After"))
+    {
         if let Ok(s) = val.to_str() {
             if let Ok(secs) = s.trim().parse::<f64>() {
                 let wait = (secs.ceil() as u64).max(1) + 1;
@@ -677,12 +677,21 @@ fn discord_send_with_retry(
         let response = match request.send() {
             Ok(r) => r,
             Err(e) => {
-                warn!("Discord request failed (attempt {}/{}): {}", attempt, max_retries, redact_webhook_url(&e.to_string()));
+                warn!(
+                    "Discord request failed (attempt {}/{}): {}",
+                    attempt,
+                    max_retries,
+                    redact_webhook_url(&e.to_string())
+                );
                 if attempt < max_retries {
                     std::thread::sleep(Duration::from_secs((attempt * 2).into()));
                     continue;
                 }
-                bail!("Discord webhook send failed after {} attempts: {}", max_retries, redact_webhook_url(&e.to_string()));
+                bail!(
+                    "Discord webhook send failed after {} attempts: {}",
+                    max_retries,
+                    redact_webhook_url(&e.to_string())
+                );
             }
         };
 
@@ -712,7 +721,10 @@ fn discord_send_with_retry(
         if discord_status_is_fatal(status_code) {
             bail!(
                 "Discord webhook returned non-retryable HTTP {} (attempt {}/{}). Response: {}",
-                status_code, attempt, max_retries, snippet
+                status_code,
+                attempt,
+                max_retries,
+                snippet
             );
         }
 
@@ -720,7 +732,11 @@ fn discord_send_with_retry(
         if status_code >= 500 {
             warn!(
                 "Discord transient error ({}). Retrying in {}s (attempt {}/{}). Response: {}",
-                status_code, attempt * 2, attempt, max_retries, snippet
+                status_code,
+                attempt * 2,
+                attempt,
+                max_retries,
+                snippet
             );
             if attempt < max_retries {
                 std::thread::sleep(Duration::from_secs((attempt * 2).into()));
@@ -730,7 +746,9 @@ fn discord_send_with_retry(
 
         bail!(
             "Discord webhook returned HTTP {} after {} attempts. Response: {}",
-            status_code, attempt, snippet
+            status_code,
+            attempt,
+            snippet
         );
     }
 
@@ -808,10 +826,7 @@ pub fn send_discord_files(
             .iter()
             .enumerate()
             .map(|(i, path)| {
-                let fname = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("file");
+                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
                 json!({ "id": i, "filename": fname })
             })
             .collect();
@@ -855,11 +870,9 @@ pub fn send_discord_files(
         let webhook_clone = webhook.clone();
         let pjs = payload_json_str.clone();
         discord_send_with_retry(&client, &webhook, || {
-            let mut form =
-                multipart::Form::new().text("payload_json", pjs.clone());
+            let mut form = multipart::Form::new().text("payload_json", pjs.clone());
             for fd in &file_data_vec {
-                let part = multipart::Part::bytes(fd.bytes.clone())
-                    .file_name(fd.filename.clone());
+                let part = multipart::Part::bytes(fd.bytes.clone()).file_name(fd.filename.clone());
                 form = form.part(format!("files[{}]", fd.idx), part);
             }
             Ok(client.post(&webhook_clone).multipart(form))
@@ -1265,7 +1278,9 @@ fn open_packet_socket(interface: &str) -> Result<RawFd> {
         let err = io::Error::last_os_error();
         #[allow(unsafe_code)]
         // SAFETY: `fd` is owned exclusively by this scope on this path and has not been closed yet; `close` runs exactly once.
-        unsafe { libc::close(fd) };
+        unsafe {
+            libc::close(fd)
+        };
         return Err(err).context("binding packet socket");
     }
 
@@ -4511,17 +4526,15 @@ mod discord_tests {
     fn test_redact_webhook_url() {
         let url = "https://discord.com/api/webhooks/123456789/AbCdEfGhIjKlMnOpQrStUvWxYz_0123";
         let redacted = redact_webhook_url(url);
-        assert_eq!(
-            redacted,
-            "https://discord.com/api/webhooks/[REDACTED]"
-        );
+        assert_eq!(redacted, "https://discord.com/api/webhooks/[REDACTED]");
         assert!(!redacted.contains("123456789"));
         assert!(!redacted.contains("AbCdEfGhIjKlMnOpQrStUvWxYz"));
     }
 
     #[test]
     fn test_redact_webhook_url_in_error_message() {
-        let msg = "Failed to send to https://discord.com/api/webhooks/9999/SECRET_TOKEN_HERE: timeout";
+        let msg =
+            "Failed to send to https://discord.com/api/webhooks/9999/SECRET_TOKEN_HERE: timeout";
         let redacted = redact_webhook_url(msg);
         assert!(redacted.contains("[REDACTED]"));
         assert!(!redacted.contains("SECRET_TOKEN_HERE"));
