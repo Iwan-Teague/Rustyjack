@@ -597,9 +597,13 @@ impl IsolationEngine {
                 return Ok(());
             }
 
-            // For Connectivity mode wireless, attempt connection
-            // (but this is not used in current UI flow)
+            // For Connectivity mode wireless, attempt connection: DHCP,
+            // default route and DNS, exactly like ethernet. Fail-closed:
+            // an activation error is reported instead of silently keeping
+            // an interface that never got connectivity.
             info!("Interface {} activated in Connectivity mode", iface);
+            self.configure_dhcp_connectivity(iface)?;
+            info!("Interface {} fully activated with connectivity", iface);
             return Ok(());
         }
 
@@ -691,6 +695,19 @@ impl IsolationEngine {
 
         // Connectivity mode (full connection required)
         // Attempt DHCP and fail if unsuccessful
+        self.configure_dhcp_connectivity(iface)?;
+
+        info!("Interface {} fully activated with connectivity", iface);
+        Ok(())
+    }
+
+    /// Configure DHCP, default route and DNS for an interface in
+    /// Connectivity mode. Shared by ethernet and wireless activation.
+    ///
+    /// Fail-closed: any failure (no lease, no route, no DNS) propagates so
+    /// the caller records an activation error instead of accepting an
+    /// interface without the connectivity Connectivity mode promises.
+    fn configure_dhcp_connectivity(&self, iface: &str) -> Result<()> {
         match self.ops.acquire_dhcp(iface, Duration::from_secs(30)) {
             Ok(lease) => {
                 info!(
@@ -723,7 +740,6 @@ impl IsolationEngine {
             }
         }
 
-        info!("Interface {} fully activated with connectivity", iface);
         Ok(())
     }
 
@@ -888,8 +904,20 @@ impl IsolationEngine {
             }
         }
 
-        let dns = self.dns.verify_dns()?;
-        debug!("DNS servers: {:?}", dns);
+        match self.dns.verify_dns() {
+            Ok(dns) => debug!("DNS servers: {:?}", dns),
+            Err(e) => {
+                if mode == EnforcementMode::Passive {
+                    // Passive mode tolerates missing DNS configuration:
+                    // activation legitimately skips DNS there (e.g. DHCP
+                    // failure is non-fatal), mirroring the route tolerance
+                    // above.
+                    debug!("DNS not configured (passive mode): {}", e);
+                } else {
+                    return Err(e);
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1099,5 +1127,48 @@ mod tests {
 
         let outcome = engine.enforce().unwrap();
         assert_eq!(outcome.allowed, vec!["wlan0".to_string()]);
+    }
+
+    #[test]
+    fn test_enforce_wireless_connectivity_configures_route_and_dns() {
+        let mock = Arc::new(MockNetOps::new());
+        mock.add_interface("wlan0", true, "up");
+
+        let temp_dir = TempDir::new().unwrap();
+        let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
+
+        let outcome = engine.enforce().unwrap();
+
+        assert_eq!(outcome.allowed, vec!["wlan0".to_string()]);
+        assert_eq!(outcome.errors.len(), 0);
+
+        // Connectivity mode must configure a default route via the active
+        // interface (mock default lease: gateway 192.168.1.1).
+        let routes = mock.get_routes();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].interface, "wlan0");
+
+        // And DNS must be written to the managed resolv.conf (mock default
+        // lease DNS: 8.8.8.8).
+        let resolv = std::fs::read_to_string(temp_dir.path().join("resolv.conf")).unwrap();
+        assert!(resolv.contains("nameserver 8.8.8.8"));
+    }
+
+    #[test]
+    fn test_enforce_passive_no_carrier_tolerates_missing_dns() {
+        let mock = Arc::new(MockNetOps::new());
+        mock.add_interface("eth0", false, "up");
+        mock.set_carrier_state("eth0", false);
+
+        let temp_dir = TempDir::new().unwrap();
+        let engine = IsolationEngine::new(mock.clone(), temp_dir.path().to_path_buf());
+
+        let outcome = engine.enforce_passive().unwrap();
+
+        // No carrier: activation succeeds without any network configuration
+        // and passive verification must not demand route or DNS state.
+        assert_eq!(outcome.allowed, vec!["eth0".to_string()]);
+        assert!(mock.get_routes().is_empty());
+        assert!(!temp_dir.path().join("resolv.conf").exists());
     }
 }
