@@ -21,7 +21,7 @@ use sha2::Sha256;
 use tar::{Archive, Builder};
 use tracing::{debug, info, warn};
 use walkdir::WalkDir;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 const ENC_MAGIC: &[u8; 6] = b"RJENC1";
 const ENC_MAGIC_V2: &[u8; 6] = b"RJENC2";
@@ -830,14 +830,13 @@ fn encrypt_bytes_with_password(password: &str, plaintext: &[u8]) -> Result<Vec<u
     let mut rng = OsRng;
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut nonce_bytes);
-    let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, ENC_PBKDF2_ITERS, &mut key);
+    let mut key = Zeroizing::new([0u8; 32]);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, ENC_PBKDF2_ITERS, &mut *key);
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
+        Aes256Gcm::new_from_slice(&*key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
         .map_err(|e| anyhow!("Encryption failed: {e}"))?;
-    key.zeroize();
 
     let mut out = Vec::with_capacity(
         ENC_MAGIC_V2.len() + ENC_SALT_LEN_GCM + ENC_NONCE_LEN_GCM + ciphertext.len(),
@@ -879,12 +878,12 @@ pub fn decrypt_bytes_with_password_legacy_cbc(password: &str, data: &[u8]) -> Re
     }
     let salt = &data[OPENSSL_MAGIC.len()..header_len];
     let ct = &data[header_len..];
-    let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
+    let mut key_iv = Zeroizing::new([0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN]);
     pbkdf2_hmac::<Sha256>(
         password.as_bytes(),
         salt,
         ENC_PBKDF2_ITERS_LEGACY,
-        &mut key_iv,
+        &mut *key_iv,
     );
     let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
     let mut buf = vec![0u8; ct.len()];
@@ -893,7 +892,6 @@ pub fn decrypt_bytes_with_password_legacy_cbc(password: &str, data: &[u8]) -> Re
         .decrypt_padded_b2b_mut::<Pkcs7>(ct, &mut buf)
         .map_err(|_| anyhow!("Decryption failed: wrong password or corrupted data"))?
         .to_vec();
-    key_iv.zeroize();
     Ok(plaintext)
 }
 
@@ -908,15 +906,14 @@ fn decrypt_rjenc_bytes(password: &str, data: &[u8], iterations: u32) -> Result<V
     let salt = &data[salt_start..nonce_start];
     let nonce_bytes = &data[nonce_start..ct_start];
     let ct = &data[ct_start..];
-    let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut key);
+    let mut key = Zeroizing::new([0u8; 32]);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut *key);
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
+        Aes256Gcm::new_from_slice(&*key).map_err(|e| anyhow!("Invalid encryption key: {e}"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
     let plaintext = cipher
         .decrypt(nonce, ct)
         .map_err(|e| anyhow!("Decryption failed: {e}"))?;
-    key.zeroize();
     Ok(plaintext)
 }
 
@@ -999,6 +996,7 @@ mod tests {
     use super::*;
     use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
     use cbc::Encryptor;
+    use zeroize::Zeroize;
 
     const TEST_PASSWORD: &str = "correct horse battery staple";
 
@@ -1067,6 +1065,41 @@ mod tests {
 
         let dec = decrypt_bytes_with_password_legacy_cbc(TEST_PASSWORD, &blob).unwrap();
         assert_eq!(dec, plaintext);
+    }
+
+    #[test]
+    fn legacy_cbc_wrong_password_is_rejected() {
+        let plaintext = b"old loot".to_vec();
+        let mut salt = [0u8; OPENSSL_SALT_LEN];
+        OsRng.fill_bytes(&mut salt);
+        let mut key_iv = [0u8; OPENSSL_KEY_LEN + OPENSSL_IV_LEN];
+        pbkdf2_hmac::<Sha256>(
+            TEST_PASSWORD.as_bytes(),
+            &salt,
+            ENC_PBKDF2_ITERS_LEGACY,
+            &mut key_iv,
+        );
+        let (key, iv) = key_iv.split_at(OPENSSL_KEY_LEN);
+        let mut out = vec![0u8; plaintext.len() + 16];
+        let ct = Encryptor::<Aes256>::new_from_slices(key, iv)
+            .unwrap()
+            .encrypt_padded_b2b_mut::<Pkcs7>(&plaintext, &mut out)
+            .unwrap()
+            .to_vec();
+        key_iv.zeroize();
+
+        let mut blob = Vec::new();
+        blob.extend_from_slice(OPENSSL_MAGIC);
+        blob.extend_from_slice(&salt);
+        blob.extend_from_slice(&ct);
+
+        let err = decrypt_bytes_with_password_legacy_cbc("wrong password", &blob)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("wrong password or corrupted data"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
