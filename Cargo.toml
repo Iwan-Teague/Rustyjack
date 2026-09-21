@@ -18,6 +18,9 @@ members = [
     "crates/rustyjack-updater",
 ]
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
