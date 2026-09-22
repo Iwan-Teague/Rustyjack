@@ -4,19 +4,23 @@ on:
   push:
   pull_request:
 
+# Least privilege (AQ-97): read-only token; no job publishes or writes to the repo.
+permissions:
+  contents: read
+
 jobs:
   code-quality:
     name: Code Quality Checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch head, verified 2026-09-20 via GitHub API)
 
       - name: Install cargo-deny
         # Installed from crates.io with --locked instead of a third-party
         # action (one less unverified supply-chain hop), matching the
         # fleet's rustychat CI posture.
-        run: cargo install --locked cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
 
       - name: Supply-chain check (advisories, bans, sources)
         # licenses is intentionally omitted pending the OI-05 licence ruling.
