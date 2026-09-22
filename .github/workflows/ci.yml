@@ -13,8 +13,8 @@ jobs:
     name: Code Quality Checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch head, verified 2026-09-20 via GitHub API)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch head 6bed076 (a moving branch pinned to a commit; verified against the upstream ref 2026-09-22)
 
       - name: Install cargo-deny
         # Installed from crates.io with --locked instead of a third-party
