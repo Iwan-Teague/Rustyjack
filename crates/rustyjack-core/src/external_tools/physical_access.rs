@@ -1,4 +1,4 @@
-use std::{fs, path::Path, thread, time::Duration};
+use std::{fmt, fs, path::Path, thread, time::Duration};
 
 use crate::redact;
 use anyhow::{anyhow, Result};
@@ -6,7 +6,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WifiCredential {
     pub ssid: String,
     pub password: Option<String>,
@@ -14,7 +14,18 @@ pub struct WifiCredential {
     pub source: String, // "router_config", "dhcp_leak", "mdns", "upnp"
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl fmt::Debug for WifiCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WifiCredential")
+            .field("ssid", &self.ssid)
+            .field("password", &self.password.as_ref().map(|_| "REDACTED"))
+            .field("security", &self.security)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub struct PhysicalAccessReport {
     pub wifi_credentials: Vec<WifiCredential>,
     pub router_model: Option<String>,
@@ -22,6 +33,22 @@ pub struct PhysicalAccessReport {
     pub admin_url: Option<String>,
     pub default_credentials_tried: Vec<(String, String, bool)>,
     pub vulnerabilities: Vec<String>,
+}
+
+impl fmt::Debug for PhysicalAccessReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PhysicalAccessReport")
+            .field("wifi_credentials", &self.wifi_credentials.len())
+            .field("router_model", &self.router_model)
+            .field("router_firmware", &self.router_firmware)
+            .field("admin_url", &self.admin_url)
+            .field(
+                "default_credentials_tried",
+                &self.default_credentials_tried.len(),
+            )
+            .field("vulnerabilities", &self.vulnerabilities)
+            .finish()
+    }
 }
 
 /// Main physical access attack - extract WiFi password from wired connection
@@ -510,4 +537,53 @@ fn save_report(root: &Path, report: &PhysicalAccessReport) -> Result<()> {
 
     info!("Physical access report saved to {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod debug_redaction_witnesses {
+    use super::{PhysicalAccessReport, WifiCredential};
+
+    fn credential(password: &str) -> WifiCredential {
+        WifiCredential {
+            ssid: "home-net".to_string(),
+            password: Some(password.to_string()),
+            security: "WPA2".to_string(),
+            source: "router_config".to_string(),
+        }
+    }
+
+    #[test]
+    fn wifi_credential_debug_redacts_password() {
+        let rendered = format!("{:?}", credential("aq140-witness-wifi-pass"));
+        assert!(
+            !rendered.contains("aq140-witness-wifi-pass"),
+            "WifiCredential Debug output leaked the WiFi password: {rendered}"
+        );
+    }
+
+    #[test]
+    fn physical_access_report_debug_redacts_wifi_passwords_and_tried_credentials() {
+        let report = PhysicalAccessReport {
+            wifi_credentials: vec![credential("aq140-witness-wifi-pass")],
+            router_model: Some("TP-Link Archer A7".to_string()),
+            router_firmware: None,
+            admin_url: Some("http://192.168.0.1".to_string()),
+            default_credentials_tried: vec![(
+                "admin".to_string(),
+                "aq140-witness-admin-pass".to_string(),
+                false,
+            )],
+            vulnerabilities: Vec::new(),
+        };
+
+        let rendered = format!("{report:?}");
+        assert!(
+            !rendered.contains("aq140-witness-wifi-pass"),
+            "PhysicalAccessReport Debug output leaked a WiFi password: {rendered}"
+        );
+        assert!(
+            !rendered.contains("aq140-witness-admin-pass"),
+            "PhysicalAccessReport Debug output leaked a tried credential: {rendered}"
+        );
+    }
 }

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
 use sha1::Sha1;
@@ -6,15 +8,32 @@ use crate::error::{NetlinkError, Result};
 
 type HmacSha1 = Hmac<Sha1>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KeyMaterial {
     pub pmk: [u8; 32],
 }
 
-#[derive(Debug, Clone)]
+impl fmt::Debug for KeyMaterial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyMaterial")
+            .field("pmk", &"REDACTED")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct DeriveInputs {
     pub ssid: String,
     pub psk: String,
+}
+
+impl fmt::Debug for DeriveInputs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeriveInputs")
+            .field("ssid", &self.ssid)
+            .field("psk", &"REDACTED")
+            .finish()
+    }
 }
 
 pub fn derive_key_material(inputs: &DeriveInputs) -> Result<KeyMaterial> {
@@ -89,4 +108,35 @@ pub fn compute_mic(frame: &[u8], kck: &[u8]) -> Result<[u8; 16]> {
     let mut out = [0u8; 16];
     out.copy_from_slice(&digest[..16]);
     Ok(out)
+}
+
+#[cfg(test)]
+mod debug_redaction_witnesses {
+    use super::*;
+
+    #[test]
+    fn key_material_debug_redacts_pmk() {
+        let pmk = [0xA5u8; 32];
+        let material = KeyMaterial { pmk };
+
+        let rendered = format!("{material:?}");
+        assert!(
+            !rendered.contains(&format!("{pmk:?}")),
+            "KeyMaterial Debug output leaked the PMK bytes: {rendered}"
+        );
+    }
+
+    #[test]
+    fn derive_inputs_debug_redacts_psk() {
+        let inputs = DeriveInputs {
+            ssid: "home-net".to_string(),
+            psk: "aq140-witness-passphrase".to_string(),
+        };
+
+        let rendered = format!("{inputs:?}");
+        assert!(
+            !rendered.contains("aq140-witness-passphrase"),
+            "DeriveInputs Debug output leaked the passphrase: {rendered}"
+        );
+    }
 }
