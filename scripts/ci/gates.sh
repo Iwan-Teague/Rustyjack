@@ -155,8 +155,8 @@ rustc ci/no_emoji_in_source.rs -o /tmp/no_emoji_in_source
 printf '=== 5/9 cargo fmt --all --check ===\n'
 cargo fmt --all --check
 
-printf '=== 6/9 cargo deny check advisories bans sources ===\n'
-cargo deny check advisories bans sources
+printf '=== 6/9 cargo deny check advisories bans licenses sources ===\n'
+cargo deny check advisories bans licenses sources
 
 printf '=== 7/9 cargo check --workspace ===\n'
 cargo check --workspace

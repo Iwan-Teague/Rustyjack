@@ -1,7 +1,6 @@
 # cargo-deny configuration — rustyjack (AQ-73 baseline supply-chain scaffold).
-# Gate in CI: `cargo deny check advisories bans sources`.
-# NOTE: `licenses` is intentionally NOT gated in CI yet — wiring it into the
-# CI gate is a separate change; this file's allow list is the policy record.
+# Gate in CI and in scripts/ci/gates.sh: `cargo deny check advisories bans licenses sources`
+# (`licenses` gated since AQ-238, once the OI-05 licence decision had landed).
 # The workspace licence is PolyForm Noncommercial 1.0.0 suite-wide (owner
 # decision OI-05, ADR-021), listed below and witnessed load-bearing in the
 # AQ-237 rollout. The remaining entries record the MEASURED licence set of
