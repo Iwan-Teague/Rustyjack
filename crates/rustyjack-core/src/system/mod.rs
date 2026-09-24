@@ -616,9 +616,14 @@ const DISCORD_MAX_FILES_PER_MESSAGE: usize = 10;
 /// Redact Discord webhook URL tokens from error messages.
 fn redact_webhook_url(s: &str) -> String {
     use regex::Regex;
-    // Match discord webhook URLs and redact the token portion
-    let re =
-        Regex::new(r"(https://discord\.com/api/webhooks/)\d+/[A-Za-z0-9_-]+").expect("valid regex");
+    // Match discord webhook URLs and redact the token portion. The pattern is a
+    // compile-time constant so Regex::new cannot fail in practice; fail closed
+    // (redact the whole string) rather than panic, so a logging/error path can
+    // never crash and can never leak an un-redacted webhook token.
+    let re = match Regex::new(r"(https://discord\.com/api/webhooks/)\d+/[A-Za-z0-9_-]+") {
+        Ok(re) => re,
+        Err(_) => return "[redacted: webhook url]".to_string(),
+    };
     re.replace_all(s, "${1}[REDACTED]").to_string()
 }
 
