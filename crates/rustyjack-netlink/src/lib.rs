@@ -24,20 +24,21 @@
 //!
 //! ```no_run
 //! use rustyjack_netlink::*;
+//! use std::net::IpAddr;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     // Bring interface up
 //!     set_interface_up("eth0").await?;
-//!     
+//!
 //!     // Configure IP address
-//!     let addr = "192.168.1.100".parse()?;
+//!     let addr = IpAddr::from([192, 168, 1, 100]);
 //!     add_address("eth0", addr, 24).await?;
-//!     
+//!
 //!     // Add default route
-//!     let gateway = "192.168.1.1".parse()?;
+//!     let gateway = IpAddr::from([192, 168, 1, 1]);
 //!     add_default_route(gateway, "eth0").await?;
-//!     
+//!
 //!     Ok(())
 //! }
 //! ```

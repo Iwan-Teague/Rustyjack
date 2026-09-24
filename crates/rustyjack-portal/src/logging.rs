@@ -189,7 +189,8 @@ mod tests {
         // Attacker tries to break out of quoted field
         let malicious = "value\" injected=\"malicious";
         let escaped = escape_log_value(malicious);
-        assert!(!escaped.contains('"'));
+        // Every quote must be backslash-escaped: no bare `"` may survive.
+        assert!(!escaped.replace("\\\"", "").contains('"'));
         assert!(escaped.contains("\\\""));
     }
 

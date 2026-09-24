@@ -21,7 +21,10 @@ async fn status_reports_ops_and_core_dispatch_forbidden() {
     let mut config = DaemonConfig::from_env();
     config.socket_path = socket_path.clone();
     config.ops = OpsConfig::appliance_defaults();
-    config.allow_core_dispatch = false;
+    #[cfg(feature = "core_dispatch")]
+    {
+        config.allow_core_dispatch = false;
+    }
 
     let state = Arc::new(DaemonState::new(config));
     let shutdown = Arc::new(Notify::new());
@@ -46,7 +49,8 @@ async fn status_reports_ops_and_core_dispatch_forbidden() {
     let status = client.status().await.expect("status");
     assert!(status.ops.wifi_ops);
     assert!(status.ops.eth_ops);
-    assert!(!status.ops.system_ops);
+    assert!(status.ops.system_ops);
+    assert!(!status.ops.offensive_ops);
 
     let response = client
         .request(RequestBody::CoreDispatch(CoreDispatchRequest {

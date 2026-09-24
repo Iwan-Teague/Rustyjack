@@ -534,10 +534,11 @@ fn resolve_runtime_probe(config: &mut DisplayConfig, force_discovery: bool) -> R
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn startup_reuses_cached_geometry_when_probe_completed() {
         let mut cfg = DisplayConfig {
@@ -567,6 +568,7 @@ mod tests {
         assert_eq!(probe.geometry.height(), 128);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn calibration_required_even_when_probe_cached() {
         // Regression: pending_calibration was gated on !use_cached, so after the probe
@@ -600,6 +602,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn calibration_not_required_when_completed() {
         let mut cfg = DisplayConfig {
@@ -629,6 +632,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn calibration_required_when_wizard_marked_incomplete() {
         let mut cfg = DisplayConfig {
@@ -659,6 +663,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn invalid_calibration_geometry_is_rejected() {
         let base = DisplayGeometry {
@@ -677,6 +682,7 @@ mod tests {
         assert!(calibration_geometry(&cfg, &base).is_none());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn small_display_emits_unsupported_warning() {
         let mut cfg = DisplayConfig {
@@ -689,6 +695,26 @@ mod tests {
             .warnings
             .iter()
             .any(|w| matches!(w, DisplayWarning::UnsupportedDisplaySize)));
+    }
+
+    #[test]
+    fn palette_from_scheme_uses_fallbacks_for_invalid_hex() {
+        let scheme = ColorScheme {
+            background: "invalid".to_string(),
+            border: "#12".to_string(),
+            text: "xyzxyz".to_string(),
+            selected_text: "#ABCDE".to_string(),
+            selected_background: "#12345G".to_string(),
+            toolbar: "qwerty".to_string(),
+        };
+
+        let palette = Palette::from_scheme(&scheme);
+        assert_eq!(palette.background, Rgb565::BLACK);
+        assert_eq!(palette.border, Rgb565::WHITE);
+        assert_eq!(palette.text, Rgb565::WHITE);
+        assert_eq!(palette.selected_text, Rgb565::WHITE);
+        assert_eq!(palette.selected_background, Rgb565::BLACK);
+        assert_eq!(palette.toolbar, Rgb565::new(20, 20, 20));
     }
 }
 
@@ -2712,29 +2738,4 @@ pub enum DashboardView {
     TargetStatus,
     MacStatus,
     NetworkInterfaces,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn palette_from_scheme_uses_fallbacks_for_invalid_hex() {
-        let scheme = ColorScheme {
-            background: "invalid".to_string(),
-            border: "#12".to_string(),
-            text: "xyzxyz".to_string(),
-            selected_text: "#ABCDE".to_string(),
-            selected_background: "#12345G".to_string(),
-            toolbar: "qwerty".to_string(),
-        };
-
-        let palette = Palette::from_scheme(&scheme);
-        assert_eq!(palette.background, Rgb565::BLACK);
-        assert_eq!(palette.border, Rgb565::WHITE);
-        assert_eq!(palette.text, Rgb565::WHITE);
-        assert_eq!(palette.selected_text, Rgb565::WHITE);
-        assert_eq!(palette.selected_background, Rgb565::BLACK);
-        assert_eq!(palette.toolbar, Rgb565::new(20, 20, 20));
-    }
 }

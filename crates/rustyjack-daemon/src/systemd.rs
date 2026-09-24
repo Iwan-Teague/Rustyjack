@@ -271,6 +271,17 @@ mod tests {
 
     #[test]
     fn bind_socket_replaces_stale_socket_file() {
+        // `bind_socket` finalizes the listener with tokio's `UnixListener::from_std`,
+        // which requires a runtime context. Enter one for this synchronous test.
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => panic!("failed to build tokio runtime: {e}"),
+        };
+        let _guard = rt.enter();
+
         let dir = unique_socket_path();
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rustyjackd.sock");

@@ -23,17 +23,17 @@
 //! ```no_run
 //! use rustyjack_netlink::iptables::*;
 //!
-//! # async fn example() -> Result<(), IptablesError> {
+//! # fn example() -> Result<()> {
 //! let mgr = IptablesManager::new()?;
 //!
 //! // Enable NAT masquerading
-//! mgr.add_masquerade("eth0").await?;
+//! mgr.add_masquerade("eth0")?;
 //!
 //! // Allow forwarding
-//! mgr.add_forward_accept("wlan0", "eth0").await?;
+//! mgr.add_forward_accept("wlan0", "eth0")?;
 //!
 //! // Redirect HTTP to captive portal
-//! mgr.add_dnat("wlan0", 80, "192.168.4.1", 80).await?;
+//! mgr.add_dnat("wlan0", 80, "192.168.4.1", 80)?;
 //! # Ok(())
 //! # }
 //! ```

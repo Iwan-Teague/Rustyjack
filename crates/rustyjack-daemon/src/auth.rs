@@ -311,7 +311,7 @@ pub fn required_tier_for_jobkind(kind: &JobKind) -> AuthorizationTier {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequiredOps {
     None,
     Wifi,
@@ -556,8 +556,7 @@ pub fn ops_allows(cfg: &crate::ops::OpsConfig, required: RequiredOps) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustyjack_commands::{UsbMountArgs, WifiDeauthArgs};
-    use rustyjack_ipc::WifiPipelinePreflightArgs;
+    use rustyjack_commands::{UsbMountArgs, WifiDeauthArgs, WifiPipelinePreflightArgs};
     use rustyjack_ipc::{JobKind, SystemCommand, WifiCommand};
 
     #[test]
@@ -776,7 +775,7 @@ mod tests {
         let body = RequestBody::SystemCommand(SystemCommand::UsbMount(UsbMountArgs {
             device: "/dev/sda1".to_string(),
             mode: rustyjack_commands::UsbMountMode::ReadOnly,
-            name: None,
+            preferred_name: None,
         }));
         assert_eq!(
             required_ops_for_request(Endpoint::SystemCommand, &body),

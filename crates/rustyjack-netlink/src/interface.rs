@@ -209,8 +209,9 @@ impl InterfaceManager {
     ///
     /// ```no_run
     /// # use rustyjack_netlink::*;
+    /// # use std::net::IpAddr;
     /// # async fn example() -> Result<()> {
-    /// let addr = "192.168.1.100".parse()?;
+    /// let addr = IpAddr::from([192, 168, 1, 100]);
     /// add_address("eth0", addr, 24).await?;
     /// # Ok(())
     /// # }

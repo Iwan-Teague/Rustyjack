@@ -223,7 +223,7 @@ impl RfkillDevice {
 ///
 /// ```no_run
 /// # use rustyjack_netlink::*;
-/// # fn example() -> Result<(), RfkillError> {
+/// # fn example() -> std::result::Result<(), RfkillError> {
 /// let rfkill = RfkillManager::new();
 ///
 /// // List all devices
@@ -267,7 +267,7 @@ impl RfkillManager {
     ///
     /// ```no_run
     /// # use rustyjack_netlink::*;
-    /// # fn example() -> Result<(), RfkillError> {
+    /// # fn example() -> std::result::Result<(), RfkillError> {
     /// let rfkill = RfkillManager::new();
     /// for dev in rfkill.list()? {
     ///     println!("Device {}: {} ({})", dev.idx,
@@ -495,7 +495,7 @@ impl RfkillManager {
     ///
     /// ```no_run
     /// # use rustyjack_netlink::*;
-    /// # fn example() -> Result<(), RfkillError> {
+    /// # fn example() -> std::result::Result<(), RfkillError> {
     /// let rfkill = RfkillManager::new();
     /// if let Some(idx) = rfkill.find_index_by_interface("wlan0")? {
     ///     rfkill.unblock(idx)?;

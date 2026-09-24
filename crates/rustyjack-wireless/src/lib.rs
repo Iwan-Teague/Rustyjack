@@ -26,7 +26,7 @@
 //! iface.set_channel(6)?;
 //!
 //! // Run deauth attack
-//! let attacker = DeauthAttacker::new(&iface)?;
+//! let mut attacker = DeauthAttacker::new(&iface)?;
 //! let config = DeauthConfig {
 //!     packets_per_burst: 64,
 //!     duration: Duration::from_secs(120),

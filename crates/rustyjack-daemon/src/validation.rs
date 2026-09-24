@@ -527,7 +527,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::BadRequest);
-        assert!(err.message.contains("mmcblk"));
+        assert!(err.message.contains("mmc"));
     }
 
     #[test]

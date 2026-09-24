@@ -69,8 +69,9 @@ impl RouteManager {
     ///
     /// ```no_run
     /// # use rustyjack_netlink::*;
+    /// # use std::net::IpAddr;
     /// # async fn example() -> Result<()> {
-    /// let gateway = "192.168.1.1".parse()?;
+    /// let gateway = IpAddr::from([192, 168, 1, 1]);
     /// add_default_route(gateway, "eth0").await?;
     /// # Ok(())
     /// # }
