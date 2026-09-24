@@ -1,10 +1,11 @@
 # cargo-deny configuration — rustyjack (AQ-73 baseline supply-chain scaffold).
 # Gate in CI: `cargo deny check advisories bans sources`.
-# NOTE: `licenses` is intentionally NOT gated in CI yet — the PolyForm/MPL
-# allow-list ruling is pending owner decision OI-05 (wave10 audit README.md B4).
-# The allow list below records the MEASURED licence set of the current graph
-# (cargo-deny 0.20.2, `cargo deny list`, all features) and is a fact-record,
-# not a policy decision.
+# NOTE: `licenses` is intentionally NOT gated in CI yet — wiring it into the
+# CI gate is a separate change; this file's allow list is the policy record.
+# The workspace licence is PolyForm Noncommercial 1.0.0 suite-wide (owner
+# decision OI-05, ADR-021), listed below and witnessed load-bearing in the
+# AQ-237 rollout. The remaining entries record the MEASURED licence set of
+# the dependency graph (cargo-deny 0.20.2, `cargo deny list`, all features).
 
 [graph]
 all-features = true
@@ -12,6 +13,10 @@ all-features = true
 [licenses]
 version = 2
 allow = [
+    # The workspace's own licence (ADR-021, owner decision OI-05: free for
+    # consumers, commercial use requires a separate licence). Removing this
+    # entry must fail `cargo deny check licenses` for every workspace crate.
+    "PolyForm-Noncommercial-1.0.0",
     "0BSD",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",

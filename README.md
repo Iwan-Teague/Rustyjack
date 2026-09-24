@@ -1,5 +1,6 @@
 # Rustyjack
 
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](#license)
 Portable Raspberry Pi Zero 2 W network toolkit with a Waveshare 1.44" LCD + joystick UI. Written in Rust, shipped as an unprivileged UI service backed by a privileged daemon. Additional documentation is in `logs/done/` (current) and `logs/outdated/` (historical).
 
 > Authorized testing and education only. Verify permissions before running any operation.
@@ -380,3 +381,11 @@ The following features exist in the core CLI but are not exposed as LCD menu ite
 ## Legal
 
 Use only for authorized testing, research, and education. The authors assume no liability for misuse, damage, or legal consequences. You are responsible for complying with all applicable laws.
+
+## License
+
+Rustyjack is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE.md).
+You are free to use, study, modify, and redistribute it for noncommercial purposes.
+Commercial use requires a separate licence from the copyright holder.
+
+Contributions are assumed to be made under the same terms.
