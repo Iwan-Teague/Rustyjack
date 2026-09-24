@@ -19,6 +19,52 @@ set -eu
 
 cd "$(dirname "$0")/../.."
 
+# AQ-233: every gate below compiles rustyjack's Linux-only crates (the
+# daemon's dependencies do not build off Linux, and gates 1-4 compile and
+# run the custom lint tools from /tmp), so on any other host there is
+# nothing this gate can gate. It SKIPs with rc 0 and names the
+# authoritative gate: GitHub CI runs this exact script on ubuntu-latest
+# on every push (ci.yml "Code Quality Checks"). GATE_RUSTYJACK_FORCE=1
+# restores the old hard failure for debugging. On Linux nothing changes:
+# all 9 gates still run, unchanged.
+if [ "$(uname -s)" != "Linux" ] && [ "${GATE_RUSTYJACK_FORCE:-0}" != "1" ]; then
+  printf 'rustyjack local gates: SKIPPED on non-Linux host (%s).\n' "$(uname -s)"
+  printf '  These crates are Linux-only and cannot compile here, so a local run\n'
+  printf '  cannot gate anything.\n'
+  printf '  The authoritative gate is GitHub CI: .github/workflows/ci.yml runs all\n'
+  printf '  9 gates on ubuntu-latest on every push.\n'
+  exit 0
+fi
+
+# AQ-233: run every step below under the toolchain rust-toolchain.toml
+# pins -- the one CI gates on -- not the ambient toolchain of the pushing
+# host (measured on this project's Mac, AQ-232: a Homebrew cargo ahead of
+# the rustup shims makes the pin file alone inert). One guarded re-exec
+# under `rustup run` puts the pinned toolchain first on PATH for the
+# whole run. Parsing is grep + parameter expansion only. Fail-closed: no
+# rustup, an unparsable pin, or an uninstalled pin refuses the gate.
+if [ "${GATE_PIN_RESOLVED:-0}" != "1" ] && [ -f rust-toolchain.toml ]; then
+  pin=$(grep '^channel = "' rust-toolchain.toml) || {
+    printf 'gate FAILED: rust-toolchain.toml has no `channel = "..."` line\n' >&2
+    exit 1
+  }
+  pin=${pin#*\"}
+  case $pin in
+    *\") pin=${pin%\"} ;;
+    *) printf 'gate FAILED: cannot parse the pinned channel from rust-toolchain.toml\n' >&2; exit 1 ;;
+  esac
+  command -v rustup >/dev/null 2>&1 || {
+    printf 'gate FAILED: rustup not found; cannot resolve the pinned toolchain (%s)\n' "$pin" >&2
+    exit 1
+  }
+  rustup run "$pin" true >/dev/null 2>&1 || {
+    printf 'gate FAILED: pinned toolchain %s is not installed. Run: rustup toolchain install %s\n' "$pin" "$pin" >&2
+    exit 1
+  }
+  printf 'gate toolchain: %s (%s)\n' "$pin" "$(rustup run "$pin" rustc --version)"
+  GATE_PIN_RESOLVED=1 exec rustup run "$pin" sh "$0" "$@"
+fi
+
 printf '=== 1/9 forbid Command::new outside allowlist (ci/forbid_command_new.rs) ===\n'
 rustc ci/forbid_command_new.rs -o /tmp/forbid_command_new
 /tmp/forbid_command_new

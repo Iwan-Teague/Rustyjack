@@ -1,0 +1,13 @@
+# Pinned toolchain (AQ-233): the pre-push gate (scripts/ci/gates.sh) re-execs
+# under exactly this channel, so a push from any Linux host gates on what CI
+# gates on, not on the pushing host's ambient cargo (measured: the Mac's
+# Homebrew clippy 1.97 sits ahead of the rustup shims, AQ-232; this repo's
+# ci.yml installs dtolnay/rust-toolchain with no toolchain input at
+# ci.yml:17, so CI currently floats on the runner's default stable).
+# 1.97.1 is the newest toolchain the full gate is verified green on (the
+# 1.98 stable added new clippy lints that turned sibling repos red without
+# any code change). Bump deliberately, with the full gate green on the new
+# version, never passively.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt"]
